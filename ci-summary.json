@@ -1,0 +1,169 @@
+{
+ "generated": "2026-10-15T23:26:48Z",
+ "metrics": [
+  {
+   "change30_pct": null,
+   "change7_pct": null,
+   "d30": null,
+   "delta30": null,
+   "delta7": null,
+   "group": "ci",
+   "id": "push_wait",
+   "kind": "wait",
+   "label": "Wait after merge",
+   "n_now": 1,
+   "n_prev": 0,
+   "now": 382,
+   "prev7": null,
+   "shown": true,
+   "state": "new",
+   "state30": "new",
+   "threshold_abs": 60.0,
+   "threshold_pct": 15.0,
+   "unit": "s"
+  },
+  {
+   "change30_pct": null,
+   "change7_pct": null,
+   "d30": null,
+   "delta30": null,
+   "delta7": null,
+   "group": "ci",
+   "id": "sim|macOS tests against bundled FFmpeg and ASS",
+   "kind": "job",
+   "label": "Simulator CI: macOS tests against bundled FFmpeg and ASS",
+   "n_now": 1,
+   "n_prev": 0,
+   "now": 382,
+   "prev7": null,
+   "shown": true,
+   "state": "new",
+   "state30": "new",
+   "threshold_abs": 30.0,
+   "threshold_pct": 20.0,
+   "unit": "s"
+  },
+  {
+   "change30_pct": null,
+   "change7_pct": null,
+   "d30": null,
+   "delta30": null,
+   "delta7": null,
+   "group": "ci",
+   "id": "sim|Linux simulator build + launch",
+   "kind": "job",
+   "label": "Simulator CI: Linux simulator build + launch",
+   "n_now": 1,
+   "n_prev": 0,
+   "now": 370,
+   "prev7": null,
+   "shown": true,
+   "state": "new",
+   "state30": "new",
+   "threshold_abs": 30.0,
+   "threshold_pct": 20.0,
+   "unit": "s"
+  },
+  {
+   "change30_pct": null,
+   "change7_pct": null,
+   "d30": null,
+   "delta30": null,
+   "delta7": null,
+   "group": "ci",
+   "id": "sim|macOS simulator build + launch",
+   "kind": "job",
+   "label": "Simulator CI: macOS simulator build + launch",
+   "n_now": 1,
+   "n_prev": 0,
+   "now": 365,
+   "prev7": null,
+   "shown": true,
+   "state": "new",
+   "state30": "new",
+   "threshold_abs": 30.0,
+   "threshold_pct": 20.0,
+   "unit": "s"
+  },
+  {
+   "change30_pct": null,
+   "change7_pct": null,
+   "d30": null,
+   "delta30": null,
+   "delta7": null,
+   "group": "ci",
+   "id": "sim|Windows launcher syntax",
+   "kind": "job",
+   "label": "Simulator CI: Windows launcher syntax",
+   "n_now": 1,
+   "n_prev": 0,
+   "now": 14,
+   "prev7": null,
+   "shown": false,
+   "state": "new",
+   "state30": "new",
+   "threshold_abs": 30.0,
+   "threshold_pct": 20.0,
+   "unit": "s"
+  }
+ ],
+ "regressions": [],
+ "schema": 2,
+ "slowest_ci": [
+  {
+   "group": "ci",
+   "id": "sim|macOS tests against bundled FFmpeg and ASS",
+   "label": "Simulator CI: macOS tests against bundled FFmpeg and ASS",
+   "now": 382
+  },
+  {
+   "group": "ci",
+   "id": "sim|Linux simulator build + launch",
+   "label": "Simulator CI: Linux simulator build + launch",
+   "now": 370
+  },
+  {
+   "group": "ci",
+   "id": "sim|macOS simulator build + launch",
+   "label": "Simulator CI: macOS simulator build + launch",
+   "now": 365
+  },
+  {
+   "group": "ci",
+   "id": "sim|Windows launcher syntax",
+   "label": "Simulator CI: Windows launcher syntax",
+   "now": 14
+  }
+ ],
+ "slowest_local": [],
+ "thresholds": {
+  "bench": {
+   "percent": 25.0,
+   "seconds": 5.0
+  },
+  "ci_job": {
+   "percent": 20.0,
+   "seconds": 20.0
+  },
+  "minutes": {
+   "percent": 15.0,
+   "seconds": 240.0
+  },
+  "nightly": {
+   "percent": 25.0,
+   "seconds": 120.0
+  },
+  "pr_wait": {
+   "percent": 25.0,
+   "seconds": 90.0
+  },
+  "push_wait": {
+   "percent": 15.0,
+   "seconds": 60.0
+  },
+  "sim_job": {
+   "percent": 20.0,
+   "seconds": 30.0
+  }
+ }
+}
