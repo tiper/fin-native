@@ -1,5 +1,7 @@
-{"updated":"2026-10-15T23:26:45Z",
-"ci":[],
+{"updated":"2026-10-15T23:28:49Z",
+"ci":[
+{"id":38822943452,"at":"2026-10-15T23:20:07Z","sha":"08a16aebd","title":"tv-session: background/foreground/fg subcommands; record the owed notification-feed TV checks","pr":797,"conclusion":"success","attempt":1,"jobs":{"host lint + type-checks":210,"host unit tests (default features)":505,"cross-build (armv7) + artifact assertions":399,"host python/shell/C gates":135,"host harness tests":175,"host unit tests (hostsim)":483,"host checks (NOT a device gate)":3}}
+],
 "sim":[
 {"id":38822943575,"at":"2026-10-15T23:20:07Z","sha":"08a16aebd","title":"tv-session: background/foreground/fg subcommands; record the owed notification-feed TV checks","pr":797,"conclusion":"success","attempt":1,"jobs":{"Linux simulator build + launch":370,"macOS tests against bundled FFmpeg and ASS":382,"Windows launcher syntax":14,"macOS simulator build + launch":365}}
 ],
