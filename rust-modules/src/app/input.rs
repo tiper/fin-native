@@ -89,8 +89,12 @@ pub(crate) fn click_is_ok(dpad_mode: bool, cur_hidden: bool, transparent_cursor:
 // this file and in `run.rs`/`nav.rs`/`boot.rs`/`playback.rs`/`metadata.rs` that still name it are
 // historical references to the extraction that produced `activate_card`, not live call sites.
 
-/// **A show/season Play (`activate_card`'s non-movie/episode arm), between its ASYNC detail
-/// request and the landing that decides play-vs-open.**
+/// **A Play waiting on its ASYNC detail request for the landing that decides play-vs-open.**
+///
+/// Two things arm it: `activate_card`'s show/season Play, where `expect` is the SHOW's rk, and a
+/// launch's `"play": true` (`app/launch.rs`), where `expect` is whatever item the launch named —
+/// a movie or episode as often as a show — so nothing downstream may assume a show. A launch arms
+/// it on the frame [`menu_play_tick`] first runs; a card press never does.
 ///
 /// D7: this used to be `MetadataCmd::LoadDetailNow` — a BLOCKING fetch run on the press frame —
 /// followed immediately by a read of `plx_data::metadata::current()`, which only worked BECAUSE the
@@ -136,7 +140,7 @@ enum MenuPlayPhase {
 impl MenuPlayAwait {
     /// The wait armed by a press at frame `now`: it starts on the detail request `activate_card`
     /// has just issued, and carries the same 12s ceiling for its whole life.
-    fn new(sid: plx_plex::plex::ServerId, expect: String, season_index: Option<i64>, hud_ms: u32, now: u32) -> Self {
+    pub(crate) fn new(sid: plx_plex::plex::ServerId, expect: String, season_index: Option<i64>, hud_ms: u32, now: u32) -> Self {
         Self { sid, expect, season_index, hud_ms, deadline: now.wrapping_add(12_000), phase: MenuPlayPhase::Detail }
     }
 }
@@ -267,10 +271,10 @@ fn collection_content_arg(mm: &plx_data::pms::PmsMovie) -> plx_screens::registry
         mm.sid, &mm.rk, mm.sec, &mm.title))
 }
 
-/// The landing half of `activate_card`'s show/season Play — see [`MenuPlayAwait`]. Called every
+/// The landing half of a [`MenuPlayAwait`] (a card's show/season Play, or a launch's Play). Called every
 /// frame, route-unconditional, from the same site `app/run.rs` already pumps the detail landing
 /// from (right beside `plx_data::stores::metadata::pump_detail()`): a landing must never depend on
-/// which screen is mounted, since the press that started the wait may have come from Home while a
+/// which screen is mounted, since whatever started the wait may have come from Home while a
 /// different page is up by the time it settles.
 #[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn menu_play_tick(

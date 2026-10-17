@@ -2431,10 +2431,13 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
         if app.bridge.metadata_pump_season() {
             plx_machine::idle::invalidate(); // a season landing rewrites the episode row under us
         }
+        // A launch that named an item (`app/launch.rs`) opens or plays it the first frame Home is
+        // up with a server, handing a Play to the continuation just below.
+        super::launch::tick(app, fr.now);
         // D7: the continuation half of `activate_card`'s show/season Play — see
         // `App::menu_play_await`/`input::menu_play_tick`'s own doc. Right beside the pump above
-        // for the same route-unconditional reason: the press that armed the wait may have come
-        // from Home while a different page is up by the time the landing (or its settled
+        // for the same route-unconditional reason: whatever armed the wait (a card press, or a
+        // launch acting on Home) may have come from Home while a different page is up by the time the landing (or its settled
         // failure, or the ceiling) says the wait is over.
         if app.menu_play_await.is_some() {
             menu_play_tick(&mut app.player.session, &mut app.adapters.player,
@@ -3317,6 +3320,7 @@ mod lifecycle_regression_tests {
             last_route_reported: Default::default(),
             ptr: Pointer::IDLE,
             menu_play_await: Default::default(),
+            launch: None,
             prev: Default::default(),
             refresh_hubs: Default::default(),
             return_hold: Default::default(),
