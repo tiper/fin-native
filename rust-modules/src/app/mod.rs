@@ -122,6 +122,7 @@ pub(crate) mod lifecycle;
 pub(crate) mod playback;
 mod preferences;
 pub(crate) mod input;
+pub(crate) mod launch;
 pub(crate) mod bridge;
 pub(crate) mod chrome;
 pub(crate) mod content;
@@ -283,13 +284,16 @@ pub(crate) struct App {
     // to, the pages behind the one on screen, and the route change a fade is carrying. Each is the
     // CONTAINER's now — `NavStack`'s top entry, `screens::player::Origin`, the stack itself, and
     // `NavStack::pending` under a `PageDip`. D1, restructure phase 12.)
-    /// **`activate_card`'s show/season Play, between its ASYNC detail request and the landing
-    /// that decides play-vs-open** (D7: the item-menu/card-row Play arm used to call
+    /// **A Play between its ASYNC detail request and the landing that decides play-vs-open**:
+    /// `activate_card`'s show/season Play, or a launch's `"play": true` on any item
+    /// (`app/launch.rs`) (D7: the item-menu/card-row Play arm used to call
     /// `MetadataCmd::LoadDetailNow` — a BLOCKING fetch on the press frame — and read
     /// `metadata::current()` on the very next statement, which only worked because the load had
     /// already finished by then). See `input::menu_play_tick`, driven every frame beside
     /// `pump_detail()` (`app/run.rs`).
     pub(crate) menu_play_await: Option<MenuPlayAwait>,
+    /// A launch parameter's item, until Home is up to open or play it (`app/launch.rs`).
+    pub(crate) launch: Option<launch::LaunchItem>,
     pub(crate) prev: u32,
     /// A playback exit is owed a re-read of Home's hubs and every library's shelves. Armed by
     /// `exit_player`; spent by `playback_tick` once the stop's `stopped` POST has landed

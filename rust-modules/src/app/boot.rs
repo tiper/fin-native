@@ -2041,6 +2041,7 @@ pub(crate) unsafe fn construct(
         last_route_reported,
         ptr,
         menu_play_await: None,
+        launch: if controlled { None } else { super::launch::from_process_args() },
         prev,
         refresh_hubs,
         return_hold: Default::default(),
