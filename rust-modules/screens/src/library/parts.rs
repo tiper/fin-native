@@ -131,12 +131,30 @@ pub(super) struct GridPart {
     indexes: GridIndexes,
     /// Render history for the at-rest poster lookahead (`lookahead.rs`); never logical state.
     rest: super::lookahead::Rest,
+    /// Where a server's re-list stands: only its landing plays (`Grid::set_animate_landings`).
+    relist: Relist,
+    /// The cards the re-list removed, by `elem_key`, kept for the landing's ghosts while it plays.
+    ghosts: HashMap<u64, plx_data::pms::PmsMovie>,
     #[cfg(test)]
     test_ops: PublicationOps,
 }
 
+/// A server's re-list (`ListingView::relisting`): the grid plays its landing as Home and the
+/// Watchlist play theirs (survivors slide, new cards fade in, removed ones fade out where they
+/// stood). Page fills and query edits keep cutting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Relist {
+    #[default]
+    Idle,
+    /// The re-list is out: the old rows are shown and the landing play is on.
+    Armed,
+    /// Its rows are projected; the landing plays from the next tick and is let go when it ends.
+    Swapped,
+}
+
 impl GridPart {
     pub(super) fn clear_projection(&mut self) {
+        self.end_relist();
         self.total = 0;
         self.windows.clear();
         self.applied.clear();
@@ -151,7 +169,7 @@ impl GridPart {
         // The retained snapshot is a read-publication cache, not another cursor. Its placement
         // projection and identity are traversed below; its Arc address never enters logical state.
         let Self { entry: _, group, total, windows, applied: _, pins: _, known, identity, layout, scroll, target_layout,
-            scroll_target, grid, snapshot: _, indexes: _, rest: _, #[cfg(test)] test_ops: _ } = self;
+            scroll_target, grid, snapshot: _, indexes: _, rest: _, relist: _, ghosts: _, #[cfg(test)] test_ops: _ } = self;
         c.u32(group.0).u32(*total as u32).seq(windows.len());
         for w in windows {
             c.u32(w.first as u32).seq(w.elems.len());
@@ -191,6 +209,8 @@ impl GridPart {
             snapshot: None,
             indexes: GridIndexes::default(),
             rest: Default::default(),
+            relist: Relist::Idle,
+            ghosts: HashMap::new(),
             #[cfg(test)] test_ops: PublicationOps::default(),
         }
     }
@@ -206,7 +226,21 @@ impl GridPart {
         self.grid.set_page(CONTENT_TOP + self.layout.grid_top(), scroll);
         let src = GridSrc { total: self.total, windows: &self.windows, indexes: &self.indexes, view: H::listing(cx), policy: caption_policy() };
         let _ = self.grid.on(ev, cx, &src, fx);
-        if matches!(ev, ScreenEvent::Tick(_)) { self.grid.landed_shift() } else { 0.0 }
+        if !matches!(ev, ScreenEvent::Tick(_)) { return 0.0; }
+        // The re-list's landing started on this tick or has ended: once it is no longer playing
+        // the play is let go, and the ghosts with it.
+        if self.relist == Relist::Swapped && !self.grid.landing_pending() && !self.grid.has_ghosts() {
+            self.end_relist();
+        }
+        self.grid.landed_shift()
+    }
+
+    fn end_relist(&mut self) {
+        if self.relist != Relist::Idle {
+            self.grid.set_animate_landings(false);
+        }
+        self.relist = Relist::Idle;
+        self.ghosts.clear();
     }
 
     /// Hold the grid's cards at rest while the page is still dissolving in ([`Grid::dormant`]); the
@@ -259,6 +293,7 @@ impl GridPart {
         for (at, (elem, _)) in self.known.iter().enumerate() {
             self.indexes.known.entry(*elem).or_insert(at);
         }
+        self.end_relist();
         self.total = 0;
         self.windows.clear();
         self.applied.clear();
@@ -281,11 +316,42 @@ impl GridPart {
         ranges: Vec<Range<usize>>) {
         let view = H::listing(cx);
         let ranges = merged_ranges(ranges, view.total().max(0) as usize);
+        if view.relisting() && self.relist == Relist::Idle {
+            self.relist = Relist::Armed;
+            self.grid.set_animate_landings(true);
+        }
         if self.snapshot.as_ref().is_some_and(|old| view.same_items(old.view())) && ranges == self.applied {
             return;
         }
+        // The re-list's rows: what leaves is kept for the landing's ghosts.
+        let swap = self.relist == Relist::Armed && !view.relisting();
+        let old = if swap { self.snapshot.take() } else { None };
+        let was: Vec<(u32, usize)> = if swap {
+            self.windows.iter().flat_map(|w| w.elems.iter().enumerate().map(move |(n, e)| (*e, w.first + n))).collect()
+        } else { Vec::new() };
         self.snapshot = Some(view.retain());
         self.project(view, keys, ranges);
+        if let Some(old) = old {
+            self.keep_ghosts(view, old.view(), &was);
+            self.relist = Relist::Swapped;
+        }
+    }
+
+    /// The cards of the old rows that are not in the new ones, where the new rows have landed
+    /// (an unloaded cell of the new listing says nothing about what left).
+    fn keep_ghosts(&mut self, view: plx_data::stores::browse::ListingView<'_>,
+        old: plx_data::stores::browse::ListingView<'_>, was: &[(u32, usize)]) {
+        let loaded: Vec<usize> = self.windows.iter()
+            .flat_map(|w| w.first..w.first + w.elems.len())
+            .filter(|&i| view.item(i).is_some())
+            .collect();
+        let (Some(&lo), Some(&hi)) = (loaded.first(), loaded.last()) else { return };
+        for &(elem, index) in was {
+            if self.indexes.index_of(elem).is_some() || !(lo..=hi).contains(&index) { continue; }
+            if let Some(item) = old.item(index) {
+                self.ghosts.insert(ui_cards::elem_key(&elem), item.clone());
+            }
+        }
     }
 
     fn project(&mut self, view: plx_data::stores::browse::ListingView<'_>, keys: &mut KeyRegistry,
@@ -474,6 +540,12 @@ impl GridPart {
 
     #[cfg(test)]
     pub(super) fn window(&self) -> std::ops::Range<usize> { self.window_of(self.total) }
+
+    /// Test support: a landing is playing, and the ghost keys it names with the cards kept for them.
+    #[cfg(test)]
+    pub(super) fn relist_probe(&self) -> (bool, Vec<Option<String>>) {
+        (self.grid.landing_pending(), self.grid.ghost_keys().map(|k| self.ghosts.get(&k).map(|m| m.rk.clone())).collect())
+    }
 }
 
 /// The content panel the grid's stops are clipped to.
@@ -650,7 +722,41 @@ impl<H: LibraryLike> Part<H> for GridPart {
         // default), whose own slots the source protects. The grid also registers the stops of the
         // cards it draws.
         let p = Self::painter(f);
+        if self.grid.has_ghosts() {
+            // Under the cards that slide over their cells.
+            let ghosts = GhostSrc { items: self.grid.ghost_keys().map(|key| self.ghosts.get(&key)).collect(), policy: caption_policy() };
+            self.grid.paint_ghosts(f, p, &ghosts);
+        }
         let src = self.source(f.cx);
         self.grid.draw(f, p, &src);
     }
+}
+
+/// The cards a re-list removed, in [`Grid::ghost_keys`] order; one not kept is `None` and is not
+/// drawn. A ghost is never focused, pressed or registered.
+struct GhostSrc<'a> {
+    items: Vec<Option<&'a plx_data::pms::PmsMovie>>,
+    policy: CaptionPolicy,
+}
+
+impl<H: Host<Elem = u32>> CardSource<H> for GhostSrc<'_> {
+    fn len(&self) -> usize { self.items.len() }
+    fn elem(&self, _i: usize) -> u32 { 0 }
+    fn index_of(&self, _e: &u32) -> Option<usize> { None }
+    fn art(&self, i: usize) -> Art<'_> {
+        self.items.get(i).copied().flatten().map_or(Art::Poster(None), grid_art)
+    }
+    /// Read only for the focused card's ghost, which keeps its caption until the landing steps.
+    fn label(&self, i: usize) -> ui_cards::TileLabel {
+        self.items.get(i).copied().flatten().map(|item| grid_label(item, &self.policy)).unwrap_or_default()
+    }
+    fn progress(&self, i: usize) -> Option<f32> {
+        self.items.get(i).copied().flatten().filter(|item| item.kind != 3).and_then(|item| item.resume_frac())
+    }
+    fn overlay(&self, p: Painter, i: usize, tile: &Tile, measure: &dyn Measure) {
+        if let Some(item) = self.items.get(i).copied().flatten().filter(|item| item.kind == 3) {
+            plx_ui::widgets::still_overlay(p, &tile_facts::of(item), tile.rect, tile.radius, false, measure);
+        }
+    }
+    fn loaded(&self, i: usize) -> bool { self.items.get(i).copied().flatten().is_some() }
 }

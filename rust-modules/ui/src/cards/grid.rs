@@ -222,6 +222,14 @@ impl Grid {
         }
     }
 
+    /// Turn the landing play ([`GridSpec::animate_landings`]) on or off at run time, for an owner
+    /// that plays only some of its landings (the Library plays a server's re-list, not a page
+    /// fill or a query edit). A landing already playing finishes either way.
+    pub fn set_animate_landings(&mut self, on: bool) {
+        self.spec.landings = on;
+        self.landing.set_enabled(on);
+    }
+
     /// The owner is seating this grid's focus as the page's own ARRIVAL (its first poster, once the
     /// cards have landed or the page's head has moved): the `FocusMoved` it raises grows from rest
     /// on the standard lift spring, its caption band opening with it, as a deliberate move's does
