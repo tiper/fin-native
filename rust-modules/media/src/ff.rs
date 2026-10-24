@@ -1878,6 +1878,8 @@ fn arm_active_stall_guard(
 mod acquisition;
 #[path = "ff_subs.rs"]
 mod subs;
+#[path = "ff_native_audio.rs"]
+pub(crate) mod native_audio;
 #[path = "ff_subside.rs"]
 pub(crate) mod subside;
 use subs::{SubKind, SubTracks};
@@ -9196,6 +9198,49 @@ pub fn demux(
                 } else {
                     None
                 };
+                // FLAC and Opus go to the television's own decoder (`ff_native_audio.rs`). FLAC's caps
+                // carry no field, so the stream header leads the audio lane; Opus' travels in the Load.
+                // What is fed is recorded for the player, which learns a refusal from it.
+                let mut pending_headers: Vec<Vec<u8>> = Vec::new();
+                if ai >= 0 && FEED_AUDIO.load(Ordering::Relaxed) && speed_dec.is_none() {
+                    let acp = stream_codecpar(*streams.add(ai as usize));
+                    let aname = std::ffi::CStr::from_ptr(avcodec_get_name((*acp).codec_id)).to_string_lossy().into_owned();
+                    if let Some(kind) = native_audio::Kind::from_ffmpeg_name(&aname) {
+                        let extra: &[u8] = if (*acp).extradata.is_null() || (*acp).extradata_size <= 0 {
+                            &[]
+                        } else {
+                            std::slice::from_raw_parts((*acp).extradata, (*acp).extradata_size as usize)
+                        };
+                        let channels = u32::try_from((*acp).ch_layout.nb_channels).unwrap_or(0);
+                        let rate = u32::try_from((*acp).sample_rate).unwrap_or(0);
+                        let header = match kind {
+                            native_audio::Kind::Flac => native_audio::flac_stream_header(extra),
+                            native_audio::Kind::Opus => Some(Vec::new()),
+                        };
+                        match header {
+                            Some(header) => {
+                                crate::player::log(&format!(
+                                    "ff: {aname} fed to the TV's own decoder (channels={channels} rate={rate} extradata={}B)",
+                                    extra.len()
+                                ));
+                                if !header.is_empty() {
+                                    pending_headers.push(header);
+                                }
+                                native_audio::publish_fed(kind, channels);
+                            }
+                            None => {
+                                crate::player::log(&format!(
+                                    "ff: {aname} track the TV's decoder cannot be fed (channels={channels} rate={rate} extradata={}B); refusing the stream",
+                                    extra.len()
+                                ));
+                                SHARED.fail_demux(DemuxExitClass::LoadRefused);
+                                avformat_close_input(&mut fmt);
+                                free_avio(avio);
+                                break;
+                            }
+                        }
+                    }
+                }
                 let dur = fmt_duration(fmt);
                 if dur > 0 {
                     SHARED
@@ -9564,6 +9609,22 @@ pub fn demux(
                         // The audio lane runs past its soft cap while the video lane is starved
                         // ([`AUDIO_AHEAD_HEADROOM`]); the gate is what makes that decision, here.
                         let gate = audio_push_gate(aq_p, headroom.video_reach_ns());
+                        // A FLAC track's stream header goes first, at this packet's time: the decoder
+                        // reads it as the start of the stream.
+                        let mut header_stop = 0;
+                        for header in std::mem::take(&mut pending_headers) {
+                            header_stop = crate::aq::aq_push_gated(
+                                aqa_p, header.as_ptr(), header.len() as c_int, pts, 1, 2, gate,
+                                || state.drain_wire(),
+                            );
+                            if header_stop != 0 {
+                                break;
+                            }
+                        }
+                        if header_stop != 0 {
+                            av_packet_unref(pkt);
+                            break;
+                        }
                         let pushed = if let Some(dec) = speed_dec.as_mut() {
                             let mut rv = 0;
                             for (au_pts, pcm) in dec.decode(pkt, pts) {

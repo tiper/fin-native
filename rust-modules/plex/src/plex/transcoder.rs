@@ -1143,6 +1143,7 @@ mod tests {
                 av1_row: (0, 0, 0),
                 audio: "aac,ac3,eac3".into(),
             audio_channels: Default::default(),
+            native_ceiling: Default::default(),
             },
             s.contract.delivery,
         );
@@ -1354,6 +1355,7 @@ mod tests {
             av1_row: (0, 0, 0),
             audio: "aac,ac3,eac3".into(),
             audio_channels: Default::default(),
+            native_ceiling: Default::default(),
         };
         let p = super::profile_for(&caps);
         assert!(!p.contains("hevc"), "hevc must not appear anywhere in {p}");
@@ -1385,6 +1387,7 @@ mod tests {
                 av1_row: (0, 0, 0),
                 audio: "aac".into(),
                 audio_channels: Default::default(),
+                native_ceiling: Default::default(),
             },
         ] {
             let p = super::profile_for(&caps);
@@ -1413,6 +1416,7 @@ mod tests {
             av1_row: (0, 0, 0),
             audio: "aac".into(),
             audio_channels: Default::default(),
+            native_ceiling: Default::default(),
         };
         let p = super::profile_for(&caps);
         let dp = p.split("add-transcode-target").next().unwrap();
