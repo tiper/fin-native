@@ -237,6 +237,14 @@ impl Grid {
         }
     }
 
+    /// Turn the landing play ([`GridSpec::animate_landings`]) on or off at run time, for an owner
+    /// that plays only some of its landings (the Library plays a server's re-list, not a page
+    /// fill or a query edit). A landing already playing finishes either way.
+    pub fn set_animate_landings(&mut self, on: bool) {
+        self.spec.landings = on;
+        self.landing.set_enabled(on);
+    }
+
     /// The owner is seating this grid's focus as the page's own ARRIVAL (its first poster, once the
     /// cards have landed or the page's head has moved): the `FocusMoved` it raises grows from rest
     /// on the standard lift spring, its caption band opening with it, as a deliberate move's does
@@ -1037,7 +1045,7 @@ impl Grid {
     /// Hands `read` the label card `i` carries, `None` when it carries none: with persistent
     /// captions the source's own cached label (every card has one), otherwise the one `paint` holds
     /// (the focused card's, or the closing band's of a card the focus left).
-    fn with_caption<H: Host, S: CardSource<H>, R>(
+    fn with_caption<H: Host, S: CardSource<H> + ?Sized, R>(
         &self, src: &S, i: usize, paint: &CardPaint, read: impl FnOnce(&super::TileLabel) -> R,
     ) -> Option<R> {
         if self.spec.persistent_captions { Some(src.with_label(i, read)) }
@@ -1048,7 +1056,7 @@ impl Grid {
     /// ahead of every tile ([`draw`](Self::draw)). `focused` marks the lifted card: it opens the
     /// `devtriggers` card probe, and with persistent captions it is the only card whose cached words
     /// are not drawn static.
-    fn draw_caption<H: Host, S: CardSource<H>>(
+    fn draw_caption<H: Host, S: CardSource<H> + ?Sized>(
         &self, f: &DrawFrame<'_, '_, H>, src: &S, i: usize, paint: &CardPaint, s: f32, focused: bool,
     ) {
         self.with_caption(src, i, paint, |label| {
@@ -1290,6 +1298,11 @@ impl Grid {
             card_row::draw_tile(pr, ghosts.art(j), rect, s, &self.spec.style, ghosts.progress(j));
             let tile = Tile { rect, scale: s, radius: self.spec.style.tile_radius(rect, s), focused: g.focused };
             ghosts.overlay(pr, j, &tile, f.measure);
+            // With persistent captions every ghost keeps its own caption while it fades.
+            if self.spec.persistent_captions {
+                self.draw_caption(f, ghosts, j, &CardPaint { rect, p: pr, label: None }, s, false);
+                continue;
+            }
             // The focused card's caption stays as drawn until the landing steps: from then on it is
             // the new focus card's, which moves with the focus.
             if g.focused && self.landing_waiting() {
