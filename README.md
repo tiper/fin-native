@@ -24,7 +24,7 @@ a Jellyfin backend to that engine and ships it as a separate app. If you use Ple
 </p>
 
 Captured in FinNative's desktop simulator against a Jellyfin server holding only the open films
-credited at the end of [Credit](#credit), so every title and image is free to show. The simulator
+credited under [Credit](#credit), so every title and image is free to show. The simulator
 draws the same interface as the television but plays no video, so there is no player screenshot.
 
 ## What works
