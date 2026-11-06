@@ -91,6 +91,10 @@ pub(crate) fn live_setup() -> Setup {
 }
 
 /// One effect's blocking work. `None` is an effect with no answer (`Delete`).
+/// The release a pack's `app` range is judged against: the PlxNative this build is based on, because packs name
+/// PlxNative versions. `identity::version()` is FinNative's own line (0.1.0), which would refuse a pack that asks for 0.10.0.
+pub(crate) const PACK_APP_VERSION: &str = plx_screens::legal::PLXNATIVE_BASE;
+
 fn run_effect(effect: HudEffect, app_version: &str) -> Option<HudEvent> {
     match effect {
         // The cache is verified again here, on the storage worker, with the same function a reply goes through.
@@ -1115,6 +1119,16 @@ mod tests {
         price_package(&verified(text), measure, langs)
     }
     const REFERENCE_ID: &str = "com.plxnative.examples.reference";
+    #[test]
+    fn a_pack_made_for_a_plxnative_release_runs_on_the_base_it_is_built_on() {
+        let manifest = include_str!("../../../appkit/src/hud_format/fixtures/minimal/manifest.json")
+            .replacen("\"package_format\": \"1.0\",", "\"package_format\": \"1.0\", \"app\": {\"min\": \"0.10.0\"},", 1);
+        let pack = fixtures::with_manifest("minimal", &manifest);
+        assert!(matches!(verdict(&pack, PACK_APP_VERSION), Verdict::Loadable(_)), "{PACK_APP_VERSION}");
+        // FinNative's own line, which callers once passed, is below every pack's min.
+        assert!(matches!(verdict(&pack, "0.1.0"), Verdict::Unloadable(_, Unloadable::AppRange)));
+    }
+
     const APP: &str = "0.2.1";
 
     struct Dir(PathBuf);
