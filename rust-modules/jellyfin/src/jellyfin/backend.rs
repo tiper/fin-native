@@ -16,7 +16,7 @@ use super::paths::{self, SortBy};
 use super::playback_info;
 use super::transcode;
 use super::translate::{self, hubs};
-use plx_plex::plex::account::{AudioPreferences, PreferenceError};
+use plx_plex::plex::account::{AudioPreferences, MarkerAccess, PreferenceError};
 use plx_platform::i18n::msg;
 use plx_plex::plex::backend::Backend;
 use plx_plex::plex::grant::{self, MintRefusal, PlaintextAsk};
@@ -1009,11 +1009,22 @@ impl Backend for Shared {
         let saved = if update.is_empty() { c.language_preferences()? } else { c.save_language_preferences(&update)? };
         Ok(translate::audio_preferences(&saved))
     }
+    // Jellyfin has no paid tier: the segments it serves are every viewer's.
+    fn marker_access(&self) -> Result<MarkerAccess, PreferenceError> {
+        Ok(MarkerAccess { intro: true, credits: true })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Skip markers are not behind a subscription here: Plex asks plex.tv, Jellyfin grants both.
+    #[test]
+    fn every_viewer_may_skip_intros_and_credits() {
+        let access = Shared(Arc::new(JfBackend::default())).marker_access();
+        assert_eq!(access, Ok(MarkerAccess { intro: true, credits: true }));
+    }
 
     /// A shelf of people has rows in `directory`, not `metadata`: it is not an empty shelf.
     #[test]
