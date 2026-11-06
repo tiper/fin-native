@@ -792,8 +792,8 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 # it from the recipe AND its prerequisites, never the name (`check-ass` is a test goal and stages the
 # host libass into `pkg/`). Two kinds qualify:
 #
-#   * HOST-ONLY goals: the unit-test loops and the lint pass (`test-hostsim`, `check-nodef`,
-#     `test-fast`, `test-crate`, `lint`, `build-bench`), the pieces of `check` that are plain host work
+#   * HOST-ONLY goals: the unit-test loops, the fuzz runs and the lint pass (`test-hostsim`, `check-nodef`,
+#     `test-fast`, `test-crate`, `fuzz-hud`, `lint`, `build-bench`), the pieces of `check` that are plain host work
 #     (`check-cargo-lint`, `check-cargo-unit-hostsim`, `check-localization`, `check-c-unit`,
 #     `check-python-harness`), the notices tables, and the set-up and local tooling that writes outside
 #     `pkg/` (a toolchain install, the disk-watch agent, the test media, the demo library, the
@@ -818,7 +818,7 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 # goal in the two kinds above resets nothing under a dry run, and every goal named as NOT here stays out
 # of the list. The list is ONE line on purpose (`grep '^SIDE_EFFECT_FREE' Makefile` is the exact set,
 # and several tests read it that way).
-SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim check-nodef test-fast test-crate lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require
+SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require
 PURE_QUERY := $(if $(MAKECMDGOALS),$(if $(filter-out $(SIDE_EFFECT_FREE),$(MAKECMDGOALS)),,yes),)
 ifneq ($(PURE_QUERY),yes)
 ifneq ($(RUST_CFG),$(shell cat $(RUST_STAMP) 2>/dev/null))
@@ -1050,6 +1050,15 @@ pkg/plxnative-storage: LICENSE $(STORAGE_INPUTS) rust-modules/Cargo.toml rust-mo
 # this to -E/--export-dynamic: no other executable-private symbol is part of the native ABI.
 SMP_CALLBACK_HOOK = _ZN17StarfishMediaAPIs20callbackFunctionHookEixPKc
 SMP_INTERPOSER_LDFLAG = -Wl,--export-dynamic-symbol=$(SMP_CALLBACK_HOOK)
+# The second symbol the executable exports: src/exit.c defines libc's `exit`, and this export makes
+# the `exit` of every shared library bind to it (PLX-NATIVE-1P shows one made on SDL's SDLTimer
+# thread), so the process ends through plx_exit_record (src/crashtrace.c), which ends it with the
+# caller's status without running the exit handlers. Measured with the NDK's ld on a one-file
+# executable: it exports `exit` even without this flag, because libc.so (always on the link line)
+# defines it too; the flag keeps the export from depending on that implicit rule, and
+# `ci/check-elf.sh` asserts it on the shipped binary.
+# `check-c-unit` links its host copy of the interposer with this same variable.
+EXIT_INTERPOSER_LDFLAG = -Wl,--export-dynamic-symbol=exit
 # --gc-sections: this link is gcc's, not rustc's. rustc passes --gc-sections itself when IT links an
 # executable (which is why pkg/plxnative-storage above never needed the flag), but here the Rust
 # code arrives as a finished staticlib, so without the flag every section of every archive member
@@ -1059,14 +1068,15 @@ SMP_INTERPOSER_LDFLAG = -Wl,--export-dynamic-symbol=$(SMP_CALLBACK_HOOK)
 # it DOES use is kept) and 13.2 MB .text, and 62 libc/libm imports (posix_spawn, chroot, splice,
 # sinf, ...) that only dead code used.
 # Roots needed no extra KEEP/--undefined: the entry point and the .init_array/.fini_array
-# constructors are roots by construction, the Starfish interposer is a root because
-# --export-dynamic-symbol exports it, and everything else the app needs is reached by a relocation
+# constructors are roots by construction, the Starfish interposer and `exit` are roots because
+# --export-dynamic-symbol exports them, and everything else the app needs is reached by a relocation
 # (the ffmpeg/curl/ACB/Starfish entry points are dlsym'd out of OTHER libraries, never out of this
-# executable, whose .dynsym defines only _init, _fini and the interposer). Nothing here uses
-# `#[used]`/`link_section`/`__attribute__((constructor))`. If a future feature needs a symbol that
-# only `dlsym(RTLD_DEFAULT, ...)` reaches inside this binary, it must be exported or KEEP()ed
-# explicitly. `ci/check-elf.sh` only asserts that the Starfish interposer is exported (and that
-# Load-with-context is not a loader dependency); it does not assert that nothing else is defined.
+# executable, whose .dynsym defines only _init, _fini, the Starfish interposer and `exit`).
+# Nothing here uses `#[used]`/`link_section`/`__attribute__((constructor))`. If a future feature
+# needs a symbol that only `dlsym(RTLD_DEFAULT, ...)` reaches inside this binary, it must be
+# exported or KEEP()ed explicitly. `ci/check-elf.sh` only asserts that the Starfish interposer and
+# `exit` are exported (and that Load-with-context is not a loader dependency); it does not assert
+# that nothing else is defined.
 GC_SECTIONS_LDFLAG = -Wl,--gc-sections
 # `-lm` AHEAD of $(RUST_LIB) as well as at the end: the prebuilt armv7 std's compiler_builtins
 # carries WEAK +soft-float definitions of roundf/floorf/ceilf/fmodf/cbrtf/sqrtf/... (roundf is a
@@ -1074,7 +1084,7 @@ GC_SECTIONS_LDFLAG = -Wl,--gc-sections
 # scanned and the members are never extracted, so every call (Rust's and svg.c's) binds to glibc's
 # VFP libm. `ci/check-elf.sh` fails if a local definition of one of them comes back.
 pkg/plxnative: $(OBJS) $(RUST_LIB) $(FFMPEG_STAGED) $(LIBASS_STAGED) $(SENTRY_NATIVE_STAMP) Makefile ci/arm-cc.py ci/check-link-evidence.py
-	$(CC) $(CFLAGS) -Wl,--build-id=sha1 $(GC_SECTIONS_LDFLAG) $(SMP_INTERPOSER_LDFLAG) \
+	$(CC) $(CFLAGS) -Wl,--build-id=sha1 $(GC_SECTIONS_LDFLAG) $(SMP_INTERPOSER_LDFLAG) $(EXIT_INTERPOSER_LDFLAG) \
 	  $(OBJS) -lm $(RUST_LIB) $(SENTRY_NATIVE_LIB) \
 	  $(SENTRY_UNWIND_LIB) $(LIBS_REAL) -ldl -lrt -lpthread -lm -o $@
 
@@ -1490,7 +1500,7 @@ test: deploy run
 # finds every target whose recipe runs cargo and fails when one is missing from this list.
 DISK_ENTRIES = check check-replay check-cargo-lint check-cargo-unit-default check-cargo-unit-hostsim lint \
                test-fast test-crate test-hostsim check-nodef check-ass check-ffmpeg sim-macos sim-linux screenshots-sim site-video-sim \
-               $(RUST_LIB) pkg/plxnative-storage macapp macapp-zip build-bench build-bench-quick
+               $(RUST_LIB) pkg/plxnative-storage macapp macapp-zip build-bench build-bench-quick fuzz-hud
 $(DISK_ENTRIES): | disk-preflight
 
 # A relative CARGO_TARGET_DIR is relative to rust-modules, where cargo runs.
@@ -1498,6 +1508,9 @@ DISK_TREE = $(if $(CARGO_TARGET_DIR),$(if $(filter /%,$(CARGO_TARGET_DIR)),$(CAR
 DISK_NEED =
 test-fast test-crate: DISK_TREE = $(CURDIR)/rust-modules/$(TEST_FAST_TDIR)
 test-hostsim: DISK_TREE = $(CURDIR)/rust-modules/$(TEST_HOSTSIM_TDIR)
+# The fuzz tree (ASan + coverage, release with debuginfo, eight binaries): 3.1 GiB measured after a cold build.
+fuzz-hud: DISK_TREE = $(CURDIR)/rust-modules/$(FUZZ_TDIR)
+fuzz-hud: DISK_NEED = 3.3
 check-replay sim-macos: DISK_TREE = $(abspath $(SIM_TDIR)$(if $(LAB),-lab,))
 sim-linux: DISK_TREE = $(abspath $(SIM_LINUX_TDIR_ENV))
 screenshots-sim: DISK_TREE = $(abspath $(SHOT_TDIR))
@@ -1795,6 +1808,18 @@ test-hostsim:
 	  $(HOST_ENV) \
 	  $(UNIT_RUN) --require-match $(if $(T),--filter '$(T)') -- cargo +$(RUST_TOOLCHAIN) test --lib $(addprefix -p ,$(HOSTSIM_PKGS)) --features hostsim
 
+# `make fuzz-hud [T=<target>] [SECS=60]` -- the `cargo fuzz` package over every parser a HUD package or the
+# registry reaches (`fuzz/`: its own workspace, outside rust-modules, so nothing shipped names it). T is one
+# or more targets (`python3 tools/fuzz-hud.py list`), default all; SECS is the time per target, run one after
+# another. It builds on the nightly toolchain (FUZZ_TOOLCHAIN, default `nightly`) in its own tree, copies its
+# seeds from fixtures the repository already has, and fails when any target crashes (the input lands in
+# fuzz/artifacts/<target>/). FUZZ_WORK=<dir> moves seeds, corpora and artifacts off a slow disk.
+# docs/agent-reference.md, the `make fuzz-hud` entry.
+FUZZ_TDIR = target-fuzz
+.PHONY: fuzz-hud
+fuzz-hud:
+	@PATH="$$HOME/.cargo/bin:$$PATH" python3 tools/fuzz-hud.py run --secs $(or $(strip $(SECS)),60) $(T)
+
 # `make check-nodef` -- type-check the SHIPPING feature set (`--no-default-features`: devtools,
 # devtriggers and threadcheck off, what `RELEASE=1` builds). `make check`, `make` and `make sim` all
 # build the DEV features, so a break that only the release set has is invisible to every one of them
@@ -1904,12 +1929,38 @@ check-python-harness:
 #    this app did for seven weeks, because the signal is MASKED inside its own handler, so
 #    `raise()` returned and the `_exit(128+sig)` beneath it ran every time.
 # 3. The shim's private log files (ci/private-log-test.c).
+# 4. The libc `exit` interposer (src/exit.c), LINUX ONLY. Two temporary files stand in for the event log
+#    and the crash log; a forked child installs the real crash tracer (src/crashtrace.c, linked with
+#    the test; no Rust) onto them, `dlopen`s a library by path (ci/exit-interpose-lib.c: it registers
+#    a finalizer that would `_exit(42)`, then calls `exit(7)`) and calls it from a second thread named
+#    `exit-caller`, the shape of PLX-NATIVE-1P's SDLTimer thread. The executable is built twice. With
+#    src/exit.c linked and the link's own EXIT_INTERPOSER_LDFLAG, the child must end with 7: the real
+#    status survived, the finalizer never ran, and BOTH the event log and the crash log hold the
+#    `*** EXIT status=7 caller=0x` record (plx_exit_record) with a `time:` line, a `thread:` line
+#    naming `exit-caller` and an `at:` line naming libexitcaller.so (no `bin:` line): the next
+#    launch's importer reads the crash log and reports the record, as an error and not a crash.
+#    Without src/exit.c (crashtrace.c still linked) it must end with 42, which is
+#    what proves the test can fail. (The flag is not the variable between the two:
+#    ld exports an executable's `exit` anyway, because libc.so defines it too, measured with the
+#    NDK's ld; what ships is asserted on the artifact by ci/check-elf.sh.) The library is opened by
+#    path, never linked: a shared object on the link line can change what the linker exports. Darwin's
+#    two-level namespace does not bind a dylib's `exit` to an executable's, so the test cannot run on
+#    a Mac and prints a skip line there; CI's Linux `make check` runs it.
 .PHONY: check-c-unit
 check-c-unit:
 	@set -e; d=$$(mktemp -d "$${TMPDIR:-/tmp}/plx-c-unit.XXXXXX"); trap 'rm -rf "'"$$d"'"' EXIT; \
 	cc -O1 -Wall -Wextra -Werror -Isrc -DPLX_APPID_STABLE='"$(APPID_STABLE)"' -o "$$d/crashfmt" ci/crashfmt-test.c && "$$d/crashfmt"; \
 	cc -O1 -Wall -Wextra -Werror -Isrc -DPLX_APPID_STABLE='"$(APPID_STABLE)"' -o "$$d/crashtrace" ci/crashtrace-test.c src/crashtrace.c && "$$d/crashtrace"; \
-	cc -O1 -Wall -Wextra -Werror -Isrc -o "$$d/private-log" ci/private-log-test.c && "$$d/private-log"
+	cc -O1 -Wall -Wextra -Werror -Isrc -o "$$d/private-log" ci/private-log-test.c && "$$d/private-log"; \
+	if [ "$$(uname -s)" = Linux ]; then \
+	  cc -O1 -Wall -Wextra -Werror -shared -fPIC -o "$$d/libexitcaller.so" ci/exit-interpose-lib.c; \
+	  cc -O1 -Wall -Wextra -Werror -Isrc -DPLX_APPID_STABLE='"$(APPID_STABLE)"' -o "$$d/exit-interposed" ci/exit-interpose-test.c src/crashtrace.c src/exit.c $(EXIT_INTERPOSER_LDFLAG) -ldl -lpthread; \
+	  "$$d/exit-interposed" "$$d/libexitcaller.so" interposed; \
+	  cc -O1 -Wall -Wextra -Werror -Isrc -DPLX_APPID_STABLE='"$(APPID_STABLE)"' -o "$$d/exit-control" ci/exit-interpose-test.c src/crashtrace.c -ldl -lpthread; \
+	  "$$d/exit-control" "$$d/libexitcaller.so" control; \
+	else \
+	  echo "check-c-unit: exit-interpose test skipped on $$(uname -s): only Linux binds a shared object's exit() to the executable's (CI runs it)"; \
+	fi
 
 check-python-rest:
 	@python3 tools/check-parallel.py --steps ci/check-python-steps.txt
