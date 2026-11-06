@@ -14,7 +14,7 @@
 //!
 //! The hook is the [`alt!`] macro at the top of each method body.
 
-use crate::plex::account::{AudioPreferences, PreferenceError};
+use crate::plex::account::{AudioPreferences, MarkerAccess, PreferenceError};
 use crate::plex::notify::{Notification, NotifyEnd};
 use crate::plex::{
     MediaContainer, Metadata, PageReq, SearchKind, SectionQuery, StreamUrl, TimelineReport, TranscodeSpec, Trickplay,
@@ -231,6 +231,12 @@ pub trait Backend: Send + Sync {
     /// the page showed, with that change applied. Answers the preferences now in force.
     fn save_audio_preferences(&self, previous: &AudioPreferences, next: &AudioPreferences)
         -> Result<AudioPreferences, PreferenceError> {
+        Err(PreferenceError::Unavailable)
+    }
+    /// Which skip markers the signed-in viewer may act on (`PreferenceRequest::load_marker_access`),
+    /// in place of the plex.tv features a Plex Pass unlocks. The server hands out its markers to
+    /// everyone who can play, so a backend without a paid tier grants both.
+    fn marker_access(&self) -> Result<MarkerAccess, PreferenceError> {
         Err(PreferenceError::Unavailable)
     }
 }

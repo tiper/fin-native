@@ -471,6 +471,7 @@ impl PreferenceRequest {
     fn load_marker_access_with(&self, current: impl Fn() -> bool,
         mut read: impl FnMut(&str) -> Result<Vec<u8>, PreferenceError>) -> Result<MarkerAccess, PreferenceError> {
         if !current() { return Err(PreferenceError::Stale); }
+        crate::alt!(b => b.marker_access());
         let user: AccountUser = serde_json::from_slice(&read("/api/v2/user")?)
             .map_err(|_| PreferenceError::InvalidResponse)?;
         if (self.user.id == 0 && self.user.uuid.is_empty()) || !user.matches_identity(&self.user) {
