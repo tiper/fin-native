@@ -1230,6 +1230,7 @@ mod tests {
             video_ceiling: Default::default(),
             app_lossy: plx_platform::devcaps::AppLossy::Off,
             app_lossy_in_force: Default::default(),
+            dv_first_picture: plx_platform::devcaps::DvFirstPicture::AnyIrap,
             },
             s.contract.delivery,
         );
@@ -1642,6 +1643,7 @@ mod tests {
             video_ceiling: Default::default(),
             app_lossy: plx_platform::devcaps::AppLossy::Off,
             app_lossy_in_force: Default::default(),
+            dv_first_picture: plx_platform::devcaps::DvFirstPicture::AnyIrap,
         };
         let p = super::profile_for(&caps);
         assert!(!p.contains("hevc"), "hevc must not appear anywhere in {p}");
@@ -1677,6 +1679,7 @@ mod tests {
                 video_ceiling: Default::default(),
                 app_lossy: plx_platform::devcaps::AppLossy::Off,
                 app_lossy_in_force: Default::default(),
+                dv_first_picture: plx_platform::devcaps::DvFirstPicture::AnyIrap,
             },
         ] {
             let p = super::profile_for(&caps);
@@ -1709,6 +1712,7 @@ mod tests {
             video_ceiling: Default::default(),
             app_lossy: plx_platform::devcaps::AppLossy::Off,
             app_lossy_in_force: Default::default(),
+            dv_first_picture: plx_platform::devcaps::DvFirstPicture::AnyIrap,
         };
         let p = super::profile_for(&caps);
         let dp = p.split("add-transcode-target").next().unwrap();
