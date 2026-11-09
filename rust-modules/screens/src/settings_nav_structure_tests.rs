@@ -386,7 +386,7 @@ fn every_pushed_picker_opens_on_its_checked_line_and_pops_to_its_row() {
         other => panic!("{other:?} is not a local picker"),
     };
     let playback = super::super::preferences::nav_items_for_test(super::super::preferences::Kind::Playback, None);
-    assert_eq!(playback.len(), 10, "every Playback picker and the Player HUD page are in the table: {playback:?}");
+    assert_eq!(playback.len(), 11, "every Playback picker and the Player HUD page are in the table: {playback:?}");
     assert_eq!(playback.iter().filter(|(_, d)| *d == SettingsPage::PlayerHud).count(), 1, "the Player HUD row is the one that is not a picker");
     for &(row, dest) in playback.iter().filter(|(_, d)| *d != SettingsPage::PlayerHud) {
         let SettingsPage::Picker(kind) = dest else { panic!("a Playback row pushes a picker: {dest:?}") };
