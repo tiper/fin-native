@@ -212,6 +212,9 @@ impl RetranscodeClaimResult {
 pub(super) enum ClaimWork {
     /// One `/decision` attempt for this contract ([`try_retranscode`]).
     Encode(plx_plex::plex::EncodeContract),
+    /// A refusal conversion carries the requested facet identity through the worker. Its
+    /// output codecs or changing URL cannot mint another finite recovery offer.
+    EncodeRecovery(plx_plex::plex::EncodeContract, super::backend_policy::OfferId),
     /// A recovery back to the Original ([`run_original_recovery`]).
     RecoverOriginal(Box<OriginalRecoveryPlan>),
     /// A transcode rebuilt at an offset ([`run_rebase`]): an adaptive refresh, or a seek.
@@ -314,12 +317,17 @@ fn run_retranscode_claim_worker(
     // fallback ([`plan_claim_flight`]), so a recovery with neither (the no-Plex fixture has no
     // client to capture them from) flies without them.
     let claim_inputs = || inputs.expect("an encode, or a recovery owing a rebuild, is dispatched with its claim inputs");
+    let recovery_recipe = match &work {
+        ClaimWork::EncodeRecovery(_, id) => Some(*id),
+        _ => None,
+    };
     match work {
         ClaimWork::Rebase(_) | ClaimWork::AutoHls(_) | ClaimWork::KeepRoute => unreachable!("handled above"),
-        ClaimWork::Encode(primary_contract) => {
+        ClaimWork::Encode(primary_contract) | ClaimWork::EncodeRecovery(primary_contract, _) => {
             let inputs = claim_inputs();
             select_streams_for_encode(off, inputs);
-            if let RetranscodeWorkerOutcome::Applied(applied) = try_retranscode(off, inputs, primary_contract) {
+            if let RetranscodeWorkerOutcome::Applied(mut applied) = try_retranscode(off, inputs, primary_contract) {
+                applied.recovery_offer = recovery_recipe;
                 return RetranscodeClaimResult::Retranscode(applied);
             }
         }
@@ -552,7 +560,7 @@ pub enum SeekVerdict {
 /// Drained once a frame by the pump, before it tries to claim a fresh action (a claim stays
 /// `Applying` — see `claim_route_action` — and a seek stays `Preparing`, for as long as this
 /// mailbox is empty, so nothing else can race either). `newer_seek_waiting` is the pump's one read
-/// of `TX.seek_to_ns`: a tap that arrived during a seek's flight sits there untouched, and the
+/// of the readout's pending seek: a tap that arrived during a seek's flight sits there untouched, and the
 /// landing it outdates is discarded rather than installed (the viewer asked for somewhere else
 /// since).
 ///
@@ -683,6 +691,11 @@ fn install_recovery_landing(
             // `install_rebase` settles the start transaction itself on every refusal.
             match install_rebase(ps, plan, outcome) {
                 Some(installed) => {
+                    let _ = ps.qualify_installed_feed_offer(if rollback {
+                        CandidatePurpose::RollbackExisting
+                    } else {
+                        CandidatePurpose::ReopenCurrent
+                    });
                     if rollback {
                         note_original_rolled_back_onto(&installed);
                         crate::player::report::note_delivery_requested_for(
@@ -709,6 +722,7 @@ fn install_recovery_landing(
                 release_rebase_start(owner, ticket);
                 return RecoveryVerdict::Refused;
             };
+            let _ = ps.qualify_installed_feed_offer(CandidatePurpose::NewCandidate);
             // Nothing is playing, so the Original it replaced has nothing left to feed: stop it
             // now, not after a reload that keeps it on screen.
             installed.retire_replaced();
@@ -731,6 +745,11 @@ fn install_recovery_landing(
                 return RecoveryVerdict::Refused;
             }
             install_retranscode_outcome(ps, &applied);
+            let _ = if let Some(id) = applied.recovery_offer {
+                ps.qualify_resolved_feed_offer(id, CandidatePurpose::NewCandidate)
+            } else {
+                ps.qualify_installed_feed_offer(CandidatePurpose::NewCandidate)
+            };
             // The attempt now lacks the facet the pipeline refused: the Original candidate the ABR
             // climb would return to is graded against it again, so the climb does not propose the
             // refused audio's direct play or the refused video raster.
@@ -873,11 +892,15 @@ fn install_claim_landing(
             }
         }
         RetranscodeClaimResult::NativeAudio { ordinal, codec } => {
-            // `stage_native_audio` moves `ps.stream_acodec`; it touches no other projection field
-            // (the desired audio index and cues live outside it).
-            advance_claim_snapshot(&mut action, |p| p.stream_acodec = codec.clone());
-            crate::player::stage_native_audio(ps, ordinal, &codec);
-            ClaimTail::NativeAudio
+            if !ps.backends().feed {
+                ClaimTail::Rejected("native audio requires Feed")
+            } else {
+                // `stage_native_audio` moves `ps.stream_acodec`; it touches no other projection field
+                // (the desired audio index and cues live outside it).
+                advance_claim_snapshot(&mut action, |p| p.stream_acodec = codec.clone());
+                crate::player::route_fx::stage_native_audio(ps, ordinal, &codec);
+                ClaimTail::NativeAudio
+            }
         }
         // Only a recovery flight dispatches KeepRoute, and its landing is `install_recovery_landing`'s.
         RetranscodeClaimResult::KeepRoute => ClaimTail::Rejected(RETRANSCODE_REJECTED),

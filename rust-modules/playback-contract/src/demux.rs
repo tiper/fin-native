@@ -150,6 +150,8 @@ pub enum DemuxEffect {
     TransportRc(i32),
     NetworkBytes(i64),
     DurationNs(i64),
+    /// The stream carries no length of its own: the item's runtime stands in, when one was planned.
+    AdoptDurationHint,
     VideoRaster { width: i32, height: i32 },
     VideoTailNs(i64),
     AudioTailNs(i64),

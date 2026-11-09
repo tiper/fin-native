@@ -343,8 +343,8 @@ fn the_playing_item_cache_hits_only_for_the_same_item_on_the_same_server() {
 #[test]
 fn the_playing_item_carries_its_runtime() {
     let it: plx_plex::plex::Metadata = serde_json::from_value(serde_json::json!({ "duration": 5_964_000 })).unwrap();
-    assert_eq!(playing_item_from(SRV_A, "42", Some(&it)).duration_ms, 5_964_000);
-    assert_eq!(playing_item_from(SRV_A, "42", None).duration_ms, 0);
+    assert_eq!(playing_item_from(SRV_A, "42", Some(&it)).duration_ms, Some(5_964_000));
+    assert_eq!(playing_item_from(SRV_A, "42", None).duration_ms, None);
 }
 
 /// `PlayingItem.kind` is the played item's own Plex type, read from the same wire `type` the

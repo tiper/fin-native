@@ -69,7 +69,7 @@ pub fn draw_scrub_thumb(t: &mut ScrubThumb, ps: &plx_media::route::PlaybackSessi
         t.shown = Some((tile.index, tile.width, tile.height));
     }
     let (Some((_, w, h)), true) = (t.shown, t.tex != 0) else { return };
-    let dur = plx_media::player::duration_ns();
+    let dur = plx_media::player::duration_ns(ps).unwrap_or(0);
     let frac = if dur > 0 { scrub as f64 / dur as f64 } else { 0.0 };
     let r = scrub_thumb_rect(frac, w, h, bar);
     draw(Painter::root(), r, t.tex, w as f32, h as f32, None);

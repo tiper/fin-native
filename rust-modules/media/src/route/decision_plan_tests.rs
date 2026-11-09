@@ -156,7 +156,7 @@ fn apply_plan_hints_the_items_runtime_for_a_server_stream_only() {
     let mut ps = crate::route::PlaybackSession::IDLE;
     let _g = fresh_registry(&mut ps);
     let playing = || {
-        Some(plx_data::metadata::PlayingItem { duration_ms: 5_400_000, ..plx_data::metadata::PlayingItem::with_subs(Vec::new()) })
+        Some(plx_data::metadata::PlayingItem { duration_ms: Some(5_400_000), ..plx_data::metadata::PlayingItem::with_subs(Vec::new()) })
     };
     apply_plan(
         &mut ps,
