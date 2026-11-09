@@ -151,8 +151,8 @@ fn slot_of(occupant: Occupant) -> ControlSlot {
 /// mismatching table row that looks like a behaviour change.
 fn assert_idle_playhead() {
     use std::sync::atomic::Ordering::Relaxed;
-    assert_eq!(plx_media::player::SHARED.duration_ns.load(Relaxed), 0, "a leaked duration");
-    assert!(!plx_media::player::TX.paused.load(Relaxed), "a leaked pause");
+    assert_eq!(plx_play_feed::shared::FEED_SHARED.duration_ns.load(Relaxed), 0, "a leaked duration");
+    assert!(!plx_play_feed::shared::FEED_TX.paused.load(Relaxed), "a leaked pause");
     let ps = plx_media::route::idle_session_for_test();
     assert!(!plx_media::player::loading(ps), "a busy pipeline");
     assert_ne!(
@@ -186,12 +186,13 @@ impl Mounter<TestHost> for PinMounter {
 struct PinRig {
     mounter: PinMounter,
     measure: FixtureMeasure,
+    session: plx_media::route::PlaybackSession,
     reqs: Vec<PlayerReq>,
     perform: bool,
 }
 impl Rig<TestHost> for PinRig {
     fn split(&mut self) -> Split<'_, TestHost> {
-        Split { mounter: &mut self.mounter, views: (), measure: &self.measure }
+        Split { mounter: &mut self.mounter, views: &self.session, measure: &self.measure }
     }
     fn deliver(&mut self, _: MachineId, _: &AppMsg, _: &CxParts<u32>, _: &mut Effects<'_, TestHost>) -> Handled {
         Handled::No
@@ -285,7 +286,8 @@ impl Run {
         perform: bool,
     ) -> Run {
         let mut d: Dispatcher<TestHost> = Dispatcher::new();
-        let mut rig = PinRig { mounter: PinMounter { package }, measure: FixtureMeasure, reqs: Vec::new(), perform };
+        let mut rig = PinRig { mounter: PinMounter { package }, measure: FixtureMeasure,
+            session: super::playback_session(0, 0), reqs: Vec::new(), perform };
         d.request(MachineId::Nav, NavOp::Root(FixtureArg::VideoPlane));
         d.frame_with(&mut rig, tick(0), vec![], vec![], &mut NoTap, false);
         let id = d.nav.top_page().expect("the player page mounted").id;
@@ -343,9 +345,6 @@ impl Run {
             e
         };
         let now = self.now;
-        let ps = plx_media::route::idle_session_for_test();
-        // the app's per-key preamble, before the key-down frame
-        self.screen().hud.note_fresh_press(ps, now, false);
         self.frame(now, vec![coded(key(k, tick(now)))]);
         self.frame(now + 16, vec![]);
         self.frame(now + 112, vec![coded(key_up(k, tick(now + 112)))]);
@@ -356,8 +355,6 @@ impl Run {
     /// roughly 50 ms), then the release.
     fn press_held(&mut self, k: Key, repeat_at: &[u32]) {
         let now = self.now;
-        let ps = plx_media::route::idle_session_for_test();
-        self.screen().hud.note_fresh_press(ps, now, false);
         let with = |edge: plx_machine::machine::Edge, at: u32| {
             let mut e = key(k, tick(at));
             if let plx_machine::machine::InputKind::Key { edge: ed, .. } = &mut e.kind {
@@ -461,6 +458,7 @@ impl Chaptered {
             plx_data::metadata::PlayingItem {
                 sid: plx_plex::plex::ServerId::from_raw(0),
                 rk: "rk".into(),
+                duration_ms: None,
                 show_rk: String::new(),
                 kind: String::new(),
                 audio: Vec::new(),
@@ -473,7 +471,6 @@ impl Chaptered {
                 markers: Vec::new(),
                 chapters: (1..=count).map(chapter).collect(),
                 hdr: false,
-                duration_ms: 0,
             }
         ))));
         Chaptered
@@ -1731,19 +1728,6 @@ mod sections {
         assert!(run.asked().is_empty(), "walking asks the app for nothing");
     }
 
-    /// A playing film's length, for the keys whose meaning needs a bar to scrub; the harness's idle playhead has none.
-    struct Duration(i64);
-    impl Duration {
-        fn of(ns: i64) -> Self {
-            Self(plx_media::player::SHARED.duration_ns.swap(ns, std::sync::atomic::Ordering::Relaxed))
-        }
-    }
-    impl Drop for Duration {
-        fn drop(&mut self) {
-            plx_media::player::SHARED.duration_ns.store(self.0, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
     /// **FAST-FORWARD and REWIND do nothing under a modal page.** They reach the machine as `Key::Other` (only the
     /// D-pad arrows navigate), so the engine never moves on them and the overlay panel ignored them. They are
     /// `Left` / `Right { alt: true }` to the screen, and `jump_key` runs before any section check: a film with a
@@ -1754,7 +1738,6 @@ mod sections {
     fn fast_forward_and_rewind_do_nothing_under_a_modal_page() {
         let _g = plx_base::testlock::serial();
         assert_idle_playhead();
-        let _length = Duration::of(7_200_000_000_000);
         let _chapters = Chaptered::install();
         for (open, section, group, key_wcode) in [
             (1, Section::Chapters, GROUP_STRIP.0, plx_ui::consts::WCODE_FASTFORWARD),
@@ -1763,6 +1746,9 @@ mod sections {
             (0, Section::Info, GROUP_SECTION.0, plx_ui::consts::WCODE_REWIND),
         ] {
             let mut run = classic_run(Occupant::Plain);
+            let mut facts = *run.rig.session.attempt_view().facts();
+            facts.duration_ns = Some(7_200_000_000_000);
+            super::super::publish_facts(&mut run.rig.session, facts);
             run.open_from_tab(open);
             let held = run.held();
             run.asked();
@@ -2808,8 +2794,6 @@ mod sections {
         // lands on moves neither the section nor the limit, the next frame moves both
         let now = run.now + 16;
         run.now = now;
-        let ps = plx_media::route::idle_session_for_test();
-        run.screen().hud.note_fresh_press(ps, now, false);
         run.frame(now, vec![key(Key::Back, tick(now))]);
         assert!(run.open_sections().is_empty(), "BACK closed it");
         assert_eq!((run.appear(Section::Info), limit(&mut run)), (1.0, 656.0), "the dismissal frame moves nothing");
@@ -2869,8 +2853,6 @@ mod sections {
             assert_eq!(run.appear(section), 1.0);
             let now = run.now + 16;
             run.now = now;
-            let ps = plx_media::route::idle_session_for_test();
-            run.screen().hud.note_fresh_press(ps, now, false);
             run.frame(now, vec![key(Key::Back, tick(now))]);
             assert!(run.open_sections().is_empty(), "{section:?}: BACK closed it");
             assert_eq!(run.appear(section), 1.0, "{section:?}: the frame BACK landed on draws it whole");

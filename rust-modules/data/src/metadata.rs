@@ -2621,6 +2621,8 @@ pub struct PlayingItem {
     /// The played item's own Plex type (`movie` | `episode` | `track` | `clip` | ...), empty when
     /// the server sent none. Read from the same `type` the detail page's [`Detail::kind`] reads.
     pub kind: String,
+    /// Positive PMS item duration for the selected leaf, in milliseconds. Missing stays unknown.
+    pub duration_ms: Option<u64>,
     pub audio: Vec<Stream>,
     pub subs: Vec<Stream>,
     pub video_fps: f64, // the played leaf's video fps (0 = unknown) — feeds the Load esInfo
@@ -2647,9 +2649,6 @@ pub struct PlayingItem {
     /// (`convert_streams`' `hdr`). The SOURCE's fact, not the picture's: a server re-encode to SDR
     /// keeps it true, so the HDR overlay dim also asks the route (`route::overlay_gain`).
     pub hdr: bool,
-    /// The item's own runtime in ms (0 = the server did not say). The player publishes it as the
-    /// duration of a stream that carries none of its own (a live-written container).
-    pub duration_ms: i64,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -2662,6 +2661,7 @@ impl PlayingItem {
             rk: "rk".into(),
             show_rk: String::new(),
             kind: String::new(),
+            duration_ms: None,
             audio: Vec::new(),
             subs,
             video_fps: 0.0,
@@ -2672,7 +2672,6 @@ impl PlayingItem {
             markers: Vec::new(),
             chapters: Vec::new(),
             hdr: false,
-            duration_ms: 0,
         }
     }
 }
@@ -2711,6 +2710,7 @@ fn cached_playing(state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str
             rk: rk.to_string(),
             show_rk: d.show_rk.clone(),
             kind: d.kind.clone(),
+            duration_ms: u64::try_from(d.dur_ms).ok().filter(|ms| *ms > 0),
             audio: d.audio.clone(),
             subs: d.subs.clone(),
             video_fps: d.video_fps,
@@ -2721,7 +2721,6 @@ fn cached_playing(state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str
             markers: d.markers.clone(),
             chapters: d.chapters.clone(),
             hdr: d.hdr,
-            duration_ms: d.dur_ms,
         })
 }
 
@@ -2741,10 +2740,20 @@ pub fn fetch_playing_item(
     rk: &str,
     want: Option<plx_plex::plex::MediaId>,
 ) -> Option<(PlayingItem, Option<PlayedVersion>)> {
+    fetch_playing_item_choosing(client, sid, rk, |_| want)
+}
+
+pub fn fetch_playing_item_choosing(
+    client: &'static plx_plex::plex::Client,
+    sid: plx_plex::plex::ServerId,
+    rk: &str,
+    choose: impl FnOnce(&plx_plex::plex::Metadata) -> Option<plx_plex::plex::MediaId>,
+) -> Option<(PlayingItem, Option<PlayedVersion>)> {
     if rk.is_empty() {
         return None;
     }
     let it = client.metadata(rk);
+    let want = it.as_ref().and_then(choose);
     Some(playing_version_from(sid, rk, it.as_ref(), want))
 }
 
@@ -2776,6 +2785,22 @@ pub fn playing_version_from(
         acodec: m.audio_codec.clone(),
     });
     (playing_item_of(sid, rk, it, media), played)
+}
+
+#[cfg(test)]
+#[test]
+fn selected_part_duration_precedes_item_duration_and_unknown_stays_unknown() {
+    let item: plx_plex::plex::Metadata = serde_json::from_str(
+        r#"{"duration":600000,"Media":[{"id":1,"Part":[{"key":"/first","duration":500000}]},{"id":2,"Part":[{"key":"/second","duration":450000}]}]}"#,
+    ).expect("PMS item fixture");
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let (selected, _) = playing_version_from(sid, "item", Some(&item), Some(plx_plex::plex::MediaId(2)));
+    assert_eq!(selected.duration_ms, Some(450_000));
+    let unknown: plx_plex::plex::Metadata = serde_json::from_str(
+        r#"{"Media":[{"id":2,"Part":[{"key":"/second"}]}]}"#,
+    ).expect("PMS item without duration");
+    let (selected, _) = playing_version_from(sid, "item", Some(&unknown), Some(plx_plex::plex::MediaId(2)));
+    assert_eq!(selected.duration_ms, None);
 }
 
 /// The conversion half of [`fetch_playing_item`] for the default version, pure so the parse is
@@ -2816,13 +2841,15 @@ fn playing_item_of(
     // the frame size rides the same version the streams come from (route.rs's
     // direct-play gate tests it against the device bound — see the field doc)
     let (width, height, bitrate) = media.map_or((0, 0, 0), |m| (m.width, m.height, m.bitrate));
-    let duration_ms = it.map_or(0, |it| it.duration);
     let kind = it.map(|it| it.kind.clone()).unwrap_or_default();
     PlayingItem {
         sid,
         rk: rk.to_string(),
         show_rk,
         kind,
+        duration_ms: media.and_then(|m| m.part.first())
+            .and_then(|part| u64::try_from(part.duration).ok()).filter(|ms| *ms > 0)
+            .or_else(|| it.and_then(|it| u64::try_from(it.duration).ok()).filter(|ms| *ms > 0)),
         audio,
         subs,
         video_fps,
@@ -2833,7 +2860,6 @@ fn playing_item_of(
         markers,
         chapters,
         hdr,
-        duration_ms,
     }
 }
 
