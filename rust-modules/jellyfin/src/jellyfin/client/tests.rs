@@ -78,7 +78,7 @@ fn base_addresses_are_normalized() {
 #[test]
 fn plex_shaped_image_paths_become_jellyfin_images() {
     assert_eq!(plex_image_path("/library/metadata/abc/clearLogo").as_deref(), Some("/Items/abc/Images/Logo?quality=90"));
-    assert_eq!(plex_image_path("/library/metadata/abc/thumb/123").as_deref(), Some("/Items/abc/Images/Primary?quality=90"));
+    assert_eq!(plex_image_path("/library/metadata/abc/art/b1").as_deref(), Some("/Items/abc/Images/Backdrop?quality=90&tag=b1"));
     assert_eq!(plex_image_path("/Items/abc/Images/Primary?tag=x"), None);
     // A tag the server gave is in the request, so a replaced image is a new request.
     image_tags::note("tagged", paths::ImageKind::Logo, "l2");
