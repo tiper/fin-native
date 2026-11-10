@@ -429,8 +429,9 @@ pub struct LibraryPage<'a> {
     pub size: i64,
 }
 
-/// An image path the app builds itself in Plex's shape (`/library/metadata/{id}/clearLogo`, `/thumb`,
-/// `/art`) as the Jellyfin image it means. `None` for anything else.
+/// An image path in Plex's shape (`/library/metadata/{id}/clearLogo`, `/thumb`, `/art`, the app's own,
+/// or `/art/{tag}`, the backdrop [`super::translate`] gives a row) as the Jellyfin image it means.
+/// `None` for anything else.
 pub fn plex_image_path(path: &str) -> Option<String> {
     let rest = path.strip_prefix("/library/metadata/")?;
     let rest = rest.split('?').next().unwrap_or(rest);
@@ -442,7 +443,7 @@ pub fn plex_image_path(path: &str) -> Option<String> {
         "art" => ImageKind::Backdrop,
         _ => return None,
     };
-    let tag = image_tags::tag(id, kind);
+    let tag = parts.next().filter(|t| !t.is_empty()).map(str::to_string).or_else(|| image_tags::tag(id, kind));
     Some(paths::image(id, kind, tag.as_deref(), 0, 0))
 }
 

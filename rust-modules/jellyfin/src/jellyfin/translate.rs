@@ -299,14 +299,18 @@ fn primary_image(i: &BaseItemDto) -> String {
 }
 
 /// The item's own backdrop, else the one it inherits (an episode or season shows its series').
+/// The backdrop in Plex's own art shape, `/library/metadata/{id}/art/{tag}`: no query, and a new
+/// image is a new path, so it can name a Continue Watching card's composite
+/// (`plx_plex::plex::artwork::card_path`). [`super::client::plex_image_path`] requests it.
 fn backdrop_image(i: &BaseItemDto) -> String {
-    if let Some(tag) = i.backdrop_image_tags.first() {
-        return paths::image(&normalize(&i.id), ImageKind::Backdrop, Some(tag), 0, 0);
-    }
-    match (i.parent_backdrop_item_id.as_deref(), i.parent_backdrop_image_tags.first()) {
-        (Some(pid), Some(tag)) => paths::image(&normalize(pid), ImageKind::Backdrop, Some(tag), 0, 0),
-        _ => String::new(),
-    }
+    let (id, tag) = match i.backdrop_image_tags.first() {
+        Some(tag) => (i.id.as_str(), tag),
+        None => match (i.parent_backdrop_item_id.as_deref(), i.parent_backdrop_image_tags.first()) {
+            (Some(pid), Some(tag)) => (pid, tag),
+            _ => return String::new(),
+        },
+    };
+    format!("/library/metadata/{}/art/{tag}", normalize(id))
 }
 
 /// The page's ambient colours (PMS's `UltraBlurColors`) from the BlurHash of the backdrop
@@ -886,7 +890,7 @@ mod tests {
         assert_eq!((m.duration, m.view_offset, m.view_count), (596_400, 120_000, 0));
         assert!(m.last_viewed_at > 0);
         assert_eq!(m.thumb, "/Items/f137a2dd21bbc1b99aa5c0f6bf02a805/Images/Primary?quality=90&tag=p1");
-        assert_eq!(m.art, "/Items/f137a2dd21bbc1b99aa5c0f6bf02a805/Images/Backdrop?quality=90&tag=b1");
+        assert_eq!(m.art, "/library/metadata/f137a2dd21bbc1b99aa5c0f6bf02a805/art/b1");
         assert_eq!(m.genre.iter().map(|g| g.tag.as_str()).collect::<Vec<_>>(), ["Animation", "Comedy"]);
         assert_eq!(m.director[0].tag, "Sacha Goedegebure");
         assert_eq!((m.role[0].tag.as_str(), m.role[0].role.as_str()), ("Bunny", "Himself"));
@@ -947,7 +951,15 @@ mod tests {
         assert_eq!((m.grandparent_rating_key.as_str(), m.grandparent_title.as_str()), ("s1", "The Show"));
         assert_eq!((m.parent_index, m.index, m.view_count), (Some(1), 3, 2));
         assert_eq!(m.grandparent_thumb, "/Items/s1/Images/Primary?quality=90&tag=sp");
-        assert_eq!(m.art, "/Items/s1/Images/Backdrop?quality=90&tag=pb", "an episode shows its series' backdrop");
+        assert_eq!(m.art, "/library/metadata/s1/art/pb", "an episode shows its series' backdrop");
+    }
+
+    /// A Continue Watching card draws the composite of the title's backdrop and logo
+    /// (`plx_plex::plex::artwork::card_path`): a Jellyfin row's id and backdrop make that key.
+    #[test]
+    fn a_continue_watching_row_has_a_composite_key() {
+        let m = metadata(&parse(MOVIE), &Ctx { sections: &SectionIds::new(), section_guid: None }).unwrap();
+        assert!(plx_plex::plex::artwork::card_path(&m.rating_key, &m.art).is_some(), "{} {}", m.rating_key, m.art);
     }
 
     #[test]

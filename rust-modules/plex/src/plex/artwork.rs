@@ -9,7 +9,7 @@
 //!   and how its URL is rendered is the worker's business, not the key's.
 //! * `/plx/card/{logo_rk}{art}`: our own composite of the server's background `art` (a server-relative
 //!   path such as `/library/metadata/605/art/1778546279`, kept whole so a new background is a new
-//!   key) and the clearLogo of the item `logo_rk` (a decimal rating key; an episode's logo is its
+//!   key) and the clearLogo of the item `logo_rk` (a rating key; an episode's logo is its
 //!   show's, so it is not the rating key of the row).
 //!
 //! **No key carries a credential**: both are built from ids and a path with no query, so a key can be
@@ -29,9 +29,9 @@ fn is_catalog_hex(s: &str) -> bool {
     s.len() == 24 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// A PMS rating key as the composite key spells it: decimal digits.
+/// A rating key as the composite key spells it: decimal digits, or lowercase hexadecimal.
 fn is_rating_key(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+    !s.is_empty() && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// A server-relative art path the composite key can carry whole: absolute (one leading `/`, never a
