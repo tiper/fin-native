@@ -12,7 +12,7 @@ use super::prefs::{Descriptor, Fallback, ListRow, Parse, ProfileMemory, Row, Sco
 use super::prefs::{DolbyVisionModePref, AudioConversionPref, InstantDpadSeekingPref, UriEnginePref, AudioEnhancementsPref, AutoSignInPref, DeckPressPref, UnderPostersPref, DirectPlayModePref, LastHeroBlurPref,
     LastLibraryRow, LibraryViewsRow, NextEpisodeModePref, PlaintextConsentRow, QualityPref, ServerKeyPinsRow,
     HdrOverlayBrightnessPref, SkipIntervalPref, SubtitleOffsetsPref, SubtitlePositionPref, SubtitleSizePref, SubtitleTonePref,
-    HoldHintTaughtPref, TrailerAutoplayPref, UiResolutionPref};
+    HoldHintTaughtPref, HudEndTimePref, TrailerAutoplayPref, UiResolutionPref};
 use super::{
     DolbyVisionMode, AudioConversion, InstantDpadSeeking, UriEngine, CanonicalSessionPreferences, DeckPress, UnderPosters, UnderPostersLadder, DetailPart, DetailParts, DirectPlayMode, LastLibrary, LibraryViews, NextEpisodeMode,
     PlaintextChoice, PlaintextConsent, PlaybackQuality, Preferences, ServerKeyPin, Session, SkipInterval,
@@ -122,6 +122,7 @@ fn every_marker_names_its_own_field() {
     // A5: the remaining `Copy` rows.
     check_row::<AutoSignInPref>(true);
     check_row::<TrailerAutoplayPref>(true);
+    check_row::<HudEndTimePref>(false);
     check_row::<LastHeroBlurPref>(Some([[0.5, 0.25, 0.125]; 4]));
     check_row::<UiResolutionPref>(UiResolution::Hd720);
     check_row::<HoldHintTaughtPref>(HoldHintTaught { card: true, pill: false });
@@ -356,6 +357,7 @@ fn garbage_fixtures() -> Vec<(&'static str, Vec<Value>)> {
         ("ui_resolution", generic()),
         ("hold_hint_taught", generic()),
         ("trailer_autoplay", not_a_bool()),
+        ("hud_end_time", not_a_bool()),
         ("last_hero_blur", vec![Value::Null, json!("zzz"), json!(17), json!([1, "x"]), json!([[1, 2, 3]]), json!({"unexpected": 1})]),
         // A list's garbage is anything that is not an array; a mixed array is driven separately.
         ("plaintext_consent", not_a_list()),
