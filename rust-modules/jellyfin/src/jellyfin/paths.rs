@@ -12,8 +12,9 @@
 use plx_plex::plex::urlenc_str as enc;
 
 /// The item fields a listing (a shelf, a grid page) asks for: enough to draw a card and its
-/// progress, nothing that makes the server load streams or people for every row.
-pub const LIST_FIELDS: &str = "PrimaryImageAspectRatio,DateCreated,ChildCount,RecursiveItemCount,Overview,Genres";
+/// progress, nothing that makes the server load streams or people for every row. `Width` and
+/// `Height` are the item's own stored frame size (no stream read), for the card's resolution mark.
+pub const LIST_FIELDS: &str = "PrimaryImageAspectRatio,DateCreated,ChildCount,RecursiveItemCount,Overview,Genres,Width,Height";
 
 /// The item fields a detail page asks for.
 pub const DETAIL_FIELDS: &str = "Overview,Genres,People,Studios,Taglines,ProductionLocations,\
