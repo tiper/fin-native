@@ -698,9 +698,9 @@ fn playback_info_asks_with_the_profile_and_its_stream_is_ours_to_stop() {
     let v = c.playback_info("e1", Some("ms1"), Some(1), Some(3), &profile).unwrap();
     assert!(!v.direct_play && v.video_encode && !v.audio_encode);
     {
+        // The policy read runs beside the verdict, so the log's order is not fixed.
         let log = fake.log.lock().unwrap();
-        let (path, verb, body, _) = &log[0];
-        assert_eq!(*verb, Verb::Post);
+        let (path, _, body, _) = log.iter().find(|(_, verb, _, _)| *verb == Verb::Post).expect("the verdict is a POST");
         assert!(path.starts_with("/Items/e1/PlaybackInfo?userId=u1&isPlayback=true"));
         assert!(path.contains("&mediaSourceId=ms1&audioStreamIndex=1&subtitleStreamIndex=3"));
         assert_eq!(serde_json::from_str::<serde_json::Value>(body.as_deref().unwrap()).unwrap()["DeviceProfile"]["Name"], "test");
