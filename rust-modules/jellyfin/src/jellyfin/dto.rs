@@ -183,6 +183,9 @@ pub struct BaseItemDto {
     pub parent_index_number: Option<i64>,
     pub child_count: Option<i64>,
     pub recursive_item_count: Option<i64>,
+    /// A video's frame size, as the server stored it from the file's video stream.
+    pub width: Option<i64>,
+    pub height: Option<i64>,
     pub parent_id: Option<String>,
     pub series_id: Option<String>,
     pub series_name: Option<String>,

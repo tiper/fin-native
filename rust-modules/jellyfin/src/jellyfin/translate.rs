@@ -201,6 +201,9 @@ pub fn metadata(i: &BaseItemDto, ctx: &Ctx<'_>) -> Option<Metadata> {
         media: i.media_sources.iter().map(|s| media(&id, s)).collect(),
         ..Default::default()
     };
+    if m.media.is_empty() {
+        m.media.extend(frame_media(i));
+    }
 
     if kind == "clip" {
         // The data layer tells a trailer from the other extras by this (`Extra::is_trailer`).
@@ -609,6 +612,18 @@ pub fn container_name(jf: &str) -> String {
     }
 }
 
+/// A listing row's media: none of its sources, only the frame size the row carries, so a card
+/// and the hero can name the resolution. It has no part, so a play still reads the item's file.
+fn frame_media(i: &BaseItemDto) -> Option<Media> {
+    let (w, h) = (i.width.unwrap_or(0), i.height.unwrap_or(0));
+    (w > 0 && h > 0).then(|| Media {
+        width: w,
+        height: h,
+        video_resolution: resolution(w, h).to_string(),
+        ..Default::default()
+    })
+}
+
 /// One media source as the model's `Media` with its single `Part`.
 pub fn media(item_id: &str, s: &MediaSourceInfo) -> Media {
     let video = s.media_streams.iter().find(|m| m.kind == "Video");
@@ -934,6 +949,23 @@ mod tests {
         assert_eq!((ext.codec.as_str(), ext.forced, ext.selected), ("srt", 1, 0));
         assert_eq!(ext.key, "/Videos/f137a2dd21bbc1b99aa5c0f6bf02a805/f137a2dd21bbc1b99aa5c0f6bf02a805/Subtitles/3/0/Stream.srt");
         assert_eq!((pgs.codec.as_str(), pgs.key.as_str()), ("pgs", ""));
+    }
+
+    #[test]
+    fn a_listing_row_names_its_resolution_from_its_frame_size() {
+        let ids = SectionIds::new();
+        let ctx = Ctx { sections: &ids, section_guid: None };
+        let row = parse(r#"{"Id":"ab12","Name":"Film","Type":"Movie","Width":1920,"Height":800}"#);
+        let m = metadata(&row, &ctx).unwrap();
+        assert_eq!(m.listing_facts().video_resolution.as_deref(), Some("1080"));
+        assert!(m.media[0].part.is_empty(), "no part: a play still reads the item's file");
+
+        let bare = parse(r#"{"Id":"ab12","Name":"Film","Type":"Movie"}"#);
+        assert!(metadata(&bare, &ctx).unwrap().media.is_empty(), "no frame size, no media");
+
+        let full = metadata(&parse(MOVIE), &ctx).unwrap();
+        assert_eq!(full.media.len(), 1, "a row with sources keeps them");
+        assert_eq!(full.listing_facts().video_resolution.as_deref(), Some("4k"));
     }
 
     #[test]
