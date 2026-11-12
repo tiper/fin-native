@@ -733,10 +733,7 @@ fn q_top_b_adaptive_hls_burns_the_remembered_subtitle() {
     let mut case = Case::episode(two_subs(), memory(None, Some(english_track())));
     case.quality = Some(Quality::Auto);
     case.link = Some(plx_plex::plex::probe::Location::Remote);
-    // The mock answers the probe's Range GET with a plain 200, which the transport asks once more
-    // (Cloudflare answers the first Range of an unseen URL that way) before refusing it: 2 probe
-    // GETs, the selection PUT and the transcode decision.
-    case.extra = 4;
+    case.extra = 3;
     let (plan, requests, _) = resolve_logged(case);
     assert!(matches!(plan.contract.delivery, plx_plex::plex::TranscodeDelivery::FixedHls { .. }), "setup: HLS: {requests:?}");
     assert_burned(&plan, &requests, 55001);
