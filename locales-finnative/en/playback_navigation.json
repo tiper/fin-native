@@ -1,0 +1,6 @@
+{
+  "settings.playback.dolby_vision.copy": {
+    "value": "Auto uses Dolby Vision when the TV supports it. Off plays the HDR10 layer instead. Files with no HDR10 layer are converted by your Jellyfin server, and may not play.",
+    "description": "Explanation of the Dolby Vision playback setting. Names the picker's two labels: settings.playback.auto and settings.playback.dolby_vision.off. Off can stop a file with no HDR10 layer (Dolby Vision Profile 5) from playing, because the server may refuse to convert it."
+  }
+}

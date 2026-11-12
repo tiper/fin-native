@@ -27,5 +27,16 @@
   "browse.home.failed": "Server non raggiungibile",
   "browse.login.title": "Accedi a Jellyfin",
   "browse.login.instructions": "Sul telefono o sul computer apri Jellyfin, vai a Quick Connect nelle impostazioni utente e inserisci questo codice. Puoi anche scansionare il codice per aprire quella pagina.",
-  "browse.login.connecting": "Connessione a Jellyfin in corso…"
+  "browse.login.connecting": "Connessione a Jellyfin in corso…",
+  "browse.auth.refused": "Il tuo server ha rifiutato la connessione — controlla le impostazioni di accesso alla rete.",
+  "browse.auth.unreachable": "Nessun server raggiungibile: controlla la connessione.",
+  "browse.auth.insecure": "Trovato il tuo server, ma è impossibile connettersi in modo sicuro (HTTPS). Controlla che il server consenta connessioni sicure e riprova.",
+  "browse.auth.discovery_trouble": "Jellyfin non risponde. Nuovo tentativo in corso…",
+  "browse.auth.plaintext_offer": "Il tuo server è su questa rete ma non può essere raggiunto in modo sicuro. Seleziona Connetti per collegarti senza crittografia.",
+  "browse.auth.plaintext_allowed": "Il tuo server è su questa rete ma non può essere raggiunto in modo sicuro. Seleziona Riprova per collegarti senza crittografia.",
+  "browse.auth.plaintext_declined_signin": "Hai scelto di non connetterti al tuo server senza crittografia. Seleziona Riprova per ricevere nuovamente la richiesta.",
+  "browse.auth.plaintext_revoked_signin": "Le connessioni non crittografate al tuo server sono disattivate. Seleziona Riprova per ricevere nuovamente la richiesta.",
+  "browse.auth.plaintext_declined_signed_in": "Hai scelto di non connetterti al tuo server senza crittografia. Abilitalo in Impostazioni → Connessioni non crittografate.",
+  "browse.auth.plaintext_revoked_signed_in": "Le connessioni non crittografate al tuo server sono disattivate. Attivale in Impostazioni → Connessioni non crittografate.",
+  "browse.auth.plaintext_remote": "Il tuo server ha risposto solo senza crittografia, dall'esterno di questa rete. Controlla l'accesso remoto nelle sue impostazioni."
 }

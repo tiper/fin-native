@@ -6,5 +6,8 @@
   "widgets.repair.start_failed": "Impossibile avviare la riparazione. Chiudi e riapri FinNative per riprovare.",
   "widgets.tracks.enh_note_burn": "I sottotitoli restano attivi. Il server rielaborerà il video per mantenerli, quindi l'immagine potrebbe apparire leggermente più morbida.",
   "widgets.tracks.enh_reason_not_analyzed": "Non ancora disponibile per questo video. Il server deve prima analizzarne l'audio.",
-  "widgets.tracks.enh_reason_refused": "Il server non ha potuto attivare questa opzione per il video."
+  "widgets.tracks.enh_reason_refused": "Il server non ha potuto attivare questa opzione per il video.",
+  "widgets.menu.quality_converted_note": "Il server sta convertendo il video.",
+  "widgets.tracks.enh_reason_converting": "Non disponibile mentre il tuo server converte questo video.",
+  "widgets.tracks.enh_reason_not_copyable": "Il tuo server non può aggiungerlo a questo video in questo momento."
 }

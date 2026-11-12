@@ -6,5 +6,8 @@
   "widgets.repair.start_failed": "No se pudo iniciar la reparación. Cierra y vuelve a abrir FinNative para intentarlo de nuevo.",
   "widgets.tracks.enh_note_burn": "Los subtítulos se mantienen. Tu servidor reprocesará el vídeo para conservarlos, y la imagen puede verse algo menos nítida.",
   "widgets.tracks.enh_reason_not_analyzed": "Este vídeo aún no está listo. Tu servidor necesita analizar primero su sonido.",
-  "widgets.tracks.enh_reason_refused": "Tu servidor no pudo activar esto para este vídeo."
+  "widgets.tracks.enh_reason_refused": "Tu servidor no pudo activar esto para este vídeo.",
+  "widgets.menu.quality_converted_note": "Tu servidor está convirtiendo este vídeo.",
+  "widgets.tracks.enh_reason_converting": "No disponible mientras tu servidor convierte este vídeo.",
+  "widgets.tracks.enh_reason_not_copyable": "Tu servidor no puede añadir esto a este vídeo ahora mismo."
 }

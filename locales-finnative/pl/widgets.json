@@ -6,5 +6,8 @@
   "widgets.repair.start_failed": "Nie udało się rozpocząć naprawy. Zamknij i ponownie otwórz FinNative, aby spróbować jeszcze raz.",
   "widgets.tracks.enh_note_burn": "Napisy zostają włączone. Serwer przetworzy obraz, aby je zachować, więc obraz może być nieco mniej ostry.",
   "widgets.tracks.enh_reason_not_analyzed": "Jeszcze niegotowe dla tego filmu. Serwer musi najpierw przeanalizować jego dźwięk.",
-  "widgets.tracks.enh_reason_refused": "Serwer nie mógł tego włączyć dla tego filmu."
+  "widgets.tracks.enh_reason_refused": "Serwer nie mógł tego włączyć dla tego filmu.",
+  "widgets.menu.quality_converted_note": "Twój serwer konwertuje ten materiał.",
+  "widgets.tracks.enh_reason_converting": "Niedostępne, gdy Twój serwer konwertuje ten materiał.",
+  "widgets.tracks.enh_reason_not_copyable": "Twój serwer nie może teraz zastosować tej funkcji do tego materiału."
 }
