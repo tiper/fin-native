@@ -612,14 +612,22 @@ pub fn container_name(jf: &str) -> String {
     }
 }
 
-/// A listing row's media: none of its sources, only the frame size the row carries, so a card
-/// and the hero can name the resolution. It has no part, so a play still reads the item's file.
+/// A listing row's media: none of its sources, only the frame size and the video stream the row
+/// carries, so a card and the hero can name the resolution and HDR. Its part has no key, so a
+/// play still reads the item's file.
 fn frame_media(i: &BaseItemDto) -> Option<Media> {
     let (w, h) = (i.width.unwrap_or(0), i.height.unwrap_or(0));
     (w > 0 && h > 0).then(|| Media {
         width: w,
         height: h,
         video_resolution: resolution(w, h).to_string(),
+        part: i
+            .media_streams
+            .iter()
+            .find(|m| m.kind == "Video")
+            .and_then(|v| stream(&i.id, &MediaSourceInfo::default(), v))
+            .map(|v| vec![MediaPart { stream: vec![v], ..Default::default() }])
+            .unwrap_or_default(),
         ..Default::default()
     })
 }
@@ -958,7 +966,7 @@ mod tests {
         let row = parse(r#"{"Id":"ab12","Name":"Film","Type":"Movie","Width":1920,"Height":800}"#);
         let m = metadata(&row, &ctx).unwrap();
         assert_eq!(m.listing_facts().video_resolution.as_deref(), Some("1080"));
-        assert!(m.media[0].part.is_empty(), "no part: a play still reads the item's file");
+        assert!(m.media[0].part.is_empty(), "no stream, no part");
 
         let bare = parse(r#"{"Id":"ab12","Name":"Film","Type":"Movie"}"#);
         assert!(metadata(&bare, &ctx).unwrap().media.is_empty(), "no frame size, no media");
@@ -966,6 +974,32 @@ mod tests {
         let full = metadata(&parse(MOVIE), &ctx).unwrap();
         assert_eq!(full.media.len(), 1, "a row with sources keeps them");
         assert_eq!(full.listing_facts().video_resolution.as_deref(), Some("4k"));
+    }
+
+    #[test]
+    fn a_listing_row_is_hdr_by_its_video_stream() {
+        let ids = SectionIds::new();
+        let ctx = Ctx { sections: &ids, section_guid: None };
+        let row = |video: &str| {
+            let json = format!(
+                r#"{{"Id":"ab12","Name":"Film","Type":"Movie","Width":3840,"Height":2160,
+                    "MediaStreams":[{{"Type":"Audio","Index":1,"Codec":"eac3"}},{{"Type":"Video","Index":0,"Codec":"hevc"{video}}}]}}"#
+            );
+            metadata(&parse(&json), &ctx).unwrap()
+        };
+        for video in [
+            r#","VideoRangeType":"HDR10","ColorTransfer":"smpte2084""#,
+            r#","VideoRangeType":"HDR10Plus","ColorTransfer":"smpte2084""#,
+            r#","VideoRangeType":"HLG","ColorTransfer":"arib-std-b67""#,
+            // Profile 5 carries no HDR transfer of its own.
+            r#","VideoRangeType":"DOVI","DvProfile":5"#,
+        ] {
+            let m = row(video);
+            assert!(m.listing_facts().hdr, "{video}");
+            assert_eq!(m.listing_facts().video_resolution.as_deref(), Some("4k"));
+            assert_eq!(m.media[0].part[0].key, "", "no file: a play still reads the item's");
+        }
+        assert!(!row(r#","VideoRangeType":"SDR","ColorTransfer":"bt709""#).listing_facts().hdr);
     }
 
     #[test]
