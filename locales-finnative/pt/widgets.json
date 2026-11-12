@@ -7,7 +7,7 @@
   "widgets.tracks.enh_note_burn": "As legendas mantêm-se. O seu servidor vai refazer o vídeo para as manter, por isso a imagem pode ficar um pouco menos nítida.",
   "widgets.tracks.enh_reason_not_analyzed": "Ainda não disponível para este vídeo. O seu servidor tem de analisar primeiro o som.",
   "widgets.tracks.enh_reason_refused": "O seu servidor não conseguiu ativar isto para este vídeo.",
-  "widgets.menu.quality_converted_note": "O seu servidor Jellyfin está a converter o vídeo.",
-  "widgets.tracks.enh_reason_converting": "Não disponível enquanto o seu servidor Jellyfin converte este vídeo.",
-  "widgets.tracks.enh_reason_not_copyable": "O seu servidor Jellyfin não consegue adicionar isto a este vídeo neste momento."
+  "widgets.menu.quality_converted_note": "O seu servidor está a converter o vídeo.",
+  "widgets.tracks.enh_reason_converting": "Não disponível enquanto o seu servidor converte este vídeo.",
+  "widgets.tracks.enh_reason_not_copyable": "O seu servidor não consegue adicionar isto a este vídeo neste momento."
 }

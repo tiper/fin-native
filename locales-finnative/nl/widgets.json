@@ -7,7 +7,7 @@
   "widgets.tracks.enh_note_burn": "Ondertitels blijven aan. Je server bewerkt de video om ze te behouden, dus het beeld kan iets zachter ogen.",
   "widgets.tracks.enh_reason_not_analyzed": "Nog niet klaar voor deze video. Je server moet eerst het geluid analyseren.",
   "widgets.tracks.enh_reason_refused": "Je server kon dit niet inschakelen voor deze video.",
-  "widgets.menu.quality_converted_note": "Je Jellyfin-server converteert deze video.",
-  "widgets.tracks.enh_reason_converting": "Niet beschikbaar terwijl je Jellyfin-server deze video converteert.",
-  "widgets.tracks.enh_reason_not_copyable": "Je Jellyfin-server kan dit nu niet aan deze video toevoegen."
+  "widgets.menu.quality_converted_note": "Je server converteert deze video.",
+  "widgets.tracks.enh_reason_converting": "Niet beschikbaar terwijl je server deze video converteert.",
+  "widgets.tracks.enh_reason_not_copyable": "Je server kan dit nu niet aan deze video toevoegen."
 }

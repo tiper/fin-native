@@ -37,15 +37,15 @@
     "description": "Issue #266/M7. One-line reason under the DISABLED (dim) Boost dialog / Normalize loudness rows after this playback's server already refused or ignored the params once."
   },
   "widgets.menu.quality_converted_note": {
-    "value": "Your Jellyfin server is converting this video.",
+    "value": "Your server is converting this video.",
     "description": "One-line sub-label under the checked entry of the player's Quality page when the Quality row reports a conversion the viewer did not pick by name ('Original · Converted', 'Auto · 720p'). Always the same neutral sentence; it names no cause."
   },
   "widgets.tracks.enh_reason_converting": {
-    "value": "Not available while your Jellyfin server converts this video.",
+    "value": "Not available while your server converts this video.",
     "description": "One-line reason under the DISABLED (dim) Boost dialog / Normalize loudness rows whenever the Quality row reads 'Original · Converted' (Original picked, the server converting the video). Same fact as that row."
   },
   "widgets.tracks.enh_reason_not_copyable": {
-    "value": "Your Jellyfin server can't add this to this video right now.",
+    "value": "Your server can't add this to this video right now.",
     "description": "One-line reason under the DISABLED (dim) Boost dialog / Normalize loudness rows when Original quality is in force (or cannot be reached by picking it) but the video cannot be offered the enhancement as it plays: a relay link, a video the server must convert, a track pick the Original route could not follow. Deliberately generic: the viewer cannot act on the differences."
   }
 }

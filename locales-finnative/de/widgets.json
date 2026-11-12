@@ -7,7 +7,7 @@
   "widgets.tracks.enh_note_burn": "Die Untertitel bleiben an. Dein Server bearbeitet das Video, um sie zu behalten, daher kann das Bild etwas weicher wirken.",
   "widgets.tracks.enh_reason_not_analyzed": "Für dieses Video noch nicht bereit. Dein Server muss erst den Ton analysieren.",
   "widgets.tracks.enh_reason_refused": "Dein Server konnte dies für dieses Video nicht einschalten.",
-  "widgets.menu.quality_converted_note": "Dein Jellyfin-Server konvertiert dieses Video.",
-  "widgets.tracks.enh_reason_converting": "Nicht verfügbar, während dein Jellyfin-Server dieses Video konvertiert.",
-  "widgets.tracks.enh_reason_not_copyable": "Dein Jellyfin-Server kann dies diesem Video gerade nicht hinzufügen."
+  "widgets.menu.quality_converted_note": "Dein Server konvertiert dieses Video.",
+  "widgets.tracks.enh_reason_converting": "Nicht verfügbar, während dein Server dieses Video konvertiert.",
+  "widgets.tracks.enh_reason_not_copyable": "Dein Server kann dies diesem Video gerade nicht hinzufügen."
 }
