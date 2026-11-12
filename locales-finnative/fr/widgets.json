@@ -6,5 +6,8 @@
   "widgets.repair.start_failed": "Impossible de lancer la réparation. Fermez puis rouvrez FinNative pour réessayer.",
   "widgets.tracks.enh_note_burn": "Les sous-titres restent affichés. Votre serveur retravaillera la vidéo pour les conserver ; l’image peut paraître un peu moins nette.",
   "widgets.tracks.enh_reason_not_analyzed": "Pas encore disponible pour cette vidéo. Votre serveur doit d’abord analyser sa piste son.",
-  "widgets.tracks.enh_reason_refused": "Votre serveur n’a pas pu l’activer pour cette vidéo."
+  "widgets.tracks.enh_reason_refused": "Votre serveur n’a pas pu l’activer pour cette vidéo.",
+  "widgets.menu.quality_converted_note": "Votre serveur Jellyfin convertit cette vidéo.",
+  "widgets.tracks.enh_reason_converting": "Indisponible tant que votre serveur Jellyfin convertit cette vidéo.",
+  "widgets.tracks.enh_reason_not_copyable": "Votre serveur Jellyfin ne peut pas l’ajouter à cette vidéo pour le moment."
 }

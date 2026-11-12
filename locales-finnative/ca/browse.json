@@ -27,5 +27,16 @@
   "browse.jf.favorite_add": "Afegeix a Preferits",
   "browse.jf.favorite_remove": "Treu de Preferits",
   "browse.jf.favorites": "Preferits",
-  "browse.auth.sign_in_again": "El servidor ja no accepta la sessió de {profile}. Torna a iniciar la sessió amb Afegeix un usuari."
+  "browse.auth.sign_in_again": "El servidor ja no accepta la sessió de {profile}. Torna a iniciar la sessió amb Afegeix un usuari.",
+  "browse.auth.refused": "El teu servidor Jellyfin ha rebutjat la connexió; comprova'n la configuració d'accés a la xarxa.",
+  "browse.auth.unreachable": "No s'ha pogut connectar amb cap servidor Jellyfin; comprova la connexió.",
+  "browse.auth.insecure": "S'ha trobat el teu servidor Jellyfin, però no disposa d'una connexió segura (HTTPS). Comprova que el servidor l'admeti i torna-ho a provar.",
+  "browse.auth.discovery_trouble": "Jellyfin no respon. Ho continuem intentant…",
+  "browse.auth.plaintext_offer": "El teu servidor Jellyfin és en aquesta xarxa, però no utilitza HTTPS. Selecciona Connecta per utilitzar-lo sense xifratge.",
+  "browse.auth.plaintext_allowed": "El teu servidor Jellyfin és en aquesta xarxa, però no utilitza HTTPS. Selecciona Torna-ho a provar per utilitzar-lo sense xifratge.",
+  "browse.auth.plaintext_declined_signin": "Has rebutjat la connexió sense xifratge amb el teu servidor Jellyfin. Selecciona Torna-ho a provar per decidir-ho de nou.",
+  "browse.auth.plaintext_revoked_signin": "Has desactivat l'accés sense xifratge al teu servidor Jellyfin. Selecciona Torna-ho a provar per decidir-ho de nou.",
+  "browse.auth.plaintext_declined_signed_in": "Has rebutjat la connexió sense xifratge amb el teu servidor Jellyfin. Permet-la a Configuració → Connexions sense xifratge.",
+  "browse.auth.plaintext_revoked_signed_in": "Has desactivat l'accés sense xifratge al teu servidor Jellyfin. Activa'l a Configuració → Connexions sense xifratge.",
+  "browse.auth.plaintext_remote": "El teu servidor Jellyfin ha respost sense xifratge des d'una altra xarxa. Comprova l'accés remot a la seva configuració."
 }

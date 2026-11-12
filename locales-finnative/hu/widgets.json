@@ -6,5 +6,8 @@
   "widgets.repair.start_failed": "A javítás nem indítható el. Az újrapróbáláshoz zárja be, majd nyissa meg újra a FinNative-ot.",
   "widgets.tracks.enh_note_burn": "A feliratok bekapcsolva maradnak. A szerver ehhez újrafeldolgozza a videót, ezért a kép kissé életlenebb lehet.",
   "widgets.tracks.enh_reason_not_analyzed": "Ehhez a videóhoz még nem érhető el. A szervernek előbb elemeznie kell a hangját.",
-  "widgets.tracks.enh_reason_refused": "A szerver ennél a videónál nem tudta bekapcsolni."
+  "widgets.tracks.enh_reason_refused": "A szerver ennél a videónál nem tudta bekapcsolni.",
+  "widgets.menu.quality_converted_note": "A Jellyfin-szerver konvertálja ezt a videót.",
+  "widgets.tracks.enh_reason_converting": "Nem érhető el, amíg a Jellyfin-szerver konvertálja ezt a videót.",
+  "widgets.tracks.enh_reason_not_copyable": "A Jellyfin-szerver most nem tudja ezt hozzáadni ehhez a videóhoz."
 }

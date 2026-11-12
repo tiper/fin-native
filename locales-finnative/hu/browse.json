@@ -27,5 +27,14 @@
   "browse.jf.favorite_add": "Hozzáadás a kedvencekhez",
   "browse.jf.favorite_remove": "Eltávolítás a kedvencek közül",
   "browse.jf.favorites": "Kedvencek",
-  "browse.auth.sign_in_again": "A szerver már nem fogadja el ezt a bejelentkezést: {profile}. Jelentkezzen be újra a Felhasználó hozzáadása menüponttal."
+  "browse.auth.sign_in_again": "A szerver már nem fogadja el ezt a bejelentkezést: {profile}. Jelentkezzen be újra a Felhasználó hozzáadása menüponttal.",
+  "browse.auth.refused": "A Jellyfin-szerver elutasította a kapcsolatot – ellenőrizze a hálózati hozzáférés beállításait.",
+  "browse.auth.unreachable": "Egyetlen Jellyfin-szerver sem érhető el – ellenőrizze a kapcsolatot.",
+  "browse.auth.insecure": "A Jellyfin-szerver megvan, de HTTPS-kapcsolat nem jött létre. Ellenőrizze, hogy a szerver engedi-e a biztonságos kapcsolatot.",
+  "browse.auth.discovery_trouble": "A Jellyfin nem válaszol. Újrapróbálás…",
+  "browse.auth.plaintext_offer": "A Jellyfin-szerver ezen a hálózaton van, de biztonságosan nem érhető el. Titkosítás nélkül: Csatlakozás.",
+  "browse.auth.plaintext_allowed": "A Jellyfin-szerver ezen a hálózaton van, de biztonságosan nem érhető el. Titkosítás nélkül: Újra.",
+  "browse.auth.plaintext_declined_signin": "Elutasította a titkosítatlan kapcsolatot a Jellyfin-szerverrel. Az újabb kérdéshez: Újra.",
+  "browse.auth.plaintext_revoked_signin": "A titkosítatlan kapcsolat a Jellyfin-szerverrel ki van kapcsolva. Az újabb kérdéshez: Újra.",
+  "browse.auth.plaintext_remote": "A Jellyfin-szerver csak titkosítás nélkül válaszolt, a hálózaton kívülről. Ellenőrizze a Távoli hozzáférés beállítását."
 }

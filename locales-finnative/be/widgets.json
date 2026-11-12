@@ -6,5 +6,8 @@
   "widgets.repair.start_failed": "Не ўдалося пачаць выпраўленне. Закрыйце і зноў адкрыйце FinNative, каб паспрабаваць яшчэ раз.",
   "widgets.tracks.enh_note_burn": "Субтытры застануцца. Ваш сервер пераапрацуе відэа, каб іх захаваць, і карцінка можа стаць крыху менш чоткай.",
   "widgets.tracks.enh_reason_not_analyzed": "Гэтае відэа яшчэ не гатова. Ваш сервер спачатку павінен прааналізаваць гук.",
-  "widgets.tracks.enh_reason_refused": "Ваш сервер не змог уключыць гэта для гэтага відэа."
+  "widgets.tracks.enh_reason_refused": "Ваш сервер не змог уключыць гэта для гэтага відэа.",
+  "widgets.menu.quality_converted_note": "Ваш сервер Jellyfin канвертуе гэта відэа.",
+  "widgets.tracks.enh_reason_converting": "Недаступна, пакуль ваш сервер Jellyfin канвертуе гэта відэа.",
+  "widgets.tracks.enh_reason_not_copyable": "Ваш сервер Jellyfin не можа зараз дадаць гэта да гэтага відэа."
 }

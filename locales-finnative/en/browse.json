@@ -117,5 +117,49 @@
     "args": {
       "profile": "str"
     }
+  },
+  "browse.auth.refused": {
+    "value": "Your Jellyfin server refused the connection — check its network access settings.",
+    "description": "browse auth refused"
+  },
+  "browse.auth.unreachable": {
+    "value": "Couldn't reach any Jellyfin server — check the connection.",
+    "description": "browse auth unreachable"
+  },
+  "browse.auth.insecure": {
+    "value": "Found your Jellyfin server, but couldn't connect to it securely (HTTPS). Check that your server allows secure connections, then try again.",
+    "description": "browse auth insecure"
+  },
+  "browse.auth.discovery_trouble": {
+    "value": "Jellyfin isn't responding. Still trying…",
+    "description": "browse auth discovery_trouble"
+  },
+  "browse.auth.plaintext_offer": {
+    "value": "Your Jellyfin server is on this network but can’t be reached securely. Select Connect to connect without encryption.",
+    "description": "browse auth plaintext_offer"
+  },
+  "browse.auth.plaintext_allowed": {
+    "value": "Your Jellyfin server is on this network but can’t be reached securely. Select Try again to connect without encryption.",
+    "description": "browse auth plaintext_allowed"
+  },
+  "browse.auth.plaintext_declined_signin": {
+    "value": "You chose not to connect to your Jellyfin server without encryption. Select Try again to be asked again.",
+    "description": "browse auth plaintext_declined_signin"
+  },
+  "browse.auth.plaintext_revoked_signin": {
+    "value": "Unencrypted connections to your Jellyfin server are off. Select Try again to be asked again.",
+    "description": "browse auth plaintext_revoked_signin"
+  },
+  "browse.auth.plaintext_declined_signed_in": {
+    "value": "You chose not to connect to your Jellyfin server without encryption. Allow it in Settings → Unencrypted connections.",
+    "description": "browse auth plaintext_declined_signed_in"
+  },
+  "browse.auth.plaintext_revoked_signed_in": {
+    "value": "Unencrypted connections to your Jellyfin server are off. Turn them on in Settings → Unencrypted connections.",
+    "description": "browse auth plaintext_revoked_signed_in"
+  },
+  "browse.auth.plaintext_remote": {
+    "value": "Your Jellyfin server answered only without encryption, from outside this network. Check Remote Access in its settings.",
+    "description": "browse auth plaintext_remote"
   }
 }

@@ -27,5 +27,16 @@
   "browse.jf.favorite_add": "Dodaj do ulubionych",
   "browse.jf.favorite_remove": "Usuń z ulubionych",
   "browse.jf.favorites": "Ulubione",
-  "browse.auth.sign_in_again": "Serwer nie przyjmuje już logowania {profile}. Zaloguj się ponownie przez Dodaj użytkownika."
+  "browse.auth.sign_in_again": "Serwer nie przyjmuje już logowania {profile}. Zaloguj się ponownie przez Dodaj użytkownika.",
+  "browse.auth.refused": "Twój serwer Jellyfin odrzucił połączenie — sprawdź jego ustawienia dostępu do sieci.",
+  "browse.auth.unreachable": "Nie udało się połączyć z żadnym serwerem Jellyfin — sprawdź połączenie.",
+  "browse.auth.insecure": "Nie można połączyć się bezpiecznie z Twoim serwerem Jellyfin (HTTPS). Sprawdź ustawienia serwera.",
+  "browse.auth.discovery_trouble": "Jellyfin nie odpowiada. Nadal próbujemy…",
+  "browse.auth.plaintext_offer": "Twój serwer Jellyfin jest w tej sieci, ale nie można połączyć się z nim bezpiecznie. Wybierz „Połącz”, aby połączyć się bez szyfrowania.",
+  "browse.auth.plaintext_allowed": "Nie można połączyć się bezpiecznie z Twoim serwerem Jellyfin. Wybierz „Spróbuj ponownie”, aby połączyć bez szyfrowania.",
+  "browse.auth.plaintext_declined_signin": "Odrzucono połączenie z Twoim serwerem Jellyfin bez szyfrowania. Wybierz „Spróbuj ponownie”, aby ponownie wyświetlić pytanie.",
+  "browse.auth.plaintext_revoked_signin": "Nieszyfrowane połączenia z Twoim serwerem Jellyfin są wyłączone. Wybierz „Spróbuj ponownie”, aby ponownie wyświetlić pytanie.",
+  "browse.auth.plaintext_declined_signed_in": "Odrzucono połączenie z Twoim serwerem Jellyfin bez szyfrowania. Zezwól na nie w Ustawienia → Połączenia nieszyfrowane.",
+  "browse.auth.plaintext_revoked_signed_in": "Nieszyfrowane połączenia z Twoim serwerem Jellyfin są wyłączone. Włącz je w Ustawienia → Połączenia nieszyfrowane.",
+  "browse.auth.plaintext_remote": "Twój serwer Jellyfin odpowiedział tylko bez szyfrowania, spoza tej sieci. Sprawdź „Dostęp zdalny” w jego ustawieniach."
 }

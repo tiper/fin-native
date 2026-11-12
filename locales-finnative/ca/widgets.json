@@ -6,5 +6,8 @@
   "widgets.repair.start_failed": "No s'ha pogut iniciar la reparació. Tanca i torna a obrir FinNative per tornar-ho a provar.",
   "widgets.tracks.enh_note_burn": "Els subtítols es mantenen. El teu servidor tornarà a processar el vídeo per conservar-los, i la imatge pot perdre una mica de nitidesa.",
   "widgets.tracks.enh_reason_not_analyzed": "Aquest vídeo encara no està preparat. El teu servidor primer ha d'analitzar-ne l'àudio.",
-  "widgets.tracks.enh_reason_refused": "El teu servidor no ha pogut activar aquesta funció per a aquest vídeo."
+  "widgets.tracks.enh_reason_refused": "El teu servidor no ha pogut activar aquesta funció per a aquest vídeo.",
+  "widgets.menu.quality_converted_note": "Jellyfin està convertint aquest vídeo.",
+  "widgets.tracks.enh_reason_converting": "No disponible mentre el teu servidor Jellyfin converteix aquest vídeo.",
+  "widgets.tracks.enh_reason_not_copyable": "El teu servidor Jellyfin no pot afegir això a aquest vídeo ara mateix."
 }

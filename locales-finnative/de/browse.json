@@ -27,5 +27,16 @@
   "browse.jf.favorite_add": "Zu Favoriten hinzufügen",
   "browse.jf.favorite_remove": "Aus Favoriten entfernen",
   "browse.jf.favorites": "Favoriten",
-  "browse.auth.sign_in_again": "Der Server akzeptiert die Anmeldung von {profile} nicht mehr. Melde dich über „Benutzer hinzufügen“ erneut an."
+  "browse.auth.sign_in_again": "Der Server akzeptiert die Anmeldung von {profile} nicht mehr. Melde dich über „Benutzer hinzufügen“ erneut an.",
+  "browse.auth.refused": "Dein Jellyfin-Server hat die Verbindung abgelehnt – prüfe seine Netzwerkzugriffseinstellungen.",
+  "browse.auth.unreachable": "Kein Jellyfin-Server erreichbar – prüfe die Verbindung.",
+  "browse.auth.insecure": "Dein Jellyfin-Server wurde gefunden, aber nicht über HTTPS erreicht. Prüfe, ob er sichere Verbindungen erlaubt, und versuche es erneut.",
+  "browse.auth.discovery_trouble": "Jellyfin antwortet nicht. Neuer Versuch läuft …",
+  "browse.auth.plaintext_offer": "Dein Jellyfin-Server ist im Netzwerk, aber nicht sicher erreichbar. Wähle „Verbinden“, um ohne Verschlüsselung zu verbinden.",
+  "browse.auth.plaintext_allowed": "Dein Jellyfin-Server ist im Netzwerk, aber nicht sicher erreichbar. „Erneut versuchen“ verbindet ohne Verschlüsselung.",
+  "browse.auth.plaintext_declined_signin": "Du hast die unverschlüsselte Verbindung zu deinem Jellyfin-Server abgelehnt. „Erneut versuchen“ fragt dich erneut.",
+  "browse.auth.plaintext_revoked_signin": "Unverschlüsselte Verbindungen zu deinem Jellyfin-Server sind aus. „Erneut versuchen“ fragt dich erneut.",
+  "browse.auth.plaintext_declined_signed_in": "Unverschlüsselte Verbindung zum Jellyfin-Server abgelehnt. Erlaube sie unter Einstellungen → Unverschlüsselte Verbindungen.",
+  "browse.auth.plaintext_revoked_signed_in": "Unverschlüsselte Verbindungen zum Jellyfin-Server sind aus. Schalte sie ein unter Einstellungen → Unverschlüsselte Verbindungen.",
+  "browse.auth.plaintext_remote": "Dein Jellyfin-Server antwortete nur unverschlüsselt und von außerhalb dieses Netzwerks. Prüfe seinen Fernzugriff."
 }

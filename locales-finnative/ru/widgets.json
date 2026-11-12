@@ -6,5 +6,8 @@
   "widgets.repair.start_failed": "Не удалось начать исправление. Закройте и снова откройте FinNative для повторной попытки.",
   "widgets.tracks.enh_note_burn": "Субтитры останутся включены. Чтобы сохранить их, сервер переработает видео, поэтому изображение может стать менее чётким.",
   "widgets.tracks.enh_reason_not_analyzed": "Пока недоступно для этого видео. Сначала сервер должен проанализировать звук.",
-  "widgets.tracks.enh_reason_refused": "Сервер не смог включить эту функцию для видео."
+  "widgets.tracks.enh_reason_refused": "Сервер не смог включить эту функцию для видео.",
+  "widgets.menu.quality_converted_note": "Сервер Jellyfin преобразует это видео.",
+  "widgets.tracks.enh_reason_converting": "Недоступно, пока сервер Jellyfin преобразует это видео.",
+  "widgets.tracks.enh_reason_not_copyable": "Сейчас сервер Jellyfin не может применить эту функцию к видео."
 }
