@@ -186,6 +186,9 @@ pub struct BaseItemDto {
     /// A video's frame size, as the server stored it from the file's video stream.
     pub width: Option<i64>,
     pub height: Option<i64>,
+    /// The default source's streams, on a read that asked for `MediaStreams` without `MediaSources`.
+    #[serde(deserialize_with = "nul")]
+    pub media_streams: Vec<MediaStream>,
     pub parent_id: Option<String>,
     pub series_id: Option<String>,
     pub series_name: Option<String>,
