@@ -172,6 +172,7 @@ impl JfClient {
                 filters: if q.unwatched_only { Some("IsUnplayed") } else { None },
                 name_starts_with: q.starts_with,
                 genre_ids: q.genre_id,
+                fields: Some(paths::GRID_FIELDS),
                 ..Default::default()
             },
         );
@@ -199,6 +200,7 @@ impl JfClient {
                 sort_by: Some(paths::SortBy::PremiereDate),
                 descending: true,
                 limit: MOST,
+                fields: Some(paths::GRID_FIELDS),
                 ..Default::default()
             },
         );
@@ -248,6 +250,7 @@ impl JfClient {
                 search_term: Some(query),
                 include_item_types: Some(item_types),
                 recursive: true,
+                fields: Some(paths::GRID_FIELDS),
                 start_index: start,
                 limit: size,
                 ..Default::default()

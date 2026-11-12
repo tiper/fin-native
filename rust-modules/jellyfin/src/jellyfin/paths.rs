@@ -18,6 +18,15 @@ use plx_plex::plex::urlenc_str as enc;
 pub const LIST_FIELDS: &str =
     "PrimaryImageAspectRatio,DateCreated,ChildCount,RecursiveItemCount,Overview,Genres,Width,Height,MediaStreams";
 
+/// [`LIST_FIELDS`] for a row drawn only as a poster (a library grid, search, a person's titles,
+/// "more like this", a collection's titles): no `Overview`, which only the Home hero and an
+/// episode row read, and which is most of a row's bytes.
+pub const GRID_FIELDS: &str =
+    "PrimaryImageAspectRatio,DateCreated,ChildCount,RecursiveItemCount,Genres,Width,Height,MediaStreams";
+
+/// The fields a season row asks for: a season has no genres and no streams of its own.
+pub const SEASON_FIELDS: &str = "PrimaryImageAspectRatio,DateCreated,ChildCount,RecursiveItemCount,Overview";
+
 /// The item fields a detail page asks for.
 pub const DETAIL_FIELDS: &str = "Overview,Genres,People,Studios,Taglines,ProductionLocations,\
 MediaSources,MediaStreams,Chapters,ProviderIds,DateCreated,ChildCount,RecursiveItemCount,\
@@ -304,7 +313,7 @@ pub fn seasons(user_id: &str, series_id: &str) -> String {
         "/Shows/{}/Seasons?userId={}&fields={}&enableUserData=true",
         enc(series_id),
         enc(user_id),
-        LIST_FIELDS
+        SEASON_FIELDS
     )
 }
 
@@ -341,7 +350,7 @@ pub fn similar(user_id: &str, item_id: &str, limit: i64) -> String {
         enc(item_id),
         enc(user_id),
         limit.max(1),
-        LIST_FIELDS
+        GRID_FIELDS
     )
 }
 

@@ -767,8 +767,7 @@ impl Backend for Shared {
         let Some(c) = self.0.client() else { return false };
         // One light read for the one thing it needs: whether the item is an episode, which Next
         // Up would bring back.
-        let is_episode = c.items_by_id(&[rating_key]).is_some_and(|m| m.metadata.first().is_some_and(|m| m.kind == "episode"));
-        c.leave_continue_watching(rating_key, is_episode)
+        c.leave_continue_watching(rating_key)
     }
     fn section_items_query(&self, q: &SectionQuery<'_>) -> Option<MediaContainer> {
         let c = self.0.client()?;

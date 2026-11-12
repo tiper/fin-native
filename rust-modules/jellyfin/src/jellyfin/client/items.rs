@@ -19,24 +19,34 @@ impl JfClient {
     // ---- items ----
 
     /// One item with everything the detail page shows (`Client::metadata`), with its skip markers.
-    /// The item and its segments are asked for together: a page waits for both, and a show or a
-    /// season, which has none, answers an empty list.
+    /// Everything the page waits for is asked in one round, by the kind a listing noted for the
+    /// item ([`image_tags::kind`]): a film or an episode with its segments, a show with the
+    /// episode to play next, a season or a collection alone. An item no listing has shown is
+    /// asked with its segments, and a show among those reads its next episode afterwards.
     pub fn metadata(&self, item_id: &str) -> Option<Metadata> {
-        let (dto, segs) = both(
+        let kind = image_tags::kind(item_id);
+        let kind = kind.as_deref();
+        let has_segments = !matches!(kind, Some("show" | "season" | "collection"));
+        let (dto, beside) = both(
             || self.get::<BaseItemDto>(&paths::item(self.user_id(), item_id)),
-            || self.get::<QueryResult<MediaSegmentDto>>(&paths::media_segments(item_id)),
+            || match kind {
+                Some("show") => (None, Some(self.on_deck(item_id))),
+                _ if has_segments => (self.get::<QueryResult<MediaSegmentDto>>(&paths::media_segments(item_id)), None),
+                _ => (None, None),
+            },
         );
         let dto = dto?;
-        let segs = segs.flatten().map(|page| page.items);
+        let (segs, deck) = beside.unwrap_or_default();
+        let segs = segs.map(|page| page.items);
         *self.recent_item.lock().unwrap_or_else(|p| p.into_inner()) =
             Some((item_id.to_owned(), Instant::now(), dto.clone(), segs.clone()));
-        self.item_page(&dto, segs.as_deref())
+        self.item_page(&dto, segs.as_deref(), deck)
     }
 
     /// The item as [`Self::metadata`] read it in the last [`RECENT_ITEM`], else read now.
     pub fn metadata_recent(&self, item_id: &str) -> Option<Metadata> {
         match self.recent(item_id) {
-            Some((dto, segs)) => self.item_page(&dto, segs.as_deref()),
+            Some((dto, segs)) => self.item_page(&dto, segs.as_deref(), None),
             None => self.metadata(item_id),
         }
     }
@@ -54,8 +64,10 @@ impl JfClient {
             .map(|(_, _, dto, segs)| f(dto, segs.as_deref()))
     }
 
-    /// The item's page from what the server said of it and its segments.
-    fn item_page(&self, dto: &BaseItemDto, segs: Option<&[MediaSegmentDto]>) -> Option<Metadata> {
+    /// The item's page from what the server said of it and its segments. `deck` is a show's next
+    /// episode when it was already asked for; without it a show's is read here.
+    fn item_page(&self, dto: &BaseItemDto, segs: Option<&[MediaSegmentDto]>, deck: Option<Option<Metadata>>)
+        -> Option<Metadata> {
         let mut m = translate::metadata(dto, &self.ctx(None))?;
         if matches!(m.kind.as_str(), "movie" | "episode") {
             // Segments are optional: a server without a segment provider answers an empty list,
@@ -69,7 +81,8 @@ impl JfClient {
             }
         }
         if m.kind == "show" {
-            m.on_deck = self.on_deck(&m.rating_key).map(|e| OnDeckHub { metadata: Some(Box::new(e)) });
+            let next = deck.unwrap_or_else(|| self.on_deck(&m.rating_key));
+            m.on_deck = next.map(|e| OnDeckHub { metadata: Some(Box::new(e)) });
         }
         Some(m)
     }
@@ -163,6 +176,7 @@ impl JfClient {
                     sort_by: Some(SortBy::PremiereDate),
                     start_index: start,
                     limit: size,
+                    fields: Some(paths::GRID_FIELDS),
                     ..Default::default()
                 },
             ))?,
@@ -178,10 +192,13 @@ impl JfClient {
 
     /// Trailers and extras (`Client::extras`).
     pub fn extras(&self, item_id: &str) -> Option<MediaContainer> {
-        let features: Option<Vec<BaseItemDto>> = self.get(&paths::special_features(self.user_id(), item_id));
-        // Jellyfin keeps trailers apart from the other extras, so they are a read of their own; one
-        // that fails leaves the extras, and the reverse.
-        let trailers: Option<Vec<BaseItemDto>> = self.get(&paths::local_trailers(self.user_id(), item_id));
+        // Jellyfin keeps trailers apart from the other extras, so they are a read of their own,
+        // asked beside the other; one that fails leaves the extras, and the reverse.
+        let (features, trailers) = both(
+            || self.get::<Vec<BaseItemDto>>(&paths::special_features(self.user_id(), item_id)),
+            || self.get::<Vec<BaseItemDto>>(&paths::local_trailers(self.user_id(), item_id)),
+        );
+        let trailers = trailers.flatten();
         if features.is_none() && trailers.is_none() {
             return None;
         }
@@ -251,20 +268,32 @@ impl JfClient {
     /// becomes its show's Next Up. So an episode is also recorded as dismissed in this app's
     /// display preferences on the server ([`Self::next_up`] leaves those out), which the user's
     /// other installs share. The watched mark and play count stay as they were.
-    pub fn leave_continue_watching(&self, item_id: &str, is_episode: bool) -> bool {
+    pub fn leave_continue_watching(&self, item_id: &str) -> bool {
         self.forget_recent();
-        let cleared = self
-            .send(Verb::Post, &paths::user_data(self.user_id(), item_id), Some(r#"{"PlaybackPositionTicks":0}"#))
-            .is_some_and(|a| a.ok());
-        cleared && (!is_episode || self.dismiss_next_up(item_id))
+        let clear = || {
+            self.send(Verb::Post, &paths::user_data(self.user_id(), item_id), Some(r#"{"PlaybackPositionTicks":0}"#))
+                .is_some_and(|a| a.ok())
+        };
+        if !self.is_episode(item_id) {
+            return clear();
+        }
+        // Read anew, beside the clearing: the write replaces the whole record, so it starts from
+        // the server's.
+        let (cleared, prefs) = both(clear, || self.display_prefs(Duration::ZERO));
+        cleared && prefs.and_then(Result::ok).is_some_and(|prefs| self.dismiss_next_up(item_id, &prefs))
+    }
+
+    /// Whether the item is an episode: by the kind its listing noted, else by asking.
+    fn is_episode(&self, item_id: &str) -> bool {
+        let kind = image_tags::kind(item_id)
+            .or_else(|| self.items_by_id(&[item_id])?.metadata.first().map(|m| m.kind.clone()));
+        kind.as_deref() == Some("episode")
     }
 
     /// Record `item_id` among the Next Up episodes the user dismissed, keeping the last
     /// [`DISMISSED_MAX`] (an episode that was played moves Next Up on and is never named again).
-    fn dismiss_next_up(&self, item_id: &str) -> bool {
-        // Read anew: the write replaces the whole record, so it starts from the server's.
-        let Ok(prefs) = self.display_prefs(Duration::ZERO) else { return false };
-        let mut prefs = (*prefs).clone();
+    fn dismiss_next_up(&self, item_id: &str, prefs: &serde_json::Value) -> bool {
+        let mut prefs = prefs.clone();
         let mut ids = dismissed_in(&prefs);
         ids.retain(|d| d != item_id);
         ids.push(item_id.to_owned());
