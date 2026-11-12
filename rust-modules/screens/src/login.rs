@@ -3022,6 +3022,9 @@ mod tests {
         cx_with(m, &EMPTY_SNAPSHOT)
     }
 
+    /// The focus GROUP exists exactly when [`LoginScreen::has_control`] does, and its one element
+    /// is `ElemKind::Bare` — the escape acts on the key-down edge with no hold and no press dip,
+    /// like every read-out action in this family, never a `Control`/`Card`.
     #[cfg(not(feature = "finnative"))]
     #[test]
     fn the_control_group_exists_only_while_a_control_is_offered() {
@@ -3092,6 +3095,10 @@ mod tests {
         }
     }
 
+    /// **The failed read-out stands on the page read-out's anchor and never grows.** Its verdict
+    /// hangs from `StatusOverlay::FULL_ANCHOR_TOP` and its row — the primary (*Try again*, or
+    /// *Use another account* on the no-server verdict) / *Details*, nothing else — stacks `space::LG` plus the fixed drop under the reserved two-line reason slot; a report's status line, a sendable offer and a
+    /// delivered report all leave the row exactly where it was.
     #[cfg(not(feature = "finnative"))]
     #[test]
     fn the_failed_readout_stands_on_the_page_lines_and_never_grows() {
@@ -3695,6 +3702,7 @@ mod tests {
         assert_eq!(resolves(&second), 0, "…and not again while the owner has yet to answer");
     }
 
+    /// (b) An offered incident puts the question on screen, with focus on its answers.
     #[cfg(not(feature = "finnative"))]
     #[test]
     fn an_offered_incident_opens_the_report_alert_with_focus_on_its_answers() {
@@ -3741,6 +3749,8 @@ mod tests {
         failed
     }
 
+    /// **Details opens the card** — the one alert, as the Details sheet, with focus sent to its
+    /// answers — and the read-out itself gains nothing: the row stays *Try again* / *Details*.
     #[cfg(not(feature = "finnative"))]
     #[test]
     fn details_opens_the_details_card() {
@@ -3822,6 +3832,9 @@ mod tests {
         assert!(<LoginScreen as Focusable<SessionHost>>::place(&s, &key.elem, &cx, At::Drawn).is_some());
     }
 
+    /// **Send report is on the card iff the report can still be sent**, and holds focus when it is
+    /// there; otherwise *Close* is the one answer. The body carries the Report ID once there is one,
+    /// then the support line.
     #[cfg(not(feature = "finnative"))]
     #[test]
     fn the_details_card_offers_send_report_iff_sendable() {
@@ -3863,6 +3876,8 @@ mod tests {
         assert!(!screen_with(Phase::Error, S::Delivered { receipt }, pin).report.sendable());
     }
 
+    /// **BACK and Close close the card and put focus back on Details** — and neither sends
+    /// anything or leaves the screen; with the card closed, BACK is the root press it always was.
     #[cfg(not(feature = "finnative"))]
     #[test]
     fn back_or_close_returns_focus_to_details() {
@@ -3890,6 +3905,8 @@ mod tests {
         assert_eq!(root_backs(&fx), 1, "with the card closed, BACK is the root press");
     }
 
+    /// **Send report on the card sends the held report**, closes the card and returns focus to
+    /// Details, where the status line then reports it.
     #[cfg(not(feature = "finnative"))]
     #[test]
     fn send_report_on_the_card_sends_the_report() {
@@ -3940,6 +3957,9 @@ mod tests {
         }).collect()
     }
 
+    /// **An eligible plaintext-only server is a choice, not a failure**: the read-out's one primary
+    /// is *Connect* beside *Details* — never a third button — and the report question is NOT raised
+    /// on its own; the report stays behind *Details*.
     #[cfg(not(feature = "finnative"))]
     #[test]
     fn an_eligible_plaintext_failure_offers_connect_and_does_not_raise_the_report_question() {
@@ -4163,6 +4183,9 @@ mod tests {
         note.map(|n| n.text.to_str().unwrap().to_string())
     }
 
+    /// **The calm default**: a failure nobody has reported draws its verdict, reason and row and
+    /// nothing else — no status line — and a report's line is its status alone: the Report ID
+    /// and the support line are the Details card's, never the read-out's.
     #[cfg(not(feature = "finnative"))]
     #[test]
     fn a_failure_with_no_report_draws_no_status_line() {
@@ -4177,6 +4200,9 @@ mod tests {
         assert_eq!(text(s.report_note()).as_deref(), Some(plx_platform::i18n::msg::settings_login_report_sent()));
     }
 
+    /// **(e) A report on its way keeps the inline spinner turning over a settled read-out** — the
+    /// failed sign-in draws no spinner of its own, so its clock must still run for the report's,
+    /// and stop once the report has settled.
     #[cfg(not(feature = "finnative"))]
     #[test]
     fn a_report_on_its_way_turns_the_spinner_on_a_failed_readout() {
