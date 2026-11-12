@@ -84,6 +84,8 @@ pub enum PickerKind {
     AudioConversion,
     SubtitleSize,
     SubtitlePosition,
+    /// The caption colour (`SubtitleTone`): white, yellow or a gray. Next to Size and Position.
+    SubtitleColor,
     HdrOverlay,
     NextEpisode,
     SkipInterval,
@@ -169,7 +171,7 @@ impl PickerKind {
     pub fn parent(self) -> SettingsPage {
         match self {
             PickerKind::Quality | PickerKind::DirectPlay | PickerKind::AudioConversion | PickerKind::HdrOverlay | PickerKind::NextEpisode | PickerKind::DeckPress | PickerKind::SkipInterval | PickerKind::InstantDpadSeeking | PickerKind::UriEngine | PickerKind::DolbyVision | PickerKind::IntroSkip | PickerKind::CreditsSkip => SettingsPage::Playback,
-            PickerKind::AudioLanguage | PickerKind::SubtitleMode | PickerKind::SubtitleLanguage | PickerKind::ForcedSubtitles | PickerKind::SubtitleSize | PickerKind::SubtitlePosition => SettingsPage::AudioSubtitles,
+            PickerKind::AudioLanguage | PickerKind::SubtitleMode | PickerKind::SubtitleLanguage | PickerKind::ForcedSubtitles | PickerKind::SubtitleSize | PickerKind::SubtitlePosition | PickerKind::SubtitleColor => SettingsPage::AudioSubtitles,
             PickerKind::UiResolution => SettingsPage::Root,
         }
     }
