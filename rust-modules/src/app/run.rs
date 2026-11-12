@@ -2277,15 +2277,6 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
             app.bridge.browse_run(plx_data::stores::browse::BrowseCmd::HubsInvalidateAll);
             log("home: hubs refresh queued after playback");
         }
-        // A favourite the server just took or dropped: Home's Favorites shelf is the server's
-        // listing, so it is re-read rather than edited (`plx_plex::plex::take_favorite_landed`).
-        if plx_plex::plex::take_favorite_landed() {
-            super::bridge::execute_endpoint_outcomes(
-                &mut app.pages,
-                app.bridge.hubs_run(plx_data::stores::hubs::HubsCmd::RefetchHubs).endpoints,
-            );
-            log("home: hubs refresh queued after a favourite changed");
-        }
         // The return hold ends when the refetch it waits for has SETTLED for the played item's
         // source: issued (the owed flag is spent) and that source's read taken, whether it brought
         // a catalog or failed (a failure keeps the content and moves no generation, so the

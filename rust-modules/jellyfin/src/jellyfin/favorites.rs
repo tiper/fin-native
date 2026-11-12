@@ -4,11 +4,10 @@
 //! The mark travels beside the item model rather than in it: [`super::translate`] records each
 //! item's mark as it reads the item ([`note`]), and the item menu and the detail page read it back
 //! by ratingKey ([`state`]). A press flips the mark at once and writes it on a worker ([`set`]); a
-//! write the server refuses flips it back, and one it takes leaves Home owing a refetch
-//! ([`take_landed`]) so its Favorites shelf gains or loses the item.
+//! write the server refuses flips it back, and one it takes comes back on the live-update socket
+//! as this user's data changing ([`super::live`]), which re-reads Home and its Favorites shelf.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 /// Marks remembered at once. Every listing the backend reads notes its items, so this bounds a
@@ -16,9 +15,6 @@ use std::sync::Mutex;
 const KEPT: usize = 4096;
 
 static MARKS: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
-
-/// A write the server took since the frame thread last asked ([`take_landed`]).
-static LANDED: AtomicBool = AtomicBool::new(false);
 
 /// Record `rating_key`'s mark as the server stated it.
 pub fn note(rating_key: &str, favourite: bool) {
@@ -58,21 +54,13 @@ pub fn set(rating_key: &str, favourite: bool, write: impl FnOnce(&str, bool) -> 
     }
 }
 
-/// The worker's answer for one write: taken, Home owes a refetch; refused, the mark flips back.
+/// The worker's answer for one write: refused, the mark flips back. A write the server took
+/// needs nothing here: the server reports it on the socket.
 fn landed(rating_key: &str, favourite: bool, ok: bool) {
-    if ok {
-        LANDED.store(true, Ordering::Release);
-    } else {
+    if !ok {
         note(rating_key, !favourite);
     }
     plx_machine::idle::invalidate();
-}
-
-/// Has a favourite write landed since the last call? FRAME THREAD: the app refetches Home's hubs
-/// when it has, which is what puts the item on (or takes it off) the Favorites shelf; a mark is
-/// in no listing the app already holds, so nothing short of the server's own answer can.
-pub fn take_landed() -> bool {
-    LANDED.swap(false, Ordering::AcqRel)
 }
 
 #[cfg(test)]
@@ -89,15 +77,12 @@ mod tests {
     }
 
     #[test]
-    fn a_taken_write_owes_home_one_refetch_and_a_refused_one_flips_back() {
+    fn a_refused_write_flips_the_mark_back_and_a_taken_one_keeps_it() {
         note("fav-c", true);
         landed("fav-c", true, false);
         assert!(!state("fav-c"), "refused: the mark flips back");
-        assert!(!take_landed(), "refused: Home's shelf did not change");
         note("fav-c", true);
         landed("fav-c", true, true);
         assert!(state("fav-c"));
-        assert!(take_landed(), "taken: Home refetches");
-        assert!(!take_landed(), "once");
     }
 }

@@ -112,10 +112,3 @@ pub fn set_favorite_mark(rating_key: &str, favourite: bool) {
     crate::alt!(b => b.set_favorite_mark(rating_key, favourite));
     let _ = (rating_key, favourite);
 }
-
-/// Has a favourite write landed since the last call? FRAME THREAD: the app then re-reads Home,
-/// whose Favorites shelf is the server's own listing.
-pub fn take_favorite_landed() -> bool {
-    crate::alt!(b => b.take_favorite_landed());
-    false
-}
