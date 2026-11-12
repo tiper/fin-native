@@ -21,8 +21,7 @@
 //! - [`qrpng`]: the sign-in screen's QR code, as a PNG.
 //! - [`playback_info`]: the server's own playback verdict for this device (`PlaybackInfo`).
 //! - [`transcode`]: a transcode request as a Jellyfin stream, and the decision the player reads.
-//! - [`live`]: the server's WebSocket as the app's live-update feed, over [`socket`], a minimal
-//!   WebSocket client.
+//! - [`live`]: the server's WebSocket as the app's live-update feed, over `plx_net::ws`.
 //! - [`time`]: ticks and ISO-8601 dates into the milliseconds and unix seconds the model uses.
 //! - [`languages`]: Jellyfin's ISO 639-2 language codes as the app's (Plex's account codes).
 
@@ -40,7 +39,6 @@ pub mod live;
 pub mod paths;
 pub mod playback_info;
 pub mod qrpng;
-pub mod socket;
 pub mod time;
 pub mod transcode;
 pub mod translate;

@@ -214,12 +214,21 @@ impl JfClient {
         if !credential_may_go(&self.base) {
             return None;
         }
-        Some(live::Target {
-            origin: plx_plex::plex::Origin::parse(&self.base)?,
-            path: format!("{}/socket", base_path(&self.base)),
-            headers: vec![format!("Authorization: {}", self.identity.header(Some(token)))],
-            user_id: self.user_id().to_string(),
-        })
+        Some(live::Target { url: self.socket_url(token)?, user_id: self.user_id().to_string() })
+    }
+
+    /// The socket's address: `ws` for a plain server and `wss` for a TLS one, `/socket` under the
+    /// server's base path, signed in by the token in the query.
+    pub(super) fn socket_url(&self, token: &str) -> Option<String> {
+        let origin = plx_plex::plex::Origin::parse(&self.base)?;
+        Some(format!(
+            "{}://{}{}/socket?api_key={}&deviceId={}",
+            if origin.is_tls() { "wss" } else { "ws" },
+            origin.authority(),
+            base_path(&self.base),
+            plx_plex::plex::urlenc_str(token),
+            plx_plex::plex::urlenc_str(&self.identity.device_id),
+        ))
     }
 
     /// Make the item a favourite or not (`Client::set_favorite`): the current route, else the

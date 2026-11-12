@@ -1126,3 +1126,14 @@ fn a_listed_show_and_season_ask_only_for_what_their_page_needs() {
     assert_eq!(log.iter().filter(|(p, ..)| p.starts_with("/Shows/NextUp")).count(), 1, "asked once, beside the item");
     assert_eq!(log.len(), 4);
 }
+
+/// The socket is the server's `/socket` under its base path, signed in by the token in the
+/// query, as `ws` for a plain server and `wss` for a TLS one.
+#[test]
+fn the_socket_address_carries_the_scheme_the_base_path_and_the_token() {
+    let (c, _) = signed_in(vec![]);
+    assert_eq!(c.socket_url("tok").as_deref(), Some("ws://jf:8096/socket?api_key=tok&deviceId=dev1"));
+    let id = ClientIdentity { client: "FinNative".into(), device: "LG".into(), device_id: "dev 1".into(), version: "0".into() };
+    let tls = JfClient::new("https://media.example/jellyfin", id, Box::new(CurlTransport));
+    assert_eq!(tls.socket_url("t").as_deref(), Some("wss://media.example:443/jellyfin/socket?api_key=t&deviceId=dev%201"));
+}
