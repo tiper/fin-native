@@ -578,6 +578,11 @@ jobs:
           key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ci/build-ffmpeg.sh', 'ci/deps.py', 'ci/dependencies.json', 'ci/arm-cc.py', 'ci/check-link-evidence.py', 'ci/stage-link-evidence.py', '.github/actions/webos-ndk/action.yml') }}
 
       - name: Build
+        # FinNative: the Filmography's key, compiled into the Jellyfin layer (`plx_jellyfin::tmdb`),
+        # so the debug package below can be tested with it. The same value in both steps: a
+        # step without it would compile that crate again without the key.
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: make WEBOS_SDK='${{ steps.ndk.outputs.sdk-dir }}' -j"$(nproc)"
 
       - name: Package
@@ -588,6 +593,8 @@ jobs:
         # than over it. The release job is the only place `FLAVOR=stable` belongs (release.yml).
         # Named explicitly rather than inherited, so this is a decision on the page instead of a
         # default that moves if the Makefile's does.
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: make ipk FLAVOR=debug WEBOS_SDK='${{ steps.ndk.outputs.sdk-dir }}'
 
       - name: Binary size budget
