@@ -144,7 +144,7 @@ impl JfClient {
         let at = if rows.is_empty() {
             rows.push(me);
             0
-        } else if let Some(previous) = self.episode_before(&series, item_id) {
+        } else if let Some(previous) = self.episode_before(&series, item_id, &rows[0].rating_key) {
             rows.insert(0, previous);
             1
         } else {
@@ -164,11 +164,11 @@ impl JfClient {
         })
     }
 
-    /// The episode before `item_id` in its show, if it has one.
-    fn episode_before(&self, series: &str, item_id: &str) -> Option<Metadata> {
+    /// The episode before `item_id` (whose row key is `key`) in its show, if it has one.
+    fn episode_before(&self, series: &str, item_id: &str, key: &str) -> Option<Metadata> {
         let page: QueryResult<BaseItemDto> = self.get(&paths::episodes_beside(self.user_id(), series, item_id))?;
-        let at = page.items.iter().position(|e| e.id == item_id)?;
         let mut rows = translate::container(&page, &self.ctx(None)).metadata;
+        let at = rows.iter().position(|r| r.rating_key == key)?;
         at.checked_sub(1).map(|before| rows.swap_remove(before))
     }
 

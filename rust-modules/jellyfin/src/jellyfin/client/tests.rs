@@ -658,6 +658,17 @@ fn an_episode_plays_in_a_queue_of_its_show_around_it() {
     assert!(q.play_queue_id > 0);
     assert!(fake.log.lock().unwrap().iter().any(|(p, ..)| p.starts_with("/Shows/sh1/Episodes") && p.contains("startItemId=e2")));
 
+    // Jellyfin may spell the same id another way on another endpoint: the episode is still found.
+    let (c, _) = signed_in(vec![
+        ("/Items/e2?", 200, r#"{"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}"#),
+        ("/Shows/sh1/Episodes?userId=u1&adjacentTo=e2", 200, r#"{"Items":[
+            {"Id":"E1","Name":"Pilot","Type":"Episode","SeriesId":"sh1"},
+            {"Id":"E2","Name":"Second","Type":"Episode","SeriesId":"sh1"}]}"#),
+        ("/Shows/sh1/Episodes", 200, r#"{"Items":[{"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}]}"#),
+    ]);
+    let q = c.play_queue("e2", true).unwrap();
+    assert_eq!((q.metadata.len(), q.play_queue_selected_item_offset), (2, 1), "an upper-case spelling still finds it");
+
     // The first episode has none before it: it is the first row.
     let (c, _) = signed_in(vec![
         ("/Items/e1?", 200, r#"{"Id":"e1","Name":"Pilot","Type":"Episode","SeriesId":"sh1"}"#),
