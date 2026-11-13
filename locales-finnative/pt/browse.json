@@ -38,5 +38,9 @@
   "browse.auth.plaintext_revoked_signin": "Ligações sem encriptação ao seu servidor desligadas. Selecione Tentar novamente para voltar a decidir.",
   "browse.auth.plaintext_declined_signed_in": "Optou por não ligar ao seu servidor sem encriptação. Permita-o em Definições → Ligações não encriptadas.",
   "browse.auth.plaintext_revoked_signed_in": "Ligações sem encriptação ao seu servidor desligadas. Ative-as em Definições → Ligações não encriptadas.",
-  "browse.auth.plaintext_remote": "O seu servidor só respondeu sem encriptação, de fora desta rede. Verifique o Acesso remoto nas definições dele."
+  "browse.auth.plaintext_remote": "O seu servidor só respondeu sem encriptação, de fora desta rede. Verifique o Acesso remoto nas definições dele.",
+  "browse.jf.because_you_watched": "Porque viu {title}",
+  "browse.jf.because_you_like": "Porque gosta de {title}",
+  "browse.jf.directed_by": "Realizado por {name}",
+  "browse.jf.starring": "Com {name}"
 }

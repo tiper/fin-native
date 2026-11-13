@@ -38,5 +38,9 @@
   "browse.auth.plaintext_revoked_signin": "Has desactivat l'accés sense xifratge al teu servidor. Selecciona Torna-ho a provar per decidir-ho de nou.",
   "browse.auth.plaintext_declined_signed_in": "Has rebutjat la connexió sense xifratge amb el teu servidor. Permet-la a Configuració → Connexions sense xifratge.",
   "browse.auth.plaintext_revoked_signed_in": "Has desactivat l'accés sense xifratge al teu servidor. Activa'l a Configuració → Connexions sense xifratge.",
-  "browse.auth.plaintext_remote": "El teu servidor ha respost sense xifratge des d'una altra xarxa. Comprova l'accés remot a la seva configuració."
+  "browse.auth.plaintext_remote": "El teu servidor ha respost sense xifratge des d'una altra xarxa. Comprova l'accés remot a la seva configuració.",
+  "browse.jf.because_you_watched": "Perquè has vist {title}",
+  "browse.jf.because_you_like": "Perquè t'agrada {title}",
+  "browse.jf.directed_by": "Dirigida per {name}",
+  "browse.jf.starring": "Amb {name}"
 }

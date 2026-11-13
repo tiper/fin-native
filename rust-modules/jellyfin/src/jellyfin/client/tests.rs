@@ -1196,3 +1196,43 @@ fn capabilities_are_posted_as_this_device() {
     assert!(body.as_deref().is_some_and(|b| b.contains(r#""SupportsMediaControl":true"#)));
     assert!(headers.iter().any(|h| h.contains("DeviceId=\"dev1\"") && h.contains("Token=\"tok\"")));
 }
+
+/// A movie library's suggestion rows are titled by why the server suggests them; a row with no
+/// films, or a reason this client does not word, is left out.
+#[test]
+fn a_movie_library_s_suggestions_are_titled_by_their_reason() {
+    let _en = plx_platform::i18n::language_on_this_thread_for_test(plx_platform::i18n::Preference::En);
+    let (c, fake) = signed_in(vec![
+        ("/UserViews", 200, VIEWS),
+        ("/Movies/Recommendations", 200, r#"[
+            {"RecommendationType":"SimilarToRecentlyPlayed","BaselineItemName":"Heat","Items":[{"Id":"m1","Name":"Ronin","Type":"Movie"}]},
+            {"RecommendationType":"HasActorFromRecentlyPlayed","BaselineItemName":"Al Pacino","Items":[{"Id":"m2","Name":"Serpico","Type":"Movie"}]},
+            {"RecommendationType":"HasDirectorFromRecentlyPlayed","BaselineItemName":"Michael Mann","Items":[]},
+            {"RecommendationType":"SomethingNew","BaselineItemName":"X","Items":[{"Id":"m3","Name":"Y","Type":"Movie"}]}]"#),
+    ]);
+    let rows = c.recommendations(1, 12).unwrap();
+    let titles: Vec<_> = rows.iter().map(|h| (h.title.as_str(), h.metadata.len())).collect();
+    assert_eq!(titles, [("Because you watched Heat", 1), ("Starring Al Pacino", 1)]);
+    assert!(rows.iter().all(|h| h.key.is_empty()), "a suggestion row has no listing of its own");
+    let log = fake.log.lock().unwrap();
+    let asked = log.iter().map(|(p, ..)| p.as_str()).find(|p| p.starts_with("/Movies/Recommendations")).unwrap();
+    assert!(asked.contains("parentId=libm") && asked.contains("itemLimit=12"), "{asked}");
+}
+
+/// Next Up and Favorites of one library ask the server for that library only.
+#[test]
+fn a_library_s_next_up_and_favorites_ask_for_that_library() {
+    let (c, fake) = signed_in(vec![
+        ("/UserViews", 200, VIEWS),
+        ("/Shows/NextUp", 200, r#"{"Items":[{"Id":"e1","Name":"Pilot","Type":"Episode"}],"TotalRecordCount":1}"#),
+        ("/Items", 200, r#"{"Items":[{"Id":"s1","Name":"Show","Type":"Series"}],"TotalRecordCount":1}"#),
+        ("/UserConfiguration", 200, "{}"),
+    ]);
+    assert_eq!(c.next_up_in(2, 0, 10).unwrap().metadata.len(), 1);
+    assert_eq!(c.favorites_in(2, 0, 10).unwrap().metadata.len(), 1);
+    let log = fake.log.lock().unwrap();
+    for prefix in ["/Shows/NextUp?", "/Items?"] {
+        let asked = log.iter().map(|(p, ..)| p.as_str()).find(|p| p.starts_with(prefix)).unwrap();
+        assert!(asked.contains("parentId=libt"), "{asked}");
+    }
+}

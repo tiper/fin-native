@@ -188,13 +188,30 @@ pub fn remote_subtitle(item_id: &str, subtitle_id: &str) -> String {
 }
 
 /// Next Up: the next unwatched episode of each show in progress.
-pub fn next_up(user_id: &str, start: i64, limit: i64) -> String {
-    format!(
+pub fn next_up(user_id: &str, parent_id: Option<&str>, start: i64, limit: i64) -> String {
+    let mut p = format!(
         "/Shows/NextUp?userId={}&startIndex={}&limit={}&fields={}&enableTotalRecordCount=true&disableFirstEpisode=false&enableResumable=false",
         enc(user_id),
         start.max(0),
         limit.max(1),
         LIST_FIELDS
+    );
+    if let Some(id) = parent_id {
+        p.push_str(&format!("&parentId={}", enc(id)));
+    }
+    p
+}
+
+/// A movie library's suggestion rows: films like ones the user watched or liked, and films by a
+/// director or with an actor from them. Answers a bare JSON array of rows.
+pub fn movie_recommendations(user_id: &str, parent_id: &str, rows: i64, limit: i64) -> String {
+    format!(
+        "/Movies/Recommendations?userId={}&parentId={}&categoryLimit={}&itemLimit={}&fields={}",
+        enc(user_id),
+        enc(parent_id),
+        rows.max(1),
+        limit.max(1),
+        GRID_FIELDS
     )
 }
 

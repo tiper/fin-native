@@ -38,5 +38,9 @@
   "browse.auth.plaintext_revoked_signin": "Unverschlüsselte Verbindungen zu deinem Server sind aus. „Erneut versuchen“ fragt dich erneut.",
   "browse.auth.plaintext_declined_signed_in": "Unverschlüsselte Verbindung zum Server abgelehnt. Erlaube sie unter Einstellungen → Unverschlüsselte Verbindungen.",
   "browse.auth.plaintext_revoked_signed_in": "Unverschlüsselte Verbindungen zum Server sind aus. Schalte sie ein unter Einstellungen → Unverschlüsselte Verbindungen.",
-  "browse.auth.plaintext_remote": "Dein Server antwortete nur unverschlüsselt und von außerhalb dieses Netzwerks. Prüfe seinen Fernzugriff."
+  "browse.auth.plaintext_remote": "Dein Server antwortete nur unverschlüsselt und von außerhalb dieses Netzwerks. Prüfe seinen Fernzugriff.",
+  "browse.jf.because_you_watched": "Weil du {title} gesehen hast",
+  "browse.jf.because_you_like": "Weil dir {title} gefällt",
+  "browse.jf.directed_by": "Regie: {name}",
+  "browse.jf.starring": "Mit {name}"
 }

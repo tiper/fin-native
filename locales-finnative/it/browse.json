@@ -38,5 +38,9 @@
   "browse.auth.plaintext_revoked_signin": "Le connessioni non crittografate al tuo server sono disattivate. Seleziona Riprova per ricevere nuovamente la richiesta.",
   "browse.auth.plaintext_declined_signed_in": "Hai scelto di non connetterti al tuo server senza crittografia. Abilitalo in Impostazioni → Connessioni non crittografate.",
   "browse.auth.plaintext_revoked_signed_in": "Le connessioni non crittografate al tuo server sono disattivate. Attivale in Impostazioni → Connessioni non crittografate.",
-  "browse.auth.plaintext_remote": "Il tuo server ha risposto solo senza crittografia, dall'esterno di questa rete. Controlla l'accesso remoto nelle sue impostazioni."
+  "browse.auth.plaintext_remote": "Il tuo server ha risposto solo senza crittografia, dall'esterno di questa rete. Controlla l'accesso remoto nelle sue impostazioni.",
+  "browse.jf.because_you_watched": "Perché hai guardato {title}",
+  "browse.jf.because_you_like": "Perché ti piace {title}",
+  "browse.jf.directed_by": "Diretto da {name}",
+  "browse.jf.starring": "Con {name}"
 }

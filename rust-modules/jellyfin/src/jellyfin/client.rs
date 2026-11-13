@@ -12,7 +12,7 @@
 
 use super::auth::ClientIdentity;
 use super::dto::{
-    AuthenticationResult, BaseItemDto, MediaSegmentDto, PublicSystemInfo, QueryResult, QuickConnectResult, RemoteSubtitleInfo,
+    AuthenticationResult, BaseItemDto, MediaSegmentDto, PublicSystemInfo, QueryResult, QuickConnectResult, RecommendationDto, RemoteSubtitleInfo,
     UserDto,
     UserHomeConfig, UserLanguageConfig, UserLanguageUpdate,
 };

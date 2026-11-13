@@ -161,5 +161,33 @@
   "browse.auth.plaintext_remote": {
     "value": "Your server answered only without encryption, from outside this network. Check Remote Access in its settings.",
     "description": "browse auth plaintext_remote"
+  },
+  "browse.jf.because_you_watched": {
+    "value": "Because you watched {title}",
+    "args": {
+      "title": "str"
+    },
+    "description": "Title of a library page row of films like one the viewer watched recently; {title} is that film's title."
+  },
+  "browse.jf.because_you_like": {
+    "value": "Because you like {title}",
+    "args": {
+      "title": "str"
+    },
+    "description": "Title of a library page row of films like one the viewer marked as a favourite; {title} is that film's title."
+  },
+  "browse.jf.directed_by": {
+    "value": "Directed by {name}",
+    "args": {
+      "name": "str"
+    },
+    "description": "Title of a library page row of films by a director of a film the viewer watched or likes; {name} is the director's name."
+  },
+  "browse.jf.starring": {
+    "value": "Starring {name}",
+    "args": {
+      "name": "str"
+    },
+    "description": "Title of a library page row of films with an actor from a film the viewer watched or likes; {name} is the actor's name."
   }
 }

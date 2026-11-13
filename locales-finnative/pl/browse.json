@@ -38,5 +38,9 @@
   "browse.auth.plaintext_revoked_signin": "Nieszyfrowane połączenia z Twoim serwerem są wyłączone. Wybierz „Spróbuj ponownie”, aby ponownie wyświetlić pytanie.",
   "browse.auth.plaintext_declined_signed_in": "Odrzucono połączenie z Twoim serwerem bez szyfrowania. Zezwól na nie w Ustawienia → Połączenia nieszyfrowane.",
   "browse.auth.plaintext_revoked_signed_in": "Nieszyfrowane połączenia z Twoim serwerem są wyłączone. Włącz je w Ustawienia → Połączenia nieszyfrowane.",
-  "browse.auth.plaintext_remote": "Twój serwer odpowiedział tylko bez szyfrowania, spoza tej sieci. Sprawdź „Dostęp zdalny” w jego ustawieniach."
+  "browse.auth.plaintext_remote": "Twój serwer odpowiedział tylko bez szyfrowania, spoza tej sieci. Sprawdź „Dostęp zdalny” w jego ustawieniach.",
+  "browse.jf.because_you_watched": "Na podstawie obejrzanego: {title}",
+  "browse.jf.because_you_like": "Na podstawie ulubionego: {title}",
+  "browse.jf.directed_by": "Reżyseria: {name}",
+  "browse.jf.starring": "Występuje: {name}"
 }

@@ -38,5 +38,9 @@
   "browse.auth.plaintext_revoked_signin": "Les connexions non chiffrées à votre serveur sont désactivées. Sélectionnez Réessayer pour qu’on vous le redemande.",
   "browse.auth.plaintext_declined_signed_in": "Vous avez refusé la connexion non chiffrée à votre serveur. Autorisez-la dans Paramètres → Connexions non chiffrées.",
   "browse.auth.plaintext_revoked_signed_in": "Les connexions non chiffrées à votre serveur sont désactivées. Activez-les dans Paramètres → Connexions non chiffrées.",
-  "browse.auth.plaintext_remote": "Votre serveur n’a répondu que sans chiffrement, depuis l’extérieur de ce réseau. Vérifiez l’accès à distance dans ses paramètres."
+  "browse.auth.plaintext_remote": "Votre serveur n’a répondu que sans chiffrement, depuis l’extérieur de ce réseau. Vérifiez l’accès à distance dans ses paramètres.",
+  "browse.jf.because_you_watched": "Parce que vous avez regardé {title}",
+  "browse.jf.because_you_like": "Parce que vous aimez {title}",
+  "browse.jf.directed_by": "Réalisé par {name}",
+  "browse.jf.starring": "Avec {name}"
 }
