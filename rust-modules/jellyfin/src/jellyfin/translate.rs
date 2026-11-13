@@ -152,7 +152,13 @@ pub fn hub(identifier: &str, title: &str, key: &str, items: MediaContainer) -> H
 
 /// One item, or `None` for a type the app doesn't show.
 pub fn metadata(i: &BaseItemDto, ctx: &Ctx<'_>) -> Option<Metadata> {
-    let kind = kind_of(&i.kind)?;
+    let extra = i.extra_type.as_deref().unwrap_or("");
+    let kind = match (i.kind.as_str(), extra) {
+        // A video that is no film's extra is a library's own (a home video, a music video): the
+        // app shows and plays it as a film.
+        ("Video" | "MusicVideo", "") => "movie",
+        (t, _) => kind_of(t)?,
+    };
     let id = normalize(&i.id);
     let ud = i.user_data.clone().unwrap_or_default();
     // The favourite mark travels beside the model (`super::favorites`): recorded here, where
@@ -208,7 +214,7 @@ pub fn metadata(i: &BaseItemDto, ctx: &Ctx<'_>) -> Option<Metadata> {
 
     if kind == "clip" {
         // The data layer tells a trailer from the other extras by this (`Extra::is_trailer`).
-        m.subtype = match (i.kind.as_str(), i.extra_type.as_deref().unwrap_or("")) {
+        m.subtype = match (i.kind.as_str(), extra) {
             ("Trailer", _) | (_, "Trailer") => "trailer",
             (_, "BehindTheScenes") => "behindTheScenes",
             (_, "Scene" | "Sample") => "sceneOrSample",
@@ -829,7 +835,17 @@ mod tests {
         assert_eq!(subtype(r#"{"Id":"a1","Type":"Trailer"}"#), ("trailer".into(), 1));
         assert_eq!(subtype(r#"{"Id":"a2","Type":"Video","ExtraType":"Trailer"}"#), ("trailer".into(), 1));
         assert_eq!(subtype(r#"{"Id":"a3","Type":"Video","ExtraType":"BehindTheScenes"}"#), ("behindTheScenes".into(), 0));
-        assert_eq!(subtype(r#"{"Id":"a4","Type":"Video"}"#), (String::new(), 0));
+        assert_eq!(subtype(r#"{"Id":"a4","Type":"Video","ExtraType":"Unknown"}"#), (String::new(), 0));
+    }
+
+    #[test]
+    fn a_video_of_a_library_s_own_is_a_film_and_an_extra_stays_a_clip() {
+        let ctx = Ctx { sections: &SectionIds::default(), section_guid: None };
+        let kind = |json: &str| metadata(&serde_json::from_str(json).unwrap(), &ctx).unwrap().kind;
+        assert_eq!(kind(r#"{"Id":"v1","Type":"Video"}"#), "movie", "a home video");
+        assert_eq!(kind(r#"{"Id":"v2","Type":"MusicVideo"}"#), "movie", "a music video");
+        assert_eq!(kind(r#"{"Id":"v3","Type":"Video","ExtraType":"BehindTheScenes"}"#), "clip");
+        assert_eq!(kind(r#"{"Id":"v4","Type":"Trailer"}"#), "clip");
     }
 
     const MOVIE: &str = r#"{

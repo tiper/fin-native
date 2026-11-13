@@ -23,7 +23,7 @@ use plx_plex::plex::grant::{self, MintRefusal, PlaintextAsk};
 use plx_plex::plex::notify::{Notification, NotifyEnd};
 use plx_plex::plex::Origin;
 use plx_plex::plex::{
-    Hub, MediaContainer, Metadata, PageReq, SearchKind, SearchResult, SectionQuery, StreamUrl, TimelineReport,
+    Hub, MediaContainer, Meta, MetaType, Metadata, PageReq, SearchKind, SearchResult, SectionQuery, SortOption, StreamUrl, TimelineReport,
     TimelineState, TranscodeSpec, Trickplay,
 };
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -613,21 +613,67 @@ pub fn hub_key(key: &str) -> Option<HubKey<'_>> {
 /// A Plex sort value (`titleSort`, `addedAt:desc`, ...) as a Jellyfin sort and direction. An
 /// empty or unknown sort is by name, ascending.
 pub fn sort_of(sort: &str) -> (SortBy, bool) {
-    let (field, desc) = match sort.split_once(':') {
+    // A compound key (Show order) carries its direction on its first term:
+    // `show.titleSort:desc,season.index,episode.index`.
+    let first = sort.split(',').next().unwrap_or(sort);
+    let (field, desc) = match first.split_once(':') {
         Some((f, d)) => (f, d == "desc"),
-        None => (sort, false),
+        None => (first, false),
     };
     let by = match field {
         "addedAt" => SortBy::DateCreated,
         "originallyAvailableAt" | "year" => SortBy::PremiereDate,
-        "rating" | "audienceRating" | "userRating" => SortBy::CommunityRating,
+        "rating" => SortBy::CriticRating,
+        "audienceRating" | "userRating" => SortBy::CommunityRating,
         "duration" => SortBy::Runtime,
         "lastViewedAt" => SortBy::DatePlayed,
+        "viewCount" => SortBy::PlayCount,
         "random" => SortBy::Random,
+        "show.titleSort" => SortBy::Show,
         _ => SortBy::Title,
     };
     (by, desc)
 }
+
+/// The sort menu of a listing of `item_types` ([`grid_types`]), in Plex's keys so the menu names
+/// each one in the viewer's language. A Plex server sends it with the first page
+/// (`Meta.Type[].Sort`); the app adds Plays itself. No Random: the server shuffles again for every
+/// page, so a grid sorted so would repeat some titles and skip others.
+fn sort_menu(item_types: &str) -> Meta {
+    let keys: &[(&str, &str)] = match item_types {
+        "Season" => &[(SHOW_ORDER_SEASONS, "asc"), ("addedAt", "desc"), ("lastViewedAt", "desc")],
+        "Episode" => &[
+            (SHOW_ORDER_EPISODES, "asc"), ("titleSort", "asc"), ("originallyAvailableAt", "desc"), ("addedAt", "desc"),
+            ("audienceRating", "desc"), ("lastViewedAt", "desc"), ("duration", "asc"),
+        ],
+        "BoxSet" => &[("titleSort", "asc"), ("addedAt", "desc")],
+        "Series" => &[
+            ("titleSort", "asc"), ("addedAt", "desc"), ("originallyAvailableAt", "desc"), ("audienceRating", "desc"),
+            ("lastViewedAt", "desc"),
+        ],
+        _ => &[
+            ("titleSort", "asc"), ("addedAt", "desc"), ("originallyAvailableAt", "desc"), ("audienceRating", "desc"),
+            ("duration", "asc"), ("lastViewedAt", "desc"),
+        ],
+    };
+    let sort = keys
+        .iter()
+        .map(|&(key, direction)| SortOption {
+            key: key.into(),
+            default_direction: direction.into(),
+            ..Default::default()
+        })
+        .collect();
+    Meta { types: vec![MetaType { active: 1, sort }] }
+}
+
+/// Plex's show order for a season and an episode listing ([`SortBy::Show`]).
+const SHOW_ORDER_SEASONS: &str = "show.titleSort,index";
+const SHOW_ORDER_EPISODES: &str = "show.titleSort,season.index,episode.index";
+
+/// The Jellyfin types a movie library's grid lists: its films, and the standalone videos a home
+/// video or music video library holds (`translate::metadata` draws them as films).
+const MOVIE_TYPES: &str = "Movie,Video,MusicVideo";
 
 /// The Jellyfin item types a library's grid lists: the library's own (`Movie`, `Series`), or the
 /// listing its TYPE menu chose by Plex `type=` number (3 seasons, 4 episodes, 18 collections).
@@ -637,7 +683,7 @@ fn grid_types(kind: &str, plex_type: Option<&str>) -> &'static str {
         (Some("4"), _) => "Episode",
         (Some("18"), _) => "BoxSet",
         (_, "show") => "Series",
-        _ => "Movie",
+        _ => MOVIE_TYPES,
     }
 }
 
@@ -781,10 +827,11 @@ impl Backend for Shared {
         let filter = |key: &str| q.filters.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
         let unwatched_only = [filter("unwatched"), filter("unwatchedLeaves")].contains(&Some("1"));
         let starts_with = filter("firstCharacter");
-        c.library_items(
+        let item_types = grid_types(&kind, filter("type"));
+        let mut page = c.library_items(
             q.section_key,
             &LibraryPage {
-                item_types: grid_types(&kind, filter("type")),
+                item_types,
                 sort_by,
                 descending,
                 unwatched_only,
@@ -793,7 +840,11 @@ impl Backend for Shared {
                 start: q.start,
                 size: q.size,
             },
-        )
+        )?;
+        if q.include_meta {
+            page.meta = Some(sort_menu(item_types));
+        }
+        Some(page)
     }
     fn section_directory(&self, section_key: i64, directory: &str, filters: &[(String, String)]) -> Option<MediaContainer> {
         if directory != "genre" {
@@ -807,7 +858,7 @@ impl Backend for Shared {
     fn search(&self, query: &str, limit: i64, _section_id: i64) -> Option<MediaContainer> {
         let c = self.0.client()?;
         let kinds = [
-            ("movie", msg::browse_kind_movies(), "Movie"),
+            ("movie", msg::browse_kind_movies(), MOVIE_TYPES),
             ("show", msg::browse_kind_shows(), "Series"),
             ("episode", msg::browse_kind_episodes(), "Episode"),
         ];
@@ -825,7 +876,7 @@ impl Backend for Shared {
     }
     fn search_typed(&self, query: &str, kind: SearchKind, req: PageReq) -> Option<MediaContainer> {
         let types = match kind {
-            SearchKind::Movies => "Movie",
+            SearchKind::Movies => MOVIE_TYPES,
             SearchKind::Tv => "Series,Episode",
             SearchKind::People => return self.0.client()?.search_people(query, req.start as i64, req.size as i64),
         };
@@ -1087,10 +1138,40 @@ mod tests {
         assert_eq!(sort_of("addedAt:desc"), (SortBy::DateCreated, true));
         assert_eq!(sort_of("originallyAvailableAt:desc"), (SortBy::PremiereDate, true));
         assert_eq!(sort_of("audienceRating:desc"), (SortBy::CommunityRating, true));
+        assert_eq!(sort_of("rating"), (SortBy::CriticRating, false));
+        assert_eq!(sort_of("viewCount:desc"), (SortBy::PlayCount, true), "the app's own Plays sort");
+        assert_eq!(sort_of("duration"), (SortBy::Runtime, false));
+        assert_eq!(sort_of("lastViewedAt:desc"), (SortBy::DatePlayed, true));
+        assert_eq!(sort_of(SHOW_ORDER_EPISODES), (SortBy::Show, false));
+        // The app reverses a compound key on its first term (`SortEntry::query`).
+        assert_eq!(sort_of("show.titleSort:desc,index"), (SortBy::Show, true));
+        assert_eq!(sort_of("show.titleSort:desc,season.index,episode.index"), (SortBy::Show, true));
         // A title sort is by the name shown, never the server's stale `SortName`, and so is every
         // other sort's tie-break.
         assert_eq!(SortBy::Title.as_str(), "Name");
         assert_eq!(SortBy::DateCreated.as_str(), "DateCreated,Name");
+    }
+
+    /// Every key a menu offers sorts by what it names, never the title fallback (Plays sorted by
+    /// title while the menu had no other entry), and a listing of seasons or episodes opens in
+    /// show order, its menu's first entry.
+    #[test]
+    fn every_offered_sort_maps_to_its_own_jellyfin_sort() {
+        let listings = [("movie", None), ("show", None), ("show", Some("3")), ("show", Some("4")), ("movie", Some("18"))];
+        for types in listings.map(|(kind, plex_type)| grid_types(kind, plex_type)) {
+            let menu = sort_menu(types);
+            let [kind] = &menu.types[..] else { panic!("{types}: one type") };
+            assert_eq!(kind.active, 1);
+            for s in &kind.sort {
+                let by = sort_of(&s.key).0;
+                assert!(by != SortBy::Title || s.key == "titleSort", "{types} {}: falls back to title", s.key);
+            }
+        }
+        assert_eq!(sort_of(&sort_menu("Season").types[0].sort[0].key).0, SortBy::Show);
+        assert_eq!(sort_of(&sort_menu("Episode").types[0].sort[0].key).0, SortBy::Show);
+        assert_eq!(sort_menu(MOVIE_TYPES).types[0].sort[0].key, "titleSort");
+        assert!(listings.iter().all(|&(k, t)| sort_menu(grid_types(k, t)).types[0].sort.iter().all(|s| s.key != "random")),
+            "a random order is shuffled again for every page");
     }
 
     #[test]
@@ -1251,7 +1332,7 @@ mod grid_tests {
 
     #[test]
     fn the_type_menu_picks_what_a_library_lists() {
-        assert_eq!(grid_types("movie", None), "Movie");
+        assert_eq!(grid_types("movie", None), "Movie,Video,MusicVideo", "home and music videos too");
         assert_eq!(grid_types("show", Some("2")), "Series");
         assert_eq!(grid_types("show", Some("3")), "Season");
         assert_eq!(grid_types("show", Some("4")), "Episode");
