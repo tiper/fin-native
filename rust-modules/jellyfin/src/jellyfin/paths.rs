@@ -344,6 +344,17 @@ pub fn episodes_from(user_id: &str, series_id: &str, start_item_id: &str, limit:
     )
 }
 
+/// The episodes either side of `item_id` in its show's order, and it (Jellyfin's `adjacentTo`).
+pub fn episodes_beside(user_id: &str, series_id: &str, item_id: &str) -> String {
+    format!(
+        "/Shows/{}/Episodes?userId={}&adjacentTo={}&fields={}&enableUserData=true",
+        enc(series_id),
+        enc(user_id),
+        enc(item_id),
+        LIST_FIELDS
+    )
+}
+
 pub fn similar(user_id: &str, item_id: &str, limit: i64) -> String {
     format!(
         "/Items/{}/Similar?userId={}&limit={}&fields={}",

@@ -125,8 +125,8 @@ impl JfClient {
     }
 
     /// The queue a playback runs in (`Client::create_play_queue`), shaped as Plex answers one: an
-    /// episode and the rest of its show after it when `continuous`, anything else on its own. Up
-    /// Next and the end-of-episode hand-off read the row after the selected one.
+    /// episode with the one before it (Previous) and the rest of its show after it (Up Next and
+    /// the end-of-episode hand-off) when `continuous`, anything else on its own.
     pub fn play_queue(&self, item_id: &str, continuous: bool) -> Option<MediaContainer> {
         const WINDOW: i64 = 50;
         // The item the playback just decided on, read seconds ago; its show is its grandparent.
@@ -140,21 +140,36 @@ impl JfClient {
                 .unwrap_or_default(),
             _ => Vec::new(),
         };
-        if rows.is_empty() {
+        // Where the playing row sits: after the episode before it, when there is one.
+        let at = if rows.is_empty() {
             rows.push(me);
-        }
+            0
+        } else if let Some(previous) = self.episode_before(&series, item_id) {
+            rows.insert(0, previous);
+            1
+        } else {
+            0
+        };
         for (i, row) in rows.iter_mut().enumerate() {
             row.play_queue_item_id = i as i64 + 1;
         }
         Some(MediaContainer {
             play_queue_id: 1,
-            play_queue_selected_item_id: 1,
-            play_queue_selected_item_offset: 0,
+            play_queue_selected_item_id: at + 1,
+            play_queue_selected_item_offset: at,
             play_queue_total_count: rows.len() as i64,
             size: rows.len() as i64,
             metadata: rows,
             ..Default::default()
         })
+    }
+
+    /// The episode before `item_id` in its show, if it has one.
+    fn episode_before(&self, series: &str, item_id: &str) -> Option<Metadata> {
+        let page: QueryResult<BaseItemDto> = self.get(&paths::episodes_beside(self.user_id(), series, item_id))?;
+        let at = page.items.iter().position(|e| e.id == item_id)?;
+        let mut rows = translate::container(&page, &self.ctx(None)).metadata;
+        at.checked_sub(1).map(|before| rows.swap_remove(before))
     }
 
     /// A show's seasons or a season's episodes (`Client::children_paged`). A season's episodes are
