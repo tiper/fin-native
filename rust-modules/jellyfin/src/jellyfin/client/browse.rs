@@ -229,10 +229,16 @@ impl JfClient {
     }
 
     /// Every film and show a person appears in, across every library, newest first
-    /// (`Client::person_media`). `person_id` is the person's id, the cast row's `tag_key`.
+    /// (`Client::person_media`). `person_id` is the person's id, the cast row's `tag_key`. Each
+    /// title comes with its provider ids: its identity, which the Filmography page matches a
+    /// credit to the library by.
     pub fn person_media(&self, person_id: &str) -> Option<MediaContainer> {
+        self.listing(&self.person_titles(person_id, &format!("{},ProviderIds", paths::GRID_FIELDS)), None)
+    }
+
+    fn person_titles(&self, person_id: &str, fields: &str) -> String {
         const MOST: i64 = 200;
-        let path = paths::items(
+        paths::items(
             self.user_id(),
             &ItemsQuery {
                 person_ids: Some(person_id),
@@ -241,11 +247,64 @@ impl JfClient {
                 sort_by: Some(paths::SortBy::PremiereDate),
                 descending: true,
                 limit: MOST,
-                fields: Some(paths::GRID_FIELDS),
+                fields: Some(fields),
                 ..Default::default()
             },
+        )
+    }
+
+    /// A person's whole career, as the Filmography page's departments
+    /// (`AccountClient::person_credits`, same answers): The Movie Database's credits for the
+    /// TMDB id the server keeps on the person, the titles the library holds named by their own
+    /// identity. A build with no TMDB key, and a person the server has no TMDB id for, have no
+    /// filmography.
+    pub fn person_credits(&self, person_id: &str) -> Option<Vec<CreditGroup>> {
+        self.person_credits_with(person_id, tmdb::API_KEY)
+    }
+
+    pub(super) fn person_credits_with(&self, person_id: &str, key: Option<&str>) -> Option<Vec<CreditGroup>> {
+        let Some(key) = key.filter(|k| !k.is_empty()) else { return Some(Vec::new()) };
+        let (credits, held) = both(
+            || self.tmdb_credits(person_id, key),
+            || self.get::<QueryResult<BaseItemDto>>(&self.person_titles(person_id, "ProviderIds")),
         );
-        self.listing(&path, None)
+        let Some(credits) = credits? else { return Some(Vec::new()) };
+        let held: Vec<tmdb::Held> = held
+            .flatten()?
+            .items
+            .iter()
+            .filter_map(|i| {
+                Some(tmdb::Held {
+                    is_show: i.kind == "Series",
+                    tmdb_id: i.provider_ids.get("Tmdb").filter(|id| !id.is_empty())?.clone(),
+                    guid: translate::guid_of(i),
+                    thumb: translate::primary_image(i),
+                })
+            })
+            .collect();
+        Some(tmdb::groups(credits, &held))
+    }
+
+    /// TMDB's credits for the person: `None` is a failure to ask again, `Some(None)` a person
+    /// TMDB has nothing on (no TMDB id on the server, unknown to TMDB, or a key TMDB no longer
+    /// takes), which no retry changes.
+    fn tmdb_credits(&self, person_id: &str, key: &str) -> Option<Option<tmdb::CombinedCredits>> {
+        let person = self.send(Verb::Get, &paths::item(self.user_id(), person_id), None)?;
+        if person.status == 404 {
+            return Some(None);
+        }
+        if !person.ok() {
+            return None;
+        }
+        let person: BaseItemDto = serde_json::from_slice(&person.body).ok()?;
+        let Some(tmdb_id) = person.provider_ids.get("Tmdb").filter(|id| !id.is_empty()) else { return Some(None) };
+        let url = tmdb::combined_credits_url(tmdb_id, key, plx_platform::i18n::current().language().tag());
+        let answer = self.transport.send(&url, Verb::Get, &["Accept: application/json".to_string()], None)?;
+        match answer.status {
+            200 => serde_json::from_slice(&answer.body).ok().map(Some),
+            401 | 404 => Some(None),
+            _ => None,
+        }
     }
 
     /// A person's biography (`AccountClient::person_profile`): the overview, birth and death

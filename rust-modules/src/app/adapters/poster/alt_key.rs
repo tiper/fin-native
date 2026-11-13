@@ -2,7 +2,8 @@
 //! `imgcache::classify` knows only Plex's `/photo/:/transcode`, so Jellyfin's
 //! `/Items/{id}/Images/{kind}?tag=..&fillWidth=..` would never reach the disk tier. The request
 //! carries no credential (the token travels in a header), and the image tag in it changes when the
-//! artwork does, so the whole request is the identity.
+//! artwork does, so the whole request is the identity. A TMDB poster (a Filmography title the
+//! library does not hold) is an address whose path names its picture, so it is its own identity.
 
 use plx_platform::imgcache::{classify_baked, DiskKey};
 
@@ -16,6 +17,9 @@ pub(super) fn disk_key(namespace: &str, built_key: &str) -> Option<DiskKey> {
 }
 
 fn key_of(namespace: &str, built_key: &str) -> Option<DiskKey> {
+    if plx_jellyfin::jellyfin::tmdb::is_image(built_key) {
+        return classify_baked(namespace, KIND, built_key, "-", 1, 1);
+    }
     let (path, query) = built_key.split_once('?').unwrap_or((built_key, "-"));
     if !path.contains("/Images/") {
         return None;
@@ -44,5 +48,8 @@ mod tests {
         assert!(key_of(NS, "/Videos/v/Trickplay/320/0.jpg").is_none());
         assert!(key_of(NS, "").is_none());
         assert!(key_of(NS, "/Items/i1/Images/Backdrop").is_some(), "a request without a query");
+        let poster = key_of(NS, "https://image.tmdb.org/t/p/w342/x.jpg");
+        assert!(poster.is_some(), "a TMDB poster");
+        assert_ne!(poster, key_of(NS, "https://image.tmdb.org/t/p/w500/x.jpg"), "new size");
     }
 }

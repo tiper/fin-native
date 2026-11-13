@@ -8,7 +8,8 @@ struct Fake {
 
 impl Transport for std::sync::Arc<Fake> {
     fn send(&self, url: &str, verb: Verb, headers: &[String], body: Option<&[u8]>) -> Option<Answer> {
-        let path = url.strip_prefix("http://jf:8096").expect("every request goes to the base");
+        // Every request goes to the base, but the one to The Movie Database, kept whole.
+        let path = url.strip_prefix("http://jf:8096").unwrap_or(url);
         self.log.lock().unwrap().push((
             path.to_string(),
             verb,
@@ -530,6 +531,42 @@ fn a_persons_biography_comes_from_the_person_item() {
     );
     assert!(c.person_profile("p2").is_some_and(|p| p.title.is_empty() && p.summary.is_empty()));
     assert!(c.person_profile("p3").is_none());
+}
+
+/// The Filmography page's career comes from The Movie Database, asked for by the TMDB id the
+/// server keeps on the person; a title the library holds carries that item's own identity and
+/// poster. No key, or no TMDB id, is an empty filmography (settled); a failure is `None`.
+#[test]
+fn a_persons_career_comes_from_tmdb_and_names_the_titles_the_library_holds() {
+    const TMDB: &str = "https://api.themoviedb.org/3/person/31/combined_credits?api_key=KEY&language=en";
+    let routes = || vec![
+        ("/Items/p1?", 200, r#"{"Id":"p1","Name":"Ana Moreira","Type":"Person","ProviderIds":{"Tmdb":"31"}}"#),
+        ("/Items/p2?", 200, r#"{"Id":"p2","Name":"Unknown","Type":"Person"}"#),
+        ("/Items/p3?", 500, ""),
+        (TMDB, 200, r#"{"cast":[
+            {"id":10,"media_type":"movie","title":"Held Film","release_date":"2019-05-01","character":"Ana"},
+            {"id":11,"media_type":"tv","name":"Elsewhere","first_air_date":"2021-01-01","character":"Rita"}],"crew":[]}"#),
+        ("/Items?userId=u1", 200, r#"{"Items":[{"Id":"m1","Name":"Held Film","Type":"Movie",
+            "ProviderIds":{"Tmdb":"10","Imdb":"tt7"},"ImageTags":{"Primary":"tag1"}}]}"#),
+    ];
+    let (c, fake) = signed_in(routes());
+    let groups = c.person_credits_with("p1", Some("KEY")).unwrap();
+    let rows: Vec<_> = groups[0].credits.iter().map(|c| c.item.as_ref().unwrap()).map(|i| (i.title.as_str(), i.rating_key.as_str(), i.thumb.is_empty())).collect();
+    assert_eq!((groups.len(), groups[0].kind.as_str()), (1, "acting"));
+    assert_eq!(rows, [("Held Film", "imdb://tt7", false), ("Elsewhere", "tmdb-tv-11", true)]);
+    let log = fake.log.lock().unwrap();
+    let (_, _, _, headers) = log.iter().find(|(p, ..)| p == TMDB).expect("TMDB was asked");
+    assert!(!headers.iter().any(|h| h.contains("tok")), "the server's token never goes to TMDB");
+    let held = &log.iter().find(|(p, ..)| p.starts_with("/Items?")).unwrap().0;
+    assert!(held.contains("personIds=p1") && held.contains("fields=ProviderIds"), "{held}");
+    drop(log);
+
+    assert_eq!(c.person_credits_with("p2", Some("KEY")).map(|g| g.len()), Some(0), "no TMDB id on the person");
+    assert!(c.person_credits_with("p3", Some("KEY")).is_none(), "the server failed: asked again");
+    let (c, fake) = signed_in(routes());
+    assert_eq!(c.person_credits_with("p1", None).map(|g| g.len()), Some(0), "a build with no key");
+    assert_eq!(c.person_credits_with("p1", Some("")).map(|g| g.len()), Some(0));
+    assert!(fake.log.lock().unwrap().iter().all(|(p, ..)| !p.contains("themoviedb")), "and it asks nothing");
 }
 
 /// Each media source is one version, in the server's order, identified by an id taken from the

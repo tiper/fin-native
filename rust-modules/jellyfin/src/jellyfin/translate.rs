@@ -299,7 +299,7 @@ pub fn metadata(i: &BaseItemDto, ctx: &Ctx<'_>) -> Option<Metadata> {
 
 /// The item's portable identity, for matching the same film across servers: its IMDb id, else its
 /// TMDB or TVDB id, in the URI shape the model's `guid` holds.
-fn guid_of(i: &BaseItemDto) -> String {
+pub(super) fn guid_of(i: &BaseItemDto) -> String {
     for (provider, scheme) in [("Imdb", "imdb"), ("Tmdb", "tmdb"), ("Tvdb", "tvdb")] {
         if let Some(v) = i.provider_ids.get(provider).filter(|v| !v.is_empty()) {
             return format!("{scheme}://{v}");
@@ -327,7 +327,7 @@ fn note_image_tags(i: &BaseItemDto, id: &str) {
     }
 }
 
-fn primary_image(i: &BaseItemDto) -> String {
+pub(super) fn primary_image(i: &BaseItemDto) -> String {
     match i.image_tags.get("Primary") {
         Some(tag) => paths::image(&normalize(&i.id), ImageKind::Primary, Some(tag), 0, 0),
         None => String::new(),

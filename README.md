@@ -131,9 +131,10 @@ built on.
 
 ## Privacy
 
-FinNative sends no crash reports or analytics. It talks only to the Jellyfin server you sign in
-to, and while you sign in it looks for Jellyfin servers on your home network. Your password is
-never stored. [`PRIVACY.md`](PRIVACY.md) is the full policy, and the same text is in the app under
+FinNative sends no crash reports or analytics. It talks to the Jellyfin server you sign in to, and
+while you sign in it looks for Jellyfin servers on your home network. The one other request is an
+actor's filmography, which is asked of [The Movie Database](https://www.themoviedb.org) by the
+person's TMDB number. Your password is never stored. [`PRIVACY.md`](PRIVACY.md) is the full policy, and the same text is in the app under
 Settings → Legal.
 
 ## Building

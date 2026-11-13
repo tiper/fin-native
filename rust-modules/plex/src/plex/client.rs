@@ -773,6 +773,7 @@ impl Client {
     /// not the first.
     #[track_caller]
     pub fn fetch_built_outcome(&self, path_with_token: &str) -> ArtFetch {
+        crate::alt_some!(b => b.fetch_art(path_with_token));
         if !self.may_send() {
             return ArtFetch::NoResponse;
         }

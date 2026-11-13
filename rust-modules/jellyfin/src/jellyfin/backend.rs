@@ -950,6 +950,10 @@ impl Backend for Shared {
 
     // ---- artwork, subtitles, playback ----
     fn image_transcode_path(&self, src_path: &str, w: i64, h: i64, _png: bool) -> String {
+        // A TMDB poster (a Filmography title the library does not hold) comes from TMDB itself.
+        if let Some(url) = super::tmdb::sized_poster(src_path, w) {
+            return url;
+        }
         // Asked by the poster pipeline while it draws. An image path is the server's address and
         // the image's, so before a client is made it comes from the saved sign-in alone: making
         // the client resumes the sign-in, a request that, with the server not answering, held the
@@ -964,7 +968,11 @@ impl Backend for Shared {
         saved_client(&saved).image_path(src_path, w, h)
     }
     fn art_outlives_grant(&self, path: &str) -> bool {
-        paths::is_user_image(path)
+        // A TMDB poster carries no credential either.
+        paths::is_user_image(path) || super::tmdb::is_image(path)
+    }
+    fn fetch_art(&self, path: &str) -> Option<plx_plex::plex::ArtFetch> {
+        super::tmdb::is_image(path).then(|| super::tmdb::fetch_image(path))
     }
     fn sidecar_subtitle_detailed(&self, key: &str, _codec: &str) -> Result<Vec<u8>, String> {
         self.0.client().ok_or_else(|| "not signed in".to_string())?.get_bytes(key)
@@ -1039,11 +1047,8 @@ impl Backend for Shared {
     fn person_profile(&self, person_id: &str) -> Option<plx_plex::plex::discover::PersonProfile> {
         self.0.client()?.person_profile(person_id)
     }
-    fn person_credits(&self, _person_id: &str) -> Option<Vec<plx_plex::plex::discover::CreditGroup>> {
-        // Jellyfin knows a person's work only as far as the library holds it, and the page's own
-        // shelf already lists that (`person_media`). Nothing beyond it: settle on an empty
-        // filmography rather than retry a plex.tv request that cannot go anywhere.
-        Some(Vec::new())
+    fn person_credits(&self, person_id: &str) -> Option<Vec<plx_plex::plex::discover::CreditGroup>> {
+        self.0.client()?.person_credits(person_id)
     }
     fn person_media(&self, person_id: &str) -> Option<MediaContainer> {
         self.0.client()?.person_media(person_id)
