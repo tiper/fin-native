@@ -791,12 +791,11 @@ impl Backend for Shared {
             HubKey::ResumeIn(k) => c.continue_watching_in(k, start, size),
             HubKey::NextUpIn(k) => c.next_up_in(k, start, size),
             HubKey::FavoritesIn(k) => c.favorites_in(k, start, size),
-            // `/Items/Latest` has no offset: ask for the whole window's end and cut it here.
             HubKey::Latest(k) => {
-                // `/Items/Latest` has no offset, so each window re-reads the shelf from its start:
-                // stop at a depth where that stays cheap.
+                // `/Items/Latest` has no offset or total, so each window reads the whole shelf (its
+                // length is the total the pager goes by), capped at a depth where that stays cheap.
                 const LATEST_MAX: i64 = 96;
-                c.latest(k, (start + size).min(LATEST_MAX)).map(|m| window(m, start, size))
+                c.latest(k, LATEST_MAX).map(|m| window(m, start, size))
             }
             HubKey::Children(id) => c.children_of(id, start, size),
         }
