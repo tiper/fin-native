@@ -124,7 +124,7 @@ impl JfClient {
         let (recent, favorites) = (recent?, favorites.flatten());
         let mut hubs: Vec<Hub> = Vec::new();
         if let Some(c) = favorites {
-            hubs.push(translate::hub("home.favorites", msg::browse_jf_favorites(), "/jf/favorites", c));
+            hubs.push(translate::hub("home.favorites", msg::browse_jf_favorites(), &translate::shelf_key("favorites"), c));
         }
         hubs.extend(recent);
         Some(translate::hubs(hubs))
@@ -164,7 +164,7 @@ impl JfClient {
             .zip(latest)
             .filter_map(|((id, key, title), c)| {
                 let title = msg::browse_home_hub_recently_added_in(title);
-                Some(translate::hub(id, &title, &format!("/jf/latest/{key}"), c?))
+                Some(translate::hub(id, &title, &translate::shelf_key(format_args!("latest/{key}")), c?))
             })
             .collect();
         Some(hubs)

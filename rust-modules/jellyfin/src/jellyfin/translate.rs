@@ -32,6 +32,16 @@ use plx_plex::plex::{
 /// The key prefix for items this backend owns.
 pub const ITEM_KEY_PREFIX: &str = "/jf/items/";
 
+/// The key prefix of this backend's shelves (`backend::hub_key`). It sits under `/hubs/`, where the
+/// app reads a shelf's listing past its first cards (`is_pageable_hub_key`); every listing under it
+/// still comes back to this backend (`Backend::hub_items_paged`).
+pub const SHELF_KEY_PREFIX: &str = "/hubs/jf/";
+
+/// A shelf's key: [`SHELF_KEY_PREFIX`] then `path` (`deck`, `latest/{section}`, ...).
+pub fn shelf_key(path: impl std::fmt::Display) -> String {
+    format!("{SHELF_KEY_PREFIX}{path}")
+}
+
 /// What a translation needs to know beyond the DTO itself.
 pub struct Ctx<'a> {
     pub sections: &'a SectionIds,
@@ -1083,7 +1093,7 @@ mod tests {
         let ids = SectionIds::new();
         let c = container(&page, &Ctx { sections: &ids, section_guid: None });
         assert_eq!((c.size, c.total_size, c.offset), (1, 120, 24));
-        let h = hub("home.movies.recent", "Recently Added in Movies", "/jf/latest/1", c);
+        let h = hub("home.movies.recent", "Recently Added in Movies", "/hubs/jf/latest/1", c);
         assert!(h.more);
         assert_eq!((h.kind.as_str(), h.hub_identifier.as_str()), ("movie", "home.movies.recent"));
     }
