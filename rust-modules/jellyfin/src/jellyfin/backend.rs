@@ -988,6 +988,9 @@ impl Backend for Shared {
     fn play_queue(&self, rating_key: &str, continuous: bool) -> Option<MediaContainer> {
         self.0.client()?.play_queue(rating_key, continuous)
     }
+    fn play_queue_window(&self, id: &str, _center: i64) -> Option<MediaContainer> {
+        self.0.client()?.play_queue_window(id)
+    }
     fn timeline(&self, r: &TimelineReport<'_>) -> bool {
         let Some(c) = self.0.client() else { return false };
         c.report(&PlaybackReport {

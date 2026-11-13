@@ -164,6 +164,10 @@ pub trait Backend: Send + Sync {
     fn play_queue(&self, rating_key: &str, continuous: bool) -> Option<MediaContainer> {
         None
     }
+    /// That queue read again, for each row's current resume point (`Client::play_queue_window`).
+    fn play_queue_window(&self, id: &str, center: i64) -> Option<MediaContainer> {
+        None
+    }
     fn timeline(&self, r: &TimelineReport<'_>) -> bool {
         false
     }
