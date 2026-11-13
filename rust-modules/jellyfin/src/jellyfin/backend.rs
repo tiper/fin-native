@@ -637,7 +637,8 @@ pub fn sort_of(sort: &str) -> (SortBy, bool) {
 
 /// The sort menu of a listing of `item_types` ([`grid_types`]), in Plex's keys so the menu names
 /// each one in the viewer's language. A Plex server sends it with the first page
-/// (`Meta.Type[].Sort`); the app adds Plays itself.
+/// (`Meta.Type[].Sort`); the app adds Plays itself. No Random: the server shuffles again for every
+/// page, so a grid sorted so would repeat some titles and skip others.
 fn sort_menu(item_types: &str) -> Meta {
     let keys: &[(&str, &str)] = match item_types {
         "Season" => &[(SHOW_ORDER_SEASONS, "asc"), ("addedAt", "desc"), ("lastViewedAt", "desc")],
@@ -648,11 +649,11 @@ fn sort_menu(item_types: &str) -> Meta {
         "BoxSet" => &[("titleSort", "asc"), ("addedAt", "desc")],
         "Series" => &[
             ("titleSort", "asc"), ("addedAt", "desc"), ("originallyAvailableAt", "desc"), ("audienceRating", "desc"),
-            ("lastViewedAt", "desc"), ("random", "asc"),
+            ("lastViewedAt", "desc"),
         ],
         _ => &[
             ("titleSort", "asc"), ("addedAt", "desc"), ("originallyAvailableAt", "desc"), ("audienceRating", "desc"),
-            ("duration", "asc"), ("lastViewedAt", "desc"), ("random", "asc"),
+            ("duration", "asc"), ("lastViewedAt", "desc"),
         ],
     };
     let sort = keys
@@ -1169,6 +1170,8 @@ mod tests {
         assert_eq!(sort_of(&sort_menu("Season").types[0].sort[0].key).0, SortBy::Show);
         assert_eq!(sort_of(&sort_menu("Episode").types[0].sort[0].key).0, SortBy::Show);
         assert_eq!(sort_menu(MOVIE_TYPES).types[0].sort[0].key, "titleSort");
+        assert!(listings.iter().all(|&(k, t)| sort_menu(grid_types(k, t)).types[0].sort.iter().all(|s| s.key != "random")),
+            "a random order is shuffled again for every page");
     }
 
     #[test]
