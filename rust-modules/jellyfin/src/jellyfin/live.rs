@@ -18,6 +18,8 @@
 //!   user again and swap in the new name and avatar (`backend::refresh_signed_in_user`), and
 //!   Home is re-read with the user's Home settings as they now are (`favorites::owe_home`); it
 //!   adds nothing to the feed.
+//! * `Play`, `Playstate` and `GeneralCommand` are another client driving this one
+//!   ([`super::remote`]): they add nothing to the feed.
 //! * `ForceKeepAlive` sets how often this client says `KeepAlive`, which the server needs to keep
 //!   the connection; every message, the server's `KeepAlive` answers included, is a ping.
 //!
@@ -26,6 +28,7 @@
 //! per session, and two changes to one item would otherwise read as no news.
 
 use super::ids::normalize;
+use super::remote::{self, Command};
 use plx_net::net::connect_only::OpenError;
 use plx_net::ws::{self, Dial, End, Event, Fault, HandshakeFault, Outbox, Refusal};
 use plx_plex::plex::notify::{LibraryEntry, LibraryKind, LibraryState, Notification, NotifyEnd, PlaySession, PlayState};
@@ -75,11 +78,13 @@ pub struct Read {
     pub keepalive: Option<Duration>,
     /// The server says this user was edited (`UserUpdated`): a name or avatar may have changed.
     pub user_updated: bool,
+    /// Another client's command to this one (`Play`, `Playstate`, `GeneralCommand`).
+    pub command: Option<Command>,
 }
 
 impl Read {
     fn of(notification: Notification) -> Self {
-        Read { notification, keepalive: None, user_updated: false }
+        Read { notification, keepalive: None, user_updated: false, command: None }
     }
 }
 
@@ -115,6 +120,7 @@ impl Messages {
                 })
                 .unwrap_or_default(),
             "LibraryChanged" => return library(data),
+            "Play" | "Playstate" | "GeneralCommand" => return Read { command: remote::read(kind, data), ..ping },
             "UserUpdated" if mine("Id") => {
                 return Read { user_updated: true, ..ping };
             }
@@ -212,9 +218,10 @@ impl Beat {
     }
 }
 
-/// Open the socket at `target` and run it until it ends or `cancel` is set.
-pub fn open(off: &plx_base::task::OffFrame, target: &Target, cancel: &AtomicBool, on: &mut dyn FnMut(Notification))
-    -> NotifyEnd {
+/// Open the socket at `target` and run it until it ends or `cancel` is set. `opened` is called
+/// once the server has taken the connection.
+pub fn open(off: &plx_base::task::OffFrame, target: &Target, cancel: &AtomicBool, on: &mut dyn FnMut(Notification),
+    opened: &dyn Fn()) -> NotifyEnd {
     let Some((outbox, inbox)) = ws::channel() else { return NotifyEnd::Unsupported };
     let beat = Beat::new(KEEPALIVE);
     let mut messages = Messages::new(&target.user_id);
@@ -228,12 +235,19 @@ pub fn open(off: &plx_base::task::OffFrame, target: &Target, cancel: &AtomicBool
             return End::Lost;
         }
         let end = ws::run(off, dial, cancel, inbox, &mut |event| {
-            let Event::Text(text) = event else { return };
+            let text = match event {
+                Event::Opened => return opened(),
+                Event::Text(text) => text,
+                _ => return,
+            };
             let read = messages.read(&text);
             if let Some(every) = read.keepalive {
                 beat.set(every);
             }
             on(read.notification);
+            if let Some(command) = read.command {
+                remote::act(command);
+            }
             if read.user_updated {
                 // The name and avatar, and the Home settings the next read of Home takes.
                 super::backend::refresh_signed_in_user();
@@ -319,8 +333,10 @@ mod tests {
         assert!(r.user_updated && r.notification == Notification::Ping);
         assert!(!m.read(r#"{"MessageType":"UserUpdated","Data":{"Id":"other"}}"#).user_updated);
         for other in [r#"{"MessageType":"KeepAlive"}"#, r#"{"MessageType":"Play","Data":{}}"#, "not json"] {
-            assert_eq!(m.read(other), Read { notification: Notification::Ping, keepalive: None, user_updated: false });
+            assert_eq!(m.read(other), Read { notification: Notification::Ping, keepalive: None, user_updated: false, command: None });
         }
+        let r = m.read(r#"{"MessageType":"Playstate","Data":{"Command":"Pause"}}"#);
+        assert_eq!((r.notification, r.command), (Notification::Ping, Some(Command::Key("pause".into()))));
     }
 
     #[test]

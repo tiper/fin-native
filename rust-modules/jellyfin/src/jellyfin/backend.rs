@@ -753,7 +753,12 @@ impl Backend for Shared {
     fn notifications(&self, off: &plx_base::task::OffFrame, cancel: &AtomicBool, on: &mut dyn FnMut(Notification))
         -> NotifyEnd {
         match self.0.client().and_then(|c| c.socket_target()) {
-            Some(target) => live::open(off, &target, cancel, on),
+            // Listed as a remote-control target once the socket that carries the commands is open.
+            Some(target) => live::open(off, &target, cancel, on, &|| {
+                if let Some(c) = self.0.client() {
+                    c.report_capabilities();
+                }
+            }),
             None => NotifyEnd::Refused { status: 0 },
         }
     }
@@ -863,6 +868,9 @@ impl Backend for Shared {
     }
     fn take_favorite_landed(&self) -> bool {
         favorites::take_landed()
+    }
+    fn take_remote_keys(&self) -> Vec<String> {
+        super::remote::take_keys()
     }
     fn scrobble(&self, rating_key: &str) -> bool {
         self.0.client().is_some_and(|c| c.mark_played(rating_key))

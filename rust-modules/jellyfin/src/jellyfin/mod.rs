@@ -22,6 +22,7 @@
 //! - [`playback_info`]: the server's own playback verdict for this device (`PlaybackInfo`).
 //! - [`transcode`]: a transcode request as a Jellyfin stream, and the decision the player reads.
 //! - [`live`]: the server's WebSocket as the app's live-update feed, over `plx_net::ws`.
+//! - [`remote`]: another Jellyfin client controlling this one (cast, play/pause, the arrows).
 //! - [`time`]: ticks and ISO-8601 dates into the milliseconds and unix seconds the model uses.
 //! - [`languages`]: Jellyfin's ISO 639-2 language codes as the app's (Plex's account codes).
 
@@ -39,6 +40,7 @@ pub mod live;
 pub mod paths;
 pub mod playback_info;
 pub mod qrpng;
+pub mod remote;
 pub mod time;
 pub mod transcode;
 pub mod translate;

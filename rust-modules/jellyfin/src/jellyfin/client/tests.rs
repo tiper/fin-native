@@ -1183,3 +1183,16 @@ fn the_socket_address_carries_the_scheme_the_base_path_and_the_token() {
     let tls = JfClient::new("https://media.example/jellyfin", id, Box::new(CurlTransport));
     assert_eq!(tls.socket_url("t").as_deref(), Some("wss://media.example:443/jellyfin/socket?ApiKey=t&deviceId=dev%201"));
 }
+
+/// The client says what it can do as the signed-in device, which lists it as a cast target.
+#[test]
+fn capabilities_are_posted_as_this_device() {
+    let (mut c, fake) = client(vec![("/Users/AuthenticateByName", 200, AUTH), ("/Sessions/Capabilities/Full", 204, "")]);
+    c.sign_in("alice", "pw").expect("signed in");
+    c.report_capabilities();
+    let log = fake.log.lock().unwrap();
+    let (path, verb, body, headers) = log.last().unwrap();
+    assert_eq!((path.as_str(), *verb), ("/Sessions/Capabilities/Full", Verb::Post));
+    assert!(body.as_deref().is_some_and(|b| b.contains(r#""SupportsMediaControl":true"#)));
+    assert!(headers.iter().any(|h| h.contains("DeviceId=\"dev1\"") && h.contains("Token=\"tok\"")));
+}
