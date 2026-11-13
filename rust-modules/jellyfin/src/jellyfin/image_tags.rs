@@ -37,6 +37,30 @@ pub fn tag(item_id: &str, kind: ImageKind) -> Option<String> {
     tags.as_ref()?.get(&(item_id.to_string(), kind.as_str())).cloned()
 }
 
+/// The key an item's kind is kept under, beside its image tags.
+const KIND: &str = "Kind";
+
+/// Remember what an item is (`movie`, `show`, ...), so its page can ask in one round for exactly
+/// what that kind needs. A kind never changes, so this is a fact about the id, not a cached answer.
+pub fn note_kind(item_id: &str, kind: &'static str) {
+    if item_id.is_empty() {
+        return;
+    }
+    let mut tags = TAGS.lock().unwrap_or_else(|p| p.into_inner());
+    let tags = tags.get_or_insert_with(HashMap::new);
+    let key = (item_id.to_string(), KIND);
+    if tags.len() >= KEPT && !tags.contains_key(&key) {
+        tags.clear();
+    }
+    tags.insert(key, kind.to_string());
+}
+
+/// The kind noted for an item, when a listing or page has shown it.
+pub fn kind(item_id: &str) -> Option<String> {
+    let tags = TAGS.lock().unwrap_or_else(|p| p.into_inner());
+    tags.as_ref()?.get(&(item_id.to_string(), KIND)).cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

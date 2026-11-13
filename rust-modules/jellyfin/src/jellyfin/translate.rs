@@ -161,6 +161,7 @@ pub fn metadata(i: &BaseItemDto, ctx: &Ctx<'_>) -> Option<Metadata> {
         super::favorites::note(&id, u.is_favorite);
     }
     note_image_tags(i, &id);
+    image_tags::note_kind(&id, kind);
     let duration = ticks_to_ms(i.run_time_ticks);
     let is_container = matches!(kind, "show" | "season" | "collection");
 

@@ -750,10 +750,10 @@ impl Backend for Shared {
         Some(window(deck, start, size))
     }
     /// The live-update feed: the server's WebSocket ([`live`]).
-    fn notifications(&self, _off: &plx_base::task::OffFrame, cancel: &AtomicBool, on: &mut dyn FnMut(Notification))
+    fn notifications(&self, off: &plx_base::task::OffFrame, cancel: &AtomicBool, on: &mut dyn FnMut(Notification))
         -> NotifyEnd {
         match self.0.client().and_then(|c| c.socket_target()) {
-            Some(target) => live::open(&target, cancel, on),
+            Some(target) => live::open(off, &target, cancel, on),
             None => NotifyEnd::Refused { status: 0 },
         }
     }
@@ -767,8 +767,7 @@ impl Backend for Shared {
         let Some(c) = self.0.client() else { return false };
         // One light read for the one thing it needs: whether the item is an episode, which Next
         // Up would bring back.
-        let is_episode = c.items_by_id(&[rating_key]).is_some_and(|m| m.metadata.first().is_some_and(|m| m.kind == "episode"));
-        c.leave_continue_watching(rating_key, is_episode)
+        c.leave_continue_watching(rating_key)
     }
     fn section_items_query(&self, q: &SectionQuery<'_>) -> Option<MediaContainer> {
         let c = self.0.client()?;

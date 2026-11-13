@@ -770,7 +770,8 @@ fn watched_state_writes_use_the_right_verbs() {
 #[test]
 fn a_movie_leaves_continue_watching_with_one_write() {
     let (c, fake) = signed_in(vec![("/UserItems/", 200, "{}")]);
-    assert!(c.leave_continue_watching("m2", false));
+    image_tags::note_kind("m2", "movie");
+    assert!(c.leave_continue_watching("m2"));
     let log = fake.log.lock().unwrap();
     assert_eq!(log.len(), 1);
     assert_eq!(log[0].0, "/UserItems/m2/UserData?userId=u1");
@@ -787,7 +788,8 @@ fn a_dismissed_episode_stays_out_of_next_up() {
         ("/DisplayPreferences/finnative", 200, prefs),
         ("/Shows/NextUp", 200, r#"{"Items":[{"Id":"e0","Name":"Gone","Type":"Episode"},{"Id":"e9","Name":"Kept","Type":"Episode"}]}"#),
     ]);
-    assert!(c.leave_continue_watching("e1", true));
+    image_tags::note_kind("e1", "episode");
+    assert!(c.leave_continue_watching("e1"));
     {
         let log = fake.log.lock().unwrap();
         let write = log.iter().find(|(p, v, ..)| p.starts_with("/DisplayPreferences/") && *v == Verb::Post).unwrap();
@@ -814,7 +816,8 @@ fn the_dismissed_list_is_read_once_and_kept_by_this_clients_write() {
     assert_eq!(titles(&c), ["Dismissed here", "Kept"]);
     assert_eq!(titles(&c), ["Dismissed here", "Kept"]);
     assert_eq!(prefs_reads(), 1, "read once for both deck reads");
-    assert!(c.leave_continue_watching("e1", true));
+    image_tags::note_kind("e1", "episode");
+    assert!(c.leave_continue_watching("e1"));
     assert_eq!(prefs_reads(), 2, "the write starts from the server's record");
     assert_eq!(titles(&c), ["Kept"], "this client's write is seen at once");
     assert_eq!(prefs_reads(), 2, "without another read");
@@ -1088,4 +1091,49 @@ fn a_played_items_thumbnails_come_from_its_page() {
     let log = fake.log.lock().unwrap();
     assert_eq!(log.iter().filter(|(p, ..)| p.starts_with("/Items/m1")).count(), 1);
     assert!(log[0].0.contains("Trickplay") || log[1].0.contains("Trickplay"), "the page asks for them");
+}
+
+/// An item no listing has shown is asked for once to learn whether it is an episode.
+#[test]
+fn an_unlisted_item_is_asked_for_its_kind_before_it_leaves_continue_watching() {
+    let (c, fake) = signed_in(vec![
+        ("/Items?", 200, r#"{"Items":[{"Id":"cwx1","Name":"Film","Type":"Movie"}]}"#),
+        ("/UserItems/", 200, "{}"),
+    ]);
+    assert!(c.leave_continue_watching("cwx1"));
+    let log = fake.log.lock().unwrap();
+    let paths: Vec<_> = log.iter().map(|(p, ..)| p.split('?').next().unwrap().to_owned()).collect();
+    assert_eq!(paths, ["/Items", "/UserItems/cwx1/UserData"]);
+}
+
+/// A show a listing has shown asks for its next episode beside the item, and for no segments;
+/// a season asks for the item alone.
+#[test]
+fn a_listed_show_and_season_ask_only_for_what_their_page_needs() {
+    let (c, fake) = signed_in(vec![
+        ("/Items/kshow1?", 200, r#"{"Id":"kshow1","Name":"Show","Type":"Series"}"#),
+        ("/Items/kseason1?", 200, r#"{"Id":"kseason1","Name":"S1","Type":"Season"}"#),
+        ("/UserItems/Resume", 200, r#"{"Items":[]}"#),
+        ("/Shows/NextUp", 200, r#"{"Items":[{"Id":"kep1","Name":"Next","Type":"Episode"}]}"#),
+    ]);
+    image_tags::note_kind("kshow1", "show");
+    image_tags::note_kind("kseason1", "season");
+    let show = c.metadata("kshow1").unwrap();
+    assert_eq!(show.on_deck.and_then(|d| d.metadata).map(|e| e.rating_key), Some("kep1".into()));
+    c.metadata("kseason1").unwrap();
+    let log = fake.log.lock().unwrap();
+    assert!(!log.iter().any(|(p, ..)| p.starts_with("/MediaSegments/")), "no segments for either");
+    assert_eq!(log.iter().filter(|(p, ..)| p.starts_with("/Shows/NextUp")).count(), 1, "asked once, beside the item");
+    assert_eq!(log.len(), 4);
+}
+
+/// The socket is the server's `/socket` under its base path, signed in by the token in the
+/// query, as `ws` for a plain server and `wss` for a TLS one.
+#[test]
+fn the_socket_address_carries_the_scheme_the_base_path_and_the_token() {
+    let (c, _) = signed_in(vec![]);
+    assert_eq!(c.socket_url("tok").as_deref(), Some("ws://jf:8096/socket?ApiKey=tok&deviceId=dev1"));
+    let id = ClientIdentity { client: "FinNative".into(), device: "LG".into(), device_id: "dev 1".into(), version: "0".into() };
+    let tls = JfClient::new("https://media.example/jellyfin", id, Box::new(CurlTransport));
+    assert_eq!(tls.socket_url("t").as_deref(), Some("wss://media.example:443/jellyfin/socket?ApiKey=t&deviceId=dev%201"));
 }
