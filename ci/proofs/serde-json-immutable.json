@@ -371,13 +371,14 @@
       ".cargo/config": null,
       ".cargo/config.toml": "82f061c716740e16cfee63a74d87159e0e0dc253e1092b87c54190c603515b14"
     },
-    "lock_sha256": "a1e4a5b1dc4a4ae661f41b037dc040caf348136efa23976da56786259897383f",
+    "lock_sha256": "b386884c509416c6f2674eabae4d11219248349672dd5fb76f4ff2b086ac313a",
     "manifests": {
-      "Cargo.toml": "fbeb900767c6d3a7091b0366cdaf79753f45384be9b39a649dd8e7decbf40fb6",
+      "Cargo.toml": "efc4ecbe83c6751451fa76b8f89793e441db215d07c07aae2fb1394206007e2b",
       "appkit/Cargo.toml": "1e3a33f392110f269537b12f12879c6bc15309aca304b189d6b0346edf8a1186",
       "base/Cargo.toml": "ebe0b95553bd44f33f422f7d8e22b75ddeb53c7ee81bbe738f675690694568f7",
       "data/Cargo.toml": "dc246544384d3cfe5648b13cfcbd67edff69f027d22a268dd6fdca53bdf1e794",
       "gfx/Cargo.toml": "c8889dd95a481938966c41635f85702695ce9c59956381768e6c56d215d8fc0e",
+      "jellyfin/Cargo.toml": "8545a9d4603bb26abbb9755a0f7d5b5f65cd389932eed97ce6b0594380a0930a",
       "machine/Cargo.toml": "0bc99e95272916b8d00e1a8dad81440bc4998de12ccd9a00e7853f438c813d03",
       "media-codecs/Cargo.toml": "503c8681289314b5c8a63195aad6796cbad93fcb3eedd8d7cba9e8ed0233783f",
       "media/Cargo.toml": "2b3bb41264db9b9f30869015dfe0dd6656147c432728c9ea9301988c710a4202",
@@ -386,9 +387,9 @@
       "play-feed/Cargo.toml": "b85320257da74a1affd81238b8fb6caa7f28960181d5ea0e07704ceef4800515",
       "play-uri/Cargo.toml": "107832fa33c96b7d2a4150c294aea9cd40954c3aabf66f809fc771bb52f5c280",
       "playback-contract/Cargo.toml": "bde335ea645552d4f7481b007b80204ecb5bb592caaca22af58a8361cd050dcf",
-      "plex/Cargo.toml": "886ef07d7de8881d1a01666ea6aea70f228b5e0c8b8bbfc79b8693c59e1c8af7",
-      "screens/Cargo.toml": "ebe7f8c0d22492de6bd494cfa760dd99999bfd616b7952e753fe5a26dafc6a73",
-      "session/Cargo.toml": "331a64ed32fbc88988e4c1c33c7b9aa954deab219d1e74fbdec70a4c30690e61",
+      "plex/Cargo.toml": "d6196bf9876508d331fe8e0a0855b04ebdbc75609654b2e800367e76eafd264d",
+      "screens/Cargo.toml": "40684caf71c5f4efdbf2408fdbe82c449eb9971ad407e17c57b4fbf8088bb947",
+      "session/Cargo.toml": "3465138599308ff134e2ed643bfdf375bfa54933d693b36e041b0e9514b1d91d",
       "storage/Cargo.toml": "8865be804f87c69c5ab6fdf3f3f5388b8bfc254195329623c7b1f5cf614e3e81",
       "telemetry/Cargo.toml": "19ccd3f933efcda0052c8f0fdd9c9275c566f6d445e77a1049d0c3bd16e71b36",
       "ui/Cargo.toml": "0957d2057cadbd522ae2ee2446727c9c4022c75fba9cfb2347fd341a10fdacf4"
@@ -423,6 +424,21 @@
         "edition": "2021",
         "lib": "data/src/lib.rs",
         "lib_sha256": "13b19b51177935c316df61913c418233f371b2faf6e7d993cbdbe539e2d4360f"
+      },
+      "jellyfin/Cargo.toml": {
+        "dependency": [
+          {
+            "default-features": false,
+            "features": [
+              "alloc",
+              "std"
+            ],
+            "version": "1"
+          }
+        ],
+        "edition": "2021",
+        "lib": "jellyfin/src/lib.rs",
+        "lib_sha256": "afc284744d8d4f8169be2316248dd6c42a99cd938d2a5452c9722f2b9f7133aa"
       },
       "media/Cargo.toml": {
         "dependency": [
@@ -479,7 +495,7 @@
         ],
         "edition": "2021",
         "lib": "platform/src/lib.rs",
-        "lib_sha256": "0836abd640849f56afbe66af39632b28648609e6464fda0bd4c51087c1070acb"
+        "lib_sha256": "de49b2ad8b017496e851dd647f22aed565fa4753e80b67d43f3368c8d436e60b"
       },
       "play-feed/Cargo.toml": {
         "dependency": [
@@ -494,7 +510,7 @@
         ],
         "edition": "2021",
         "lib": "play-feed/src/lib.rs",
-        "lib_sha256": "0696be5d9415fe4e8139470340ed9d92371a5bb90517baeac2ccee90eefd90f3"
+        "lib_sha256": "afdd8d72a656a3a61b41940354e50ef410515e13edd95ac5856baaaba9592458"
       },
       "play-uri/Cargo.toml": {
         "dependency": [
@@ -602,7 +618,7 @@
         ],
         "edition": "2021",
         "lib": "ui/src/lib.rs",
-        "lib_sha256": "1b5373566db1931371a191b5e0619d48fbc7cec93d07d95669668e481187517e"
+        "lib_sha256": "281909b4dae22109e12cc7eb4bd42a0f46baf53f684a4c1185ccf9dc3c905f44"
       }
     },
     "text_hashing": "sha256-utf8-bytes-crlf-to-lf-local-root-version-v1"
