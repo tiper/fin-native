@@ -552,7 +552,7 @@ fn a_persons_career_comes_from_tmdb_and_names_the_titles_the_library_holds() {
     let (c, fake) = signed_in(routes());
     let groups = c.person_credits_with("p1", Some("KEY")).unwrap();
     let rows: Vec<_> = groups[0].credits.iter().map(|c| c.item.as_ref().unwrap()).map(|i| (i.title.as_str(), i.rating_key.as_str(), i.thumb.is_empty())).collect();
-    assert_eq!((groups.len(), groups[0].kind.as_str()), (1, "actor"));
+    assert_eq!((groups.len(), groups[0].kind.as_str()), (1, "acting"));
     assert_eq!(rows, [("Held Film", "imdb://tt7", false), ("Elsewhere", "tmdb-tv-11", true)]);
     let log = fake.log.lock().unwrap();
     let (_, _, _, headers) = log.iter().find(|(p, ..)| p == TMDB).expect("TMDB was asked");

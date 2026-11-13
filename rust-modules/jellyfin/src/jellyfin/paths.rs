@@ -24,10 +24,6 @@ pub const LIST_FIELDS: &str =
 pub const GRID_FIELDS: &str =
     "PrimaryImageAspectRatio,DateCreated,ChildCount,RecursiveItemCount,Genres,Width,Height,MediaStreams";
 
-/// [`GRID_FIELDS`] for a person's titles, with each title's provider ids.
-pub const PERSON_TITLE_FIELDS: &str =
-    "PrimaryImageAspectRatio,DateCreated,ChildCount,RecursiveItemCount,Genres,Width,Height,MediaStreams,ProviderIds";
-
 /// The fields a season row asks for: a season has no genres and no streams of its own.
 pub const SEASON_FIELDS: &str = "PrimaryImageAspectRatio,DateCreated,ChildCount,RecursiveItemCount,Overview";
 

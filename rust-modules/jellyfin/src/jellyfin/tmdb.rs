@@ -71,72 +71,54 @@ pub struct Held {
     pub thumb: String,
 }
 
-/// The departments of a career: the cast credits first as `Actor`, then each crew department,
-/// larger before smaller. A title credited twice in one department is one row naming both parts.
+/// The departments of a career, larger before smaller: the cast credits as `Acting`, the crew
+/// credits under TMDB's own department names. A title credited twice in one department is one
+/// row naming both parts.
 pub fn groups(credits: CombinedCredits, held: &[Held]) -> Vec<CreditGroup> {
     let held: HashMap<(bool, &str), &Held> = held.iter().map(|h| ((h.is_show, h.tmdb_id.as_str()), h)).collect();
     let mut out: Vec<CreditGroup> = Vec::new();
-    let mut add = |kind: &str, title: &str, e: Entry, role: Option<String>| {
-        let Some(name) = if e.is_show() { e.name.clone() } else { e.title.clone() }.filter(|t| !t.is_empty()) else { return };
-        if e.media_type != "movie" && !e.is_show() {
-            return;
-        }
+    let cast = credits.cast.into_iter().map(|mut e| (Some("Acting".to_string()), e.character.take(), e));
+    let crew = credits.crew.into_iter().map(|mut e| (e.department.take(), e.job.take(), e));
+    for (department, role, e) in cast.chain(crew) {
+        let title = if e.is_show() { &e.name } else { &e.title };
+        let Some(title) = title.clone().filter(|t| !t.is_empty() && (e.is_show() || e.media_type == "movie")) else { continue };
         let id = e.id.to_string();
         let (rating_key, thumb) = match held.get(&(e.is_show(), id.as_str())) {
             Some(h) => (h.guid.clone(), h.thumb.clone()),
             None => (format!("tmdb-{}-{id}", e.media_type), String::new()),
         };
+        let department = department.filter(|d| !d.is_empty()).unwrap_or_else(|| "Crew".to_string());
         let role = role.unwrap_or_default();
-        let group = match out.iter_mut().position(|g| g.kind == kind) {
+        let group = match out.iter().position(|g| g.title == department) {
             Some(i) => &mut out[i],
             None => {
-                out.push(CreditGroup { kind: kind.into(), title: title.into(), ..Default::default() });
+                out.push(CreditGroup { kind: department.to_ascii_lowercase(), title: department, ..Default::default() });
                 out.last_mut().expect("just pushed")
             }
         };
-        let same = |c: &&mut Credit| c.item.as_ref().is_some_and(|i| i.rating_key == rating_key);
-        if let Some(c) = group.credits.iter_mut().find(same) {
-            if !role.is_empty() && !c.role.split(", ").any(|r| r == role) {
-                if !c.role.is_empty() {
-                    c.role.push_str(", ");
-                }
-                c.role.push_str(&role);
-            }
-            return;
-        }
-        group.credits.push(Credit {
-            order: group.credits.len() as i64,
-            role,
-            item: Some(CreditItem {
-                kind: if e.is_show() { "show" } else { "movie" }.into(),
-                title: name,
-                year: e.year(),
-                rating_key,
-                thumb,
-                ..Default::default()
+        match group.credits.iter_mut().find(|c| c.item.as_ref().is_some_and(|i| i.rating_key == rating_key)) {
+            Some(c) if role.is_empty() || c.role.split(", ").any(|r| r == role) => {}
+            Some(c) if c.role.is_empty() => c.role = role,
+            Some(c) => c.role = format!("{}, {role}", c.role),
+            None => group.credits.push(Credit {
+                order: group.credits.len() as i64,
+                role,
+                item: Some(CreditItem {
+                    kind: if e.is_show() { "show" } else { "movie" }.into(),
+                    title,
+                    year: e.year(),
+                    rating_key,
+                    thumb,
+                    ..Default::default()
+                }),
             }),
-        });
-    };
-    for e in credits.cast {
-        let role = e.character.clone();
-        add("actor", "Actor", e, role);
-    }
-    for e in credits.crew {
-        let (kind, title) = match e.department.as_deref().unwrap_or("") {
-            "Directing" => ("director".to_string(), "Director".to_string()),
-            "Writing" => ("writer".to_string(), "Writer".to_string()),
-            "Production" => ("producer".to_string(), "Producer".to_string()),
-            "" => ("other".to_string(), "Other".to_string()),
-            d => (d.to_ascii_lowercase().replace([' ', '&'], "-"), d.to_string()),
-        };
-        let role = e.job.clone();
-        add(&kind, &title, e, role);
+        }
     }
     for g in &mut out {
         g.size = g.credits.len() as i64;
     }
     // Stable: the cast stays ahead of a crew department of the same size.
-    out.sort_by_key(|g| std::cmp::Reverse(g.credits.len()));
+    out.sort_by_key(|g| std::cmp::Reverse(g.size));
     out
 }
 
@@ -159,7 +141,7 @@ mod tests {
         let credits: CombinedCredits = serde_json::from_str(CREDITS).unwrap();
         let held = [Held { is_show: false, tmdb_id: "10".into(), guid: "imdb://tt1".into(), thumb: "/Items/a/Images/Primary".into() }];
         let g = groups(credits, &held);
-        assert_eq!(g.iter().map(|g| (g.kind.as_str(), g.size)).collect::<Vec<_>>(), [("actor", 3), ("director", 1), ("sound", 1)]);
+        assert_eq!(g.iter().map(|g| (g.kind.as_str(), g.size)).collect::<Vec<_>>(), [("acting", 3), ("directing", 1), ("sound", 1)]);
         let row = |g: &CreditGroup, i: usize| {
             let c = &g.credits[i];
             let it = c.item.as_ref().unwrap();

@@ -578,9 +578,8 @@ jobs:
           key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ci/build-ffmpeg.sh', 'ci/deps.py', 'ci/dependencies.json', 'ci/arm-cc.py', 'ci/check-link-evidence.py', 'ci/stage-link-evidence.py', '.github/actions/webos-ndk/action.yml') }}
 
       - name: Build
-        # FinNative: the Filmography's key, compiled into the Jellyfin layer (`plx_jellyfin::tmdb`),
-        # so the debug package below can be tested with it. The same value in both steps: a
-        # step without it would compile that crate again without the key.
+        # FinNative: the Filmography's key (`plx_jellyfin::tmdb`), here and in Package alike, or the
+        # second step compiles that crate again without it.
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: make WEBOS_SDK='${{ steps.ndk.outputs.sdk-dir }}' -j"$(nproc)"
