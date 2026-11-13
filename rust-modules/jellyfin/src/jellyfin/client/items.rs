@@ -153,8 +153,13 @@ impl JfClient {
         for (i, row) in rows.iter_mut().enumerate() {
             row.play_queue_item_id = i as i64 + 1;
         }
+        let id = {
+            let mut queue = self.queue.lock().unwrap_or_else(|p| p.into_inner());
+            *queue = (queue.0 + 1, rows.iter().map(|r| r.rating_key.clone()).collect());
+            queue.0
+        };
         Some(MediaContainer {
-            play_queue_id: 1,
+            play_queue_id: id,
             play_queue_selected_item_id: at + 1,
             play_queue_selected_item_offset: at,
             play_queue_total_count: rows.len() as i64,
@@ -162,6 +167,23 @@ impl JfClient {
             metadata: rows,
             ..Default::default()
         })
+    }
+
+    /// The queue [`Self::play_queue`] built last, read again in its order with each row's resume
+    /// point and watched state as the server now has them (`Client::play_queue_window`). `None`
+    /// for any other queue, or when one of its items is gone.
+    pub fn play_queue_window(&self, id: &str) -> Option<MediaContainer> {
+        let keys = {
+            let queue = self.queue.lock().unwrap_or_else(|p| p.into_inner());
+            (id.parse() == Ok(queue.0)).then(|| queue.1.clone())?
+        };
+        let mut fresh = self.items_by_id(&keys.iter().map(String::as_str).collect::<Vec<_>>())?.metadata;
+        let rows = keys.iter().enumerate().map(|(i, key)| {
+            let mut row = fresh.swap_remove(fresh.iter().position(|r| &r.rating_key == key)?);
+            row.play_queue_item_id = i as i64 + 1;
+            Some(row)
+        }).collect::<Option<Vec<_>>>()?;
+        Some(MediaContainer { play_queue_id: id.parse().ok()?, size: rows.len() as i64, metadata: rows, ..Default::default() })
     }
 
     /// The episode before `item_id` (whose row key is `key`) in its show, if it has one.

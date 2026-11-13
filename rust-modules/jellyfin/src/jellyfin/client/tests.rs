@@ -658,6 +658,25 @@ fn an_episode_plays_in_a_queue_of_its_show_around_it() {
     assert!(q.play_queue_id > 0);
     assert!(fake.log.lock().unwrap().iter().any(|(p, ..)| p.starts_with("/Shows/sh1/Episodes") && p.contains("startItemId=e2")));
 
+    // Read again (Previous, then Next back to it), the queue carries the resume point its stop
+    // just reported, in the queue's order; another queue's id gets nothing.
+    let (c, _) = signed_in(vec![
+        ("/Items/e2?", 200, r#"{"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}"#),
+        ("/Shows/sh1/Episodes?userId=u1&adjacentTo=e2", 200, r#"{"Items":[
+            {"Id":"e1","Name":"Pilot","Type":"Episode","SeriesId":"sh1"},
+            {"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}]}"#),
+        ("/Shows/sh1/Episodes", 200, r#"{"Items":[{"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}]}"#),
+        ("/Items?userId=u1&ids=e1%2Ce2", 200, r#"{"Items":[
+            {"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1","UserData":{"PlaybackPositionTicks":6000000000}},
+            {"Id":"e1","Name":"Pilot","Type":"Episode","SeriesId":"sh1"}]}"#),
+    ]);
+    let q = c.play_queue("e2", true).unwrap();
+    let w = c.play_queue_window(&q.play_queue_id.to_string()).unwrap();
+    let rows: Vec<_> = w.metadata.iter().map(|m| (m.rating_key.as_str(), m.play_queue_item_id, m.view_offset)).collect();
+    assert_eq!(rows, [("e1", q.metadata[0].play_queue_item_id, 0), ("e2", q.metadata[1].play_queue_item_id, 600_000)]);
+    assert_eq!(w.play_queue_id, q.play_queue_id);
+    assert!(c.play_queue_window(&(q.play_queue_id + 1).to_string()).is_none());
+
     // Jellyfin may spell the same id another way on another endpoint: the episode is still found.
     let (c, _) = signed_in(vec![
         ("/Items/e2?", 200, r#"{"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}"#),
