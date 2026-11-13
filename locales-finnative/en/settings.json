@@ -99,7 +99,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.ffmpeg.body"
   },
   "settings.legal.trademarks.body": {
-    "value": "Jellyfin and the Jellyfin logo belong to the Jellyfin project.\n\nPlex, the Plex logo and Plex Media Server are trademarks of Plex, Inc.\n\nLG and webOS are trademarks of LG Electronics Inc.\n\nPlxNative is the name of Gleb Linnik's application; FinNative uses it only to credit the work it is built on.\n\nFinNative is an independent, unofficial application. It is not produced by, endorsed by, or affiliated with the Jellyfin project, the PlxNative project, Plex, Inc. or LG Electronics Inc.",
+    "value": "Jellyfin and the Jellyfin logo belong to the Jellyfin project.\n\nPlex, the Plex logo and Plex Media Server are trademarks of Plex, Inc.\n\nLG and webOS are trademarks of LG Electronics Inc.\n\nPlxNative is the name of Gleb Linnik's application; FinNative uses it only to credit the work it is built on.\n\nFinNative is an independent, unofficial application. It is not produced by, endorsed by, or affiliated with the Jellyfin project, the PlxNative project, Plex, Inc. or LG Electronics Inc.\n\nThis product uses the TMDB API but is not endorsed or certified by TMDB.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.trademarks.body"
   },
   "settings.legal.contact.body": {
@@ -195,7 +195,7 @@
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.fin.reports"
   },
   "settings.legal.privacy.fin.reports_body": {
-    "value": "FinNative sends no crash reports, analytics or other data to its developer or to anyone else. Apart from the requests to your Jellyfin server described above, nothing leaves this television, and its logs stay on it.",
+    "value": "FinNative sends no crash reports, analytics or other data to its developer or to anyone else. Apart from the requests to your Jellyfin server described above, nothing leaves this television, and its logs stay on it. The one exception is an actor's filmography: opening a person's page asks The Movie Database (TMDB) for that person's credits, naming only their TMDB number and the app language. TMDB handles that request under its own privacy policy.",
     "description": "Settings, account, onboarding or privacy UI: settings.legal.privacy.fin.reports_body"
   },
   "settings.legal.privacy.fin.retention_body": {

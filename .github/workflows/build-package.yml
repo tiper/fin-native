@@ -109,6 +109,10 @@ on:
       SENTRY_AUTH_TOKEN:
         # FinNative: not required, because a `telemetry: none` build uploads nothing.
         required: false
+      TMDB_API_KEY:
+        # FinNative: the key the person page's Filmography asks The Movie Database with
+        # (`plx_jellyfin::tmdb`). A build without it has no Filmography.
+        required: false
     outputs:
       ipk:
         description: Path to the built .ipk inside the runner's workspace (pkg/*.ipk).
@@ -196,6 +200,8 @@ jobs:
         env:
           WEBOS_SDK: ${{ steps.ndk.outputs.sdk-dir }}
           TELEMETRY: ${{ inputs.telemetry }}
+          # FinNative: compiled into the Jellyfin layer (`option_env!`), absent when the secret is.
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           # Drops the `devtools` cargo feature — no on-screen counter in a public build.
           RELEASE: "1"
           # WHICH INSTALL. `FLAVOR ?= debug` in the Makefile — deliberately, so a developer's

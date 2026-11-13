@@ -33,7 +33,9 @@ FinNative data from this television.
 
 FinNative sends no crash reports, analytics or other data to its developer or to anyone else.
 Apart from the requests to your Jellyfin server described above, nothing leaves this television,
-and its logs stay on it.
+and its logs stay on it. The one exception is an actor's filmography: opening a person's page asks The
+Movie Database (TMDB) for that person's credits, naming only their TMDB number and the app
+language. TMDB handles that request under its own privacy policy.
 
 ## Retention
 

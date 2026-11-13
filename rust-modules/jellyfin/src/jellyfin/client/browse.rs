@@ -241,11 +241,70 @@ impl JfClient {
                 sort_by: Some(paths::SortBy::PremiereDate),
                 descending: true,
                 limit: MOST,
-                fields: Some(paths::GRID_FIELDS),
+                // With each title's provider ids: its identity, which the Filmography page
+                // matches a credit to the library by.
+                fields: Some(paths::PERSON_TITLE_FIELDS),
                 ..Default::default()
             },
         );
         self.listing(&path, None)
+    }
+
+    /// A person's whole career, as the Filmography page's departments
+    /// (`AccountClient::person_credits`, same answers): The Movie Database's credits for the
+    /// TMDB id the server keeps on the person, the titles the library holds named by their own
+    /// identity. A build with no TMDB key, and a person the server has no TMDB id for, have no
+    /// filmography.
+    pub fn person_credits(&self, person_id: &str) -> Option<Vec<CreditGroup>> {
+        self.person_credits_with(person_id, tmdb::API_KEY)
+    }
+
+    pub(super) fn person_credits_with(&self, person_id: &str, key: Option<&str>) -> Option<Vec<CreditGroup>> {
+        let Some(key) = key.filter(|k| !k.is_empty()) else { return Some(Vec::new()) };
+        let person = self.send(Verb::Get, &paths::item(self.user_id(), person_id), None)?;
+        if person.status == 404 {
+            return Some(Vec::new());
+        }
+        if !person.ok() {
+            return None;
+        }
+        let person: BaseItemDto = serde_json::from_slice(&person.body).ok()?;
+        let Some(tmdb_id) = person.provider_ids.get("Tmdb").filter(|id| !id.is_empty()) else { return Some(Vec::new()) };
+        let language = plx_platform::i18n::current().language().tag();
+        let url = tmdb::combined_credits_url(tmdb_id, key, language);
+        let answer = self.transport.send(&url, Verb::Get, &["Accept: application/json".to_string()], None)?;
+        match answer.status {
+            200 => {}
+            // TMDB does not know the person, or no longer takes this build's key: nothing a retry changes.
+            401 | 404 => return Some(Vec::new()),
+            _ => return None,
+        }
+        let credits: tmdb::CombinedCredits = serde_json::from_slice(&answer.body).ok()?;
+        let held: QueryResult<BaseItemDto> = self.get(&paths::items(
+            self.user_id(),
+            &ItemsQuery {
+                person_ids: Some(person_id),
+                include_item_types: Some("Movie,Series"),
+                recursive: true,
+                fields: Some("ProviderIds"),
+                ..Default::default()
+            },
+        ))?;
+        let held: Vec<tmdb::Held> = held
+            .items
+            .iter()
+            .filter_map(|i| {
+                let guid = translate::guid_of(i);
+                let tmdb_id = i.provider_ids.get("Tmdb").filter(|id| !id.is_empty())?;
+                (!guid.is_empty()).then(|| tmdb::Held {
+                    is_show: i.kind == "Series",
+                    tmdb_id: tmdb_id.clone(),
+                    guid,
+                    thumb: translate::primary_image(i),
+                })
+            })
+            .collect();
+        Some(tmdb::groups(credits, &held))
     }
 
     /// A person's biography (`AccountClient::person_profile`): the overview, birth and death

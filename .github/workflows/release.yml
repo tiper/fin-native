@@ -384,6 +384,7 @@ jobs:
       fwcompat: true
     secrets:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
 
   publish:
     name: publish release

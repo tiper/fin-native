@@ -104,7 +104,8 @@ worth looking at:
 ## What this app does not have
 
 No account of its own, no server, no payment path, and no user-generated content. It signs in to
-**your** Jellyfin server and talks only to it.
+**your** Jellyfin server and talks to it; the one other request it makes is an actor's filmography,
+asked of The Movie Database.
 
 **No telemetry.** The reporting code FinNative inherits from PlxNative (Sentry crash reports and
 PostHog product analytics) sends nothing unless a build carries a Sentry DSN and a PostHog key, and

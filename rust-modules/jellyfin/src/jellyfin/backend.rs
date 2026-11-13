@@ -1039,11 +1039,8 @@ impl Backend for Shared {
     fn person_profile(&self, person_id: &str) -> Option<plx_plex::plex::discover::PersonProfile> {
         self.0.client()?.person_profile(person_id)
     }
-    fn person_credits(&self, _person_id: &str) -> Option<Vec<plx_plex::plex::discover::CreditGroup>> {
-        // Jellyfin knows a person's work only as far as the library holds it, and the page's own
-        // shelf already lists that (`person_media`). Nothing beyond it: settle on an empty
-        // filmography rather than retry a plex.tv request that cannot go anywhere.
-        Some(Vec::new())
+    fn person_credits(&self, person_id: &str) -> Option<Vec<plx_plex::plex::discover::CreditGroup>> {
+        self.0.client()?.person_credits(person_id)
     }
     fn person_media(&self, person_id: &str) -> Option<MediaContainer> {
         self.0.client()?.person_media(person_id)
