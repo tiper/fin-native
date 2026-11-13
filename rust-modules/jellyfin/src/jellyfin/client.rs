@@ -166,6 +166,9 @@ pub struct JfClient {
     /// at each step (the decision, the queue, a transcode's plan), seconds after its page did.
     /// Forgotten by every write this client makes about an item ([`Self::forget_recent`]).
     recent_item: Mutex<Option<(String, Instant, BaseItemDto, Option<Vec<MediaSegmentDto>>)>>,
+    /// The queue [`Self::play_queue`] built last: its id and its rows' item ids, in order, which
+    /// [`Self::play_queue_window`] reads again.
+    queue: Mutex<(i64, Vec<String>)>,
     /// The signed-in user as the server last described it (`/Users/{id}`: name, avatar,
     /// `Configuration`, `Policy`) ([`Self::user_value`]).
     recent_user: Recent<Arc<serde_json::Value>, PreferenceError>,
@@ -259,6 +262,7 @@ impl JfClient {
             started: Mutex::new(HashSet::new()),
             transcoding: Mutex::new(HashSet::new()),
             recent_item: Mutex::new(None),
+            queue: Mutex::new((0, Vec::new())),
             recent_user: Recent::default(),
             recent_libraries: Recent::default(),
             recent_prefs: Recent::default(),

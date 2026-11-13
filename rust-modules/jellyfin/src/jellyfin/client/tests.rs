@@ -634,22 +634,68 @@ fn a_playback_reads_its_item_once_until_a_write_changes_it() {
     assert_eq!(reads(), 2, "a write makes the next step ask again");
 }
 
+/// An episode plays within its show: the episode before it is there for Previous, the rest after
+/// it for Up Next, and it is the selected row.
 #[test]
-fn an_episode_plays_in_a_queue_of_the_rest_of_its_show() {
+fn an_episode_plays_in_a_queue_of_its_show_around_it() {
     let (c, fake) = signed_in(vec![
-        ("/Items/e1?", 200, r#"{"Id":"e1","Name":"Pilot","Type":"Episode","SeriesId":"sh1","ParentIndexNumber":1,"IndexNumber":1}"#),
-        ("/Shows/sh1/Episodes", 200, r#"{"Items":[
+        ("/Items/e2?", 200, r#"{"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1","ParentIndexNumber":1,"IndexNumber":2}"#),
+        ("/Shows/sh1/Episodes?userId=u1&adjacentTo=e2", 200, r#"{"Items":[
             {"Id":"e1","Name":"Pilot","Type":"Episode","SeriesId":"sh1","ParentIndexNumber":1,"IndexNumber":1},
-            {"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1","SeriesName":"Show","ParentIndexNumber":1,"IndexNumber":2,"RunTimeTicks":27000000000}]}"#),
+            {"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1","ParentIndexNumber":1,"IndexNumber":2},
+            {"Id":"e3","Name":"Third","Type":"Episode","SeriesId":"sh1","ParentIndexNumber":1,"IndexNumber":3}]}"#),
+        ("/Shows/sh1/Episodes", 200, r#"{"Items":[
+            {"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1","ParentIndexNumber":1,"IndexNumber":2},
+            {"Id":"e3","Name":"Third","Type":"Episode","SeriesId":"sh1","SeriesName":"Show","ParentIndexNumber":1,"IndexNumber":3,"RunTimeTicks":27000000000}]}"#),
+    ]);
+    let q = c.play_queue("e2", true).unwrap();
+    let keys: Vec<_> = q.metadata.iter().map(|m| m.rating_key.as_str()).collect();
+    assert_eq!(keys, ["e1", "e2", "e3"]);
+    assert_eq!((q.play_queue_total_count, q.play_queue_selected_item_offset), (3, 1));
+    assert_eq!(q.play_queue_selected_item_id, q.metadata[1].play_queue_item_id);
+    assert_ne!(q.metadata[0].play_queue_item_id, q.metadata[1].play_queue_item_id);
+    assert_eq!((q.metadata[2].kind.as_str(), q.metadata[2].index), ("episode", 3));
+    assert!(q.play_queue_id > 0);
+    assert!(fake.log.lock().unwrap().iter().any(|(p, ..)| p.starts_with("/Shows/sh1/Episodes") && p.contains("startItemId=e2")));
+
+    // Read again (Previous, then Next back to it), the queue carries the resume point its stop
+    // just reported, in the queue's order; another queue's id gets nothing.
+    let (c, _) = signed_in(vec![
+        ("/Items/e2?", 200, r#"{"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}"#),
+        ("/Shows/sh1/Episodes?userId=u1&adjacentTo=e2", 200, r#"{"Items":[
+            {"Id":"e1","Name":"Pilot","Type":"Episode","SeriesId":"sh1"},
+            {"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}]}"#),
+        ("/Shows/sh1/Episodes", 200, r#"{"Items":[{"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}]}"#),
+        ("/Items?userId=u1&ids=e1%2Ce2", 200, r#"{"Items":[
+            {"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1","UserData":{"PlaybackPositionTicks":6000000000}},
+            {"Id":"e1","Name":"Pilot","Type":"Episode","SeriesId":"sh1"}]}"#),
+    ]);
+    let q = c.play_queue("e2", true).unwrap();
+    let w = c.play_queue_window(&q.play_queue_id.to_string()).unwrap();
+    let rows: Vec<_> = w.metadata.iter().map(|m| (m.rating_key.as_str(), m.play_queue_item_id, m.view_offset)).collect();
+    assert_eq!(rows, [("e1", q.metadata[0].play_queue_item_id, 0), ("e2", q.metadata[1].play_queue_item_id, 600_000)]);
+    assert_eq!(w.play_queue_id, q.play_queue_id);
+    assert!(c.play_queue_window(&(q.play_queue_id + 1).to_string()).is_none());
+
+    // Jellyfin may spell the same id another way on another endpoint: the episode is still found.
+    let (c, _) = signed_in(vec![
+        ("/Items/e2?", 200, r#"{"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}"#),
+        ("/Shows/sh1/Episodes?userId=u1&adjacentTo=e2", 200, r#"{"Items":[
+            {"Id":"E1","Name":"Pilot","Type":"Episode","SeriesId":"sh1"},
+            {"Id":"E2","Name":"Second","Type":"Episode","SeriesId":"sh1"}]}"#),
+        ("/Shows/sh1/Episodes", 200, r#"{"Items":[{"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}]}"#),
+    ]);
+    let q = c.play_queue("e2", true).unwrap();
+    assert_eq!((q.metadata.len(), q.play_queue_selected_item_offset), (2, 1), "an upper-case spelling still finds it");
+
+    // The first episode has none before it: it is the first row.
+    let (c, _) = signed_in(vec![
+        ("/Items/e1?", 200, r#"{"Id":"e1","Name":"Pilot","Type":"Episode","SeriesId":"sh1"}"#),
+        ("/Shows/sh1/Episodes", 200, r#"{"Items":[{"Id":"e1","Name":"Pilot","Type":"Episode","SeriesId":"sh1"},
+            {"Id":"e2","Name":"Second","Type":"Episode","SeriesId":"sh1"}]}"#),
     ]);
     let q = c.play_queue("e1", true).unwrap();
-    assert_eq!(q.metadata.len(), 2);
-    assert_eq!((q.play_queue_total_count, q.play_queue_selected_item_offset), (2, 0));
-    assert_eq!(q.play_queue_selected_item_id, q.metadata[0].play_queue_item_id);
-    assert_ne!(q.metadata[0].play_queue_item_id, q.metadata[1].play_queue_item_id);
-    assert_eq!((q.metadata[1].rating_key.as_str(), q.metadata[1].kind.as_str(), q.metadata[1].index), ("e2", "episode", 2));
-    assert!(q.play_queue_id > 0);
-    assert!(fake.log.lock().unwrap().iter().any(|(p, ..)| p.starts_with("/Shows/sh1/Episodes") && p.contains("startItemId=e1")));
+    assert_eq!((q.play_queue_selected_item_offset, q.metadata[0].rating_key.as_str()), (0, "e1"));
 
     // A movie, or a queue that is not continuous, is the item alone.
     let (c, _) = signed_in(vec![("/Items/m1?", 200, r#"{"Id":"m1","Name":"Film","Type":"Movie"}"#)]);
