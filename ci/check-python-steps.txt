@@ -120,6 +120,7 @@ python3 ci/label-issue.py --selftest
 python3 tools/analyze-sched-trace.py --self-test
 python3 tools/analyze-hwcnt-wait.py --self-test
 python3 tools/test_tv_capture_bench.py
+python3 tools/test_tv_net_remote.py
 # ...and the stamp decoder `ci/check-package.py` grades every "is this a RELEASE build?"
 # assertion through. It is pure string arithmetic over values only THIS file produces, and it
 # had been wrong since the telemetry field was added to RUST_CFG — decoding every real stamp as
