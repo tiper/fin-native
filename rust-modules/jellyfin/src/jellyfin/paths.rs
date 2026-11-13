@@ -60,9 +60,13 @@ pub enum SortBy {
     Title,
     DateCreated,
     PremiereDate,
+    CriticRating,
     CommunityRating,
     Runtime,
     DatePlayed,
+    PlayCount,
+    /// A season or episode listing in show order: by show, then season, then episode.
+    Show,
     Random,
 }
 
@@ -72,9 +76,12 @@ impl SortBy {
             SortBy::Title => "Name",
             SortBy::DateCreated => "DateCreated,Name",
             SortBy::PremiereDate => "PremiereDate,Name",
+            SortBy::CriticRating => "CriticRating,Name",
             SortBy::CommunityRating => "CommunityRating,Name",
             SortBy::Runtime => "Runtime,Name",
             SortBy::DatePlayed => "DatePlayed,Name",
+            SortBy::PlayCount => "PlayCount,Name",
+            SortBy::Show => "SeriesSortName,ParentIndexNumber,IndexNumber",
             SortBy::Random => "Random",
         }
     }
@@ -236,7 +243,12 @@ pub fn items(user_id: &str, q: &ItemsQuery<'_>) -> String {
     }
     if let Some(s) = q.sort_by {
         add("sortBy", s.as_str());
-        add("sortOrder", if q.descending { "Descending" } else { "Ascending" });
+        // Show order reversed is the shows reversed, each one's seasons and episodes still in order.
+        add("sortOrder", match (s, q.descending) {
+            (SortBy::Show, true) => "Descending,Ascending,Ascending",
+            (_, true) => "Descending",
+            (_, false) => "Ascending",
+        });
     }
     if let Some(v) = q.filters {
         add("filters", v);
@@ -621,6 +633,8 @@ mod tests {
         assert!(p.contains("&sortBy=DateCreated%2CName&sortOrder=Descending"), "{p}");
         assert!(p.contains("&filters=IsUnplayed&nameStartsWith=B"), "{p}");
         assert!(p.ends_with("&startIndex=48&enableTotalRecordCount=true&limit=24"), "{p}");
+        let shows_reversed = items("u1", &ItemsQuery { sort_by: Some(SortBy::Show), descending: true, ..Default::default() });
+        assert!(shows_reversed.contains("&sortOrder=Descending%2CAscending%2CAscending"), "{shows_reversed}");
     }
 
     #[test]
