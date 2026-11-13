@@ -5,7 +5,7 @@
 //! no client and answers every read with `None`, the same "nothing here" a Plex `Client` with no
 //! server gives.
 //!
-//! Shelf keys are this layer's own (`/jf/...`, see [`hub_key`]), so a "see all" on a shelf comes
+//! Shelf keys are this layer's own ([`translate::shelf_key`], see [`hub_key`]), so a "see all" on a shelf comes
 //! back to [`Backend::hub_items_paged`] here rather than to a PMS path.
 
 use super::auth::ClientIdentity;
@@ -580,9 +580,9 @@ pub fn display_address(base: &str) -> String {
     }
 }
 
-/// Shelf keys: `/jf/deck`, `/jf/resume`, `/jf/nextup`, `/jf/favorites`, the per-library
-/// `/jf/latest/{section}`, `/jf/resume/{section}`, `/jf/nextup/{section}` and
-/// `/jf/favorites/{section}`, or an item's own children key (`/jf/items/{id}/children`).
+/// Shelf keys: [`translate::SHELF_KEY_PREFIX`] then `deck`, `resume`, `nextup`, `favorites`, or the
+/// per-library `latest/{section}`, `resume/{section}`, `nextup/{section}` and `favorites/{section}`;
+/// or an item's own children key (`/jf/items/{id}/children`).
 #[derive(Debug, PartialEq, Eq)]
 pub enum HubKey<'a> {
     /// Continue Watching: Resume, then Next Up.
@@ -602,15 +602,16 @@ pub fn hub_key(key: &str) -> Option<HubKey<'_>> {
     if let Some(rest) = key.strip_prefix(translate::ITEM_KEY_PREFIX) {
         return rest.strip_suffix("/children").map(HubKey::Children);
     }
-    match key.trim_end_matches('/').split('/').collect::<Vec<_>>()[..] {
-        ["", "jf", "deck"] => Some(HubKey::Deck),
-        ["", "jf", "resume"] => Some(HubKey::Resume),
-        ["", "jf", "nextup"] => Some(HubKey::NextUp),
-        ["", "jf", "favorites"] => Some(HubKey::Favorites),
-        ["", "jf", "resume", k] => k.parse().ok().map(HubKey::ResumeIn),
-        ["", "jf", "nextup", k] => k.parse().ok().map(HubKey::NextUpIn),
-        ["", "jf", "favorites", k] => k.parse().ok().map(HubKey::FavoritesIn),
-        ["", "jf", "latest", k] => k.parse().ok().map(HubKey::Latest),
+    let shelf = key.strip_prefix(translate::SHELF_KEY_PREFIX)?;
+    match shelf.trim_end_matches('/').split('/').collect::<Vec<_>>()[..] {
+        ["deck"] => Some(HubKey::Deck),
+        ["resume"] => Some(HubKey::Resume),
+        ["nextup"] => Some(HubKey::NextUp),
+        ["favorites"] => Some(HubKey::Favorites),
+        ["resume", k] => k.parse().ok().map(HubKey::ResumeIn),
+        ["nextup", k] => k.parse().ok().map(HubKey::NextUpIn),
+        ["favorites", k] => k.parse().ok().map(HubKey::FavoritesIn),
+        ["latest", k] => k.parse().ok().map(HubKey::Latest),
         _ => None,
     }
 }
@@ -760,18 +761,18 @@ impl Backend for Shared {
             (join(resume), join(next_up), join(latest), suggested.join().ok().flatten(), favorites)
         });
         let shelf = |id: &str, title: &str, key: &str, items: Option<MediaContainer>| {
-            items.map(|items| translate::hub(&format!("{kind}.{id}.{section_key}"), title, &format!("{key}/{section_key}"), items))
+            items.map(|items| translate::hub(&format!("{kind}.{id}.{section_key}"), title, &translate::shelf_key(format_args!("{key}/{section_key}")), items))
         };
         let mut out: Vec<Hub> = [
-            shelf("inprogress", msg::browse_home_continue_watching(), "/jf/resume", resume),
-            shelf("jf.nextup", msg::browse_jf_next_up(), "/jf/nextup", next_up),
-            shelf("recentlyadded", msg::browse_library_hub_recently_added(), "/jf/latest", latest),
+            shelf("inprogress", msg::browse_home_continue_watching(), "resume", resume),
+            shelf("jf.nextup", msg::browse_jf_next_up(), "nextup", next_up),
+            shelf("recentlyadded", msg::browse_library_hub_recently_added(), "latest", latest),
         ]
         .into_iter()
         .flatten()
         .collect();
         out.extend(suggested.unwrap_or_default());
-        out.extend(shelf("jf.favorites", msg::browse_jf_favorites(), "/jf/favorites", favorites));
+        out.extend(shelf("jf.favorites", msg::browse_jf_favorites(), "favorites", favorites));
         Some(hubs(out))
     }
     fn library_hubs_page(&self, section_key: i64, count: i64, req: PageReq) -> Option<MediaContainer> {
@@ -791,13 +792,18 @@ impl Backend for Shared {
             HubKey::NextUpIn(k) => c.next_up_in(k, start, size),
             HubKey::FavoritesIn(k) => c.favorites_in(k, start, size),
             // `/Items/Latest` has no offset: ask for the whole window's end and cut it here.
-            HubKey::Latest(k) => c.latest(k, start + size).map(|m| window(m, start, size)),
+            HubKey::Latest(k) => {
+                // `/Items/Latest` has no offset, so each window re-reads the shelf from its start:
+                // stop at a depth where that stays cheap.
+                const LATEST_MAX: i64 = 96;
+                c.latest(k, (start + size).min(LATEST_MAX)).map(|m| window(m, start, size))
+            }
             HubKey::Children(id) => c.children_of(id, start, size),
         }
     }
     fn continue_watching(&self, count: i64) -> Option<MediaContainer> {
         let deck = self.continue_watching_page(0, count)?;
-        Some(hubs(vec![translate::hub("home.continue", msg::browse_home_continue_watching(), "/jf/deck", deck)]))
+        Some(hubs(vec![translate::hub("home.continue", msg::browse_home_continue_watching(), &translate::shelf_key("deck"), deck)]))
     }
     fn continue_watching_page(&self, start: i64, size: i64) -> Option<MediaContainer> {
         // Plex's deck is in-progress items followed by the next episode of each show being
@@ -1109,13 +1115,17 @@ mod tests {
 
     #[test]
     fn shelf_keys_round_trip() {
-        assert_eq!(hub_key("/jf/resume"), Some(HubKey::Resume));
-        assert_eq!(hub_key("/jf/nextup"), Some(HubKey::NextUp));
-        assert_eq!(hub_key("/jf/resume/3"), Some(HubKey::ResumeIn(3)));
-        assert_eq!(hub_key("/jf/nextup/4"), Some(HubKey::NextUpIn(4)));
-        assert_eq!(hub_key("/jf/favorites/5"), Some(HubKey::FavoritesIn(5)));
-        assert_eq!(hub_key("/jf/latest/12?x=1"), Some(HubKey::Latest(12)));
+        assert_eq!(hub_key("/hubs/jf/deck"), Some(HubKey::Deck));
+        assert_eq!(hub_key("/hubs/jf/resume"), Some(HubKey::Resume));
+        assert_eq!(hub_key("/hubs/jf/nextup"), Some(HubKey::NextUp));
+        assert_eq!(hub_key("/hubs/jf/resume/3"), Some(HubKey::ResumeIn(3)));
+        assert_eq!(hub_key("/hubs/jf/nextup/4"), Some(HubKey::NextUpIn(4)));
+        assert_eq!(hub_key("/hubs/jf/favorites/5"), Some(HubKey::FavoritesIn(5)));
+        assert_eq!(hub_key("/hubs/jf/latest/12?x=1"), Some(HubKey::Latest(12)));
         assert_eq!(hub_key("/jf/items/abc/children"), Some(HubKey::Children("abc")));
+        assert_eq!(hub_key("/jf/latest/12"), None, "a shelf key sits under the shelf prefix");
+        // The app pages a shelf only when its key is one it knows as pageable.
+        assert!(plx_plex::plex::is_pageable_hub_key(&translate::shelf_key("latest/1")));
         assert_eq!(hub_key("/jf/items/abc"), None);
         assert_eq!(hub_key("/hubs/home/continueWatching"), None);
     }

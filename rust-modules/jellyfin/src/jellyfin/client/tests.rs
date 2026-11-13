@@ -196,8 +196,8 @@ fn home_has_a_favorites_shelf_before_the_libraries() {
     assert_eq!(
         shelves,
         [
-            ("home.favorites", "Favorites", "/jf/favorites"),
-            ("home.movies.recent", "Recently Added in Movies", "/jf/latest/1"),
+            ("home.favorites", "Favorites", "/hubs/jf/favorites"),
+            ("home.movies.recent", "Recently Added in Movies", "/hubs/jf/latest/1"),
         ]
     );
     assert!(home.hub[0].more, "30 favourites: the shelf offers the rest");
