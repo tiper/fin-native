@@ -861,6 +861,9 @@ impl Backend for Shared {
         let shared = self.0.clone();
         favorites::set(rating_key, favourite, move |rk, fav| shared.client().is_some_and(|c| c.set_favorite(rk, fav)));
     }
+    fn take_favorite_landed(&self) -> bool {
+        favorites::take_landed()
+    }
     fn scrobble(&self, rating_key: &str) -> bool {
         self.0.client().is_some_and(|c| c.mark_played(rating_key))
     }

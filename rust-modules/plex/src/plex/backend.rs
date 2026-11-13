@@ -195,6 +195,10 @@ pub trait Backend: Send + Sync {
     /// Make `rating_key` a favourite, or not: the mark flips at once, the server is told off the
     /// frame thread, and a refusal flips it back.
     fn set_favorite_mark(&self, rating_key: &str, favourite: bool) {}
+    /// Has a favourite write landed since the last call? FRAME THREAD.
+    fn take_favorite_landed(&self) -> bool {
+        false
+    }
 
     // ---- who is signed in ----
     /// The signed-in user's name and avatar (an image path this backend resolves), for the
