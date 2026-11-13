@@ -1,6 +1,6 @@
 {
   "id": "io.github.tiper.finnative",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "vendor": "tiper",
   "type": "native",
   "main": "plxnative",
