@@ -484,6 +484,11 @@ pub fn image(item_id: &str, kind: ImageKind, tag: Option<&str>, w: i64, h: i64) 
     p
 }
 
+/// `POST`: what this client can do, which lists it as a remote-control target.
+pub fn capabilities() -> String {
+    "/Sessions/Capabilities/Full".into()
+}
+
 /// `POST`: playback started.
 pub fn playing() -> String {
     "/Sessions/Playing".into()

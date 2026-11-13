@@ -217,6 +217,13 @@ impl JfClient {
         Some(live::Target { url: self.socket_url(token)?, user_id: self.user_id().to_string() })
     }
 
+    /// Tell the server what this client can do ([`remote::CAPABILITIES`]), so other clients can
+    /// control it. The server keeps it with this device's session, which a restart forgets: it is
+    /// said again before each socket opens. A refusal only leaves this client off the cast list.
+    pub fn report_capabilities(&self) {
+        let _ = self.send(Verb::Post, &paths::capabilities(), Some(remote::CAPABILITIES));
+    }
+
     /// The socket's address: `ws` for a plain server and `wss` for a TLS one, `/socket` under the
     /// server's base path, signed in by the token in the query, spelled `ApiKey` as on the stream addresses (a current server refuses the older `api_key`).
     pub(super) fn socket_url(&self, token: &str) -> Option<String> {

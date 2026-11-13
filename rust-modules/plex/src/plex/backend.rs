@@ -200,6 +200,13 @@ pub trait Backend: Send + Sync {
         false
     }
 
+    // ---- remote control ----
+    /// Keys another device pressed on this one since the last call, oldest first, in the remote
+    /// FIFO's token alphabet (`app::events::dispatch_remote_token`). FRAME THREAD.
+    fn take_remote_keys(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     // ---- who is signed in ----
     /// The signed-in user's name and avatar (an image path this backend resolves), for the
     /// account chip when there is no Plex Home profile to show. No request: answered from what

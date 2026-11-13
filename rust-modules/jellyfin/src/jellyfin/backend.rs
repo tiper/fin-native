@@ -752,7 +752,13 @@ impl Backend for Shared {
     /// The live-update feed: the server's WebSocket ([`live`]).
     fn notifications(&self, off: &plx_base::task::OffFrame, cancel: &AtomicBool, on: &mut dyn FnMut(Notification))
         -> NotifyEnd {
-        match self.0.client().and_then(|c| c.socket_target()) {
+        // Listed as a remote-control target before the socket that carries the commands opens.
+        let target = self.0.client().and_then(|c| {
+            let target = c.socket_target()?;
+            c.report_capabilities();
+            Some(target)
+        });
+        match target {
             Some(target) => live::open(off, &target, cancel, on),
             None => NotifyEnd::Refused { status: 0 },
         }
@@ -863,6 +869,9 @@ impl Backend for Shared {
     }
     fn take_favorite_landed(&self) -> bool {
         favorites::take_landed()
+    }
+    fn take_remote_keys(&self) -> Vec<String> {
+        super::remote::take_keys()
     }
     fn scrobble(&self, rating_key: &str) -> bool {
         self.0.client().is_some_and(|c| c.mark_played(rating_key))

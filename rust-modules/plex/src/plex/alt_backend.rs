@@ -119,3 +119,10 @@ pub fn take_favorite_landed() -> bool {
     crate::alt!(b => b.take_favorite_landed());
     false
 }
+
+/// Keys another device pressed on this one (a phone app's remote) since the last call, oldest
+/// first, as remote FIFO tokens. FRAME THREAD: the app presses them as the FIFO's own.
+pub fn take_remote_keys() -> Vec<String> {
+    crate::alt!(b => b.take_remote_keys());
+    Vec::new()
+}

@@ -928,6 +928,8 @@ pub(crate) unsafe fn ingest(app: &mut App, fr: &mut Frame) {
         if let Some(r) = app.remote.as_mut() {
             r.drain(|tok| toks.push(tok.to_string()));
         }
+        // Keys pressed from another device (a phone app's remote) go the FIFO's way.
+        toks.extend(plx_plex::plex::take_remote_keys());
         for tok in toks {
             if !supplied { let _ = ingress_token(app, fr, &tok); }
         }
