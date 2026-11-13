@@ -218,11 +218,11 @@ impl JfClient {
     }
 
     /// The socket's address: `ws` for a plain server and `wss` for a TLS one, `/socket` under the
-    /// server's base path, signed in by the token in the query.
+    /// server's base path, signed in by the token in the query, spelled `ApiKey` as on the stream addresses (a current server refuses the older `api_key`).
     pub(super) fn socket_url(&self, token: &str) -> Option<String> {
         let origin = plx_plex::plex::Origin::parse(&self.base)?;
         Some(format!(
-            "{}://{}{}/socket?api_key={}&deviceId={}",
+            "{}://{}{}/socket?ApiKey={}&deviceId={}",
             if origin.is_tls() { "wss" } else { "ws" },
             origin.authority(),
             base_path(&self.base),

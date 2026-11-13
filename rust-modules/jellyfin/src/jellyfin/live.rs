@@ -50,8 +50,8 @@ const MESSAGE_MAX: usize = 1024 * 1024;
 
 /// Where the socket is and whose it is.
 pub struct Target {
-    /// `ws://` or `wss://`, the server's `/socket`, signed in by its `api_key` parameter (the
-    /// transport sends no header of the caller's, and this is how Jellyfin's own web client
+    /// `ws://` or `wss://`, the server's `/socket`, signed in by its `ApiKey` parameter (the
+    /// transport sends no header of the caller's, and the query is how Jellyfin's own web client
     /// signs its socket in).
     pub url: String,
     /// Whose changes are this user's.

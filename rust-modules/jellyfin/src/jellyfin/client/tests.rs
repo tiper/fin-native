@@ -1132,8 +1132,8 @@ fn a_listed_show_and_season_ask_only_for_what_their_page_needs() {
 #[test]
 fn the_socket_address_carries_the_scheme_the_base_path_and_the_token() {
     let (c, _) = signed_in(vec![]);
-    assert_eq!(c.socket_url("tok").as_deref(), Some("ws://jf:8096/socket?api_key=tok&deviceId=dev1"));
+    assert_eq!(c.socket_url("tok").as_deref(), Some("ws://jf:8096/socket?ApiKey=tok&deviceId=dev1"));
     let id = ClientIdentity { client: "FinNative".into(), device: "LG".into(), device_id: "dev 1".into(), version: "0".into() };
     let tls = JfClient::new("https://media.example/jellyfin", id, Box::new(CurlTransport));
-    assert_eq!(tls.socket_url("t").as_deref(), Some("wss://media.example:443/jellyfin/socket?api_key=t&deviceId=dev%201"));
+    assert_eq!(tls.socket_url("t").as_deref(), Some("wss://media.example:443/jellyfin/socket?ApiKey=t&deviceId=dev%201"));
 }
