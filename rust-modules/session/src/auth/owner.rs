@@ -2676,17 +2676,16 @@ let (id,): (u32,) = (*id,);
             SessionEvent::Command(command @ (Command::StartSwitch(_) | Command::SignOutUser)) => 'start_switch: {
 // `sign_out`: the credentials a user's sign-out leaves, written with the picker's commit (and the
 // picker opens even on a single saved user). The last saved user's sign-out is the full one.
-let (picker, sign_out): (Picker, Option<CredentialPatch>) = match command {
-    Command::StartSwitch(picker) => (*picker, None),
-    _ => {
-        if self.state.pending_erase().is_some() || self.common.pending_commit.is_some() { break 'start_switch false; }
+let (picker, sign_out): (Picker, Option<CredentialPatch>) = if let Command::StartSwitch(picker) = command {
+    (*picker, None)
+} else {
+    if self.state.pending_erase().is_some() || self.common.pending_commit.is_some() { break 'start_switch false; }
         if !self.common.persisted.others_saved() {
             break 'start_switch self.transition(&SessionEvent::Command(Command::SignOut), tick_ms, fx);
         }
         self.common.persisted = without_seated_user(&self.common.persisted);
         { let event = AttemptEvent::RosterArrived { users: self.common.persisted.home_users.iter().map(UserTile::of_ref).collect() }; let attempt = std::mem::replace(&mut self.state, attempt::Attempt::placeholder()); self.state = next_attempt(attempt, event); }
-        (Picker::ChangeProfile, Some(CredentialPatch::of(&self.common.persisted)))
-    }
+    (Picker::ChangeProfile, Some(CredentialPatch::of(&self.common.persisted)))
 };
 
         // A backend with no plex.tv account and one saved user has nobody to switch to: the same
