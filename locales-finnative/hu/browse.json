@@ -36,5 +36,9 @@
   "browse.auth.plaintext_allowed": "A szerver ezen a hálózaton van, de biztonságosan nem érhető el. Titkosítás nélkül: Újra.",
   "browse.auth.plaintext_declined_signin": "Elutasította a titkosítatlan kapcsolatot a szerverrel. Az újabb kérdéshez: Újra.",
   "browse.auth.plaintext_revoked_signin": "A titkosítatlan kapcsolat a szerverrel ki van kapcsolva. Az újabb kérdéshez: Újra.",
-  "browse.auth.plaintext_remote": "A szerver csak titkosítás nélkül válaszolt, a hálózaton kívülről. Ellenőrizze a Távoli hozzáférés beállítását."
+  "browse.auth.plaintext_remote": "A szerver csak titkosítás nélkül válaszolt, a hálózaton kívülről. Ellenőrizze a Távoli hozzáférés beállítását.",
+  "browse.jf.because_you_watched": "Mert megnézte: {title}",
+  "browse.jf.because_you_like": "Mert kedveli: {title}",
+  "browse.jf.directed_by": "Rendezte: {name}",
+  "browse.jf.starring": "Főszereplő: {name}"
 }

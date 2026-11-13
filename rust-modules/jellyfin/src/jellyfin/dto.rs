@@ -31,6 +31,21 @@ impl<T> Default for QueryResult<T> {
     }
 }
 
+/// One row of `/Movies/Recommendations`: its films, and why they are suggested.
+#[derive(Deserialize, Default, Debug)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct RecommendationDto {
+    #[serde(deserialize_with = "nul")]
+    pub items: Vec<BaseItemDto>,
+    /// `SimilarToRecentlyPlayed`, `SimilarToLikedItem`, `HasDirectorFromRecentlyPlayed`,
+    /// `HasActorFromRecentlyPlayed`, `HasLikedDirector`, `HasLikedActor`.
+    #[serde(deserialize_with = "nul")]
+    pub recommendation_type: String,
+    /// The film, director or actor the row is about.
+    #[serde(deserialize_with = "nul")]
+    pub baseline_item_name: String,
+}
+
 /// A named entry of a list such as `Studios[]`.
 #[derive(Deserialize, Default, Debug, Clone)]
 #[serde(rename_all = "PascalCase", default)]

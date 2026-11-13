@@ -580,8 +580,9 @@ pub fn display_address(base: &str) -> String {
     }
 }
 
-/// Shelf keys: `/jf/deck`, `/jf/resume`, `/jf/nextup`, `/jf/latest/{section}`, `/jf/resume/{section}`, or an
-/// item's own children key (`/jf/items/{id}/children`).
+/// Shelf keys: `/jf/deck`, `/jf/resume`, `/jf/nextup`, `/jf/favorites`, the per-library
+/// `/jf/latest/{section}`, `/jf/resume/{section}`, `/jf/nextup/{section}` and
+/// `/jf/favorites/{section}`, or an item's own children key (`/jf/items/{id}/children`).
 #[derive(Debug, PartialEq, Eq)]
 pub enum HubKey<'a> {
     /// Continue Watching: Resume, then Next Up.
@@ -590,6 +591,8 @@ pub enum HubKey<'a> {
     NextUp,
     Favorites,
     ResumeIn(i64),
+    NextUpIn(i64),
+    FavoritesIn(i64),
     Latest(i64),
     Children(&'a str),
 }
@@ -605,6 +608,8 @@ pub fn hub_key(key: &str) -> Option<HubKey<'_>> {
         ["", "jf", "nextup"] => Some(HubKey::NextUp),
         ["", "jf", "favorites"] => Some(HubKey::Favorites),
         ["", "jf", "resume", k] => k.parse().ok().map(HubKey::ResumeIn),
+        ["", "jf", "nextup", k] => k.parse().ok().map(HubKey::NextUpIn),
+        ["", "jf", "favorites", k] => k.parse().ok().map(HubKey::FavoritesIn),
         ["", "jf", "latest", k] => k.parse().ok().map(HubKey::Latest),
         _ => None,
     }
@@ -741,26 +746,32 @@ impl Backend for Shared {
         let c = self.0.client()?;
         let kind = c.library_kind(section_key).unwrap_or_default();
         let size = if count > 0 { count } else { HOME_SHELF_SIZE };
-        // Both shelves asked for at once.
-        let (resume, latest) = both(|| c.continue_watching_in(section_key, 0, size), || c.latest(section_key, size));
-        let latest = latest.flatten();
-        let mut out = Vec::new();
-        if let Some(items) = resume {
-            out.push(translate::hub(
-                &format!("{kind}.inprogress.{section_key}"),
-                msg::browse_home_continue_watching(),
-                &format!("/jf/resume/{section_key}"),
-                items,
-            ));
-        }
-        if let Some(items) = latest {
-            out.push(translate::hub(
-                &format!("{kind}.recentlyadded.{section_key}"),
-                msg::browse_library_hub_recently_added(),
-                &format!("/jf/latest/{section_key}"),
-                items,
-            ));
-        }
+        let shows = kind == "show";
+        // Every shelf asked for at once, in the order Jellyfin's own clients show them: Continue
+        // Watching, Next Up (shows), Recently Added, the suggestion rows (films), Favorites.
+        let (resume, next_up, latest, suggested, favorites) = std::thread::scope(|s| {
+            let resume = s.spawn(|| c.continue_watching_in(section_key, 0, size));
+            let next_up = s.spawn(|| shows.then(|| c.next_up_in(section_key, 0, size)).flatten());
+            let latest = s.spawn(|| c.latest(section_key, size));
+            let suggested = s.spawn(|| (kind == "movie").then(|| c.recommendations(section_key, size)).flatten());
+            // The last one asked on this thread, while the others are out.
+            let favorites = c.favorites_in(section_key, 0, size);
+            let join = |h: std::thread::ScopedJoinHandle<'_, Option<_>>| h.join().ok().flatten();
+            (join(resume), join(next_up), join(latest), suggested.join().ok().flatten(), favorites)
+        });
+        let shelf = |id: &str, title: &str, key: &str, items: Option<MediaContainer>| {
+            items.map(|items| translate::hub(&format!("{kind}.{id}.{section_key}"), title, &format!("{key}/{section_key}"), items))
+        };
+        let mut out: Vec<Hub> = [
+            shelf("inprogress", msg::browse_home_continue_watching(), "/jf/resume", resume),
+            shelf("jf.nextup", msg::browse_jf_next_up(), "/jf/nextup", next_up),
+            shelf("recentlyadded", msg::browse_library_hub_recently_added(), "/jf/latest", latest),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        out.extend(suggested.unwrap_or_default());
+        out.extend(shelf("jf.favorites", msg::browse_jf_favorites(), "/jf/favorites", favorites));
         Some(hubs(out))
     }
     fn library_hubs_page(&self, section_key: i64, count: i64, req: PageReq) -> Option<MediaContainer> {
@@ -777,6 +788,8 @@ impl Backend for Shared {
             HubKey::NextUp => c.next_up(start, size),
             HubKey::Favorites => c.favorites(start, size),
             HubKey::ResumeIn(k) => c.continue_watching_in(k, start, size),
+            HubKey::NextUpIn(k) => c.next_up_in(k, start, size),
+            HubKey::FavoritesIn(k) => c.favorites_in(k, start, size),
             // `/Items/Latest` has no offset: ask for the whole window's end and cut it here.
             HubKey::Latest(k) => c.latest(k, start + size).map(|m| window(m, start, size)),
             HubKey::Children(id) => c.children_of(id, start, size),
@@ -1099,6 +1112,8 @@ mod tests {
         assert_eq!(hub_key("/jf/resume"), Some(HubKey::Resume));
         assert_eq!(hub_key("/jf/nextup"), Some(HubKey::NextUp));
         assert_eq!(hub_key("/jf/resume/3"), Some(HubKey::ResumeIn(3)));
+        assert_eq!(hub_key("/jf/nextup/4"), Some(HubKey::NextUpIn(4)));
+        assert_eq!(hub_key("/jf/favorites/5"), Some(HubKey::FavoritesIn(5)));
         assert_eq!(hub_key("/jf/latest/12?x=1"), Some(HubKey::Latest(12)));
         assert_eq!(hub_key("/jf/items/abc/children"), Some(HubKey::Children("abc")));
         assert_eq!(hub_key("/jf/items/abc"), None);

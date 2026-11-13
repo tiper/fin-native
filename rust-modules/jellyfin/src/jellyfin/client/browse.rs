@@ -37,9 +37,19 @@ impl JfClient {
     /// reaches as far past the window as there can be dismissed episodes, and the window, its
     /// offset and the total are cut from what is left.
     pub fn next_up(&self, start: i64, size: i64) -> Option<MediaContainer> {
+        self.next_up_under(None, start, size)
+    }
+
+    /// [`Self::next_up`] of one library's shows.
+    pub fn next_up_in(&self, section_key: i64, start: i64, size: i64) -> Option<MediaContainer> {
+        self.next_up_under(Some(&self.section_guid(section_key)?), start, size)
+    }
+
+    fn next_up_under(&self, parent: Option<&str>, start: i64, size: i64) -> Option<MediaContainer> {
         let start = start.max(0);
         let reach = if size > 0 { start + size + super::items::DISMISSED_MAX as i64 } else { size };
-        let (page, dismissed) = both(|| self.listing(&paths::next_up(self.user_id(), 0, reach), None), || self.dismissed_next_up());
+        let path = paths::next_up(self.user_id(), parent, 0, reach);
+        let (page, dismissed) = both(|| self.listing(&path, parent), || self.dismissed_next_up());
         let mut page = page?;
         let dismissed = dismissed.unwrap_or_default();
         let listed = page.metadata.len();
@@ -53,9 +63,19 @@ impl JfClient {
 
     /// The movies, shows and episodes the user marked as favourites, by name.
     pub fn favorites(&self, start: i64, size: i64) -> Option<MediaContainer> {
+        self.favorites_under(None, start, size)
+    }
+
+    /// [`Self::favorites`] of one library.
+    pub fn favorites_in(&self, section_key: i64, start: i64, size: i64) -> Option<MediaContainer> {
+        self.favorites_under(Some(&self.section_guid(section_key)?), start, size)
+    }
+
+    fn favorites_under(&self, parent: Option<&str>, start: i64, size: i64) -> Option<MediaContainer> {
         let path = paths::items(
             self.user_id(),
             &ItemsQuery {
+                parent_id: parent,
                 include_item_types: Some("Movie,Series,Episode"),
                 recursive: true,
                 sort_by: Some(SortBy::Title),
@@ -65,7 +85,7 @@ impl JfClient {
                 ..Default::default()
             },
         );
-        self.listing(&path, None)
+        self.listing(&path, parent)
     }
 
     /// The Home keys of the user's `Configuration`; the defaults when the server doesn't answer, so
@@ -145,6 +165,27 @@ impl JfClient {
             .filter_map(|((id, key, title), c)| {
                 let title = msg::browse_home_hub_recently_added_in(title);
                 Some(translate::hub(id, &title, &format!("/jf/latest/{key}"), c?))
+            })
+            .collect();
+        Some(hubs)
+    }
+
+    /// A movie library's suggestion rows (`/Movies/Recommendations`), each titled by why it is
+    /// suggested: "Because you watched", "Because you like", "Directed by", "Starring". A row with
+    /// no films is left out.
+    pub fn recommendations(&self, section_key: i64, size: i64) -> Option<Vec<Hub>> {
+        const ROWS: i64 = 4;
+        let guid = self.section_guid(section_key)?;
+        let rows: Vec<RecommendationDto> = self.get(&paths::movie_recommendations(self.user_id(), &guid, ROWS, size))?;
+        let ctx = self.ctx(Some(&guid));
+        let hubs = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, row)| {
+                let title = translate::recommendation_title(&row.recommendation_type, &row.baseline_item_name)?;
+                let items = translate::container_of(&row.items, &ctx);
+                (!items.metadata.is_empty())
+                    .then(|| translate::hub(&format!("movie.jf.suggested.{section_key}.{i}"), &title, "", items))
             })
             .collect();
         Some(hubs)

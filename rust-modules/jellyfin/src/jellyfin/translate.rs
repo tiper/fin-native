@@ -22,6 +22,7 @@ use crate::jellyfin::image_tags;
 use crate::jellyfin::languages;
 use crate::jellyfin::paths::{self, ImageKind};
 use crate::jellyfin::time::{iso_date, iso_to_unix, ticks_to_ms};
+use plx_platform::i18n::msg;
 use plx_plex::plex::account::AudioPreferences;
 use plx_plex::plex::{
     Chapter, HexColor, Hub, LibrarySection, Marker, Media, MediaContainer, MediaId, MediaPart, Metadata, SearchResult, Stream,
@@ -148,6 +149,21 @@ pub fn hub(identifier: &str, title: &str, key: &str, items: MediaContainer) -> H
         metadata: items.metadata,
         ..Default::default()
     }
+}
+
+/// A suggestion row's title from why the server suggests it (`RecommendationDto`), or `None`
+/// for a reason this client does not word.
+pub fn recommendation_title(kind: &str, about: &str) -> Option<String> {
+    if about.is_empty() {
+        return None;
+    }
+    Some(match kind {
+        "SimilarToRecentlyPlayed" => msg::browse_jf_because_you_watched(about),
+        "SimilarToLikedItem" => msg::browse_jf_because_you_like(about),
+        "HasDirectorFromRecentlyPlayed" | "HasLikedDirector" => msg::browse_jf_directed_by(about),
+        "HasActorFromRecentlyPlayed" | "HasLikedActor" => msg::browse_jf_starring(about),
+        _ => return None,
+    })
 }
 
 /// One item, or `None` for a type the app doesn't show.
