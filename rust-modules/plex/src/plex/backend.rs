@@ -145,6 +145,11 @@ pub trait Backend: Send + Sync {
     fn art_outlives_grant(&self, path: &str) -> bool {
         false
     }
+    /// The picture at a fetchable `path` the server does not serve (`Client::fetch_built_outcome`,
+    /// same answers); `None` leaves the fetch to the server.
+    fn fetch_art(&self, path: &str) -> Option<crate::plex::ArtFetch> {
+        None
+    }
     fn sidecar_subtitle_detailed(&self, key: &str, codec: &str) -> Result<Vec<u8>, String> {
         Err("not supported by this server".into())
     }
