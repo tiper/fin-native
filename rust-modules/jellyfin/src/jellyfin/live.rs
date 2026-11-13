@@ -8,13 +8,16 @@
 //!
 //! * `UserDataChanged` for this user (a watched mark, a resume point, a play count, from any
 //!   device, this one included) reports each changed item `stopped`, which re-reads it where it is
-//!   held and refreshes Continue Watching.
+//!   held and refreshes Continue Watching. A favourite mark that differs from the one this app
+//!   holds was made on another device: Home is re-read at once, so its Favorites shelf follows
+//!   (`favorites::heard`); the feed's own Home refresh waits while a visible row would move.
 //! * `LibraryChanged` reports the items added, removed and updated (the first few of each) as
 //!   the library changes they are, which re-read the server's Home, shelves and library grids. An
 //!   update counts: an added item is listed only once its scan finishes, which Jellyfin reports so.
 //! * `UserUpdated` for this user (a name or avatar edited on any device) has the backend read the
-//!   user again and swap in the new name and avatar (`backend::refresh_signed_in_user`); it adds
-//!   nothing to the feed.
+//!   user again and swap in the new name and avatar (`backend::refresh_signed_in_user`), and
+//!   Home is re-read with the user's Home settings as they now are (`favorites::owe_home`); it
+//!   adds nothing to the feed.
 //! * `ForceKeepAlive` sets how often this client says `KeepAlive`, which the server needs to keep
 //!   the connection; every message, the server's `KeepAlive` answers included, is a ping.
 //!
@@ -98,7 +101,18 @@ impl Messages {
             }
             "UserDataChanged" if mine("UserId") => data["UserDataList"]
                 .as_array()
-                .map(|list| list.iter().filter_map(|d| d["ItemId"].as_str()).map(normalize).collect())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|d| {
+                            let id = normalize(d["ItemId"].as_str()?);
+                            // A favourite made on another device: Home's Favorites shelf is re-read.
+                            if let Some(favourite) = d["IsFavorite"].as_bool() {
+                                super::favorites::heard(&id, favourite);
+                            }
+                            Some(id)
+                        })
+                        .collect()
+                })
                 .unwrap_or_default(),
             "LibraryChanged" => return library(data),
             "UserUpdated" if mine("Id") => {
@@ -221,7 +235,9 @@ pub fn open(off: &plx_base::task::OffFrame, target: &Target, cancel: &AtomicBool
             }
             on(read.notification);
             if read.user_updated {
+                // The name and avatar, and the Home settings the next read of Home takes.
                 super::backend::refresh_signed_in_user();
+                super::favorites::owe_home();
             }
         });
         beat.stop();

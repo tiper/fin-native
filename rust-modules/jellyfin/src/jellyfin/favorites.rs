@@ -68,6 +68,29 @@ fn landed(rating_key: &str, favourite: bool, ok: bool) {
     plx_machine::idle::invalidate();
 }
 
+/// The server says `rating_key` is, or is not, a favourite (the socket's report of this user's
+/// data changing, [`super::live`]). A mark that differs from the one held was made elsewhere, on
+/// another device: it is taken, and Home owes the same refetch a write of this app's owes. This
+/// app's own press already holds the mark it wrote, so its echo owes nothing more. Returns whether
+/// the mark changed.
+pub fn heard(rating_key: &str, favourite: bool) -> bool {
+    if rating_key.is_empty() || state(rating_key) == favourite {
+        return false;
+    }
+    note(rating_key, favourite);
+    owe_home();
+    true
+}
+
+/// Home's rows are out of date for a reason the server just named and the viewer should see at
+/// once: a favourite made elsewhere ([`heard`]), or this user's Home settings edited
+/// (`UserUpdated`: the order of the libraries, the ones left out of Recently Added, whether
+/// played items show there). The app re-reads Home as it does after a favourite of its own.
+pub fn owe_home() {
+    LANDED.store(true, Ordering::Release);
+    plx_machine::idle::invalidate();
+}
+
 /// Has a favourite write landed since the last call? FRAME THREAD: the app refetches Home's hubs
 /// when it has, which is what puts the item on (or takes it off) the Favorites shelf; a mark is
 /// in no listing the app already holds, so nothing short of the server's own answer can.
@@ -88,8 +111,12 @@ mod tests {
         assert!(!state("fav-a"));
     }
 
+    /// The landed flag is one per process: the tests that read it take turns.
+    static FLAG: Mutex<()> = Mutex::new(());
+
     #[test]
     fn a_taken_write_owes_home_one_refetch_and_a_refused_one_flips_back() {
+        let _turn = FLAG.lock().unwrap_or_else(|p| p.into_inner());
         note("fav-c", true);
         landed("fav-c", true, false);
         assert!(!state("fav-c"), "refused: the mark flips back");
@@ -99,5 +126,17 @@ mod tests {
         assert!(state("fav-c"));
         assert!(take_landed(), "taken: Home refetches");
         assert!(!take_landed(), "once");
+    }
+
+    #[test]
+    fn a_mark_made_elsewhere_is_taken_and_owes_home_a_refetch_and_this_apps_echo_owes_nothing() {
+        let _turn = FLAG.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = take_landed();
+        assert!(heard("fav-d", true), "unknown here, a favourite there");
+        assert!(state("fav-d") && take_landed());
+        assert!(!heard("fav-d", true), "the echo of a mark already held");
+        assert!(!heard("fav-e", false), "never a favourite, still not one");
+        assert!(!take_landed());
+        assert!(heard("fav-d", false) && !state("fav-d") && take_landed());
     }
 }
