@@ -218,9 +218,10 @@ impl Beat {
     }
 }
 
-/// Open the socket at `target` and run it until it ends or `cancel` is set.
-pub fn open(off: &plx_base::task::OffFrame, target: &Target, cancel: &AtomicBool, on: &mut dyn FnMut(Notification))
-    -> NotifyEnd {
+/// Open the socket at `target` and run it until it ends or `cancel` is set. `opened` is called
+/// once the server has taken the connection.
+pub fn open(off: &plx_base::task::OffFrame, target: &Target, cancel: &AtomicBool, on: &mut dyn FnMut(Notification),
+    opened: &dyn Fn()) -> NotifyEnd {
     let Some((outbox, inbox)) = ws::channel() else { return NotifyEnd::Unsupported };
     let beat = Beat::new(KEEPALIVE);
     let mut messages = Messages::new(&target.user_id);
@@ -234,7 +235,11 @@ pub fn open(off: &plx_base::task::OffFrame, target: &Target, cancel: &AtomicBool
             return End::Lost;
         }
         let end = ws::run(off, dial, cancel, inbox, &mut |event| {
-            let Event::Text(text) = event else { return };
+            let text = match event {
+                Event::Opened => return opened(),
+                Event::Text(text) => text,
+                _ => return,
+            };
             let read = messages.read(&text);
             if let Some(every) = read.keepalive {
                 beat.set(every);

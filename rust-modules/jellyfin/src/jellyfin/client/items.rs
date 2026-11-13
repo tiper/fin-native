@@ -219,7 +219,7 @@ impl JfClient {
 
     /// Tell the server what this client can do ([`remote::CAPABILITIES`]), so other clients can
     /// control it. The server keeps it with this device's session, which a restart forgets: it is
-    /// said again before each socket opens. A refusal only leaves this client off the cast list.
+    /// said again each time the socket opens. A refusal only leaves this client off the cast list.
     pub fn report_capabilities(&self) {
         let _ = self.send(Verb::Post, &paths::capabilities(), Some(remote::CAPABILITIES));
     }

@@ -752,14 +752,13 @@ impl Backend for Shared {
     /// The live-update feed: the server's WebSocket ([`live`]).
     fn notifications(&self, off: &plx_base::task::OffFrame, cancel: &AtomicBool, on: &mut dyn FnMut(Notification))
         -> NotifyEnd {
-        // Listed as a remote-control target before the socket that carries the commands opens.
-        let target = self.0.client().and_then(|c| {
-            let target = c.socket_target()?;
-            c.report_capabilities();
-            Some(target)
-        });
-        match target {
-            Some(target) => live::open(off, &target, cancel, on),
+        match self.0.client().and_then(|c| c.socket_target()) {
+            // Listed as a remote-control target once the socket that carries the commands is open.
+            Some(target) => live::open(off, &target, cancel, on, &|| {
+                if let Some(c) = self.0.client() {
+                    c.report_capabilities();
+                }
+            }),
             None => NotifyEnd::Refused { status: 0 },
         }
     }

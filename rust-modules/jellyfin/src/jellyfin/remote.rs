@@ -1,7 +1,7 @@
 //! Remote control: another Jellyfin client (the phone app, the web client) drives this one.
 //!
 //! The server lists this client as a cast target once it says what it can do
-//! ([`CAPABILITIES`], posted before each socket opens), and sends the commands over the socket
+//! ([`CAPABILITIES`], posted each time the socket opens), and sends the commands over the socket
 //! ([`super::live`]). Each becomes what the app already acts on:
 //!
 //! * `Play` (`PlayNow`) starts the first item named where Resume would, as a launch link does
@@ -60,7 +60,8 @@ pub fn read(kind: &str, data: &serde_json::Value) -> Option<Command> {
             "MoveRight" => key("right"),
             "Select" => key("ok"),
             "Back" => key("back"),
-            // The FIFO's tokens are space-delimited: `+` stands for a space.
+            // The FIFO's tokens are space-delimited: `+` stands for a space, so a typed `+` is
+            // read back as one.
             "SendString" => match data["Arguments"]["String"].as_str()? {
                 "" => None,
                 text => Some(Command::Key(format!("txt:{}", text.replace(char::is_whitespace, "+")))),
@@ -71,13 +72,17 @@ pub fn read(kind: &str, data: &serde_json::Value) -> Option<Command> {
     }
 }
 
+/// The launch payload that plays `id`, shaped as the system's own (`app::deeplink::parse` reads
+/// the caller's params under `parameters`).
+fn play_link(id: &str) -> String {
+    serde_json::json!({ "parameters": { "plex": { "ratingKey": id, "action": "play" } } }).to_string()
+}
+
 /// Act on a command: a play goes to the launch link, a key waits for the next frame.
 pub fn act(command: Command) {
     plx_base::eventlog::log(&format!("jellyfin: remote {command:?}"));
     match command {
-        Command::Play(id) => plx_platform::tv::launch::offer(
-            &serde_json::json!({ "plex": { "ratingKey": id, "action": "play" } }).to_string(),
-        ),
+        Command::Play(id) => plx_platform::tv::launch::offer(&play_link(&id)),
         Command::Key(token) => {
             let mut keys = KEYS.lock().unwrap_or_else(|p| p.into_inner());
             if keys.len() == KEYS_MAX {
@@ -90,7 +95,7 @@ pub fn act(command: Command) {
 }
 
 /// The keys pressed from another device since the last call, oldest first. FRAME THREAD; one
-/// atomic load when there are none.
+/// atomic swap when there are none. The queue is `plx_platform::tv::launch`'s, for keys.
 pub fn take_keys() -> Vec<String> {
     if !WAITING.swap(false, Ordering::Acquire) {
         return Vec::new();
@@ -131,6 +136,11 @@ mod tests {
         assert_eq!(msg("GeneralCommand", r#"{"Name":"SendString","Arguments":{"String":"star wars"}}"#), key("txt:star+wars"));
         assert_eq!(msg("GeneralCommand", r#"{"Name":"SetVolume"}"#), None);
         assert_eq!(msg("UserDataChanged", "{}"), None);
+    }
+
+    #[test]
+    fn a_play_is_a_launch_link_under_parameters() {
+        assert_eq!(play_link("ab12"), r#"{"parameters":{"plex":{"action":"play","ratingKey":"ab12"}}}"#);
     }
 
     #[test]
