@@ -9,7 +9,7 @@ pub const CONTACT_EMAIL: &str = "github.com/tiper/fin-native/issues";
 /// commit names itself: `X.Y.Z` when the merge is at a release tag, the next minor with `-dev`
 /// after it. About prints it under the build line. Set it at each upstream merge, beside keeping
 /// FinNative's own number in the version files (the `cut-release` skill, "FinNative").
-pub const PLXNATIVE_BASE: &str = "0.10.0";
+pub const PLXNATIVE_BASE: &str = "0.11.0-dev";
 
 /// FinNative's policy: one Jellyfin server and no reporting, so none of the Plex services, the
 /// unencrypted-connection answers or the optional reports PlxNative's policy describes.
