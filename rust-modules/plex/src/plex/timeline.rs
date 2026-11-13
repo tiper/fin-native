@@ -29,6 +29,7 @@ impl Client {
     }
 
     pub fn timeline_answer(&self, r: &TimelineReport) -> TimelineAnswer {
+        crate::alt!(b => TimelineAnswer { taken: b.timeline(r), stop: None });
         match self.post_accepting_json(&self.timeline_query(r)) {
             Some(body) => TimelineAnswer { taken: true, stop: server_stop_of(&body) },
             None => TimelineAnswer::default(),
