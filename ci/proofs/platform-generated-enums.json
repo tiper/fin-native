@@ -32,7 +32,7 @@
     "base/Cargo.toml": "ebe0b95553bd44f33f422f7d8e22b75ddeb53c7ee81bbe738f675690694568f7",
     "data/Cargo.toml": "90a763a8a9e22bda7e95f8ede4dc10ec6e92a62b90bd0fd2e622c617d75ec6c7",
     "gfx/Cargo.toml": "c8889dd95a481938966c41635f85702695ce9c59956381768e6c56d215d8fc0e",
-    "jellyfin/Cargo.toml": "8545a9d4603bb26abbb9755a0f7d5b5f65cd389932eed97ce6b0594380a0930a",
+    "jellyfin/Cargo.toml": "3a2291abbcaf9bb956f709056469766fafd5c76aa1cda95c140d378d68572527",
     "machine/Cargo.toml": "0bc99e95272916b8d00e1a8dad81440bc4998de12ccd9a00e7853f438c813d03",
     "media/Cargo.toml": "2b3bb41264db9b9f30869015dfe0dd6656147c432728c9ea9301988c710a4202",
     "media-codecs/Cargo.toml": "503c8681289314b5c8a63195aad6796cbad93fcb3eedd8d7cba9e8ed0233783f",
