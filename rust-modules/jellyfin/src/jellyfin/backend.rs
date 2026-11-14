@@ -1133,6 +1133,30 @@ mod tests {
         assert_eq!(backend.section_oldest(1, &terms, "addedAt"), Some(Oldest::Nothing));
     }
 
+    /// The same two reads asked of the app's `Client`, as the A-Z rail asks them: the installed
+    /// backend answers, and no request reaches the server the client points at (a loopback
+    /// listener that must never see a connection). The backend is a process-wide install, so the
+    /// test runs alone in a child process.
+    #[test]
+    fn the_clients_band_reads_go_to_jellyfin_and_never_reach_the_server() {
+        use plx_plex::plex::{Oldest, SectionTotal};
+        if !plx_base::testlock::fresh_process(module_path!(), "the_clients_band_reads_go_to_jellyfin_and_never_reach_the_server") {
+            return;
+        }
+        let server = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        server.set_nonblocking(true).expect("a non-blocking listener");
+        let port = i32::from(server.local_addr().expect("its address").port());
+        let _serial = plx_base::testlock::serial();
+        let id = plx_plex::plex::register_for_test("jellyfin", "127.0.0.1", port, "token", "device");
+        let client = plx_plex::plex::client_for(id).expect("the registered client");
+        plx_plex::plex::backend::install(Box::new(Shared(Arc::new(JfBackend::default()))));
+        let terms = [("addedAt>".to_string(), "0".to_string())];
+        assert_eq!(client.section_total(1, &terms), Some(SectionTotal::Ignored));
+        assert_eq!(client.section_oldest(1, &terms, "addedAt"), Some(Oldest::Nothing));
+        let accepted = server.accept().map(|_| ()).map_err(|e| e.kind());
+        assert_eq!(accepted, Err(std::io::ErrorKind::WouldBlock), "a Plex probe reached the server");
+    }
+
     /// A shelf of people has rows in `directory`, not `metadata`: it is not an empty shelf.
     #[test]
     fn a_people_shelf_survives_the_empty_shelf_filter() {
