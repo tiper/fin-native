@@ -186,6 +186,7 @@ impl Client {
     /// did not answer; [`SectionTotal::Ignored`] when it answered ROWS (the window was ignored, and
     /// will be again). Docs: `docs/pms-api.md`, "Count probes at band edges".
     pub fn section_total(&self, section_key: i64, terms: &[(String, String)]) -> Option<SectionTotal> {
+        crate::alt!(b => b.section_total(section_key, terms));
         total_of_probe(&self.get_json(&section_total_path(section_key, terms))?)
     }
 
@@ -200,6 +201,7 @@ impl Client {
     /// reads it to know how far back its year bands go. Docs: `docs/pms-api.md`, "Count probes at band
     /// edges".
     pub fn section_oldest(&self, section_key: i64, terms: &[(String, String)], field: &str) -> Option<Oldest> {
+        crate::alt!(b => b.section_oldest(section_key, terms, field));
         Some(oldest_of_page(&self.get_json(&section_oldest_path(section_key, terms, field))?, field))
     }
 

@@ -37,3 +37,5 @@ workspace = true
 [dev-dependencies]
 # Tests read the shelf titles in English without the boot-time locale (`i18n::current`).
 plx_platform = { path = "../platform", features = ["test-support"] }
+# The server registry as a test fixture (`register_for_test`), for the tests that call `Client`.
+plx_plex = { path = "../plex", features = ["alt-backend", "test-support"] }
