@@ -47,7 +47,6 @@ pub fn state(rating_key: &str) -> bool {
 /// the server is told on a worker, and a refusal flips it back. Never blocks the caller.
 pub fn set(rating_key: &str, favourite: bool, write: impl FnOnce(&str, bool) -> bool + Send + 'static) {
     note(rating_key, favourite);
-    plx_machine::idle::invalidate();
     let rk = rating_key.to_string();
     let spawned = plx_base::task::spawn_off_frame("favourite", move |_| {
         let ok = write(&rk, favourite);
@@ -65,7 +64,7 @@ fn landed(rating_key: &str, favourite: bool, ok: bool) {
     } else {
         note(rating_key, !favourite);
     }
-    plx_machine::idle::invalidate();
+    plx_machine::present::wake_from_worker();
 }
 
 /// The server says `rating_key` is, or is not, a favourite (the socket's report of this user's
@@ -88,7 +87,7 @@ pub fn heard(rating_key: &str, favourite: bool) -> bool {
 /// played items show there). The app re-reads Home as it does after a favourite of its own.
 pub fn owe_home() {
     LANDED.store(true, Ordering::Release);
-    plx_machine::idle::invalidate();
+    plx_machine::present::wake_from_worker();
 }
 
 /// Has a favourite write landed since the last call? FRAME THREAD: the app refetches Home's hubs

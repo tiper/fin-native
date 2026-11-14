@@ -406,11 +406,13 @@ pub struct LiveRow {
     /// Always `S::SCOPE`; every live row is `Profile` since the nine moved (T-live checks it).
     pub scope: plx_plex::plex::session::prefs::Scope,
     restore: fn(&Preferences, Option<&ProfilePrefs>, &Overrides),
+    read: fn() -> u16,
 }
 
 impl LiveRow {
-    pub const fn of<S: LiveSetting>() -> LiveRow {
-        LiveRow { key: S::KEY, live: S::LIVE, scope: S::SCOPE, restore: restore_row::<S> }
+    pub const fn of<S: LiveSetting>() -> LiveRow where S::Value: Packed {
+        LiveRow { key: S::KEY, live: S::LIVE, scope: S::SCOPE, restore: restore_row::<S>,
+            read: || S::live().to_bits() }
     }
 }
 
@@ -437,6 +439,12 @@ pub const LIVE_ROWS: &[LiveRow] = &[
     LiveRow::of::<TrailerAutoplayPref>(),
     LiveRow::of::<HudEndTimePref>(),
 ];
+
+/// Capture the actual packed values of every live preference, in LIVE_ROWS order.
+/// The app compares these at its IO boundary; this is not a dirty flag or an event queue.
+pub fn preference_values() -> Vec<u16> {
+    LIVE_ROWS.iter().map(|row| (row.read)()).collect()
+}
 
 // ---- restore --------------------------------------------------------------------------------
 
@@ -851,7 +859,7 @@ fn choose_via<S: LiveSetting>(v: S::Value, how: How, normalize: impl FnOnce(S::V
             }
             How::Optimistic(reply) => {
                 S::publish(v);
-                plx_machine::idle::invalidate();
+                // The input runner observes the live preference values.
                 if let Some(reply) = reply {
                     let _ = reply.send(false);
                 }
@@ -864,13 +872,13 @@ fn choose_via<S: LiveSetting>(v: S::Value, how: How, normalize: impl FnOnce(S::V
             let _ = plx_base::storage_worker::submit_retained(move || {
                 let saved = confirm_with::<S>(&write, v);
                 let _ = reply.send(saved);
-                plx_machine::idle::invalidate();
+                // Reply is the addressed completion; the worker claims no UI damage.
             });
         }
         How::Optimistic(reply) => {
             PROFILE_PREFS.put::<S>(&write, v);
             S::publish(v);
-            plx_machine::idle::invalidate();
+            // The input runner observes the live preference values.
             let _ = plx_base::storage_worker::submit_retained(move || {
                 let saved = persist_profile_pref::<S>(&write, v);
                 if !saved {
@@ -882,7 +890,7 @@ fn choose_via<S: LiveSetting>(v: S::Value, how: How, normalize: impl FnOnce(S::V
                 if let Some(reply) = reply {
                     let _ = reply.send(saved);
                 }
-                plx_machine::idle::invalidate();
+                // Reply is the addressed completion; the worker claims no UI damage.
             });
         }
     }
@@ -917,7 +925,7 @@ fn confirm_with<S: LiveSetting>(write: &ProfileWrite, v: S::Value) -> bool {
         if session::current_seat() == write.seat() {
             S::publish(v);
         }
-        plx_machine::idle::invalidate();
+        // Confirmed live values are captured at the main-thread Bridge boundary.
         S::after_saved(v);
     }
     saved
