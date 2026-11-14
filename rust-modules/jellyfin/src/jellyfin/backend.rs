@@ -23,7 +23,8 @@ use plx_plex::plex::grant::{self, MintRefusal, PlaintextAsk};
 use plx_plex::plex::notify::{Notification, NotifyEnd};
 use plx_plex::plex::Origin;
 use plx_plex::plex::{
-    Hub, MediaContainer, Meta, MetaType, Metadata, PageReq, SearchKind, SearchResult, SectionQuery, SortOption, StreamUrl, TimelineReport,
+    Hub, MediaContainer, Meta, MetaType, Metadata, Oldest, PageReq, SearchKind, SearchResult, SectionQuery, SectionTotal, SortOption,
+    StreamUrl, TimelineReport,
     TimelineState, TranscodeSpec, Trickplay,
 };
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -873,6 +874,17 @@ impl Backend for Shared {
         let wire = filters.iter().find(|(k, _)| k == "type").map(|(_, v)| v.as_str());
         c.library_genres(section_key, grid_types(&kind, wire))
     }
+    /// The A-Z rail bands a listing by counting the items at or past each edge (`rating>>=9.49`,
+    /// `addedAt>=<epoch>`); Jellyfin's item query has no such range filters for most of the fields
+    /// the sort menu offers. A server that cannot count is what `Ignored` says, so the listing gets
+    /// no rail and the read is not asked again.
+    fn section_total(&self, _section_key: i64, _terms: &[(String, String)]) -> Option<SectionTotal> {
+        Some(SectionTotal::Ignored)
+    }
+    /// Never reached after [`Self::section_total`]'s answer; nothing to band either way.
+    fn section_oldest(&self, _section_key: i64, _terms: &[(String, String)], _field: &str) -> Option<Oldest> {
+        Some(Oldest::Nothing)
+    }
     fn search(&self, query: &str, limit: i64, _section_id: i64) -> Option<MediaContainer> {
         let c = self.0.client()?;
         let kinds = [
@@ -1108,6 +1120,17 @@ mod tests {
     fn every_viewer_may_skip_intros_and_credits() {
         let access = Shared(Arc::new(JfBackend::default())).marker_access();
         assert_eq!(access, Ok(MarkerAccess { intro: true, credits: true }));
+    }
+
+    /// The A-Z rail's band counts are Plex count probes (`rating>>=9.49`, `addedAt>=...`), which
+    /// Jellyfin's item query cannot answer: the listing gets no rail, and its Plex requests are
+    /// never sent to a Jellyfin server.
+    #[test]
+    fn a_library_sorted_by_a_banded_field_gets_no_rail_and_sends_no_plex_probe() {
+        let backend = Shared(Arc::new(JfBackend::default()));
+        let terms = [("unwatched".to_string(), "1".to_string()), ("addedAt>".to_string(), "0".to_string())];
+        assert_eq!(backend.section_total(1, &terms), Some(SectionTotal::Ignored));
+        assert_eq!(backend.section_oldest(1, &terms, "addedAt"), Some(Oldest::Nothing));
     }
 
     /// A shelf of people has rows in `directory`, not `metadata`: it is not an empty shelf.
