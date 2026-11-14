@@ -454,7 +454,7 @@ jobs:
     name: host harness tests
     needs: changes
     if: needs.changes.outputs.gated == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     # FinNative: 15, not 10. Its larger tree takes check-deps' plants 8-10 min on a runner.
     timeout-minutes: 15
     steps:

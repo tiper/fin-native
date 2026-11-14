@@ -371,12 +371,12 @@
       ".cargo/config": null,
       ".cargo/config.toml": "82f061c716740e16cfee63a74d87159e0e0dc253e1092b87c54190c603515b14"
     },
-    "lock_sha256": "b386884c509416c6f2674eabae4d11219248349672dd5fb76f4ff2b086ac313a",
+    "lock_sha256": "e4a22856112e6ecb4025e720246bd044d872a915b1dc63bb4f5edf6bb10357fe",
     "manifests": {
       "Cargo.toml": "efc4ecbe83c6751451fa76b8f89793e441db215d07c07aae2fb1394206007e2b",
       "appkit/Cargo.toml": "1e3a33f392110f269537b12f12879c6bc15309aca304b189d6b0346edf8a1186",
       "base/Cargo.toml": "ebe0b95553bd44f33f422f7d8e22b75ddeb53c7ee81bbe738f675690694568f7",
-      "data/Cargo.toml": "dc246544384d3cfe5648b13cfcbd67edff69f027d22a268dd6fdca53bdf1e794",
+      "data/Cargo.toml": "90a763a8a9e22bda7e95f8ede4dc10ec6e92a62b90bd0fd2e622c617d75ec6c7",
       "gfx/Cargo.toml": "c8889dd95a481938966c41635f85702695ce9c59956381768e6c56d215d8fc0e",
       "jellyfin/Cargo.toml": "8545a9d4603bb26abbb9755a0f7d5b5f65cd389932eed97ce6b0594380a0930a",
       "machine/Cargo.toml": "0bc99e95272916b8d00e1a8dad81440bc4998de12ccd9a00e7853f438c813d03",
@@ -618,7 +618,7 @@
         ],
         "edition": "2021",
         "lib": "ui/src/lib.rs",
-        "lib_sha256": "281909b4dae22109e12cc7eb4bd42a0f46baf53f684a4c1185ccf9dc3c905f44"
+        "lib_sha256": "b97ad17641a265c8edab4933ba380eef6cb2e52bfc9f68272b6be505088777eb"
       }
     },
     "text_hashing": "sha256-utf8-bytes-crlf-to-lf-local-root-version-v1"
