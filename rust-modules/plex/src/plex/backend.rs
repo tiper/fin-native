@@ -17,7 +17,8 @@
 use crate::plex::account::{AudioPreferences, MarkerAccess, PreferenceError};
 use crate::plex::notify::{Notification, NotifyEnd};
 use crate::plex::{
-    MediaContainer, Metadata, PageReq, SearchKind, SectionQuery, StreamUrl, TimelineReport, TranscodeSpec, Trickplay,
+    MediaContainer, Metadata, Oldest, PageReq, SearchKind, SectionQuery, SectionTotal, StreamUrl, TimelineReport,
+    TranscodeSpec, Trickplay,
 };
 use std::sync::atomic::AtomicBool;
 use std::sync::OnceLock;
@@ -69,6 +70,14 @@ pub trait Backend: Send + Sync {
     /// A section's secondary directory (`genre`, `firstCharacter`, ...) under `filters`, as
     /// `Client::section_directory` answers it.
     fn section_directory(&self, section_key: i64, directory: &str, filters: &[(String, String)]) -> Option<MediaContainer> {
+        None
+    }
+    /// The A-Z rail's count-only read and extent read, as `Client::section_total` and
+    /// `Client::section_oldest` answer them.
+    fn section_total(&self, section_key: i64, terms: &[(String, String)]) -> Option<SectionTotal> {
+        None
+    }
+    fn section_oldest(&self, section_key: i64, terms: &[(String, String)], field: &str) -> Option<Oldest> {
         None
     }
     fn search(&self, query: &str, limit: i64, section_id: i64) -> Option<MediaContainer> {
