@@ -746,7 +746,7 @@ impl KnownSource {
         KnownSource {
             selection: request.selection,
             source: UriSource::new(url, tracks.into_iter().collect()).with_dolby_vision(
-                request.dolby_vision_declaration.map(crate::player::feed_open::dolby_hdr_info)),
+                request.dolby_vision_declaration.map(crate::player::dolby_hdr_info)),
             requirements: Requirements { source: SourceKind::ProgressiveUri,
                 video: Fidelity::Exact, audio: Fidelity::Exact,
                 audio_track: selected_audio.map_or(TrackChoice::Unspecified, TrackChoice::Selected),

@@ -285,9 +285,8 @@ fn with_immersive(p: &str, audio: &str, atmos: bool) -> String {
 #[cfg(test)]
 fn with_dolby_hdr_info(p: &str, video: &str, dv: plx_data::metadata::DvPresentation) -> String {
     let (payload, notice) = plx_play_feed::with_dolby_hdr_info(
-        p, video, dv.declared().map(|n| plx_playback_contract::feed::DolbyHdrInfo {
-            profile_id: n.profile_id, track_type: n.track_type, encryption_type: n.encryption_type,
-        }), dv.declared().is_some() && plx_data::metadata::dv_node_suppressed(),
+        p, video, dv.declared().map(super::feed_open::dolby_hdr_info),
+        dv.declared().is_some() && plx_data::metadata::dv_node_suppressed(),
     );
     if let Some(line) = notice { log(&line); }
     payload
