@@ -38,6 +38,7 @@ pub mod ass_ink; // the viewer's colour pick on an authored ASS header: white is
 pub mod ass_source; // bounded embedded scripts and subtitle presentation clock
 pub mod engine;
 mod feed_open; // one resolved request for the prepared route's physical feed open, built over `plx_play_feed` types
+pub(crate) use feed_open::dolby_hdr_info;
 pub mod foreground;
 pub mod lifecycle;
 pub mod machine;

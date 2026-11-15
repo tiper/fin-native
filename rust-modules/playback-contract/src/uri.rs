@@ -24,9 +24,17 @@ pub fn native_index(tracks: &[NativeTrackIndex], selected: TrackSelection) -> Op
 }
 
 /// The authorized URL stays opaque; callers provide the exact native track map with it.
-pub struct UriSource { url: String, tracks: Vec<NativeTrackIndex> }
+pub struct UriSource { url: String, tracks: Vec<NativeTrackIndex>, dolby_vision: Option<crate::feed::DolbyHdrInfo> }
 impl UriSource {
-    pub fn new(url: String, tracks: Vec<NativeTrackIndex>) -> Self { Self { url, tracks } }
+    pub fn new(url: String, tracks: Vec<NativeTrackIndex>) -> Self { Self { url, tracks, dolby_vision: None } }
+
+    /// The Dolby Vision node the Load declares, as Feed's Load declares it: without it the TV's
+    /// pipeline plays only a Profile 8 file's HDR10 base layer (webOS 6, `hdrType=HDR10`).
+    pub fn with_dolby_vision(self, dolby_vision: Option<crate::feed::DolbyHdrInfo>) -> Self {
+        Self { dolby_vision, ..self }
+    }
+
+    pub fn dolby_vision(&self) -> Option<crate::feed::DolbyHdrInfo> { self.dolby_vision }
 
     pub fn has_url(&self) -> bool { !self.url.is_empty() }
 

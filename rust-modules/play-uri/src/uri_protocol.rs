@@ -86,9 +86,14 @@ impl AbrBps {
 }
 
 /// The `load` payload: `{"uri":U,"type":"media","payload":{"option":{"appId":A[,"windowId":W]
-/// [,"adaptiveStreaming":{"bps":{"start":N,"maximum":N,"minimum":N}}]}}}`. Built with the JSON
-/// writer, never by formatting the URL into a string.
-pub fn build_load(url: &str, app_id: &str, window_id: Option<&str>, bps: AbrBps) -> String {
+/// [,"adaptiveStreaming":{"bps":{"start":N,"maximum":N,"minimum":N}}]
+/// [,"externalStreamingInfo":{"contents":{"DolbyHdrInfo":{..},"provider":"plxnative"}}]}}}`.
+/// Built with the JSON writer, never by formatting the URL into a string.
+///
+/// `dolby_vision` is the node Feed's Load declares, in the same place: on webOS 6 (LG C1) a
+/// Profile 8.1 file loaded without it reported `hdrType=HDR10` and with it `hdrType=DolbyVision`.
+pub fn build_load(url: &str, app_id: &str, window_id: Option<&str>, bps: AbrBps,
+    dolby_vision: Option<plx_playback_contract::feed::DolbyHdrInfo>) -> String {
     let mut option = Map::new();
     option.insert("appId".to_owned(), json!(app_id));
     if let Some(window) = window_id {
@@ -96,6 +101,12 @@ pub fn build_load(url: &str, app_id: &str, window_id: Option<&str>, bps: AbrBps)
     }
     if let Some(bps) = bps.object() {
         option.insert("adaptiveStreaming".to_owned(), json!({ "bps": bps }));
+    }
+    if let Some(dv) = dolby_vision {
+        option.insert("externalStreamingInfo".to_owned(), json!({ "contents": {
+            "DolbyHdrInfo": { "trackType": dv.track_type, "encryptionType": dv.encryption_type,
+                "profileId": dv.profile_id },
+            "provider": "plxnative" } }));
     }
     json!({ "uri": url, "type": "media", "payload": { "option": Value::Object(option) } })
         .to_string()
@@ -909,6 +920,18 @@ impl Method {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The Load declares Dolby Vision where Feed's Load does, and only when asked to.
+    #[test]
+    fn build_load_carries_the_dolby_vision_node_only_when_given() {
+        let dv = plx_playback_contract::feed::DolbyHdrInfo { profile_id: 8, track_type: "single", encryption_type: "clear" };
+        let with: Value = serde_json::from_str(&build_load("http://h/v", "app", Some("w"), AbrBps::default(), Some(dv))).unwrap();
+        assert_eq!(with["payload"]["option"]["externalStreamingInfo"], serde_json::json!({"contents": {
+            "DolbyHdrInfo": {"trackType": "single", "encryptionType": "clear", "profileId": 8},
+            "provider": "plxnative"}}));
+        let without: Value = serde_json::from_str(&build_load("http://h/v", "app", Some("w"), AbrBps::default(), None)).unwrap();
+        assert!(without["payload"]["option"].get("externalStreamingInfo").is_none(), "{without}");
+    }
+
     #[test]
     fn uri_protocol_strict_events_ignore_false_null_and_unrelated_words() {
         for text in [
@@ -1038,7 +1061,7 @@ mod tests {
     #[test]
     fn uri_acb_adaptive_follows_the_load_that_build_load_writes() {
         for bps in [AbrBps::default(), AbrBps{start:Some(1),..AbrBps::default()}, AbrBps{maximum:Some(2),..AbrBps::default()}, AbrBps{minimum:Some(3),..AbrBps::default()}] {
-            let load: Value=serde_json::from_str(&build_load("http://h/v", "app", Some("w"), bps)).unwrap();
+            let load: Value=serde_json::from_str(&build_load("http://h/v", "app", Some("w"), bps, None)).unwrap();
             assert_eq!(bps.is_adaptive(), load["payload"]["option"].get("adaptiveStreaming").is_some(), "{bps:?}");
             assert!(!load.to_string().contains("mediaTransportType"));
         }

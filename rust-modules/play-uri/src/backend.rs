@@ -185,6 +185,8 @@ pub struct UriBackend {
     active: Option<AttemptId>,
     last_started: Option<AttemptId>,
     url: Option<String>,
+    /// The started source's Dolby Vision declaration, for its Load.
+    dolby_vision: Option<plx_playback_contract::feed::DolbyHdrInfo>,
     tracks: Vec<NativeTrackIndex>,
     /// The audio track the service last reported selected (`audioInfo.track`, or a
     /// `trackSelected`): a selection of exactly that track changes nothing, so the service never
@@ -236,7 +238,7 @@ impl UriBackend {
         assert!(!config.capabilities.audio_off && !config.capabilities.subtitle_off,
             "URI transport has no confirmed track-disable operation");
         Self { config, lifecycle: Lifecycle::new(), staged: None, active: None,
-            last_started: None, url: None, tracks: Vec::new(), audio_current: None,
+            last_started: None, url: None, dolby_vision: None, tracks: Vec::new(), audio_current: None,
             window: false, window_id: None, window_coded: None,
             start_deadline_ms: None, loaded: false, play_sent: false, played_once: false,
             subscribed: false,
@@ -363,6 +365,7 @@ impl UriBackend {
         };
         self.last_started = Some(attempt);
         self.active = Some(attempt);
+        self.dolby_vision = staged.source.dolby_vision();
         let (url, tracks) = staged.source.into_parts();
         self.url = Some(url);
         self.tracks = tracks;
@@ -883,6 +886,7 @@ impl UriBackend {
                 }
                 if let Some(answer) = session_io::transport_answer(
                     &effect, self.config.transport, self.url.as_deref().unwrap_or(""), &self.config.app_id,
+                    self.dolby_vision,
                 ) {
                     queue.push_back(answer);
                     continue;
@@ -1208,6 +1212,11 @@ mod tests {
         fn calls(&self, method: &str) -> usize {
             self.0.lock().unwrap().calls.iter().filter(|(name, _, _)| *name == method).count()
         }
+        /// The payload of the last `method` call.
+        fn payload(&self, method: &str) -> String {
+            self.0.lock().unwrap().calls.iter().rev().find(|(name, _, _)| *name == method)
+                .map(|(_, _, payload)| payload.clone()).expect("call was sent")
+        }
         /// The identities the driver asked to register as, in order.
         fn shapes(&self) -> Vec<Shape> { self.0.lock().unwrap().shapes.clone() }
         /// The worker's answer to a registration the hub refused: a failed `register` reply, and
@@ -1334,6 +1343,25 @@ mod tests {
                 assert!(log.contains(" ev=currentTime value=123 (first report)"), "{log}");
             }
         });
+    }
+
+    #[test]
+    fn the_load_declares_the_sources_dolby_vision_and_only_that() {
+        let dv = plx_playback_contract::feed::DolbyHdrInfo { profile_id: 8, track_type: "single", encryption_type: "clear" };
+        let mut rig = Rig::new();
+        rig.driver.stage_source(A, KEY, UriSource::new(URL.into(), Vec::new()).with_dolby_vision(Some(dv))).unwrap();
+        assert_eq!(rig.driver.dispatch(&rig.mt, A, rig.command, Operation::Start { source: KEY, requirements: REQ }),
+            DispatchResult::Queued);
+        rig.bus.say("register", "");
+        rig.driver.poll(&rig.mt);
+        let load: serde_json::Value = serde_json::from_str(&rig.bus.payload("load")).unwrap();
+        assert_eq!(load["payload"]["option"]["externalStreamingInfo"]["contents"]["DolbyHdrInfo"]["profileId"], 8);
+
+        let mut plain = Rig::new();
+        assert_eq!(plain.start_with(A, Vec::new()), DispatchResult::Queued);
+        plain.bus.say("register", "");
+        plain.driver.poll(&plain.mt);
+        assert!(!plain.bus.payload("load").contains("externalStreamingInfo"));
     }
 
     #[test]

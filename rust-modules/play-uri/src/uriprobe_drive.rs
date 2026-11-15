@@ -232,14 +232,14 @@ impl<A: Copy> UriSession<A> {
             for effect in effects {
                 match effect {
                     LifeFx::Open { .. } => {
-                        events.push_back(super::session_io::transport_answer(&effect, self.transport, &self.url, &self.app_id).expect("open answer"));
+                        events.push_back(super::session_io::transport_answer(&effect, self.transport, &self.url, &self.app_id, None).expect("open answer"));
                     }
                     LifeFx::Call { request, ref call, .. } => {
                         self.inbox.push_back(UriEvent::Dispatched { method: super::uri_protocol::Method::of(call.method()), kind: match &call { UriCall::SelectTrack {kind,..} => Some(*kind), _ => None }, request });
-                        events.push_back(super::session_io::transport_answer(&effect, self.transport, &self.url, &self.app_id).expect("call answer"));
+                        events.push_back(super::session_io::transport_answer(&effect, self.transport, &self.url, &self.app_id, None).expect("call answer"));
                     }
                     LifeFx::Close { .. } => {
-                        events.push_back(super::session_io::transport_answer(&effect, self.transport, &self.url, &self.app_id).expect("close answer"));
+                        events.push_back(super::session_io::transport_answer(&effect, self.transport, &self.url, &self.app_id, None).expect("close answer"));
                     }
                     LifeFx::Deliver { method, ok, mut message } => {
                         if ok && message.accepted() != Some(false) {

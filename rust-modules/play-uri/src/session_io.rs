@@ -12,6 +12,7 @@ use std::os::raw::c_int;
 /// delivered to the caller, which owns the attempt and decides what they mean.
 pub(crate) fn transport_answer(
     effect: &Fx, transport: &dyn UriMedia, url: &str, app_id: &str,
+    dolby_vision: Option<plx_playback_contract::feed::DolbyHdrInfo>,
 ) -> Option<Event> {
     match effect {
         Fx::Open { request, shape } => {
@@ -21,7 +22,7 @@ pub(crate) fn transport_answer(
         Fx::Call { session, request, call } => {
             let payload = match call {
                 crate::uri_protocol::UriCall::Load { window_id, bps } =>
-                    build_load(url, app_id, window_id.as_deref(), *bps),
+                    build_load(url, app_id, window_id.as_deref(), *bps, dolby_vision),
                 other => other.payload().unwrap_or_default(),
             };
             let result = transport.call(*session, *request, call.method(), &payload);
