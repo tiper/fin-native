@@ -13,7 +13,7 @@ import re
 from readonly_dependencies import _local_sha, _sha, _json, _manifest_paths, _configs, _workspace_hashes, WORKSPACE_HASHING
 
 CERTIFICATE_PATH = Path(__file__).with_name('proofs') / 'platform-generated-enums.json'
-CERTIFICATE_SHA256 = 'db5f3b3400886f96ab02e9e717d3f8388256cc82971554c201a6fdee7ba3bc03'
+CERTIFICATE_SHA256 = '701d5d081e6ff08328227e60df8de15f2805b41225ab64800fd54fc4b7c83d98'
 SOURCES = ['platform/Cargo.toml', 'platform/src/lib.rs', 'platform/src/i18n/mod.rs',
            'platform/build.rs', 'platform/build_support/catalog.rs', 'build_support/install_identities.rs',
            'machine/src/lib.rs', 'machine/src/machine.rs']
