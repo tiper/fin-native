@@ -20,8 +20,18 @@ pub(crate) fn transport_answer(
         }
         Fx::Call { session, request, call } => {
             let payload = match call {
-                crate::uri_protocol::UriCall::Load { window_id, bps } =>
-                    build_load(url, app_id, window_id.as_deref(), *bps),
+                crate::uri_protocol::UriCall::Load { window_id, bps } => {
+                    // SCRATCH EXPERIMENT: does the URI pipeline read Feed's Dolby Vision node?
+                    let mut load: serde_json::Value =
+                        serde_json::from_str(&build_load(url, app_id, window_id.as_deref(), *bps)).unwrap_or_default();
+                    if let Some(option) = load.pointer_mut("/payload/option").and_then(|o| o.as_object_mut()) {
+                        option.insert("externalStreamingInfo".into(), serde_json::json!({"contents": {
+                            "DolbyHdrInfo": {"trackType": "single", "encryptionType": "clear", "profileId": 8},
+                            "provider": "plxnative"}}));
+                        plx_base::eventlog::log("uri: dv-hint experiment: load carries DolbyHdrInfo profileId=8");
+                    }
+                    load.to_string()
+                }
                 other => other.payload().unwrap_or_default(),
             };
             let result = transport.call(*session, *request, call.method(), &payload);
