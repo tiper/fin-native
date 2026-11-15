@@ -2010,13 +2010,13 @@ mod tests {
     #[test]
     fn build_load_escapes_the_url_and_carries_the_window_only_when_given() {
         let tricky = r#"http://h:1/a b?q="x"&r=\y"#;
-        let with = build_load(tricky, "com.test.app", Some(WINDOW), AbrBps::default());
+        let with = build_load(tricky, "com.test.app", Some(WINDOW), AbrBps::default(), None);
         let value: Value = serde_json::from_str(&with).expect("valid JSON");
         assert_eq!(value["uri"], tricky);
         assert_eq!(value["type"], "media");
         assert_eq!(value["payload"]["option"]["appId"], "com.test.app");
         assert_eq!(value["payload"]["option"]["windowId"], WINDOW);
-        let without: Value = serde_json::from_str(&build_load(tricky, "com.test.app", None, AbrBps::default())).unwrap();
+        let without: Value = serde_json::from_str(&build_load(tricky, "com.test.app", None, AbrBps::default(), None)).unwrap();
         assert!(without["payload"]["option"].get("windowId").is_none());
         // no rates asked for: the option is exactly what it was before they existed
         assert!(!with.contains("adaptiveStreaming"));
@@ -2026,7 +2026,7 @@ mod tests {
     #[test]
     fn build_load_nests_the_asked_rates_under_adaptive_streaming_bps() {
         let all = AbrBps { start: Some(720_000), maximum: Some(2_000_000), minimum: Some(320_000) };
-        let value: Value = serde_json::from_str(&build_load("http://h/x", "com.test.app", Some(WINDOW), all)).unwrap();
+        let value: Value = serde_json::from_str(&build_load("http://h/x", "com.test.app", Some(WINDOW), all, None)).unwrap();
         assert_eq!(
             value["payload"]["option"],
             serde_json::json!({
@@ -2037,7 +2037,7 @@ mod tests {
         );
         // only the rates given appear
         let cap = AbrBps { maximum: Some(720_000), ..AbrBps::default() };
-        let value: Value = serde_json::from_str(&build_load("http://h/x", "com.test.app", None, cap)).unwrap();
+        let value: Value = serde_json::from_str(&build_load("http://h/x", "com.test.app", None, cap, None)).unwrap();
         assert_eq!(value["payload"]["option"]["adaptiveStreaming"], serde_json::json!({ "bps": { "maximum": 720_000 } }));
         assert!(value["payload"]["option"]["adaptiveStreaming"]["bps"].get("start").is_none());
         // rates are JSON integers, not strings

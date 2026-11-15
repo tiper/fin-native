@@ -254,6 +254,10 @@ pub struct OriginalRequest {
     /// Exact selected-source layering; a positive DV verdict must certify this record.
     pub dolby_vision: plx_data::metadata::Dovi,
     pub dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode,
+    /// The node Standard's Load would declare for this original (the frozen decision's
+    /// `Declare`): the URI Load carries the same one, or the TV's pipeline plays only a Profile 8
+    /// file's base layer.
+    pub dolby_vision_declaration: Option<plx_data::metadata::DolbyHdrInfo>,
     /// The viewer turned on Settings > Playback > Playback engine (`UriEngine::On`). That choice is
     /// the viewer's own qualification of a URI source for their own playback and nobody else's: a
     /// qualifier answers for it, never without it, and never past [`standard`](Self::standard).
@@ -741,7 +745,8 @@ impl KnownSource {
         });
         KnownSource {
             selection: request.selection,
-            source: UriSource::new(url, tracks.into_iter().collect()),
+            source: UriSource::new(url, tracks.into_iter().collect()).with_dolby_vision(
+                request.dolby_vision_declaration.map(crate::player::feed_open::dolby_hdr_info)),
             requirements: Requirements { source: SourceKind::ProgressiveUri,
                 video: Fidelity::Exact, audio: Fidelity::Exact,
                 audio_track: selected_audio.map_or(TrackChoice::Unspecified, TrackChoice::Selected),
@@ -1124,7 +1129,7 @@ mod tests {
             server_origin: plx_plex::plex::Origin::http("192.0.2.5", 32499),
             source_url: "https://example.invalid/part.mkv".to_owned(), duration_ms: Some(60_000),
             video_codec: "h264".to_owned(), dolby_vision: plx_data::metadata::Dovi::NONE,
-            dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto, uri_opt_in,
+            dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto, dolby_vision_declaration: None, uri_opt_in,
             standard: PLAYS, audio_codec: "aac".to_owned(), audio_ordinal: Some(1), has_multiple_audio_tracks: false, binding: Binding::Unbound,
             subtitle_source: None, subtitle_choice: TrackChoice::Unspecified,
             source_kbps: Some(4000), raster: Some((1280, 720)),
@@ -1302,7 +1307,7 @@ mod tests {
             server_origin: plx_plex::plex::Origin::http("192.0.2.5", 32499),
             source_url: "https://example.invalid/part.mkv".to_owned(), duration_ms: Some(60_000),
             video_codec: "hevc".to_owned(), dolby_vision: dovi,
-            dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto, uri_opt_in: false,
+            dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto, dolby_vision_declaration: None, uri_opt_in: false,
             standard: PLAYS, audio_codec: "ac3".to_owned(), audio_ordinal: Some(0), has_multiple_audio_tracks: false, binding: Binding::Unbound,
             subtitle_source: None,
             subtitle_choice: TrackChoice::Unspecified,

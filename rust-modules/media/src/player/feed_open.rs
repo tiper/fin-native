@@ -70,11 +70,7 @@ impl PayloadFacts {
             pcm: self.pcm.clone().map(|value| value.map(Into::into)),
             max_raster: self.max_raster,
             fps: self.fps,
-            dv: self.dv_presentation.declared().map(|n| plx_playback_contract::feed::DolbyHdrInfo {
-                profile_id: n.profile_id,
-                track_type: n.track_type,
-                encryption_type: n.encryption_type,
-            }),
+            dv: self.dv_presentation.declared().map(dolby_hdr_info),
             immersive: self.immersive,
             force_direct_play: self.force_direct_play,
         }
@@ -419,4 +415,13 @@ pub(super) fn install_synthetic_playurl(
     let url = play.url.clone();
     crate::route::set_url(ps, &url);
     Ok(url)
+}
+
+/// The contract's copy of a Load's Dolby Vision node: what Feed's and the URI driver's Loads write.
+pub(crate) fn dolby_hdr_info(n: plx_data::metadata::DolbyHdrInfo) -> plx_playback_contract::feed::DolbyHdrInfo {
+    plx_playback_contract::feed::DolbyHdrInfo {
+        profile_id: n.profile_id,
+        track_type: n.track_type,
+        encryption_type: n.encryption_type,
+    }
 }

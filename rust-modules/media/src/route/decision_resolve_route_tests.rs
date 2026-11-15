@@ -3558,6 +3558,27 @@ fn experimental_offers_a_profile_8_file_whose_base_layer_the_frozen_decision_adm
     let known = plan.uri_original.as_ref().expect("an admitted base layer is offered");
     assert_eq!(known.certified_dolby_vision, Some(p8()));
     assert!(plan.source_decodable && plan.src_dv_decision.presentation.refusal().is_none());
+    assert_eq!(known.source.dolby_vision(), None, "a set without Dolby Vision is told nothing: the base layer plays");
+}
+
+/// The same Profile 8 file on a set with Dolby Vision: Standard declares `DolbyHdrInfo` on its Load,
+/// and the URI Load must carry the same node. Without it the webOS 6 pipeline (LG C1) reported
+/// `hdrType=HDR10` for a Profile 8.1 file Standard plays as Dolby Vision; with it, `DolbyVision`.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn experimental_declares_dolby_vision_on_the_load_as_standard_does() {
+    use plx_plex::plex::session::UriEngine;
+    let (plan, _) = uri_engine_resolve("uri-optin-p8-dv", UriEngine::On, 1, MDE_DIRECTPLAY,
+        vec![cold_track(1, "ac3", "eng", true, "")], "ac3", |env, item| {
+            env.dv_capability = plx_platform::devcaps::dv::DvCapability::Supported;
+            env.dolby_vision_mode = plx_plex::plex::session::DolbyVisionMode::Auto;
+            item.dovi = p8();
+        });
+    let declared = plan.src_dv_decision.presentation.declared().expect("the premise: Standard declares it");
+    let known = plan.uri_original.as_ref().expect("a Dolby Vision original is offered");
+    assert_eq!(known.source.dolby_vision(), Some(plx_playback_contract::feed::DolbyHdrInfo {
+        profile_id: declared.profile_id, track_type: declared.track_type,
+        encryption_type: declared.encryption_type }));
 }
 
 /// An audio codec Standard does not direct-play (DTS on a table with no DTS row): the server converts
