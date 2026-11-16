@@ -381,6 +381,7 @@ fn every_pushed_picker_opens_on_its_checked_line_and_pops_to_its_row() {
         next_episode_mode: ses::NextEpisodeMode::LADDER.last().copied(), deck_press: ses::DeckPress::LADDER.last().copied(),
         skip_interval: ses::SkipInterval::LADDER.last().copied(), instant_dpad_seeking: ses::InstantDpadSeeking::LADDER.last().copied(),
         uri_engine: ses::UriEngine::LADDER.last().copied(), dolby_vision_mode: ses::DolbyVisionMode::LADDER.last().copied(),
+        audio_conversion: ses::AudioConversion::LADDER.last().copied(),
         ..Default::default()
     };
     let lines = |kind: PickerKind| match kind {
