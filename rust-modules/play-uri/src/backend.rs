@@ -884,6 +884,11 @@ impl UriBackend {
                             "uri: selectTrack sent kind=audio index={index} stream={}", track.id));
                     }
                 }
+                if let (LifeFx::Call { call: UriCall::Load { .. }, .. }, Some(dv)) = (&effect, self.dolby_vision) {
+                    plx_base::eventlog::log(&format!(
+                        "dv: uri Load contents.DolbyHdrInfo profileId={} trackType={} encryptionType={}",
+                        dv.profile_id, dv.track_type, dv.encryption_type));
+                }
                 if let Some(answer) = session_io::transport_answer(
                     &effect, self.config.transport, self.url.as_deref().unwrap_or(""), &self.config.app_id,
                     self.dolby_vision,

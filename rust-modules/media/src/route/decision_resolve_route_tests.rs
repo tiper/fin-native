@@ -3747,6 +3747,25 @@ fn experimental_declares_dolby_vision_on_the_load_as_standard_does() {
         encryption_type: declared.encryption_type }));
 }
 
+/// A Profile 7 Feed converts: Standard's node describes the converted 8.1, which URI never sends,
+/// so a URI original of it declares nothing.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn experimental_declares_nothing_for_a_profile_7_feed_converts() {
+    use plx_plex::plex::session::UriEngine;
+    let p7 = plx_data::metadata::Dovi { present: true, profile: 7, bl_compat: 6, el_present: true,
+        ..plx_data::metadata::Dovi::NONE };
+    let (plan, _) = uri_engine_resolve("uri-optin-p7-dv", UriEngine::On, 1, MDE_DIRECTPLAY,
+        vec![cold_track(1, "ac3", "eng", true, "")], "ac3", |env, item| {
+            env.dv_capability = plx_platform::devcaps::dv::DvCapability::Supported;
+            env.dolby_vision_mode = plx_plex::plex::session::DolbyVisionMode::Auto;
+            item.dovi = p7;
+        });
+    assert!(plan.src_dv_decision.presentation.declared().is_some(), "the premise: Standard declares it");
+    let known = plan.uri_original.as_ref().expect("a converted Profile 7 original is offered");
+    assert_eq!(known.source.dolby_vision(), None);
+}
+
 /// An audio codec Standard does not direct-play (DTS on a table with no DTS row): the server converts
 /// the track, and a URI pipeline with no decoder for it would play the picture in silence.
 #[test]

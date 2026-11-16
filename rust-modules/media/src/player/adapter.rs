@@ -1142,6 +1142,14 @@ impl PlayerAdapter {
     /// still has to supply a qualified offer and send an addressed Start through the runner.
     pub fn stage_uri_source(&mut self, attempt: AttemptId, source: UriSource)
         -> Result<SourceKey, Failure> {
+        // `dvnonode` holds the node back on URI as on Feed: applied at the payload, never the gate.
+        let source = match source.dolby_vision() {
+            Some(dv) if plx_data::metadata::dv_node_suppressed() => {
+                plx_base::eventlog::log(&format!("dv: DolbyHdrInfo P{} SUPPRESSED by diagnostic override (uri)", dv.profile_id));
+                source.with_dolby_vision(None)
+            }
+            _ => source,
+        };
         let key = self.next_source_key();
         self.physical.uri_mut().ok_or(Failure::Unavailable)?
             .stage_source(attempt, key, source)?;

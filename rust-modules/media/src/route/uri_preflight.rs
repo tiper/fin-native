@@ -745,8 +745,11 @@ impl KnownSource {
         });
         KnownSource {
             selection: request.selection,
+            // Feed's node for a Profile 7 it converts describes the 8.1 it sends; URI hands the TV
+            // the file itself, so that original declares nothing.
             source: UriSource::new(url, tracks.into_iter().collect()).with_dolby_vision(
-                request.dolby_vision_declaration.map(crate::player::dolby_hdr_info)),
+                request.dolby_vision_declaration.filter(|_| !request.dolby_vision.converts_to_p81())
+                    .map(crate::player::dolby_hdr_info)),
             requirements: Requirements { source: SourceKind::ProgressiveUri,
                 video: Fidelity::Exact, audio: Fidelity::Exact,
                 audio_track: selected_audio.map_or(TrackChoice::Unspecified, TrackChoice::Selected),
