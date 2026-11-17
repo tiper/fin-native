@@ -3727,9 +3727,9 @@ fn experimental_offers_a_profile_8_file_whose_base_layer_the_frozen_decision_adm
     assert_eq!(known.source.dolby_vision(), None, "a set without Dolby Vision is told nothing: the base layer plays");
 }
 
-/// The same Profile 8 file on a set with Dolby Vision: Standard declares `DolbyHdrInfo` on its Load,
-/// and the URI Load must carry the same node. Without it the webOS 6 pipeline (LG C1) reported
-/// `hdrType=HDR10` for a Profile 8.1 file Standard plays as Dolby Vision; with it, `DolbyVision`.
+/// The same Profile 8 file on a set with Dolby Vision, on webOS 10, whose demuxer carries Dolby
+/// Vision in this MKV: Standard declares `DolbyHdrInfo` on its Load, and the URI Load carries the
+/// same node.
 #[test]
 #[cfg(feature = "devtriggers")]
 fn experimental_declares_dolby_vision_on_the_load_as_standard_does() {
@@ -3738,6 +3738,7 @@ fn experimental_declares_dolby_vision_on_the_load_as_standard_does() {
         vec![cold_track(1, "ac3", "eng", true, "")], "ac3", |env, item| {
             env.dv_capability = plx_platform::devcaps::dv::DvCapability::Supported;
             env.dolby_vision_mode = plx_plex::plex::session::DolbyVisionMode::Auto;
+            env.firmware_major = 10;
             item.dovi = p8();
         });
     let declared = plan.src_dv_decision.presentation.declared().expect("the premise: Standard declares it");
@@ -3745,6 +3746,31 @@ fn experimental_declares_dolby_vision_on_the_load_as_standard_does() {
     assert_eq!(known.source.dolby_vision(), Some(plx_playback_contract::feed::DolbyHdrInfo {
         profile_id: declared.profile_id, track_type: declared.track_type,
         encryption_type: declared.encryption_type }));
+}
+
+/// A Dolby Vision MKV before webOS 10 stays on Standard: the TV's Matroska demuxer there flags no
+/// Dolby Vision, so the node only switched the set into its Dolby Vision mode over a plain HEVC
+/// decode (LG C1, webOS 6.5.3: 7-14% darker than Standard's Dolby Vision on the same frames). The
+/// same file on webOS 10 is offered, node and all.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn experimental_leaves_a_dolby_vision_mkv_before_webos_10_on_standard() {
+    use plx_plex::plex::session::UriEngine;
+    let resolve = |major: u32| uri_engine_resolve("uri-optin-p8-mkv", UriEngine::On, 1, MDE_DIRECTPLAY,
+        vec![cold_track(1, "ac3", "eng", true, "")], "ac3", |env, item| {
+            env.dv_capability = plx_platform::devcaps::dv::DvCapability::Supported;
+            env.dolby_vision_mode = plx_plex::plex::session::DolbyVisionMode::Auto;
+            env.firmware_major = major;
+            item.dovi = p8();
+        }).0;
+    let webos6 = resolve(6);
+    assert!(COLD_PART.ends_with(".mkv") && webos6.src_dv_decision.presentation.declared().is_some(),
+        "the premise: an MKV Standard plays as Dolby Vision");
+    assert!(webos6.uri_original.is_none(), "webOS 6 keeps it on Standard");
+    assert_eq!(webos6.uri_decline, Some(crate::route::uri_preflight::UriDecline::DolbyVisionMatroska));
+    let webos10 = resolve(10);
+    assert!(webos10.uri_original.as_ref().is_some_and(|known| known.source.dolby_vision().is_some()),
+        "webOS 10 demuxes Dolby Vision from MKV: offered with the node");
 }
 
 /// A Profile 7 Feed converts: Standard's node describes the converted 8.1, which URI never sends,
@@ -3759,6 +3785,7 @@ fn experimental_declares_nothing_for_a_profile_7_feed_converts() {
         vec![cold_track(1, "ac3", "eng", true, "")], "ac3", |env, item| {
             env.dv_capability = plx_platform::devcaps::dv::DvCapability::Supported;
             env.dolby_vision_mode = plx_plex::plex::session::DolbyVisionMode::Auto;
+            env.firmware_major = 10;
             item.dovi = p7;
         });
     assert!(plan.src_dv_decision.presentation.declared().is_some(), "the premise: Standard declares it");

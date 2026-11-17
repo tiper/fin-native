@@ -170,6 +170,9 @@ pub enum UriDecline {
     SubtitleOff,
     /// The file carries Dolby Vision and Settings > Dolby Vision is Off.
     DolbyVisionOff,
+    /// Standard would play the file as Dolby Vision, and it is a Matroska file on firmware whose
+    /// demuxer flags no Dolby Vision in Matroska ([`pipeline_flags_dolby_vision`]).
+    DolbyVisionMatroska,
     /// A trailer preview, which the exported window cannot place.
     Preview,
     /// The Part has no known duration or no URL.
@@ -220,6 +223,8 @@ impl UriDecline {
             Self::ClientSubtitle => "the selected subtitle is an external file",
             Self::SubtitleOff => "the file has subtitle streams and none is selected; subtitle streams keep a play in Standard today",
             Self::DolbyVisionOff => "the file has Dolby Vision and the Dolby Vision setting is Off",
+            Self::DolbyVisionMatroska =>
+                "a Dolby Vision MKV before webOS 10; the TV's pipeline would show only its base layer, Standard plays it as Dolby Vision",
             Self::Preview => "a trailer preview",
             Self::NoDurationOrUrl => "no duration or URL for the file",
             Self::NotCertified => "the qualifier did not certify the file",
@@ -256,8 +261,14 @@ pub struct OriginalRequest {
     pub dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode,
     /// The node Standard's Load would declare for this original (the frozen decision's
     /// `Declare`): the URI Load carries the same one, or the TV's pipeline plays only a Profile 8
-    /// file's base layer.
+    /// file's base layer. Where its demuxer cannot carry the file's Dolby Vision to the picture
+    /// ([`pipeline_flags_dolby_vision`]), the original is declined instead.
     pub dolby_vision_declaration: Option<plx_data::metadata::DolbyHdrInfo>,
+    /// The Part is a Matroska file (`.mkv`), the container whose Dolby Vision the TV's own demuxer
+    /// may not flag ([`pipeline_flags_dolby_vision`]).
+    pub matroska: bool,
+    /// The set's firmware major (`device::info().major`, 0 when unknown), read with the modes.
+    pub firmware_major: u32,
     /// The viewer turned on Settings > Playback > Playback engine (`UriEngine::On`). That choice is
     /// the viewer's own qualification of a URI source for their own playback and nobody else's: a
     /// qualifier answers for it, never without it, and never past [`standard`](Self::standard).
@@ -684,9 +695,28 @@ impl ResolvePort {
         else if request.dolby_vision.present
             && request.dolby_vision_mode == plx_plex::plex::session::DolbyVisionMode::Off {
             Some(UriDecline::DolbyVisionOff)
+        } else if request.dolby_vision_declaration.is_some()
+            && !pipeline_flags_dolby_vision(request.matroska, request.firmware_major) {
+            Some(UriDecline::DolbyVisionMatroska)
         } else if request.preview && !evidence.preview_rectangle { Some(UriDecline::Preview) }
         else { None }
     }
+}
+
+/// The first firmware major whose Matroska demuxer flags Dolby Vision itself.
+const MATROSKA_DOLBY_VISION_MAJOR: u32 = 10;
+
+/// Whether the TV's own pipeline presents a Dolby Vision file as Dolby Vision once the Load
+/// declares it. On the URI path the service only checks that the `DolbyHdrInfo` node is there: it
+/// switches the set into its Dolby Vision mode, and whether the stream's Dolby Vision metadata
+/// reaches the picture is up to the demuxer. By the firmware reads of webOS 3.4 to 11.2, MP4's
+/// (qtdemux) handles Dolby Vision on every major and Matroska's (matroskademux) has no Dolby Vision
+/// code before webOS 10. Measured on an LG C1 (webOS 6.5.3-47) with a Profile 8 MKV, 2026-11-17:
+/// with the node the set read `dolbyHdr` but its frames came out 7-14% darker than Standard's Dolby
+/// Vision of the same frames, and without it plain HDR10 matched Standard's brightness. An unknown
+/// major (0) counts as before 10.
+pub fn pipeline_flags_dolby_vision(matroska: bool, firmware_major: u32) -> bool {
+    !matroska || firmware_major >= MATROSKA_DOLBY_VISION_MAJOR
 }
 
 impl KnownSource {
@@ -1132,7 +1162,7 @@ mod tests {
             server_origin: plx_plex::plex::Origin::http("192.0.2.5", 32499),
             source_url: "https://example.invalid/part.mkv".to_owned(), duration_ms: Some(60_000),
             video_codec: "h264".to_owned(), dolby_vision: plx_data::metadata::Dovi::NONE,
-            dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto, dolby_vision_declaration: None, uri_opt_in,
+            dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto, dolby_vision_declaration: None, matroska: false, firmware_major: 0, uri_opt_in,
             standard: PLAYS, audio_codec: "aac".to_owned(), audio_ordinal: Some(1), has_multiple_audio_tracks: false, binding: Binding::Unbound,
             subtitle_source: None, subtitle_choice: TrackChoice::Unspecified,
             source_kbps: Some(4000), raster: Some((1280, 720)),
@@ -1310,7 +1340,7 @@ mod tests {
             server_origin: plx_plex::plex::Origin::http("192.0.2.5", 32499),
             source_url: "https://example.invalid/part.mkv".to_owned(), duration_ms: Some(60_000),
             video_codec: "hevc".to_owned(), dolby_vision: dovi,
-            dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto, dolby_vision_declaration: None, uri_opt_in: false,
+            dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto, dolby_vision_declaration: None, matroska: false, firmware_major: 0, uri_opt_in: false,
             standard: PLAYS, audio_codec: "ac3".to_owned(), audio_ordinal: Some(0), has_multiple_audio_tracks: false, binding: Binding::Unbound,
             subtitle_source: None,
             subtitle_choice: TrackChoice::Unspecified,
@@ -1563,5 +1593,18 @@ mod tests {
         assert!(SubtitleNotCarried.log_name().contains("try a file without subtitle streams"));
         assert!(QualityOrDirectPlay.log_name().contains("Direct Play to Auto"));
         assert!(ManyAudioTracksExported.log_name().contains("several audio tracks"));
+    }
+
+    /// MP4 on every major, and Matroska from webOS 10: the formats the TV's own demuxer flags as Dolby
+    /// Vision. An unknown major is not 10.
+    #[test]
+    fn the_pipeline_flags_dolby_vision_in_mp4_and_in_matroska_from_webos_10() {
+        assert!(pipeline_flags_dolby_vision(false, 6));
+        assert!(pipeline_flags_dolby_vision(false, 0));
+        assert!(!pipeline_flags_dolby_vision(true, 6));
+        assert!(!pipeline_flags_dolby_vision(true, 9));
+        assert!(!pipeline_flags_dolby_vision(true, 0));
+        assert!(pipeline_flags_dolby_vision(true, 10));
+        assert!(pipeline_flags_dolby_vision(true, 11));
     }
 }

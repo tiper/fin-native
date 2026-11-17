@@ -29,7 +29,9 @@ impl UriSource {
     pub fn new(url: String, tracks: Vec<NativeTrackIndex>) -> Self { Self { url, tracks, dolby_vision: None } }
 
     /// The Dolby Vision node the Load declares, as Feed's Load declares it: without it the TV's
-    /// pipeline plays only a Profile 8 file's HDR10 base layer (webOS 6, `hdrType=HDR10`).
+    /// pipeline plays only a Profile 8 file's HDR10 base layer (`hdrType=HDR10`). The node only
+    /// switches the set into its Dolby Vision mode; the demuxer must carry the file's Dolby Vision
+    /// to the picture, which the route checks before it offers the source.
     pub fn with_dolby_vision(self, dolby_vision: Option<crate::feed::DolbyHdrInfo>) -> Self {
         Self { dolby_vision, ..self }
     }

@@ -1427,6 +1427,9 @@ pub struct ResolveEnv {
     /// the mode so the worker never reads the process cache. A regression sets it directly: no
     /// test mutates the production `OnceLock` or makes the whole host a DV set.
     pub dv_capability: plx_platform::devcaps::dv::DvCapability,
+    /// The set's firmware major (`device::info().major`, 0 when unknown), read once at the request
+    /// beside the Dolby Vision answer: the URI engine's Matroska Dolby Vision rule depends on it.
+    pub firmware_major: u32,
     /// **The capability value this attempt plans from**, copied off the session
     /// ([`PlaybackSession::attempt_caps`]) beside the quality and the mode, so the worker never reads the
     /// process-wide capability answer: every direct-play gate, the audio pick and the transcode
@@ -2095,6 +2098,8 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                     dolby_vision: dovi,
                     dolby_vision_mode: env.dolby_vision_mode,
                     dolby_vision_declaration: dv_decision.presentation.declared(),
+                    matroska: part_file_name(part).ends_with(".mkv"),
+                    firmware_major: env.firmware_major,
                     uri_opt_in: env.uri_engine == plx_plex::plex::session::UriEngine::On,
                     standard: super::uri_preflight::StandardDirectPlay {
                         video: source_decodable,
@@ -4548,9 +4553,14 @@ pub fn playback_preview_with_audio(
 /// extension in the part-key filename; the m4v spelling is the same mov demuxer and the same
 /// `container=mp4` in PMS metadata.
 pub(super) fn part_is_streamable(part_key: &str) -> bool {
-    let name = part_key.rsplit('/').next().unwrap_or(part_key);
-    let name = name.split('?').next().unwrap_or(name);
+    let name = part_file_name(part_key);
     name.ends_with(".mkv") || name.ends_with(".mp4") || name.ends_with(".m4v")
+}
+
+/// The file name a Part key ends in, without its query.
+fn part_file_name(part_key: &str) -> &str {
+    let name = part_key.rsplit('/').next().unwrap_or(part_key);
+    name.split('?').next().unwrap_or(name)
 }
 
 
