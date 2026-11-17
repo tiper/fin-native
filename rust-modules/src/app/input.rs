@@ -63,6 +63,18 @@ struct BackCursorOwner {
 }
 
 impl Pointer {
+    /// **Enter D-pad mode** — the one place its state is written, for the arrow keys and PLAY
+    /// alike. Each caller keeps its own decision to call `hide_cursor()`; this is the state
+    /// half: the cursor reads hidden, Back no longer owns it, motion is counted afresh against
+    /// `DPAD_MOTION_GATE` and the edge glide stops.
+    pub(crate) fn enter_dpad(&mut self) {
+        self.dpad_mode = true;
+        self.cur_hidden = true;
+        self.back_cursor = None;
+        self.mot_accum = 0.0;
+        self.edge.stop();
+    }
+
     /// Pointer mode, cursor shown, nothing held or dragging — where the loop starts.
     pub(crate) const IDLE: Pointer = Pointer {
         dpad_mode: false,
@@ -730,19 +742,16 @@ mod activate_card_tests {
         let mt = unsafe { plx_base::task::MainThread::assume() };
         let mut pa = plx_media::player::adapter::PlayerAdapter::new(mt);
         let mut pages = plx_ui::dispatch::Dispatcher::<super::bridge::AppHost>::new();
-        let mut bridge = super::bridge::Bridge::for_test(|| 0);
-        let mut menu_play_await = None;
-
-        struct Cleanup(*mut super::bridge::Bridge);
+        struct Cleanup(crate::app::runtime_owners::Harness);
         impl Drop for Cleanup {
             fn drop(&mut self) {
-                // SAFETY: captured from `bridge` just above, which outlives this guard for the
-                // whole test body.
-                unsafe { &mut *self.0 }.metadata_mut().run(plx_data::stores::metadata::MetadataCmd::Clear);
+                self.0.metadata_mut().run(plx_data::stores::metadata::MetadataCmd::Clear);
                 plx_plex::plex::reset_servers_for_test();
             }
         }
-        let _cleanup = Cleanup(&mut bridge as *mut _);
+        let mut cleanup = Cleanup(crate::app::runtime_owners::Harness::new(|| 0));
+        let mut bridge = cleanup.0.bridge();
+        let mut menu_play_await = None;
         plx_plex::plex::reset_servers_for_test();
         let sid = plx_plex::plex::register_for_test("press-frame", "127.0.0.1", 1, "t", "c-press-frame");
         let mm = plx_data::pms::PmsMovie { sid, rk: "show-1".into(), kind: 1, ..Default::default() };
@@ -792,17 +801,17 @@ mod activate_card_tests {
         let mt = unsafe { plx_base::task::MainThread::assume() };
         let mut pa = plx_media::player::adapter::PlayerAdapter::new(mt);
         let mut pages = plx_ui::dispatch::Dispatcher::<super::bridge::AppHost>::new();
-        let mut bridge = super::bridge::Bridge::for_test(|| 0);
+        let harness = crate::app::runtime_owners::Harness::new(|| 0);
 
-        struct Cleanup(*mut super::bridge::Bridge);
+        struct Cleanup(crate::app::runtime_owners::Harness);
         impl Drop for Cleanup {
             fn drop(&mut self) {
-                // SAFETY: captured from `bridge` just below, which outlives this guard.
-                unsafe { &mut *self.0 }.metadata_mut().run(plx_data::stores::metadata::MetadataCmd::Clear);
+                self.0.metadata_mut().run(plx_data::stores::metadata::MetadataCmd::Clear);
                 plx_plex::plex::reset_servers_for_test();
             }
         }
-        let _cleanup = Cleanup(&mut bridge as *mut _);
+        let mut cleanup = Cleanup(harness);
+        let mut bridge = cleanup.0.bridge();
         plx_plex::plex::reset_servers_for_test();
         let sid = plx_plex::plex::register_for_test("menu-play", "127.0.0.1", 1, "t", "c-menu-play");
 
@@ -837,7 +846,8 @@ mod activate_card_tests {
         let mt = unsafe { plx_base::task::MainThread::assume() };
         let mut pa = plx_media::player::adapter::PlayerAdapter::new(mt);
         let mut pages = plx_ui::dispatch::Dispatcher::<super::bridge::AppHost>::new();
-        let mut bridge = super::bridge::Bridge::for_test(|| 0);
+        let mut harness = crate::app::runtime_owners::Harness::new(|| 0);
+        let mut bridge = harness.bridge();
         let mut menu_play_await = None;
         let collection = plx_data::pms::PmsMovie { rk: "50001".into(),
             kind: plx_data::pms::KIND_COLLECTION, ..Default::default() };
@@ -1256,11 +1266,7 @@ pub(crate) unsafe fn begin_fresh_press(
         if !ptr.dpad_mode || !ptr.cur_hidden {
             hide_cursor();
         }
-        ptr.dpad_mode = true;
-        ptr.cur_hidden = true;
-        ptr.back_cursor = None;
-        ptr.mot_accum = 0.0;
-        ptr.edge.stop();
+        ptr.enter_dpad();
     }
 }
 
