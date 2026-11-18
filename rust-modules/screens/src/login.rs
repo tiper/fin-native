@@ -2251,6 +2251,10 @@ impl<H: AppLike> Focusable<H> for LoginScreen {
     /// the plaintext question, `alert.cancel` / `alert.send` on the report's. An element that is
     /// not in the current group has no id.
     fn a11y(&self, key: &u32, cx: &Cx<'_, H>) -> Option<A11y<'_>> {
+        #[cfg(feature = "finnative")]
+        if self.form.is_some() || *key == MANUAL {
+            return self.finnative_a11y(*key);
+        }
         if self.report.alert.is_open() {
             return self.alert_answers().a11y(*key);
         }
@@ -2271,6 +2275,13 @@ impl<H: AppLike> Focusable<H> for LoginScreen {
         })
     }
     fn a11y_elems(&self, g: GroupId, _cx: &Cx<'_, H>, out: &mut Vec<u32>) {
+        #[cfg(feature = "finnative")]
+        if self.form.is_some() {
+            if g == FORM_GROUP {
+                out.extend_from_slice(&form::ELEMS);
+            }
+            return;
+        }
         if self.report.alert.is_open() {
             self.alert_answers().elems(g, out);
         } else if g == CONTROL_GROUP {
@@ -2278,6 +2289,14 @@ impl<H: AppLike> Focusable<H> for LoginScreen {
         }
     }
     fn a11y_find(&self, path: &A11yPath, cx: &Cx<'_, H>) -> Option<u32> {
+        #[cfg(feature = "finnative")]
+        if let Some(elem) = self.finnative_a11y_find(path) {
+            return Some(elem);
+        }
+        #[cfg(feature = "finnative")]
+        if self.form.is_some() {
+            return None;
+        }
         if self.report.alert.is_open() {
             return self.alert_answers().find(path);
         }
@@ -3874,24 +3893,48 @@ impl AuthLike for SessionHost {
         assert_eq!((control.path, control.role), (id("control"), Role::Button));
         assert_eq!(control.label.as_deref(), stuck.waiting_label().to_str().ok());
 
-        let failed = failed_with(auth::owner::IncidentState::NotNow);
-        let mut s = LoginScreen::new(EntryId(0), failed.read());
-        step_ev_with(&mut s, &tick_ev(16), &failed, InstanceId(0), &m);
-        let cx = cx_with(&m, &failed);
-        namespaces.push(conform::<SessionHost, _>(&s, &cx));
-        assert_eq!(find(&s, "control", &cx), Some(CONTROL));
-        assert_eq!(find(&s, "details", &cx), Some(DETAILS));
-        assert_eq!(find(&s, "alert.send", &cx), None, "the alert is closed");
-        let control = Focusable::<SessionHost>::a11y(&s, &CONTROL, &cx).unwrap();
-        assert_eq!(control.label.as_deref(), plx_platform::i18n::msg::browse_action_retry_c().to_str().ok());
+        #[cfg(not(feature = "finnative"))]
+        {
+            let failed = failed_with(auth::owner::IncidentState::NotNow);
+            let mut s = LoginScreen::new(EntryId(0), failed.read());
+            step_ev_with(&mut s, &tick_ev(16), &failed, InstanceId(0), &m);
+            let cx = cx_with(&m, &failed);
+            namespaces.push(conform::<SessionHost, _>(&s, &cx));
+            assert_eq!(find(&s, "control", &cx), Some(CONTROL));
+            assert_eq!(find(&s, "details", &cx), Some(DETAILS));
+            assert_eq!(find(&s, "alert.send", &cx), None, "the alert is closed");
+            let control = Focusable::<SessionHost>::a11y(&s, &CONTROL, &cx).unwrap();
+            assert_eq!(control.label.as_deref(), plx_platform::i18n::msg::browse_action_retry_c().to_str().ok());
 
-        step_ev_with(&mut s, &ScreenEvent::Activate(DETAILS), &failed, InstanceId(0), &m);
-        let cx = cx_with(&m, &failed);
-        namespaces.push(conform::<SessionHost, _>(&s, &cx));
-        assert_eq!(find(&s, "alert.cancel", &cx), Some(ALERT_CANCEL));
-        assert_eq!(find(&s, "alert.send", &cx), Some(ALERT_SEND));
-        assert_eq!(find(&s, "control", &cx), None, "the card traps everything under it");
-        assert_eq!(find(&s, "details", &cx), None);
+            step_ev_with(&mut s, &ScreenEvent::Activate(DETAILS), &failed, InstanceId(0), &m);
+            let cx = cx_with(&m, &failed);
+            namespaces.push(conform::<SessionHost, _>(&s, &cx));
+            assert_eq!(find(&s, "alert.cancel", &cx), Some(ALERT_CANCEL));
+            assert_eq!(find(&s, "alert.send", &cx), Some(ALERT_SEND));
+            assert_eq!(find(&s, "control", &cx), None, "the card traps everything under it");
+            assert_eq!(find(&s, "details", &cx), None);
+        }
+        // FinNative: a failure offers *Try again* and *Manual sign-in*, no report card; the form
+        // that *Manual sign-in* opens names its fields and buttons.
+        #[cfg(feature = "finnative")]
+        {
+            let failed = failed_with(auth::owner::IncidentState::NotNow);
+            let mut s = LoginScreen::new(EntryId(0), failed.read());
+            step_ev_with(&mut s, &tick_ev(16), &failed, InstanceId(0), &m);
+            let cx = cx_with(&m, &failed);
+            namespaces.push(conform::<SessionHost, _>(&s, &cx));
+            assert_eq!(find(&s, "control", &cx), Some(CONTROL));
+            assert_eq!(find(&s, "manual", &cx), Some(MANUAL));
+            assert_eq!(find(&s, "details", &cx), None);
+
+            step_ev_with(&mut s, &ScreenEvent::Activate(MANUAL), &failed, InstanceId(0), &m);
+            let cx = cx_with(&m, &failed);
+            namespaces.push(conform::<SessionHost, _>(&s, &cx));
+            assert_eq!(find(&s, "form.password", &cx), Some(finnative::form::PASSWORD));
+            assert_eq!(find(&s, "form.quick_connect", &cx), Some(finnative::form::QUICK_CONNECT));
+            assert_eq!(find(&s, "manual", &cx), None, "the form is the only group");
+            assert_eq!(find(&s, "control", &cx), None);
+        }
         namespaces
     }
 
@@ -4167,6 +4210,7 @@ impl AuthLike for SessionHost {
     /// *Connect*, which allows an insecure server and is persisted, so `alert.send` must not stand
     /// for it: while the question is up the ids are `alert.not_now` / `alert.connect`, and
     /// `alert.cancel` / `alert.send` resolve only on the report's own sheets.
+    #[cfg(not(feature = "finnative"))]
     #[test]
     fn the_plaintext_question_names_not_now_and_connect_and_never_send() {
         use plx_ui::a11y::conform;

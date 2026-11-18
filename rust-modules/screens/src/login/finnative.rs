@@ -14,7 +14,52 @@ pub(super) const MANUAL: u32 = 5;
 /// The manual sign-in form's fields and buttons, the only group while it is open.
 pub(super) const FORM_GROUP: GroupId = GroupId(2);
 
+/// The open form's ids (`form.<word>`), in [`form::ELEMS`] order, with each element's role and the
+/// label it draws.
+const FORM_IDS: [(u32, &str, Role, fn() -> &'static CStr); 5] = [
+    (form::SERVER, "server", Role::Field, plx_platform::i18n::msg::browse_jf_server_c),
+    (form::USERNAME, "username", Role::Field, plx_platform::i18n::msg::browse_jf_username_c),
+    (form::PASSWORD, "password", Role::Field, plx_platform::i18n::msg::browse_jf_password_c),
+    (form::SIGN_IN, "sign_in", Role::Button, plx_platform::i18n::msg::browse_action_sign_in_c),
+    (form::QUICK_CONNECT, "quick_connect", Role::Button, plx_platform::i18n::msg::browse_jf_quick_connect_c),
+];
+
 impl LoginScreen {
+    /// FinNative's ids: `manual` beside the read-out's primary, and `form.<word>` for the open
+    /// form's fields and buttons. `None` for any other element, which the read-out names.
+    pub(super) fn finnative_a11y(&self, key: u32) -> Option<A11y<'static>> {
+        if self.form.is_some() {
+            let &(_, word, role, label) = FORM_IDS.iter().find(|(e, ..)| *e == key)?;
+            let a = A11y::new(A11yPath::new().name("form").name(word), role);
+            return Some(match label().to_str() {
+                Ok(text) => a.with_label(text),
+                Err(_) => a,
+            });
+        }
+        (key == MANUAL && self.manual_offered() && !self.report.alert.is_open()).then(|| {
+            let a = A11y::new(A11yPath::new().name("manual"), Role::Button);
+            match plx_platform::i18n::msg::browse_jf_manual_c().to_str() {
+                Ok(text) => a.with_label(text),
+                Err(_) => a,
+            }
+        })
+    }
+
+    /// The inverse of [`finnative_a11y`](Self::finnative_a11y).
+    pub(super) fn finnative_a11y_find(&self, path: &A11yPath) -> Option<u32> {
+        let mut segs = path.segs();
+        match (segs.next(), segs.next(), segs.next()) {
+            (Some(Seg::Name("form")), Some(Seg::Name(word)), None) if self.form.is_some() => {
+                FORM_IDS.iter().find(|(_, w, ..)| *w == word).map(|(e, ..)| *e)
+            }
+            (Some(Seg::Name("manual")), None, _) if self.form.is_none() && self.manual_offered() && !self.report.alert.is_open() =>
+            {
+                Some(MANUAL)
+            },
+            _ => None,
+        }
+    }
+
     /// Whether the read-out offers *Manual sign-in* — on the QR screen, and beside a failure's
     /// *Try again* (most of FinNative's failures are a server the network did not answer with,
     /// which the form is the way past).

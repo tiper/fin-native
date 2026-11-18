@@ -295,6 +295,8 @@ impl ItemRow {
             ItemRow::WatchlistAdd => "watchlist_add",
             ItemRow::PlayVersion => "play_version",
             ItemRow::Version(_) => "version",
+            ItemRow::Favorite => "favorite",
+            ItemRow::Unfavorite => "unfavorite",
         }
     }
 }

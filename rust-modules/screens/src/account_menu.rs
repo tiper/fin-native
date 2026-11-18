@@ -92,6 +92,7 @@ impl FormId for Action {
             Action::SignOut => "sign_out",
             Action::Settings => "settings",
             Action::SendDiagnostics => "send_diagnostics",
+            Action::AddUser => "add_user",
         })
     }
 }

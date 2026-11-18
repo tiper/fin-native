@@ -185,7 +185,7 @@ impl Form {
 
     pub(in crate::login) fn draw(&self, p: Painter, focus: Option<u32>, press_scale: f32, measure: &dyn Measure) {
         let layout = RouteLayout::screen();
-        layout.draw_narrative(p, None, msg::browse_jf_manual(), msg::browse_jf_form_copy(), theme::size::LABEL, measure);
+        layout.draw_narrative(p, None, msg::browse_jf_manual(), msg::browse_jf_form_copy(), measure);
         let fields: [(u32, &CStr, bool); 3] = [
             (SERVER, msg::browse_jf_server_c(), false),
             (USERNAME, msg::browse_jf_username_c(), false),

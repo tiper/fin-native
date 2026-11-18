@@ -386,6 +386,7 @@ impl FormId for RowId {
         Some(match self {
             Self::Field(PickerKind::Quality) => "quality",
             Self::Field(PickerKind::DirectPlay) => "direct_play",
+            Self::Field(PickerKind::AudioConversion) => "audio_conversion",
             Self::Field(PickerKind::SubtitleSize) => "subtitle_size",
             Self::Field(PickerKind::SubtitlePosition) => "subtitle_position",
             Self::Field(PickerKind::SubtitleColor) => "subtitle_color",
