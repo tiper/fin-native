@@ -248,8 +248,13 @@ impl<H: Host> Navigation<H> {
     /// routing performed here cannot drift.
     pub fn request(&mut self, op: NavOp<H::Arg>, ret: ReturnState<H::Elem, H::Memory>) -> Vec<Life<H>> {
         if self.moves_page(&op) {
+            let page = self.top_page().map(|e| e.id);
             let ret = if let Some(InputOwner::Entry(owner)) = self.modals.input_owner() {
                 if let Some(e) = self.modals.entry_mut(owner) { e.ret = ret; }
+                self.top_page().map(|e| e.ret.clone()).unwrap_or_default()
+            } else if ret.focus.is_some_and(|f| Some(f.entry) != page) {
+                // Captured on a surface that has closed since (a menu's pick parks its own
+                // `Dismiss` ahead of the page op it asks for): the page keeps its own spot.
                 self.top_page().map(|e| e.ret.clone()).unwrap_or_default()
             } else { ret };
             self.tabs.stack.request(op, ret);
