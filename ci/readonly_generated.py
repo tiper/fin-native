@@ -13,7 +13,7 @@ import re
 from readonly_dependencies import _local_sha, _sha, _json, _manifest_paths, _configs, _workspace_hashes, WORKSPACE_HASHING
 
 CERTIFICATE_PATH = Path(__file__).with_name('proofs') / 'platform-generated-enums.json'
-CERTIFICATE_SHA256 = '9ed971ae4823dc55a5e4b6455db8a57e63590fef0e4ee96c6252ffb4a021a46f'
+CERTIFICATE_SHA256 = '3f679033016e4d0cb88215069c583b0fb957e86e3cafb40b392c98738a1ce831'
 SOURCES = ['platform/Cargo.toml', 'platform/src/lib.rs', 'platform/src/i18n/mod.rs',
            'platform/build.rs', 'platform/build_support/catalog.rs', 'build_support/install_identities.rs',
            'machine/src/lib.rs', 'machine/src/machine.rs']
@@ -26,7 +26,8 @@ MACHINE_SOURCES = ['571415d64a9885248f852b402153feedd4660acbe03606e4796c59659726
                    'd08b44dbff241962286eb7e1f85897073ba9f2f712a2ba935837f901635369a8',
                    '9b1ffb66c7ba2eb9fdffcb4bcbf0a29cda87a003cce69b16c73567c8bc0a65b0',
                    'b2794fd0febbbd98febfb45e12fedadcbb58900b02674af7f665bd15adea458d',
-                   'ff378a339f0b4934a4934ab25aa4965a51a27f38d053fe19c1abb382b690ee45']
+                   'ff378a339f0b4934a4934ab25aa4965a51a27f38d053fe19c1abb382b690ee45',
+                   '1fafb56dcc9f423d7c00fd989a3f11bd21022d64d62d8f71f70e3eb97f6b4975']
 MACHINE_LIB_SOURCES = ['105afdbb05fb762e6752cef260b6d928b1d828993350aaa71651f96cee0c3188',
                        'c35d39ae620b5607e7035222ab1023799adaf091d6a4f737a847dd70b26c1b36']
 
@@ -39,7 +40,8 @@ I18N_SOURCES = ['40a13d07a43c772b10587e510a69502684abfa1f582ce355b22fd935a8c46f4
 def source_hashes(root):
     sources = {p: _local_sha((root / p).read_bytes()) for p in SOURCES}
     # Reviewed variants add navigation/press facts, Canon loops, owned commands and
-    # effect/presentation contracts outside the generated declarations. The doc-only
+    # effect/presentation contracts outside the generated declarations; the accessibility-id
+    # input (By::Script, InputKind::ById and its tag-9 write_with arm, OkTap) is one more. The doc-only
     # newtype producer, ten u32 invocations and canonical include namespaces are unchanged.
     if sources['machine/src/machine.rs'] not in MACHINE_SOURCES: raise ValueError('unreviewed machine source')
     sources['machine/src/machine.rs'] = MACHINE_SOURCES
