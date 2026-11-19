@@ -1101,8 +1101,7 @@ unsafe fn ingress_token(app: &mut App, fr: &mut Frame, token: &str) -> bool {
         if !drained && super::bridge::text_owner(&app.pages) { drain_sdl(app, fr); }
         if super::bridge::text_owner(&app.pages) {
             let panel = super::bridge::text_panel_edge(&app.pages, crate::textinput::available());
-            ingest_text(app, &text.replace('+', " "), panel, plx_machine::machine::Source::RemoteFifo,
-                super::bridge::text_entry(&app.pages));
+            ingest_text(app, &text.replace('+', " "), panel, plx_machine::machine::Source::RemoteFifo);
             return true;
         }
     }
@@ -1156,11 +1155,10 @@ pub(crate) fn pin_headless_hud(app: &mut App, now: u32, tab: Option<i32>) {
 /// Typed text, delivered to the top page. A [`TextEntry::Secret`](plx_ui::screen::TextEntry::Secret)
 /// field's text is never written to the input recording: the recording is refused instead, the
 /// way an effect carrying account credentials is, so no capture ever holds a password.
-fn ingest_text(app: &mut App, text: &str, panel: bool, source: plx_machine::machine::Source,
-    entry: plx_ui::screen::TextEntry) {
+fn ingest_text(app: &mut App, text: &str, panel: bool, source: plx_machine::machine::Source) {
     if text.is_empty() { return; }
     let at = plx_machine::machine::Tick { ms: clock::now(), dt_us: 0 };
-    if entry == plx_ui::screen::TextEntry::Secret {
+    if super::bridge::text_entry(&app.pages) == plx_ui::screen::TextEntry::Secret {
         app.rec.refuse("secret text input");
     } else {
         app.rec.input(super::recorder::enc_text(text, panel, at, source));
@@ -1945,7 +1943,7 @@ unsafe fn ingest_sdl_event_with_window(app: &mut App, fr: &mut Frame,
         if super::bridge::text_owner(&app.pages) {
             let text = crate::textinput::decode(&app.ev);
             let panel = super::bridge::text_panel_edge(&app.pages, crate::textinput::available());
-            ingest_text(app, &text, panel, plx_machine::machine::Source::Sdl, super::bridge::text_entry(&app.pages));
+            ingest_text(app, &text, panel, plx_machine::machine::Source::Sdl);
         } else {
             crate::textinput::on_event(&app.ev);
         }
