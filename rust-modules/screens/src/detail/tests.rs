@@ -5917,6 +5917,8 @@ fn the_hero_controls_that_play_or_write_have_a_subject_and_the_rest_have_none() 
         (hero::HeroCtl::MarkWatched, true),
         (hero::HeroCtl::MarkUnwatched, true),
         (hero::HeroCtl::Watchlist, true),
+        (hero::HeroCtl::Favorite, true),
+        (hero::HeroCtl::Unfavorite, true),
         (hero::HeroCtl::GoToShow, false),
         (hero::HeroCtl::Alt, false),
         (hero::HeroCtl::Version, false),

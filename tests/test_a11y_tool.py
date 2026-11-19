@@ -449,14 +449,15 @@ class SubjectBearing(unittest.TestCase):
         for glob in ("*.card.*", "detail.episodes.*", "detail.season.*", "filmography.row.*", "catalog.primary",
                      "home.hero.play", "home.hero.info", "home.hero.watchlist",
                      "detail.hero.play", "detail.hero.restart", "detail.hero.trailer", "detail.hero.mark_watched",
-                     "detail.hero.mark_unwatched", "detail.hero.watchlist", "itemmenu.*", "versions.row.*",
+                     "detail.hero.mark_unwatched", "detail.hero.watchlist", "detail.hero.favorite", "detail.hero.unfavorite",
+                     "itemmenu.*", "versions.row.*",
                      "player.control.previous", "player.control.next", "player.control.next_episode",
                      "player.control.from_beginning", "player.control.skip", "player.control.[0-9]*",
                      "player.section.*", "player.failure.try_again", "player.failure.play_automatically",
                      "more.fold.previous", "more.fold.next", "more.fold.from_beginning", "more.rung.*", "menu.audio.*", "menu.sub.*", "menu.off",
                      "menu.forced", "menu.hit.*"):
             self.assertIn(glob, a11y.SUBJECT_BEARING)
-        self.assertEqual(len(a11y.SUBJECT_BEARING), 34)
+        self.assertEqual(len(a11y.SUBJECT_BEARING), 36)  # FinNative: + the favourite toggle's two faces
         self.assertNotIn("menu.*", a11y.SUBJECT_BEARING)
         self.assertNotIn("home.hero.*", a11y.SUBJECT_BEARING)
         self.assertNotIn("detail.hero.*", a11y.SUBJECT_BEARING)
@@ -566,7 +567,7 @@ class SubjectBearing(unittest.TestCase):
         exactly the controls with a subject: a control added to one side and not the other fails here."""
         hero = (ROOT / "rust-modules" / "screens" / "src" / "detail" / "hero.rs").read_text()
         names = dict(re.findall(r'HeroCtl::(\w+) => "(\w+)",', hero.split("pub const fn a11y_name", 1)[1].split("}", 1)[0]))
-        self.assertEqual(len(names), 10, names)
+        self.assertEqual(len(names), 12, names)  # FinNative: + the favourite toggle's two faces
         tests = (ROOT / "rust-modules" / "screens" / "src" / "detail" / "tests.rs").read_text()
         table = tests.split("fn the_hero_controls_that_play_or_write_have_a_subject_and_the_rest_have_none", 1)[1].split("\n}\n", 1)[0]
         acts = dict(re.findall(r"\(hero::HeroCtl::(\w+), (true|false)\)", table))
