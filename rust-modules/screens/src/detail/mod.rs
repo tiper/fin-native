@@ -4855,7 +4855,8 @@ impl DetailScreen {
 /// never to press OK on a title whose ratingKey you have not read). It is what the activation itself
 /// reads, not the route's key: Play and Restart play [`Detail::play_episode`] on a show page, the loaded
 /// card (`selected`) or the page's item on any other; the watched toggle writes the on-deck episode of a
-/// show that has been started, else the page's item; the bookmark and the trailer act on the page's item.
+/// show that has been started, else the page's item; the bookmark, the trailer and the favourite act on the
+/// page's item.
 /// `None` for the controls that only navigate or open a menu or a panel (Go to Show, Also available, Play
 /// Version, More): the control itself acts on no title. The panel or menu one of them opens has rows of its
 /// own, each guarded by its own subject: a library item's menu (`itemmenu.*`) carries its title's key, and the
@@ -4874,7 +4875,7 @@ pub(crate) fn hero_control_subject<'a>(
             selected.map_or(d.rk.as_str(), |m| m.rk.as_str())
         }),
         HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => Some(hero::hero_episode(d).map_or(d.rk.as_str(), |ep| ep.rk.as_str())),
-        HeroCtl::Watchlist | HeroCtl::Trailer => Some(d.rk.as_str()),
+        HeroCtl::Watchlist | HeroCtl::Trailer | HeroCtl::Favorite | HeroCtl::Unfavorite => Some(d.rk.as_str()),
         HeroCtl::GoToShow | HeroCtl::Alt | HeroCtl::Version | HeroCtl::More => None,
     }
 }
