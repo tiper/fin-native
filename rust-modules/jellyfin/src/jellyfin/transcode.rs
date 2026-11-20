@@ -152,7 +152,7 @@ pub fn plan(mut m: Metadata, spec: &TranscodeSpec<'_>, dev: &Device<'_>) -> Opti
         _ => VIDEO_TARGET.to_string(),
     };
     let audio_codecs = match &audio {
-        Some(a) if copy_audio && a.codec != dev.audio_target => format!("{},{}", plx_platform::devcaps::audio_codec_id(&a.codec), dev.audio_target),
+        Some(a) if copy_audio && a.codec != dev.audio_target => format!("{},{}", plx_os::devcaps::audio_codec_id(&a.codec), dev.audio_target),
         _ => dev.audio_target.to_string(),
     };
     let audio_index = audio.as_ref().map(|a| a.index);
@@ -250,9 +250,9 @@ mod tests {
     }
 
     fn spec(remux: bool, ceiling: Option<Ceiling>) -> TranscodeSpec<'static> {
-        static ASSUMED: std::sync::OnceLock<plx_platform::devcaps::Caps> = std::sync::OnceLock::new();
+        static ASSUMED: std::sync::OnceLock<plx_os::devcaps::Caps> = std::sync::OnceLock::new();
         TranscodeSpec {
-            caps: ASSUMED.get_or_init(plx_platform::devcaps::Caps::assumed),
+            caps: ASSUMED.get_or_init(plx_os::devcaps::Caps::assumed),
             rating_key: "abc",
             session: "s1",
             encoder_session: "s1",

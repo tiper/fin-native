@@ -37,16 +37,16 @@ pub(crate) fn reporting_off_for_test(off: bool) {
 pub(super) fn policy_and_delete_form() -> Form<RowId, Act, SettingsPage> {
     Form::new()
             .section(
-                FormSection::new(plx_platform::i18n::msg::settings_consent_information())
+                FormSection::new(plx_os::i18n::msg::settings_consent_information())
                     .item(RowId::Policy, RowKind::Nav(SettingsPage::Preview(
                         PreviewKind::ALL.iter().position(|k| *k == PreviewKind::Policy).unwrap_or(0) as u8,
                     )), Act::Open,
-                        Row::new(plx_platform::i18n::msg::settings_consent_policy()).detail(plx_platform::i18n::msg::settings_consent_preview_policy()).chevron(true)),
+                        Row::new(plx_os::i18n::msg::settings_consent_policy()).detail(plx_os::i18n::msg::settings_consent_preview_policy()).chevron(true)),
             )
             .section(
-                FormSection::new(plx_platform::i18n::msg::settings_consent_on_tv()).item(
+                FormSection::new(plx_os::i18n::msg::settings_consent_on_tv()).item(
                     RowId::Delete, RowKind::Button, Act::Delete,
-                    Row::new(plx_platform::i18n::msg::settings_consent_delete()).detail(plx_platform::i18n::msg::settings_consent_delete_detail()).chevron(true),
+                    Row::new(plx_os::i18n::msg::settings_consent_delete()).detail(plx_os::i18n::msg::settings_consent_delete_detail()).chevron(true),
                 ),
             )
 }

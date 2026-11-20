@@ -298,7 +298,7 @@ impl JfClient {
         }
         let person: BaseItemDto = serde_json::from_slice(&person.body).ok()?;
         let Some(tmdb_id) = person.provider_ids.get("Tmdb").filter(|id| !id.is_empty()) else { return Some(None) };
-        let url = tmdb::combined_credits_url(tmdb_id, key, plx_platform::i18n::current().language().tag());
+        let url = tmdb::combined_credits_url(tmdb_id, key, plx_os::i18n::current().language().tag());
         let answer = self.transport.send(&url, Verb::Get, &["Accept: application/json".to_string()], None)?;
         match answer.status {
             200 => serde_json::from_slice(&answer.body).ok().map(Some),

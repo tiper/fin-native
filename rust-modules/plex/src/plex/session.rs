@@ -46,6 +46,11 @@
 //!   of frame time later (per generation), rather than latching it forever.
 //! - [`clear`] (sign-out) drops the cached `Arc` immediately — it holds the very account/server
 //!   tokens sign-out means to get rid of.
+//! - **Except on a platform with no credential store** (`StoreMode::MemoryOnly` in
+//!   `plx_os::tv::secure`, see `session/memory_only.rs`): there the cache is the only authority,
+//!   writers read it and install into it, a write is `Ephemeral` rather than `Durable`, no
+//!   credential store is read or committed, and the install's own file (client id, language,
+//!   Interface resolution) is all that survives the process.
 //! - Other domains of the same record (consent) are not in this cache and their writes never
 //!   touch it. `async_persistence`'s own `CACHE`/`LOCKED_STATE` are a separate, currently-unwired
 //!   engine (see its doc) — when it is wired, its coordinator must install into and drop THIS
@@ -532,8 +537,8 @@ pub struct Session {
     /// Install-wide UI language, applied on the next process launch. Absent means System, and
     /// System is not written, so a session that never chose a language serializes exactly as it
     /// did before localization — committed replay initials and the owner digest included.
-    #[serde(default, skip_serializing_if = "plx_platform::i18n::Preference::is_system")]
-    pub language: plx_platform::i18n::Preference,
+    #[serde(default, skip_serializing_if = "plx_os::i18n::Preference::is_system")]
+    pub language: plx_os::i18n::Preference,
     /// Stable `X-Plex-Client-Identifier` — generated once, reused forever (plex.tv binds the pin
     /// and the authorized-device entry to it).
     #[serde(default)]
@@ -657,7 +662,7 @@ struct CanonicalSessionAuth {
 #[derive(Serialize, Deserialize)]
 struct CanonicalSessionPreferences {
     #[serde(default)]
-    language: plx_platform::i18n::Preference,
+    language: plx_os::i18n::Preference,
     /// Every flattened preference key (playback and display settings, the A5 rows and the two memory-door
     /// lists), flattened ahead of `extensions` so a flattened struct takes its keys first and
     /// `extensions` still sees only unknown ones.
@@ -680,7 +685,7 @@ struct CanonicalSessionPreferences {
 impl Default for CanonicalSessionPreferences {
     fn default() -> Self {
         Self {
-            language: plx_platform::i18n::Preference::System,
+            language: plx_os::i18n::Preference::System,
             prefs: Preferences { trailer_autoplay: true, ..Preferences::default() },
             extensions: BTreeMap::new(),
         }
@@ -695,7 +700,7 @@ impl Default for CanonicalSessionPreferences {
 #[allow(dead_code)] // Connected by the Stage B Session adapter.
 pub fn split_canonical(
     session: &Session,
-) -> Result<(plx_platform::storage::state::PublicPayload, String), ()> {
+) -> Result<(plx_os::storage::state::PublicPayload, String), ()> {
     // `profiles` in a v1 extension is opaque, never an active credential cache. Refuse an
     // ambiguous v2 write; only the typed field is permitted to carry active credentials.
     if session.extensions.0.contains_key("profiles") { return Err(()); }
@@ -714,7 +719,7 @@ pub fn split_canonical(
     Ok((split_public(session)?, auth))
 }
 
-fn split_public(session: &Session) -> Result<plx_platform::storage::state::PublicPayload, ()> {
+fn split_public(session: &Session) -> Result<plx_os::storage::state::PublicPayload, ()> {
     let mut preferences = serde_json::to_value(CanonicalSessionPreferences {
         language: session.language,
         prefs: session.prefs.clone(),
@@ -732,7 +737,7 @@ fn split_public(session: &Session) -> Result<plx_platform::storage::state::Publi
     }
     let pins = serde_json::to_value(&session.home_pins).map_err(|_| ())?;
     let recents = serde_json::to_value(&session.recent_searches).map_err(|_| ())?;
-    Ok(plx_platform::storage::state::PublicPayload {
+    Ok(plx_os::storage::state::PublicPayload {
             preferences,
             client_id: (!session.client_id.is_empty()).then(|| session.client_id.clone()),
             // Profile/server bootstrap metadata is personal and only useful together with its
@@ -754,7 +759,7 @@ fn split_public(session: &Session) -> Result<plx_platform::storage::state::Publi
 /// session would turn corruption into an authenticated state.
 #[allow(dead_code)] // Connected by the Stage B Session adapter.
 pub fn join_canonical(
-    public: &plx_platform::storage::state::PublicPayload,
+    public: &plx_os::storage::state::PublicPayload,
     protected: &str,
 ) -> Result<Session, ()> {
     let auth: CanonicalSessionAuth = serde_json::from_str(protected).map_err(|_| ())?;
@@ -791,7 +796,7 @@ pub fn join_canonical(
 }
 
 /// Public snapshot for a locked protected bundle. It deliberately contains no offline credentials.
-fn public_session(public: &plx_platform::storage::state::PublicPayload) -> Session {
+fn public_session(public: &plx_os::storage::state::PublicPayload) -> Session {
     let preferences = serde_json::from_value::<CanonicalSessionPreferences>(
         public.preferences.clone(),
     )
@@ -839,7 +844,7 @@ fn protected_fields_equal(left: &Session, right: &Session) -> bool {
     matches!((protected_fields(left), protected_fields(right)), (Ok(left), Ok(right)) if left == right)
 }
 fn protected_matches(session: &Session, protected: &str) -> bool {
-    join_canonical(&plx_platform::storage::state::PublicPayload::default(), protected)
+    join_canonical(&plx_os::storage::state::PublicPayload::default(), protected)
         .is_ok_and(|previous| protected_fields_equal(&previous, session))
 }
 
@@ -930,7 +935,7 @@ impl PlaybackQuality {
     /// Display text in the UI language with its regional digits; a log line names the rung by
     /// `{:?}` instead, so the log does not depend on the viewer's language.
     pub fn label(self) -> String {
-        use plx_platform::i18n::{current, msg};
+        use plx_os::i18n::{current, msg};
         let (lines, kbps): (i64, i64) = match self {
             PlaybackQuality::Auto => return msg::settings_playback_auto().to_owned(),
             PlaybackQuality::Original => return msg::widgets_quality_original().to_owned(),
@@ -1539,7 +1544,7 @@ impl HoldHintTaught {
 /// on their own panel. Install-wide (not per profile) because the window is created once, before
 /// anyone is seated. Absence, and any spelling this build does not know, is `Auto`. The setting is
 /// offered, and the stored value honoured at boot, on webOS 1-3 only
-/// (`plx_platform::tv::device::offers_ui_resolution`); elsewhere the stored value is kept but unused.
+/// (`plx_os::tv::device::offers_ui_resolution`); elsewhere the stored value is kept but unused.
 #[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiResolution {
     #[default]
@@ -2120,22 +2125,22 @@ impl NativeAudioRefusal {
     /// lesson; a named refusal keeps that behaviour. The `Facet::Video` arm returns `None`: video
     /// rows never persist (D6(c): a video facet never proves), and this row has no video fields to
     /// hold one.
-    pub fn of_facet(facet: &plx_platform::devcaps::Facet, firmware: &str, build: &str, proofs: Option<u32>) -> Option<Self> {
+    pub fn of_facet(facet: &plx_os::devcaps::Facet, firmware: &str, build: &str, proofs: Option<u32>) -> Option<Self> {
         match facet {
-            plx_platform::devcaps::Facet::Audio { codec, channels } => {
+            plx_os::devcaps::Facet::Audio { codec, channels } => {
                 if *channels == 0 && proofs.is_some() {
                     return None;
                 }
                 Some(NativeAudioRefusal {
                     firmware: firmware.to_owned(),
-                    codec: plx_platform::devcaps::audio_codec_id(codec).into_owned(),
+                    codec: plx_os::devcaps::audio_codec_id(codec).into_owned(),
                     channels: *channels,
                     build: build.to_owned(),
                     proofs,
                     extensions: Default::default(),
                 })
             }
-            plx_platform::devcaps::Facet::Video { .. } => None,
+            plx_os::devcaps::Facet::Video { .. } => None,
         }
     }
 
@@ -2150,8 +2155,8 @@ impl NativeAudioRefusal {
         self.build == other.build && self.codec == other.codec && self.channels == other.channels
     }
 
-    fn to_devcaps(&self) -> plx_platform::devcaps::Refusal {
-        plx_platform::devcaps::Refusal { codec: self.codec.clone(), channels: self.channels, build: self.build.clone() }
+    fn to_devcaps(&self) -> plx_os::devcaps::Refusal {
+        plx_os::devcaps::Refusal { codec: self.codec.clone(), channels: self.channels, build: self.build.clone() }
     }
 }
 
@@ -3302,14 +3307,14 @@ pub fn learn_hold_hint_taught(taught: HoldHintTaught) -> bool {
 /// once. See [`record_refusal_proof`] for the counted kind. Returns whether a write was queued (a set
 /// that cannot learn and an unstorable facet return false); what the write changes is decided when it
 /// lands, against the record then current.
-pub fn record_named_refusal(facet: &plx_platform::devcaps::Facet) -> bool {
+pub fn record_named_refusal(facet: &plx_os::devcaps::Facet) -> bool {
     record(facet, None)
 }
 
 /// **A conversion rescued a play and changed only the refused facet** (S2a's facet-clean proof):
 /// count one proof for `(this build, codec, channels)`; the row applies from
 /// [`LEARNED_REFUSAL_PROOFS`]. Returns whether a write was queued, as [`record_named_refusal`] does.
-pub fn record_refusal_proof(facet: &plx_platform::devcaps::Facet) -> bool {
+pub fn record_refusal_proof(facet: &plx_os::devcaps::Facet) -> bool {
     record(facet, Some(1))
 }
 
@@ -3323,8 +3328,8 @@ pub fn record_refusal_proof(facet: &plx_platform::devcaps::Facet) -> bool {
 /// is the store's property for every preference, not this one's: a write that does not land
 /// (unwritable storage) leaves the record as it was, and the next play loads the combination, is
 /// refused once more, and the ladder converts it, one refused Load slower.
-fn record(facet: &plx_platform::devcaps::Facet, proofs: Option<u32>) -> bool {
-    let Some((firmware, build)) = plx_platform::devcaps::learning_firmware() else {
+fn record(facet: &plx_os::devcaps::Facet, proofs: Option<u32>) -> bool {
+    let Some((firmware, build)) = plx_os::devcaps::learning_firmware() else {
         return false;
     };
     let Some(row) = NativeAudioRefusal::of_facet(facet, &firmware, &build, proofs) else {
@@ -3349,7 +3354,7 @@ impl Session {
     /// The stored native-audio rows in force, as `devcaps` takes them (a counted row below the
     /// threshold is stored and not applied). PURE: the play-start edge reads it from `peek()` and
     /// passes it to `devcaps::start_caps`, the one place a stored row narrows a capability value.
-    pub fn applied_refusals(&self) -> Vec<plx_platform::devcaps::Refusal> {
+    pub fn applied_refusals(&self) -> Vec<plx_os::devcaps::Refusal> {
         self.prefs.native_audio_refused.iter().filter(|r| r.applies()).map(NativeAudioRefusal::to_devcaps).collect()
     }
 }
@@ -3532,7 +3537,7 @@ static VISIBLE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 pub fn install_transient_for_test(locked: bool) {
     plx_base::testlock::assert_held("session read fixture");
     let _io = io();
-    install_locked(std::sync::Arc::new(if locked { ReadState::Locked { kept: install_preferences::Retained { language: plx_platform::i18n::saved_preference(), ..Default::default() } } } else { ReadState::Blocked }));
+    install_locked(std::sync::Arc::new(if locked { ReadState::Locked { kept: install_preferences::Retained { language: plx_os::i18n::saved_preference(), ..Default::default() } } } else { ReadState::Blocked }));
 }
 
 pub fn visible_generation() -> u64 {
@@ -3558,14 +3563,14 @@ pub fn screen_input_revision() -> (u64, u64) {
 #[cfg(any(test, feature = "test-support"))]
 pub fn install_cleared_for_test(ui_resolution: UiResolution) {
     plx_base::testlock::assert_held("cleared screen input fixture");
-    let kept = Retained { language: plx_platform::i18n::Preference::System, ui_resolution };
+    let kept = Retained { language: plx_os::i18n::Preference::System, ui_resolution };
     set_cache_locked(Cached::Settled(std::sync::Arc::new(ReadState::Cleared { kept })));
 }
 
 #[cfg(any(test, feature = "test-support"))]
 pub fn install_locked_defaults_for_test(ui_resolution: UiResolution) {
     plx_base::testlock::assert_held("locked screen input fixture");
-    let kept = Retained { language: plx_platform::i18n::Preference::System, ui_resolution };
+    let kept = Retained { language: plx_os::i18n::Preference::System, ui_resolution };
     set_cache_locked(Cached::Transient { state: std::sync::Arc::new(ReadState::Locked { kept }) });
 }
 
@@ -4043,9 +4048,10 @@ const SECURE_FORMAT: &str = "plxnative-secure-session";
 struct SecureEnvelope {
     format: String,
     version: u8,
-    sealed: plx_platform::tv::secure::Sealed,
+    sealed: plx_os::tv::secure::Sealed,
 }
 
+#[derive(Clone)]
 enum ReadState {
     Missing,
     Ready {
@@ -4110,6 +4116,10 @@ fn read_locked(canonical: persistence::CanonicalRead) -> ReadState {
 fn read_live_locked() -> ReadState {
     #[cfg(any(test, feature = "test-support"))]
     READS_FOR_TEST.with(|c| c.set(c.get() + 1));
+    // Above every fixture redirect below: a platform with no credential store reads no store.
+    if memory_only::active() {
+        return memory_only::read_locked();
+    }
     #[cfg(any(test, feature = "test-support"))]
     if TEST_FILE.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
         // A redirected scratch path is an explicit host fixture. It is also deliberately not
@@ -4119,7 +4129,7 @@ fn read_live_locked() -> ReadState {
     }
     match read_canonical_locked() {
         persistence::CanonicalRead::Missing => migrate_missing_fallback_locked(read_legacy_locked()),
-        persistence::CanonicalRead::Blocked(plx_platform::storage::StoreError::HelperUnavailable) => {
+        persistence::CanonicalRead::Blocked(plx_os::storage::StoreError::HelperUnavailable) => {
             match read_legacy_filtered_locked(true) {
                 ReadState::Ready {
                     session, plaintext, ..
@@ -4208,7 +4218,7 @@ fn read_legacy_filtered_locked(fallback_only: bool) -> ReadState {
         }
         if let Ok(envelope) = serde_json::from_slice::<SecureEnvelope>(&bytes) {
             if envelope.format == SECURE_FORMAT && envelope.version == 1 {
-                let Some(plain) = plx_platform::tv::secure::open(&envelope.sealed) else {
+                let Some(plain) = plx_os::tv::secure::open(&envelope.sealed) else {
                     plx_base::eventlog::log("session: secure file is present but its device key is unavailable");
                     return ReadState::Locked { kept: install_preferences::load().unwrap_or_default() };
                 };
@@ -4523,15 +4533,28 @@ pub fn update(edit: impl FnOnce(&Session) -> Option<Session>) -> bool {
 
 /// Blocking persistence seam; Language settings dispatches it on the storage worker.
 /// A next-launch promise requires the same confirmed durability as playback preferences.
-pub fn set_language(language: plx_platform::i18n::Preference) -> bool {
+pub fn set_language(language: plx_os::i18n::Preference) -> bool {
     let saved = update_with_outcome(|current| {
         let mut next = current.clone();
         next.language = language;
         Some(next)
-    }).is_some_and(|write| matches!(write.classify(),
-        async_persistence::CompletionOutcome::Durable(_)));
-    if saved { plx_platform::i18n::set_saved_preference(language); }
+    }).is_some_and(|write| kept_for_next_launch(&write));
+    if saved { plx_os::i18n::set_saved_preference(language); }
     saved
+}
+
+/// Whether `write` keeps its choice for the NEXT launch: a store's confirmed commit, or, on a
+/// platform with no credential store, the install's own file ([`memory_only`]), which is where
+/// the language and the Interface resolution live there. A write held in memory alone does not.
+fn kept_for_next_launch(write: &async_persistence::LiveWrite) -> bool {
+    match write.classify() {
+        async_persistence::CompletionOutcome::Durable(_) => true,
+        async_persistence::CompletionOutcome::Ephemeral => write.install_choices_kept(),
+        async_persistence::CompletionOutcome::Uncertain { .. }
+        | async_persistence::CompletionOutcome::Failed(_)
+        | async_persistence::CompletionOutcome::ProtectionUncertain(_)
+        | async_persistence::CompletionOutcome::Superseded => false,
+    }
 }
 
 /// Blocking persistence seam for the Interface resolution picker, dispatched on the storage
@@ -4543,7 +4566,7 @@ pub fn set_ui_resolution(mode: UiResolution) -> bool {
         (!already).then(|| current.with_ui_resolution(mode))
     });
     // Already the stored choice is a pick that landed; an unreadable or refused record is not.
-    already || write.is_some_and(|write| matches!(write.classify(), async_persistence::CompletionOutcome::Durable(_)))
+    already || write.is_some_and(|write| kept_for_next_launch(&write))
 }
 
 
@@ -4731,23 +4754,27 @@ fn save_locked_with_authority(
     // Before the write, not after: a failed persist still means these names are live in THIS run,
     // and the log wants them redacted either way.
     publish_identities(s);
+    // Above the fixture redirect and the platform selection below: no credential store is written.
+    if memory_only::active() {
+        return memory_only::save_locked(s, authority, cache_generation);
+    }
     #[cfg(any(test, feature = "test-support"))]
     if TEST_FILE.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
         let legacy = save_legacy_locked(s);
         install_or_drop_after_write(s, legacy, authority, cache_generation);
         return async_persistence::LiveWrite::legacy(legacy);
     }
-    plx_platform::storage::wire::failure::clear();
+    plx_os::storage::wire::failure::clear();
     CANDIDATE_ERRNOS.with(|slot| slot.set([None; 8]));
     let protected_before = has_protected_authority();
     let commit = persistence::write_session_timed(s, authority);
     // Uncertain helper replies already own their evidence in CanonicalCommit. Only the older
     // StoreError-only failure variants still need this immediate thread-local snapshot.
     let helper_failure = match &commit {
-        persistence::CanonicalCommit::Failed(plx_platform::storage::StoreError::HelperUnavailable
-            | plx_platform::storage::StoreError::HelperAuthentication | plx_platform::storage::StoreError::HelperProtocol) =>
-            Some(plx_platform::storage::wire::failure::last().unwrap_or_else(||
-                plx_platform::storage::wire::failure::HelperFailure::new(plx_platform::storage::wire::failure::Stage::Unknown, None))),
+        persistence::CanonicalCommit::Failed(plx_os::storage::StoreError::HelperUnavailable
+            | plx_os::storage::StoreError::HelperAuthentication | plx_os::storage::StoreError::HelperProtocol) =>
+            Some(plx_os::storage::wire::failure::last().unwrap_or_else(||
+                plx_os::storage::wire::failure::HelperFailure::new(plx_os::storage::wire::failure::Stage::Unknown, None))),
         _ => None,
     };
     let durable = matches!(commit, persistence::CanonicalCommit::Durable { .. });
@@ -4848,7 +4875,7 @@ fn save_legacy_fallback_locked(
         plx_base::eventlog::log("session: preserving the existing protected record; refusing an unprotected downgrade");
         return None;
     }
-    if let Some(sealed) = plx_platform::tv::secure::seal(&serde_json::to_vec_pretty(s).ok()?) {
+    if let Some(sealed) = plx_os::tv::secure::seal(&serde_json::to_vec_pretty(s).ok()?) {
         let envelope = SecureEnvelope {
             format: SECURE_FORMAT.to_string(),
             version: 1,
@@ -4932,7 +4959,7 @@ fn save_legacy_locked(s: &Session) -> Option<bool> {
     let Ok(json) = serde_json::to_vec_pretty(s) else {
         return None;
     };
-    if let Some(sealed) = plx_platform::tv::secure::seal(&json) {
+    if let Some(sealed) = plx_os::tv::secure::seal(&json) {
         let envelope = SecureEnvelope {
             format: SECURE_FORMAT.to_string(),
             version: 1,
@@ -4966,7 +4993,7 @@ fn save_legacy_locked(s: &Session) -> Option<bool> {
 fn has_protected_authority() -> bool {
     match read_canonical_locked() {
         persistence::CanonicalRead::Locked { protection, .. } => protection.is_some_and(|outcome| {
-            !matches!(outcome.class, plx_platform::storage::wire::ProtectionClass::Db8AclOnly)
+            !matches!(outcome.class, plx_os::storage::wire::ProtectionClass::Db8AclOnly)
         }),
         _ => false,
     }
@@ -5351,6 +5378,9 @@ pub struct Erasure {
 /// replace them with the defaults after the credentials themselves have already been cleared.
 pub fn clear_for_erase(all_local: bool, retry: Option<Retained>) -> Erasure {
     let _io = io();
+    if memory_only::active() {
+        return memory_only::clear_locked(all_local, retry);
+    }
     let kept = retry.unwrap_or_else(|| Retained::of(&session_from_read(&read_live_locked())));
     let native = cfg!(all(target_os = "linux", target_arch = "arm", not(feature = "hostsim"), not(any(test, feature = "test-support"))));
     // File backends need a credential-free resource before the credential file disappears.
@@ -5465,7 +5495,7 @@ pub fn clear_for_erase(all_local: bool, retry: Option<Retained>) -> Erasure {
         if let Some(bytes) = read_owned_regular(&path) {
             if let Ok(envelope) = serde_json::from_slice::<SecureEnvelope>(&bytes) {
                 if envelope.format == SECURE_FORMAT && envelope.version == 1 {
-                    plx_platform::tv::secure::remove(&envelope.sealed.backend, &envelope.sealed.key);
+                    plx_os::tv::secure::remove(&envelope.sealed.backend, &envelope.sealed.key);
                 }
             }
         }
@@ -5486,7 +5516,7 @@ pub fn clear_for_erase(all_local: bool, retry: Option<Retained>) -> Erasure {
         if !reset { preference_failures.push("stored language preference could not be reset".into()); }
         preference_failures.extend(install_preferences::erase());
         if reset && preference_failures.is_empty() {
-            retained.language = plx_platform::i18n::Preference::System;
+            retained.language = plx_os::i18n::Preference::System;
             // The file backend's retained file is gone whole. Native ClearTenure keeps every other
             // public preference, and its Cleared state accepts the removal of `language` alone.
             if !native { retained.ui_resolution = UiResolution::Auto; }
@@ -5591,11 +5621,11 @@ fn retry_pending_revocation_removals_locked() -> bool {
             // Discard obsolete permission without touching the marker for a newer sign-out.
             true
         } else {
-            match plx_platform::storage::unlink(&marker) {
+            match plx_os::storage::unlink(&marker) {
                 Ok(()) => sync_retired_candidate_parent(&marker),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => sync_retired_candidate_parent(&marker),
                 // The same rule as `retire_session_candidate`: absence proven behind a refusal.
-                Err(error) => match plx_platform::storage::prove_absent_after_refused_unlink(&marker, error) {
+                Err(error) => match plx_os::storage::prove_absent_after_refused_unlink(&marker, error) {
                     Ok(()) => true,
                     Err(error) => {
                         plx_base::eventlog::log(&format!("session: revocation retirement failed errno={}",
@@ -5723,14 +5753,14 @@ fn sync_retired_candidate_parent(path: &std::path::Path) -> bool {
 /// lookup, and a neutralize open (no O_CREAT) answering ENOENT is the same proof. Only a name
 /// that exists, or cannot be looked at, stays a failure for the caller to retry.
 fn retire_session_candidate(path: &std::path::Path) -> bool {
-    let unlink = match plx_platform::storage::unlink(path) {
+    let unlink = match plx_os::storage::unlink(path) {
         Ok(()) => return sync_retired_candidate_parent(path),
         // May be the retry of our own unlink whose parent sync failed, so it syncs too.
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return sync_retired_candidate_parent(path),
         Err(error) => error,
     };
     // A refusal changed nothing on disk, so absence proven behind it has nothing to flush.
-    let Err(unlink) = plx_platform::storage::prove_absent_after_refused_unlink(path, unlink) else { return true };
+    let Err(unlink) = plx_os::storage::prove_absent_after_refused_unlink(path, unlink) else { return true };
     match neutralize_session_candidate(path) {
         Ok(()) => true,
         // Opened without O_CREAT: the name vanished after the lookup above.
@@ -5925,6 +5955,9 @@ mod prefs_characterisation_tests;
 #[allow(dead_code)] // Stage B connects typed owner admission/completions.
 pub mod async_persistence;
 mod install_preferences;
+mod memory_only;
+#[cfg(test)]
+mod memory_only_tests;
 pub use install_preferences::Retained;
 pub mod prefs;
 #[cfg(test)]
@@ -6119,7 +6152,7 @@ mod ui_resolution_tests {
         let (public, protected) = split_canonical(&Session::default()).unwrap();
         let mut public = serde_json::to_value(&public).unwrap();
         public["preferences"]["ui_resolution"] = serde_json::json!("1080p");
-        let public: plx_platform::storage::state::PublicPayload = serde_json::from_value(public).unwrap();
+        let public: plx_os::storage::state::PublicPayload = serde_json::from_value(public).unwrap();
         assert_eq!(join_canonical(&public, &protected).unwrap().ui_resolution(), UiResolution::Auto);
     }
 
@@ -6127,10 +6160,10 @@ mod ui_resolution_tests {
     /// language, in the cached session `peek` serves and in the owned one a writer starts from.
     #[test]
     fn a_signed_out_read_carries_the_resolution_like_the_language() {
-        let kept = Retained { language: plx_platform::i18n::Preference::Be, ui_resolution: UiResolution::Sd540 };
+        let kept = Retained { language: plx_os::i18n::Preference::Be, ui_resolution: UiResolution::Sd540 };
         for read in [ReadState::Cleared { kept }, ReadState::Locked { kept }] {
             for session in [session_from_read(&read), (*session_of(&read)).clone()] {
-                assert_eq!(session.language, plx_platform::i18n::Preference::Be);
+                assert_eq!(session.language, plx_os::i18n::Preference::Be);
                 assert_eq!(session.ui_resolution(), UiResolution::Sd540);
                 assert!(session.account_token.is_empty());
             }
@@ -6151,16 +6184,16 @@ mod ui_resolution_tests {
         redirect_candidates_for_test(Some(vec![dir.join("auth.json")]));
         let path = dir.join("auth.language.json");
         for (body, language, resolution) in [
-            (r#"{"version":1,"language":"be","ui_resolution":"8k"}"#, plx_platform::i18n::Preference::Be, UiResolution::Auto),
-            (r#"{"version":1,"language":"be","ui_resolution":"1080p"}"#, plx_platform::i18n::Preference::Be, UiResolution::Auto),
-            (r#"{"version":1,"language":"be"}"#, plx_platform::i18n::Preference::Be, UiResolution::Auto),
-            (r#"{"version":1,"language":"be","ui_resolution":"720p"}"#, plx_platform::i18n::Preference::Be, UiResolution::Hd720),
+            (r#"{"version":1,"language":"be","ui_resolution":"8k"}"#, plx_os::i18n::Preference::Be, UiResolution::Auto),
+            (r#"{"version":1,"language":"be","ui_resolution":"1080p"}"#, plx_os::i18n::Preference::Be, UiResolution::Auto),
+            (r#"{"version":1,"language":"be"}"#, plx_os::i18n::Preference::Be, UiResolution::Auto),
+            (r#"{"version":1,"language":"be","ui_resolution":"720p"}"#, plx_os::i18n::Preference::Be, UiResolution::Hd720),
         ] {
             std::fs::write(&path, body).unwrap();
             let loaded = install_preferences::load();
             assert_eq!(loaded, Some(Retained { language, ui_resolution: resolution }), "{body}");
         }
-        assert!(install_preferences::save(Retained { language: plx_platform::i18n::Preference::Be, ui_resolution: UiResolution::Auto }));
+        assert!(install_preferences::save(Retained { language: plx_os::i18n::Preference::Be, ui_resolution: UiResolution::Auto }));
         assert!(!std::fs::read_to_string(&path).unwrap().contains("ui_resolution"), "Automatic is not written");
         redirect_candidates_for_test(None);
         let _ = std::fs::remove_dir_all(&dir);
@@ -6377,7 +6410,7 @@ mod server_key_pin_tests {
         let _serial = plx_base::testlock::serial();
         let key = keypin::key_of("session-signed-in.invalid", 32400);
         let _scoped = keypin::Scoped::watch_machine("m-session-live", &key);
-        let language = plx_platform::i18n::Preference::En;
+        let language = plx_os::i18n::Preference::En;
         let live = || Cached::Settled(std::sync::Arc::new(ReadState::Ready {
             session: std::sync::Arc::new(Session::default()), plaintext: false, retry_canonical: false,
         }));
@@ -6545,17 +6578,17 @@ mod server_key_pin_tests {
 
     // ---- S2a: a refusal is learned from a facet-clean proof, counted, and applied at the threshold ----
 
-    fn dts6() -> plx_platform::devcaps::Facet {
-        plx_platform::devcaps::Facet::Audio { codec: "dca".into(), channels: 6 }
+    fn dts6() -> plx_os::devcaps::Facet {
+        plx_os::devcaps::Facet::Audio { codec: "dca".into(), channels: 6 }
     }
 
-    fn opus6() -> plx_platform::devcaps::Facet {
-        plx_platform::devcaps::Facet::Audio { codec: "opus".into(), channels: 6 }
+    fn opus6() -> plx_os::devcaps::Facet {
+        plx_os::devcaps::Facet::Audio { codec: "opus".into(), channels: 6 }
     }
 
     /// This thread's set: names its firmware and build, so it can record a refusal.
-    fn firmware_build(build: &str) -> plx_platform::devcaps::CapsGuard {
-        plx_platform::devcaps::firmware_on_this_thread_for_test("fw", build, plx_platform::devcaps::Caps::assumed())
+    fn firmware_build(build: &str) -> plx_os::devcaps::CapsGuard {
+        plx_os::devcaps::firmware_on_this_thread_for_test("fw", build, plx_os::devcaps::Caps::assumed())
     }
 
     fn row(codec: &str, channels: u32, build: &str, proofs: Option<u32>) -> NativeAudioRefusal {
@@ -6630,8 +6663,8 @@ mod server_key_pin_tests {
     }
 
     /// A set that announces Opus 5.1, so a recorded Opus refusal WOULD move `caps()` if anything wrote it.
-    fn opus_announcing_caps() -> plx_platform::devcaps::Caps {
-        plx_platform::devcaps::Caps { audio: "aac,ac3,eac3,opus".into(), ..plx_platform::devcaps::Caps::assumed() }
+    fn opus_announcing_caps() -> plx_os::devcaps::Caps {
+        plx_os::devcaps::Caps { audio: "aac,ac3,eac3,opus".into(), ..plx_os::devcaps::Caps::assumed() }
     }
 
     /// `devcaps` is write-once (#1047): a recorded refusal lands in the install's record and moves
@@ -6641,15 +6674,15 @@ mod server_key_pin_tests {
     fn caps_is_one_arc_across_a_recorded_refusal() {
         let _serial = plx_base::testlock::serial();
         let _session = test_support::TempSession::new("refusal-one-arc");
-        let _fw = plx_platform::devcaps::firmware_on_this_thread_for_test("fw", "B", opus_announcing_caps());
+        let _fw = plx_os::devcaps::firmware_on_this_thread_for_test("fw", "B", opus_announcing_caps());
         save(&test_support::signed_in());
-        let before = plx_platform::devcaps::caps();
+        let before = plx_os::devcaps::caps();
         assert!(before.audio_supports("opus", 6), "sanity: the set announces Opus 5.1");
         assert!(record_named_refusal(&opus6()));
         plx_base::storage_worker::drain_for_test();
         save(&peek());
         assert_eq!(peek().native_audio_refused().len(), 1, "the row is stored");
-        let after = plx_platform::devcaps::caps();
+        let after = plx_os::devcaps::caps();
         assert!(std::sync::Arc::ptr_eq(&before, &after), "the stored row moved caps(): opus ceiling {:?} -> {:?}", before.audio_channels.get("opus"), after.audio_channels.get("opus"));
     }
 
@@ -6704,7 +6737,7 @@ mod server_key_pin_tests {
             row("dts", 6, "B", Some(LEARNED_REFUSAL_PROOFS)),
             row("flac", 6, "B", Some(1)),
         ];
-        let refusal = |codec: &str| plx_platform::devcaps::Refusal { codec: codec.into(), channels: 6, build: "B".into() };
+        let refusal = |codec: &str| plx_os::devcaps::Refusal { codec: codec.into(), channels: 6, build: "B".into() };
         assert_eq!(session.applied_refusals(), [refusal("opus"), refusal("dts")]);
         assert!(Session::default().applied_refusals().is_empty());
     }
@@ -6713,7 +6746,7 @@ mod server_key_pin_tests {
     /// remove the whole codec. A named refusal keeps the unguarded behaviour.
     #[test]
     fn a_proof_of_unknown_width_is_not_stored() {
-        let unknown = plx_platform::devcaps::Facet::Audio { codec: "dts".into(), channels: 0 };
+        let unknown = plx_os::devcaps::Facet::Audio { codec: "dts".into(), channels: 0 };
         assert_eq!(NativeAudioRefusal::of_facet(&unknown, "fw", "B", Some(1)), None);
         assert!(NativeAudioRefusal::of_facet(&unknown, "fw", "B", None).is_some());
     }
@@ -6722,7 +6755,7 @@ mod server_key_pin_tests {
     /// attempt's alone, so the next play retries the raster once.
     #[test]
     fn a_video_facet_is_never_stored() {
-        let video = plx_platform::devcaps::Facet::Video { codec: "h264".into(), width: 3840, height: 2160 };
+        let video = plx_os::devcaps::Facet::Video { codec: "h264".into(), width: 3840, height: 2160 };
         assert_eq!(NativeAudioRefusal::of_facet(&video, "fw", "b", Some(1)), None);
         assert_eq!(NativeAudioRefusal::of_facet(&video, "fw", "b", None), None);
     }

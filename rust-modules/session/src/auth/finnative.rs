@@ -113,7 +113,7 @@ pub(super) fn run_session_work(epoch: u64, input: owner::SessionWork, ask: &Plai
 }
 
 pub(super) fn login_worker(epoch: u64, client_id: &str, ask: &PlaintextAsk, output: &dyn owner::ObservationSink) {
-    use plx_platform::i18n::msg;
+    use plx_os::i18n::msg;
     if !output.live() {
         return;
     }
@@ -197,7 +197,7 @@ fn fail(output: &dyn owner::ObservationSink, epoch: u64, message: &str) {
 /// Quick Connect: put a code on screen and wait for it to be approved, asking for a fresh code when
 /// one runs out. `None` once the outcome has been published (a failure, or the screen going away).
 fn quick_connect(epoch: u64, jf: &mut JfClient, output: &dyn owner::ObservationSink) -> Option<Session> {
-    use plx_platform::i18n::msg;
+    use plx_os::i18n::msg;
     let quickconnect = format!("{}/web/#/quickconnect", jf.base());
     backend::set_link_address(&backend::display_address(jf.base()));
     for generation in 1..=MAX_CODES {
@@ -255,7 +255,7 @@ fn finish(epoch: u64, jf: JfClient, info: &PublicSystemInfo, session: Session, o
         return;
     }
     let Some(origin) = Origin::parse(jf.base()) else {
-        return fail(output, epoch, plx_platform::i18n::msg::browse_jf_bad_address());
+        return fail(output, epoch, plx_os::i18n::msg::browse_jf_bad_address());
     };
     let mut source = SourceRef {
         machine_id: session.server_id.clone(),
@@ -500,7 +500,7 @@ fn switch_with(
     grant: impl FnOnce(&str, &Origin) -> Result<(), MintRefusal>,
     who: impl FnOnce(&str, &str) -> Result<Session, SignInError>,
 ) -> super::ProfileSwitchOutcomeProgress {
-    use plx_platform::i18n::msg;
+    use plx_os::i18n::msg;
     let failed = |error: String| super::ProfileSwitchOutcomeProgress::Failed { error, pin_denied: false };
     let saved = session.profiles.iter().find(|p| p.uuid == tile.uuid).cloned()
         .or_else(|| signed_in(&session.server, &session.sources).filter(|p| p.uuid == tile.uuid));

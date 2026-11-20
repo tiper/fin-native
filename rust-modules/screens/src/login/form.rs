@@ -14,7 +14,7 @@
 
 use plx_jellyfin::jellyfin::backend::{SignInMethod, SignInRequest};
 use plx_machine::machine::{Measure, TextEdit};
-use plx_platform::i18n::msg;
+use plx_os::i18n::msg;
 use plx_ui::route_screen::RouteLayout;
 use plx_ui::screen::TextEntry;
 use plx_ui::text_buffer::TextBuffer;

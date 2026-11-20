@@ -20,11 +20,11 @@ use super::params::{Ceiling, TranscodeDelivery, TranscodeSpec};
 use super::probe::Location;
 
 // `DP_AUDIO_CODECS` — the AUDIO codec set the buffer-feed pipeline decodes — is defined in
-// `devcaps` (the platform layer intersects it with the device's own codec table) and re-exported
+// `devcaps` (the os layer intersects it with the device's own codec table) and re-exported
 // here, so the profile string below and `plex::DP_AUDIO_CODECS` keep naming it. The live set is
 // `devcaps::Caps::audio`; normal routing uses [`is_dp_audio_track_with`] for membership, channel
 // bounds and sample rate, shared with the device profile.
-pub use plx_platform::devcaps::DP_AUDIO_CODECS;
+pub use plx_os::devcaps::DP_AUDIO_CODECS;
 
 /// Codec, channel and rate check for an actual selected track, against the capability value `caps`
 /// of the attempt asking. Codec-only membership is insufficient on devices whose DTS decoder stops
@@ -38,9 +38,9 @@ pub use plx_platform::devcaps::DP_AUDIO_CODECS;
 ///
 /// A codec the app converts itself ("Convert audio: on the TV", `devcaps::converted_on_tv`)
 /// direct-plays at any channel count: the conversion folds 7.1 to 5.1.
-pub fn is_dp_audio_track_with(caps: &plx_platform::devcaps::Caps, codec: &str, channels: i64, sample_rate: i64) -> bool {
-    (caps.audio_supports(codec, channels) && plx_platform::devcaps::audio_track_fits(codec, channels, sample_rate))
-        || plx_platform::devcaps::converted_with(caps, plx_platform::devcaps::tv_audio_conversion(), codec, channels, sample_rate)
+pub fn is_dp_audio_track_with(caps: &plx_os::devcaps::Caps, codec: &str, channels: i64, sample_rate: i64) -> bool {
+    (caps.audio_supports(codec, channels) && plx_os::devcaps::audio_track_fits(codec, channels, sample_rate))
+        || plx_os::devcaps::converted_with(caps, plx_os::devcaps::tv_audio_conversion(), codec, channels, sample_rate)
 }
 
 /// Subtitle codecs Original client-renders (`ff.rs` / the track menu). This is the
@@ -146,7 +146,7 @@ pub fn link_policy(link: Option<Location>) -> LinkPolicy {
 /// string is built from it, and `route::plan::video_direct_plays` (the local gate that stands in for
 /// `/decision` when it is unreachable) is held to it by a test over every capability combination,
 /// so the two can no longer drift apart silently.
-pub fn direct_play_video_codecs(caps: &plx_platform::devcaps::Caps) -> Vec<&'static str> {
+pub fn direct_play_video_codecs(caps: &plx_os::devcaps::Caps) -> Vec<&'static str> {
     let mut v = vec!["h264"];
     if caps.hevc {
         v.push("hevc");
@@ -223,12 +223,12 @@ pub fn direct_play_video_codecs(caps: &plx_platform::devcaps::Caps) -> Vec<&'sta
 ///
 /// The Load payload cannot drift whatever PMS chooses: `route.rs` reads the OUTPUT codecs off
 /// the /decision response (`decision_codecs`) and describes those, not the profile's wish.
-fn profile_for_delivery(caps: &plx_platform::devcaps::Caps, delivery: TranscodeDelivery) -> String {
-    profile_for_delivery_with(caps, delivery, plx_platform::devcaps::tv_audio_conversion())
+fn profile_for_delivery(caps: &plx_os::devcaps::Caps, delivery: TranscodeDelivery) -> String {
+    profile_for_delivery_with(caps, delivery, plx_os::devcaps::tv_audio_conversion())
 }
 
 /// [`profile_for_delivery`] over an explicit "Convert audio: on the TV" choice (`tv_audio`).
-fn profile_for_delivery_with(caps: &plx_platform::devcaps::Caps, delivery: TranscodeDelivery, tv_audio: bool) -> String {
+fn profile_for_delivery_with(caps: &plx_os::devcaps::Caps, delivery: TranscodeDelivery, tv_audio: bool) -> String {
     let dp_video = direct_play_video_codecs(caps).join(",");
     // The table-gated copy codecs, in list order. Each one is advertised only when the table
     // carries ITS row, and each brings the row's own bound (see `row_limits`).
@@ -292,7 +292,7 @@ fn profile_for_delivery_with(caps: &plx_platform::devcaps::Caps, delivery: Trans
     // the codecs the app converts itself. Only the direct-play profile grows: the transcode target
     // below is what a server ENCODES to, and the converted codecs carry no channel limitation
     // because the conversion folds 7.1 to 5.1.
-    let dp_audio = plx_platform::devcaps::direct_play_audio(&caps.audio, tv_audio)
+    let dp_audio = plx_os::devcaps::direct_play_audio(&caps.audio, tv_audio)
         .split(',').map(profile_codec_name).collect::<Vec<_>>().join(",");
     // ac3 first — the preferred ENCODE target — then the rest of the caps subset as copy lanes.
     // opus is only ever a copy lane: last, so it can never be the encode head. The fixed HLS
@@ -322,13 +322,13 @@ fn profile_for_delivery_with(caps: &plx_platform::devcaps::Caps, delivery: Trans
     // input's top rate (`devcaps::pcm_load_rate`), so only their channel limit above is sent, and a
     // PCM rate under the ceiling that is not in the PCM table is refused by the planner instead.
     let audio_limits = audio_limits
-        + &plx_platform::devcaps::PCM_AUDIO_CODECS
+        + &plx_os::devcaps::PCM_AUDIO_CODECS
             .split(',')
             .filter(|c| caps.audio_has(c))
-            .chain(plx_platform::devcaps::APP_DECODED.iter().filter(|c| c.lossy && caps.audio_has(c.id)).map(|c| c.id))
+            .chain(plx_os::devcaps::APP_DECODED.iter().filter(|c| c.lossy && caps.audio_has(c.id)).map(|c| c.id))
             .chain(target_audio_codecs.iter().copied())
-            .filter(|c| plx_platform::devcaps::audio_rate_bounded(c))
-            .map(|codec| audio_limit(codec, "audio.samplingRate", plx_platform::devcaps::AUDIO_RATE_CEILING))
+            .filter(|c| plx_os::devcaps::audio_rate_bounded(c))
+            .map(|codec| audio_limit(codec, "audio.samplingRate", plx_os::devcaps::AUDIO_RATE_CEILING))
             .collect::<String>();
     let target = match delivery {
         TranscodeDelivery::ProgressiveMkv => format!(
@@ -357,19 +357,19 @@ fn profile_for_delivery_with(caps: &plx_platform::devcaps::Caps, delivery: Trans
     )
 }
 
-fn profile_for(caps: &plx_platform::devcaps::Caps) -> String {
+fn profile_for(caps: &plx_os::devcaps::Caps) -> String {
     profile_for_delivery_with(caps, TranscodeDelivery::ProgressiveMkv, false)
 }
 
 /// The forced-direct-play profile: the engine's own formats, no device limits, no transcode
 /// target. `vp9` and `av1` join the video list only when the device table lists their rows (issue
 /// #593); a forced start never widens the codec set past what the table says the panel decodes.
-fn forced_direct_profile_for(caps: &plx_platform::devcaps::Caps) -> String {
-    forced_direct_profile_with(caps, plx_platform::devcaps::tv_audio_conversion())
+fn forced_direct_profile_for(caps: &plx_os::devcaps::Caps) -> String {
+    forced_direct_profile_with(caps, plx_os::devcaps::tv_audio_conversion())
 }
 
 /// [`forced_direct_profile_for`] over an explicit "Convert audio: on the TV" choice (`tv_audio`).
-fn forced_direct_profile_with(caps: &plx_platform::devcaps::Caps, tv_audio: bool) -> String {
+fn forced_direct_profile_with(caps: &plx_os::devcaps::Caps, tv_audio: bool) -> String {
     let mut video = "h264,hevc".to_string();
     if caps.vp9 {
         video.push_str(",vp9");
@@ -384,8 +384,8 @@ fn forced_direct_profile_with(caps: &plx_platform::devcaps::Caps, tv_audio: bool
     // one still gets a direct-play answer for it instead of a transcode (`Caps::app_may_decode_lossy`).
     let fed = DP_AUDIO_CODECS
         .split(',')
-        .chain(plx_platform::devcaps::PCM_AUDIO_CODECS.split(','))
-        .chain(plx_platform::devcaps::APP_DECODED.iter().filter(|c| c.lossy).map(|c| c.id))
+        .chain(plx_os::devcaps::PCM_AUDIO_CODECS.split(','))
+        .chain(plx_os::devcaps::APP_DECODED.iter().filter(|c| c.lossy).map(|c| c.id))
         .filter(|c| caps.forced_feeds_audio(c) || caps.app_may_decode_lossy(c))
         .fold(Vec::<&str>::new(), |mut seen, c| {
             if !seen.contains(&c) {
@@ -394,7 +394,7 @@ fn forced_direct_profile_with(caps: &plx_platform::devcaps::Caps, tv_audio: bool
             seen
         })
         .join(",");
-    let audio = plx_platform::devcaps::direct_play_audio(&fed, tv_audio)
+    let audio = plx_os::devcaps::direct_play_audio(&fed, tv_audio)
         .split(',')
         .map(profile_codec_name)
         .collect::<Vec<_>>()
@@ -407,7 +407,7 @@ fn forced_direct_profile_with(caps: &plx_platform::devcaps::Caps, tv_audio: bool
 /// profiles shipped with PMS does), where the pipeline and the device table say `dts`. The one
 /// place profile text leaves our own vocabulary.
 fn profile_codec_name(codec: &str) -> &str {
-    match plx_platform::devcaps::audio_codec_id(codec).as_ref() {
+    match plx_os::devcaps::audio_codec_id(codec).as_ref() {
         "dts" => "dca",
         _ => codec,
     }
@@ -571,7 +571,7 @@ impl Client {
         session: &str,
         audio_stream_id: i64,
         subtitle_stream_id: i64,
-        caps: &plx_platform::devcaps::Caps,
+        caps: &plx_os::devcaps::Caps,
     ) -> Option<MediaContainer> {
         self.mde_decision_with_profile(rating_key, media_index, session, audio_stream_id, subtitle_stream_id, caps, false)
     }
@@ -586,7 +586,7 @@ impl Client {
         session: &str,
         audio_stream_id: i64,
         subtitle_stream_id: i64,
-        caps: &plx_platform::devcaps::Caps,
+        caps: &plx_os::devcaps::Caps,
     ) -> Option<MediaContainer> {
         self.mde_decision_with_profile(rating_key, media_index, session, audio_stream_id, subtitle_stream_id, caps, true)
     }
@@ -599,7 +599,7 @@ impl Client {
         session: &str,
         audio_stream_id: i64,
         subtitle_stream_id: i64,
-        caps: &plx_platform::devcaps::Caps,
+        caps: &plx_os::devcaps::Caps,
         forced: bool,
     ) -> Option<MediaContainer> {
         crate::alt!(b => b.mde_decision(rating_key, media_index, session, audio_stream_id, subtitle_stream_id, forced));
@@ -782,7 +782,7 @@ mod tests {
     use super::{
         link_policy, Ceiling, Client, LinkPolicy, Location, TranscodeDelivery, TranscodeSpec,
     };
-    use plx_platform::devcaps::Caps;
+    use plx_os::devcaps::Caps;
     use crate::plex::{AudioEnhancements, EncodeContract, Origin, ServerId};
 
     // ---- the universal-transcoder query: who is allowed to COPY ---------------------------
@@ -1228,9 +1228,9 @@ mod tests {
             audio_channels: Default::default(),
             native_ceiling: Default::default(),
             video_ceiling: Default::default(),
-            app_lossy: plx_platform::devcaps::AppLossy::Off,
+            app_lossy: plx_os::devcaps::AppLossy::Off,
             app_lossy_in_force: Default::default(),
-            dv_first_picture: plx_platform::devcaps::DvFirstPicture::AnyIrap,
+            dv_first_picture: plx_os::devcaps::DvFirstPicture::AnyIrap,
             },
             s.contract.delivery,
         );
@@ -1375,7 +1375,7 @@ mod tests {
             "no subscription-free video fallback in {video:?} — a free server drops the video track");
         assert_eq!(video.first().map(String::as_str), Some("hevc"),
             "hevc must stay FIRST: order is preference, and hevc is what keeps 4K+HDR10 through a re-encode");
-        for c in plx_platform::devcaps::Caps::assumed().audio.split(',') {
+        for c in plx_os::devcaps::Caps::assumed().audio.split(',') {
             assert!(list_of(target, "audioCodec=").contains(&c.to_string()),
                 "{c} is direct-playable but absent from the target — the server would re-encode a track we decode natively");
         }
@@ -1403,9 +1403,9 @@ mod tests {
     #[test]
     fn flac_is_offered_for_direct_play_up_to_stereo_and_never_as_a_target() {
         // what `devcaps` makes of a READ table (its own tests pin that half)
-        let mut caps = plx_platform::devcaps::Caps::assumed();
+        let mut caps = plx_os::devcaps::Caps::assumed();
         caps.audio.push_str(",flac");
-        caps.audio_channels.insert("flac".into(), plx_platform::devcaps::PCM_MAX_CHANNELS);
+        caps.audio_channels.insert("flac".into(), plx_os::devcaps::PCM_MAX_CHANNELS);
         let profile = super::profile_for(&caps);
         assert!(list_of(&profile, "audioCodec=").contains(&"flac".into()), "{profile}");
         assert!(profile.contains("scope=videoAudioCodec&scopeName=flac&type=upperBound&name=audio.channels&value=2&replace=true"), "{profile}");
@@ -1413,7 +1413,7 @@ mod tests {
         assert!(!profile.contains("scopeName=flac&type=upperBound&name=audio.samplingRate"), "{profile}");
         assert!(!list_of(target_of(&profile), "audioCodec=").contains(&"flac".into()));
         assert!(list_of(&super::forced_direct_profile_for(&caps), "audioCodec=").contains(&"flac".into()));
-        let assumed = plx_platform::devcaps::Caps::assumed();
+        let assumed = plx_os::devcaps::Caps::assumed();
         assert!(!super::profile_for(&assumed).contains("flac"));
         assert!(!super::forced_direct_profile_for(&assumed).contains("flac"));
     }
@@ -1422,10 +1422,10 @@ mod tests {
     /// and Force only, never a transcode target. LPCM is named `pcm` in the profile.
     #[test]
     fn alac_and_pcm_are_offered_like_flac_and_never_as_a_target() {
-        let mut caps = plx_platform::devcaps::Caps::assumed();
+        let mut caps = plx_os::devcaps::Caps::assumed();
         caps.audio.push_str(",flac,alac,pcm");
         for c in ["flac", "alac", "pcm"] {
-            caps.audio_channels.insert(c.into(), plx_platform::devcaps::PCM_MAX_CHANNELS);
+            caps.audio_channels.insert(c.into(), plx_os::devcaps::PCM_MAX_CHANNELS);
         }
         let profile = super::profile_for(&caps);
         let forced = super::forced_direct_profile_for(&caps);
@@ -1436,7 +1436,7 @@ mod tests {
             assert!(!list_of(target_of(&profile), "audioCodec=").contains(&c.into()), "{c} is not a transcode target");
             assert!(list_of(&forced, "audioCodec=").contains(&c.into()), "{c}: {forced}");
         }
-        let assumed = plx_platform::devcaps::Caps::assumed();
+        let assumed = plx_os::devcaps::Caps::assumed();
         for c in ["alac", "pcm"] {
             assert!(!list_of(&super::profile_for(&assumed), "audioCodec=").contains(&c.into()), "{c}");
         }
@@ -1450,7 +1450,7 @@ mod tests {
     /// `/decision` direct-plays what the profile has the server convert.
     #[test]
     fn every_transcode_target_audio_codec_is_asked_for_at_48_khz_at_most() {
-        use plx_platform::devcaps::{audio_track_fits, DP_AUDIO_CODECS, PCM_AUDIO_CODECS};
+        use plx_os::devcaps::{audio_track_fits, DP_AUDIO_CODECS, PCM_AUDIO_CODECS};
         let mut caps = Caps { audio: format!("{DP_AUDIO_CODECS},{PCM_AUDIO_CODECS}"), ..Caps::assumed() };
         caps.audio_channels.insert("dts".into(), 6);
         let rate_bound = |codec: &str| format!(
@@ -1481,11 +1481,11 @@ mod tests {
     /// is still converted: the `audio.channels` limitation of the three stays at two.
     #[test]
     fn hi_res_lossless_is_not_converted_by_the_server_but_surround_still_is() {
-        use plx_platform::devcaps::audio_track_fits;
+        use plx_os::devcaps::audio_track_fits;
         let mut caps = Caps::assumed().with_app_lossy();
         caps.audio.push_str(",opus,flac,alac,pcm");
         for c in ["flac", "alac", "pcm"] {
-            caps.audio_channels.insert(c.into(), plx_platform::devcaps::PCM_MAX_CHANNELS);
+            caps.audio_channels.insert(c.into(), plx_os::devcaps::PCM_MAX_CHANNELS);
         }
         let limit = |codec: &str, name: &str, value: u32| format!(
             "scope=videoAudioCodec&scopeName={codec}&type=upperBound&name={name}&value={value}&replace=true"
@@ -1591,7 +1591,7 @@ mod tests {
     /// well, and Auto's profile does not move with the policy at all.
     #[test]
     fn the_forced_profile_offers_an_enabled_lossy_codec_the_set_cannot_decode() {
-        use plx_platform::devcaps::AppLossy;
+        use plx_os::devcaps::AppLossy;
         let rowless = Caps { app_lossy: AppLossy::Measured, ..Caps::assumed() };
         let forced = super::forced_direct_profile_for(&rowless);
         assert_eq!(list_of(&forced, "audioCodec="), ["aac", "ac3", "eac3", "dca"], "{forced}");
@@ -1641,9 +1641,9 @@ mod tests {
             audio_channels: Default::default(),
             native_ceiling: Default::default(),
             video_ceiling: Default::default(),
-            app_lossy: plx_platform::devcaps::AppLossy::Off,
+            app_lossy: plx_os::devcaps::AppLossy::Off,
             app_lossy_in_force: Default::default(),
-            dv_first_picture: plx_platform::devcaps::DvFirstPicture::AnyIrap,
+            dv_first_picture: plx_os::devcaps::DvFirstPicture::AnyIrap,
         };
         let p = super::profile_for(&caps);
         assert!(!p.contains("hevc"), "hevc must not appear anywhere in {p}");
@@ -1677,9 +1677,9 @@ mod tests {
                 audio_channels: Default::default(),
                 native_ceiling: Default::default(),
                 video_ceiling: Default::default(),
-                app_lossy: plx_platform::devcaps::AppLossy::Off,
+                app_lossy: plx_os::devcaps::AppLossy::Off,
                 app_lossy_in_force: Default::default(),
-                dv_first_picture: plx_platform::devcaps::DvFirstPicture::AnyIrap,
+                dv_first_picture: plx_os::devcaps::DvFirstPicture::AnyIrap,
             },
         ] {
             let p = super::profile_for(&caps);
@@ -1710,9 +1710,9 @@ mod tests {
             audio_channels: Default::default(),
             native_ceiling: Default::default(),
             video_ceiling: Default::default(),
-            app_lossy: plx_platform::devcaps::AppLossy::Off,
+            app_lossy: plx_os::devcaps::AppLossy::Off,
             app_lossy_in_force: Default::default(),
-            dv_first_picture: plx_platform::devcaps::DvFirstPicture::AnyIrap,
+            dv_first_picture: plx_os::devcaps::DvFirstPicture::AnyIrap,
         };
         let p = super::profile_for(&caps);
         let dp = p.split("add-transcode-target").next().unwrap();
@@ -1762,13 +1762,13 @@ mod tests {
     }
 
     /// A recovery that took a refused 4K H.264 out of the attempt bounds THAT codec in the profile
-    /// ([`plx_platform::devcaps::Facet::Video`]): PMS cannot copy the raster the pipeline refused
+    /// ([`plx_os::devcaps::Facet::Video`]): PMS cannot copy the raster the pipeline refused
     /// and must encode, while the other codecs and the shared bound stay. Both deliveries carry it
     /// (the block is delivery-independent), and an attempt without a ceiling is byte-identical.
     #[test]
     fn a_video_ceiling_bounds_that_codec_in_the_profile() {
         let assumed = Caps::assumed();
-        let narrowed = assumed.without(&plx_platform::devcaps::Facet::Video {
+        let narrowed = assumed.without(&plx_os::devcaps::Facet::Video {
             codec: "h264".into(),
             width: 3840,
             height: 2160,

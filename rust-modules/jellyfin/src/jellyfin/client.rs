@@ -25,7 +25,7 @@ use super::paths::{self, ImageKind, ItemsQuery, SortBy};
 use super::time::ms_to_ticks;
 use super::tmdb;
 use super::translate::{self, Ctx};
-use plx_platform::i18n::msg;
+use plx_os::i18n::msg;
 use plx_plex::plex::account::PreferenceError;
 use plx_plex::plex::discover::CreditGroup;
 use plx_plex::plex::{Hub, LibrarySection, MediaContainer, Metadata, OnDeckHub, Trickplay};

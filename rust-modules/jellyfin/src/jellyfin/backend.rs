@@ -17,7 +17,7 @@ use super::playback_info;
 use super::transcode;
 use super::translate::{self, hubs};
 use plx_plex::plex::account::{AudioPreferences, MarkerAccess, PreferenceError};
-use plx_platform::i18n::msg;
+use plx_os::i18n::msg;
 use plx_plex::plex::backend::Backend;
 use plx_plex::plex::grant::{self, MintRefusal, PlaintextAsk};
 use plx_plex::plex::notify::{Notification, NotifyEnd};
@@ -443,7 +443,7 @@ fn prove_grant(
 
 /// The device as the server's profile describes it: the capability table the player's own
 /// direct-play gate reads, every video codec it lists (h264, hevc, vp9, av1) with their rows.
-fn this_device(caps: &plx_platform::devcaps::Caps) -> playback_info::Device<'_> {
+fn this_device(caps: &plx_os::devcaps::Caps) -> playback_info::Device<'_> {
     playback_info::Device {
         video: plx_plex::plex::direct_play_video_codecs(caps),
         max_w: caps.hevc_max.0,
@@ -451,14 +451,14 @@ fn this_device(caps: &plx_platform::devcaps::Caps) -> playback_info::Device<'_> 
         rows: vec![("vp9", caps.vp9_row.0, caps.vp9_row.1), ("av1", caps.av1_row.0, caps.av1_row.1)],
         vp9_bit_depth: caps.vp9_bit_depth,
         audio: &caps.audio,
-        converted_audio: if plx_platform::devcaps::tv_audio_conversion() { playback_info::CONVERTED_AUDIO } else { "" },
+        converted_audio: if plx_os::devcaps::tv_audio_conversion() { playback_info::CONVERTED_AUDIO } else { "" },
         audio_target: audio_encode_target(caps),
     }
 }
 
 /// The audio codec a server encodes to when a track cannot be copied: the head of the Plex
 /// profile's `audioCodec` chain (ac3 first, then the rest of what the TV decodes).
-fn audio_encode_target(caps: &plx_platform::devcaps::Caps) -> &'static str {
+fn audio_encode_target(caps: &plx_os::devcaps::Caps) -> &'static str {
     ["ac3", "eac3", "aac", "dts"].into_iter().find(|c| caps.audio_has(c)).unwrap_or("aac")
 }
 
@@ -1000,7 +1000,7 @@ impl Backend for Shared {
         let chosen = m.media.get_mut(media_index)?;
         chosen.selected = true;
         let source = chosen.part.first().and_then(|p| transcode::media_source_of(&p.key)).map(str::to_string);
-        let profile = playback_info::device_profile(&this_device(&plx_platform::devcaps::caps()));
+        let profile = playback_info::device_profile(&this_device(&plx_os::devcaps::caps()));
         let verdict = if forced {
             None
         } else {

@@ -346,7 +346,7 @@ live_setting!(IntroSkipPref, INTRO_SKIP, "intro skip");
 live_setting!(CreditsSkipPref, CREDITS_SKIP, "credits skip");
 live_setting!(DolbyVisionModePref, DOLBY_VISION_MODE, "Dolby Vision mode");
 /// By hand rather than through `live_setting!`, for the one line its `publish` adds: the choice is
-/// also the platform layer's ([`plx_platform::devcaps::set_tv_audio_conversion`]), because the two
+/// also the os layer's ([`plx_os::devcaps::set_tv_audio_conversion`]), because the two
 /// readers that decide what direct-plays — plex's profile and `is_dp_audio_track` — sit below this
 /// crate and cannot read the cell.
 impl LiveSetting for AudioConversionPref {
@@ -355,7 +355,7 @@ impl LiveSetting for AudioConversionPref {
     }
     fn publish(v: AudioConversion) {
         AUDIO_CONVERSION.set(v);
-        plx_platform::devcaps::set_tv_audio_conversion(v == AudioConversion::Tv);
+        plx_os::devcaps::set_tv_audio_conversion(v == AudioConversion::Tv);
     }
     #[cfg(any(test, feature = "test-support"))]
     fn publishes() -> u32 {

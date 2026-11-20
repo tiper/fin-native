@@ -5,7 +5,7 @@
 //! ([`super::live`]). Each becomes what the app already acts on:
 //!
 //! * `Play` (`PlayNow`) starts the first item named where Resume would, as a launch link does
-//!   (`plx_platform::tv::launch`): the link waits for a signed-in Home and ends any playback first.
+//!   (`plx_os::tv::launch`): the link waits for a signed-in Home and ends any playback first.
 //!   The other play commands (next, last, shuffle, instant mix) need a queue and are not taken.
 //! * `Playstate` (pause, unpause, play/pause, stop, rewind, fast-forward) and the navigation
 //!   `GeneralCommand`s (the arrows, select, back, text) become presses of the remote's keys, in the
@@ -82,7 +82,7 @@ fn play_link(id: &str) -> String {
 pub fn act(command: Command) {
     plx_base::eventlog::log(&format!("jellyfin: remote {command:?}"));
     match command {
-        Command::Play(id) => plx_platform::tv::launch::offer(&play_link(&id)),
+        Command::Play(id) => plx_os::tv::launch::offer(&play_link(&id)),
         Command::Key(token) => {
             let mut keys = KEYS.lock().unwrap_or_else(|p| p.into_inner());
             if keys.len() == KEYS_MAX {
@@ -95,7 +95,7 @@ pub fn act(command: Command) {
 }
 
 /// The keys pressed from another device since the last call, oldest first. FRAME THREAD; one
-/// atomic swap when there are none. The queue is `plx_platform::tv::launch`'s, for keys.
+/// atomic swap when there are none. The queue is `plx_os::tv::launch`'s, for keys.
 pub fn take_keys() -> Vec<String> {
     if !WAITING.swap(false, Ordering::Acquire) {
         return Vec::new();

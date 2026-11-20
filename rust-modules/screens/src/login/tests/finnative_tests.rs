@@ -36,7 +36,7 @@ fn the_qr_screen_and_a_failure_both_offer_manual_sign_in() {
     let s = LoginScreen::new(EntryId(0), failed.read());
     assert_eq!(s.row().as_slice(), [CONTROL, MANUAL], "Try again, then Manual sign-in");
     let (labels, _) = s.readout_labels();
-    assert_eq!(labels[1], Some(plx_platform::i18n::msg::browse_jf_manual_c()));
+    assert_eq!(labels[1], Some(plx_os::i18n::msg::browse_jf_manual_c()));
 }
 
 /// FinNative has no reporting endpoint, so a failure the report could be offered for (every

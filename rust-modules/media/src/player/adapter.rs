@@ -33,7 +33,7 @@ use super::backend;
 use plx_playback_contract::feed::{FeedTransportAction, OpenRequest};
 use plx_playback_contract::feed::{PhysicalSet, UriOnlySet};
 use plx_base::task::MainThread;
-use plx_platform::tv::sink::{NoSink, VideoSink};
+use plx_os::tv::sink::{NoSink, VideoSink};
 use std::collections::VecDeque;
 
 const MAX_METRIC_NOTICES: usize = 32;
@@ -130,7 +130,7 @@ mod composed_backends_tests {
     /// reaches the seam through a sink that refuses every verb.
     #[test]
     fn the_adapters_sink_is_inert_until_installed_and_asked_afresh_at_every_use() {
-        use plx_platform::tv::sink::{NoSink, VideoSink, VP_NONE};
+        use plx_os::tv::sink::{NoSink, VideoSink, VP_NONE};
         use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
         static ASKED: AtomicUsize = AtomicUsize::new(0);
         fn counted() -> &'static dyn VideoSink {
@@ -148,7 +148,7 @@ mod composed_backends_tests {
     /// A set the adapter refuses brings its sink with it: the adapter keeps the one it had.
     #[test]
     fn a_refused_physical_set_leaves_the_adapters_sink_alone() {
-        use plx_platform::tv::sink::{NoSink, VideoSink};
+        use plx_os::tv::sink::{NoSink, VideoSink};
         use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
         static ASKED: AtomicUsize = AtomicUsize::new(0);
         fn counted() -> &'static dyn VideoSink {
@@ -221,13 +221,14 @@ mod qualified_uri_offer_tests {
             UriSource::new("https://example.invalid/original.mkv".to_owned(), vec![]),
             requirements(TrackChoice::Unspecified), initial, 60_000, deadline).expect("typed offer");
 
-        handle.set_not_ready(Some(plx_playback_contract::uri::UriNotReady::AcbHandle));
+        handle.set_not_ready(Some(plx_playback_contract::uri::UriNotReady::Driver(
+            "the driver could not set its display up")));
         let (declined, log) = plx_base::eventlog::with_private_log(|| {
             let declined = adapter.offer_qualified_uri(&mut session, offer());
             (declined, std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default())
         });
         assert!(matches!(declined, Err(Failure::Unavailable)));
-        assert!(log.contains("uri: original declined (the ACB handle for the URI engine could not be created)\n"),
+        assert!(log.contains("uri: original declined (the driver could not set its display up)\n"),
             "{log}");
         assert!(adapter.qualified_uri.is_none(), "a declined offer keeps no authorization");
         assert!(matches!(session.backend_offer(),
@@ -270,7 +271,7 @@ mod qualified_uri_offer_tests {
             requirements(TrackChoice::Unspecified), initial, 60_000, deadline).expect("typed offer");
 
         // A driver that would decline if it were asked.
-        handle.set_not_ready(Some(plx_playback_contract::uri::UriNotReady::AcbHandle));
+        handle.set_not_ready(Some(plx_playback_contract::uri::UriNotReady::DisplayUnavailable));
         let mut fx = Vec::new();
         adapter.release.step(&ReleaseEvent::UnloadHandedOff { epoch: 1, at: std::time::Instant::now() }, &mut fx);
         assert!(adapter.release_busy());
@@ -506,7 +507,7 @@ pub struct PlayerAdapter {
     abr_inbox: Option<(crate::route::RouteStartAttempt, crate::adaptive::AbrInbox)>,
     /// Backend-independent periodic reporting resource for the current physical attempt.
     timeline: Option<timeline::TimelineRunner>,
-    repair: Option<(u64, std::sync::mpsc::Receiver<Result<(), plx_platform::tv::sandbox::Failure>>)>,
+    repair: Option<(u64, std::sync::mpsc::Receiver<Result<(), plx_os::tv::sandbox::Failure>>)>,
     release: super::release::NativeRelease,
     /// Effects produced by an addressed URI release while the backend poll has no session
     /// borrow. The release machine owns the sole queued transaction; these are only its IO work.
@@ -1758,11 +1759,11 @@ impl PlayerAdapter {
         let Some(token) = owner.begin(supported) else { return; };
         let (tx, rx) = std::sync::mpsc::channel();
         if plx_base::task::spawn_small("jail repair", move || {
-            let _ = tx.send(plx_platform::tv::sandbox::repair());
+            let _ = tx.send(plx_os::tv::sandbox::repair());
         }) {
             self.repair = Some((token, rx));
         } else {
-            owner.complete(token, Err(plx_platform::tv::sandbox::Failure::StartFailed));
+            owner.complete(token, Err(plx_os::tv::sandbox::Failure::StartFailed));
         }
     }
 
@@ -1772,7 +1773,7 @@ impl PlayerAdapter {
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(std::sync::mpsc::TryRecvError::Empty) => return false,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(plx_platform::tv::sandbox::Failure::StartFailed),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(plx_os::tv::sandbox::Failure::StartFailed),
         };
         let changed = owner.complete(*token, result);
         self.repair = None;
@@ -2253,7 +2254,7 @@ impl PlayerAdapter {
 #[cfg(test)]
 mod repair_receipt_tests {
     use super::*;
-    use plx_platform::tv::sandbox::{Failure, State};
+    use plx_os::tv::sandbox::{Failure, State};
     #[test]
     fn local_metric_history_evicts_old_effects_after_real_reducer_results() {
         use super::super::attempt_metrics::{Origin, RequestOutcome, Tick, Fx};

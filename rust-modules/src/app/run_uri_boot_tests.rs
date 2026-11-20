@@ -3,13 +3,14 @@
 #[cfg(feature = "play-uri")]
 mod uri_boot_tests {
     use super::*;
+    use crate::app::adapters::backends::{ProductQualifier, UriProduct};
     use plx_media::route::uri_preflight::{KnownSource, OriginalQualifier, OriginalRequest,
-        ProductEvidence, ResolvePort, Verdict};
+        ProductEvidence, Verdict};
     use plx_play_uri::backend::{Binding, NativeTrackIndex, UriSource};
     use plx_playback_contract::{BackendKind, Capabilities, Fidelity, Requirements,
         SourceKind, TrackChoice, TrackKind, TrackSelection};
-    use plx_platform::tv::sink::{DisplaySink, NoSink, VP_EXPORTED};
-    use plx_platform::tv::uri::{CloseStatus, RequestId, SessionId, Shape, UriMedia,
+    use plx_os::tv::sink::{DisplaySink, NoSink, VP_EXPORTED};
+    use plx_os::tv::uri::{CloseStatus, RequestId, SessionId, Shape, UriMedia,
         UriPoll, UriReply};
     use std::ffi::{c_char, c_int, c_long, CStr};
 
@@ -172,7 +173,7 @@ mod uri_boot_tests {
             NoSink.plane_probe_connect_dass(mt)
         }
         unsafe fn plane_finish(&self, mt: &plx_base::task::MainThread)
-            -> plx_platform::tv::sink::PlaneFinish {
+            -> plx_os::tv::sink::PlaneFinish {
             NoSink.plane_finish(mt)
         }
         unsafe fn plane_bind(&self, mt: &plx_base::task::MainThread, id: *const c_char) {
@@ -187,9 +188,9 @@ mod uri_boot_tests {
             NoSink.plane_start(mt, x, y, w, h)
         }
         unsafe fn plane_unload(&self, mt: &plx_base::task::MainThread)
-            -> plx_platform::tv::sink::PlaneUnload { NoSink.plane_unload(mt) }
+            -> plx_os::tv::sink::PlaneUnload { NoSink.plane_unload(mt) }
         fn plane_completions(&self, mt: &plx_base::task::MainThread)
-            -> Vec<plx_platform::tv::sink::PlaneCompletion> { NoSink.plane_completions(mt) }
+            -> Vec<plx_os::tv::sink::PlaneCompletion> { NoSink.plane_completions(mt) }
         unsafe fn plane_pause(&self, mt: &plx_base::task::MainThread) {
             NoSink.plane_pause(mt)
         }
@@ -209,12 +210,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         let metric_request = rig.app.player.session.metric_request().expect("accepted URI request");
         rig.release.send(()).unwrap();
@@ -251,18 +250,20 @@ mod uri_boot_tests {
             request.contains("/decision?")), "qualified original bypassed Feed MDE");
     }
 
-    /// The port the product composition builds for a viewer who opted in to the URI engine, over the
+    /// The product the composition builds for a viewer who opted in to the URI engine, over the
     /// exported-window `Display`: the binding of a major the product's exported-window table,
     /// `EXPORTED_STRATA`, has not admitted (`Unbound`: the host has no handle and the major is not
     /// listed) handed through the debug-only override's
-    /// `compose` (`dev::uri_exported`) as `install_uri_product` does, and the production evidence
-    /// (`unqualified_on` the display's mode, which an opted-in request certifies).
+    /// `compose` (`dev::uri_exported`) as `install_uri_product` does, and what an opted-in request
+    /// certifies.
     #[cfg(feature = "devtriggers")]
-    fn composed_port(exported_override: bool, display: &Display) -> ResolvePort {
+    fn composed_product(exported_override: bool, display: &Display) -> UriProduct {
         let binding = crate::dev::uri_exported::compose(Binding::Unbound, display.window_mode(),
             exported_override);
-        ResolvePort::new(ProductEvidence::unqualified_on(display.window_mode(), binding).opted_in(),
-            Arc::new(QualifiedOriginal))
+        UriProduct { binding, callable: ProductEvidence::CALLABLE,
+            certified: ProductEvidence::opt_in_certifies(ProductEvidence::CALLABLE,
+                ProductEvidence::UNCERTIFIED),
+            qualifier: Arc::new(QualifiedOriginal) }
     }
 
     /// With the exported-window override the composition binds the exported window on a `VP_EXPORTED`
@@ -279,7 +280,7 @@ mod uri_boot_tests {
         let display: &'static Display = Box::leak(Box::new(Display));
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
             &mut rig.app.adapters.player, &mut rig.app.player.session,
-            composed_port(true, display), bus, display));
+            composed_product(true, display), bus, display));
         rig.request();
         rig.release.send(()).unwrap();
         let mut resolved = None;
@@ -316,7 +317,7 @@ mod uri_boot_tests {
         let display: &'static Display = Box::leak(Box::new(Display));
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
             &mut rig.app.adapters.player, &mut rig.app.player.session,
-            composed_port(false, display), bus, display));
+            composed_product(false, display), bus, display));
         rig.request();
         rig.release.send(()).unwrap();
         let mut resolved = None;
@@ -340,10 +341,10 @@ mod uri_boot_tests {
             .set_link(plx_plex::plex::probe::Location::Local);
         let bus: &'static Bus = Box::leak(Box::new(Bus::new()));
         let display: &'static Display = Box::leak(Box::new(Display));
-        let port = ResolvePort::new(ProductEvidence::unqualified(display.window_mode()),
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Unbound, callable: ProductEvidence::CALLABLE,
+            certified: ProductEvidence::UNCERTIFIED, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         rig.release.send(()).unwrap();
         let mut resolved = None;
@@ -377,12 +378,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: false, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         rig.release.send(()).unwrap();
         let mut resolved = None;
@@ -434,12 +433,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: false, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         assert!(plx_media::route::arm_play_resume(&mut rig.app.player.session, 12_000_000_000),
             "the viewer's resume point rides the resolve in flight");
@@ -483,22 +480,17 @@ mod uri_boot_tests {
 
     // ---- the URI dev route (`plxnative-uridev`): the production composition, ACB-bound ----
 
-    /// The pair `install_uri_product` builds on an ACB-bound set (evidence nothing certifies, the
+    /// The product `install_uri_product` builds on an ACB-bound set (nothing certified, the
     /// production qualifier), handed through the dev route's `compose` with `trigger`. The host has
-    /// no ACB plane, so the evidence is built the way `product_binding` yields it for one rather
-    /// than read from the process; the OFFER is what the host proves, the bind is TV-only.
+    /// no ACB plane, so the binding is the one `product_binding` yields for one rather than read
+    /// from the process; the OFFER is what the host proves, the bind is TV-only.
     #[cfg(feature = "devtriggers")]
-    fn acb_port(trigger: Option<&str>) -> ResolvePort {
+    fn acb_product(trigger: Option<&str>) -> UriProduct {
         use crate::dev::uri_product as dev_route;
-        let evidence = ProductEvidence::unqualified_on(plx_platform::tv::sink::VP_ACB,
-            Binding::Acb);
-        let (evidence, qualifier) = dev_route::compose(evidence,
-            Arc::new(plx_media::route::uri_preflight::ProductQualifier),
-            trigger.map(str::to_owned));
-        ResolvePort::new(evidence, qualifier)
+        dev_route::compose(UriProduct::production(Binding::Acb), trigger.map(str::to_owned))
     }
 
-    /// A rig whose boot composed the ACB port for `trigger`, and the play of its one Part (id 1, on
+    /// A rig whose boot composed the ACB product for `trigger`, and the play of its one Part (id 1, on
     /// the server it registered as `lifecycle-fixture`) landed: the bus, and what the plan resolved.
     #[cfg(feature = "devtriggers")]
     fn land_acb_play(rig: &mut Rig, trigger: Option<&str>)
@@ -508,7 +500,7 @@ mod uri_boot_tests {
         let bus: &'static Bus = Box::leak(Box::new(Bus::new()));
         let display: &'static Display = Box::leak(Box::new(Display));
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, acb_port(trigger), bus,
+            &mut rig.app.adapters.player, &mut rig.app.player.session, acb_product(trigger), bus,
             display));
         rig.request();
         rig.release.send(()).unwrap();
@@ -643,12 +635,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         let request = rig.app.player.session.metric_request().expect("logical request");
         rig.release.send(()).unwrap();
@@ -726,12 +716,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         let request = rig.app.player.session.metric_request().expect("logical request");
         rig.release.send(()).unwrap();
@@ -793,12 +781,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         let request = rig.app.player.session.metric_request().expect("logical request");
         rig.release.send(()).unwrap();
@@ -904,12 +890,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         rig.release.send(()).unwrap();
         let mut resolved = None;
@@ -1031,12 +1015,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedTwoAudio));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedTwoAudio) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         rig.release.send(()).unwrap();
         let mut resolved = None;
@@ -1114,12 +1096,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         rig.release.send(()).unwrap();
         let mut resolved = None;
@@ -1172,12 +1152,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedTwoAudio));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedTwoAudio) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         rig.release.send(()).unwrap();
         let mut resolved = None;
@@ -1233,12 +1211,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         rig.release.send(()).unwrap();
         let mut resolved = None;
@@ -1308,12 +1284,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         rig.release.send(()).unwrap();
         let mut resolved = None;
@@ -1373,12 +1347,10 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         rig.request();
         rig.release.send(()).unwrap();
         let mut resolved = None;
@@ -1448,7 +1420,7 @@ mod uri_boot_tests {
             NoSink.plane_probe_connect_dass(mt)
         }
         unsafe fn plane_finish(&self, mt: &plx_base::task::MainThread)
-            -> plx_platform::tv::sink::PlaneFinish { NoSink.plane_finish(mt) }
+            -> plx_os::tv::sink::PlaneFinish { NoSink.plane_finish(mt) }
         unsafe fn plane_bind(&self, mt: &plx_base::task::MainThread, id: *const c_char) {
             NoSink.plane_bind(mt, id)
         }
@@ -1461,9 +1433,9 @@ mod uri_boot_tests {
             NoSink.plane_start(mt, x, y, w, h)
         }
         unsafe fn plane_unload(&self, mt: &plx_base::task::MainThread)
-            -> plx_platform::tv::sink::PlaneUnload { NoSink.plane_unload(mt) }
+            -> plx_os::tv::sink::PlaneUnload { NoSink.plane_unload(mt) }
         fn plane_completions(&self, mt: &plx_base::task::MainThread)
-            -> Vec<plx_platform::tv::sink::PlaneCompletion> { NoSink.plane_completions(mt) }
+            -> Vec<plx_os::tv::sink::PlaneCompletion> { NoSink.plane_completions(mt) }
         unsafe fn plane_pause(&self, mt: &plx_base::task::MainThread) { NoSink.plane_pause(mt) }
         unsafe fn plane_resume(&self, mt: &plx_base::task::MainThread) { NoSink.plane_resume(mt) }
     }
@@ -1504,23 +1476,24 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: true,
-            binding: Binding::Exported { canvas: (1920, 1080) },
-            callable: caps, certified: caps, preview_rectangle: false },
-            Arc::new(QualifiedOriginal));
-        let evidence = port.evidence();
+        let product = UriProduct { binding: Binding::Exported { canvas: (1920, 1080) },
+            callable: caps, certified: caps, qualifier: Arc::new(QualifiedOriginal) };
         let settings = crate::app::adapters::backends::UriDriverSettings {
             clock: Box::new(StepClock(clock)),
             app_id: plx_base::paths::app_id().to_owned(),
-            binding: evidence.binding,
-            capabilities: evidence.opted_in().certified,
+            binding: product.binding,
+            capabilities: ProductEvidence::opt_in_certifies(product.callable, product.certified),
             startup_timeout_ms: WINDOW_STARTUP_MS,
             release_allowance_ms: WINDOW_RELEASE_MS,
             source_ttl_ms: 30_000,
         };
-        assert!(crate::app::adapters::backends::install_uri_backend_with_ports(
-            &mut rig.app.adapters.player, settings, bus, display));
-        rig.app.player.session.install_uri_preflight_port(port);
+        let path = crate::app::adapters::backends::install_uri_backend_with_ports(
+            &mut rig.app.adapters.player, settings, bus, display)
+            .expect("the URI driver installs");
+        rig.app.player.session.install_uri_preflight_port(
+            plx_media::route::uri_preflight::ResolvePort::new(
+                ProductEvidence { display: path, callable: product.callable,
+                    certified: product.certified }, product.qualifier));
     }
 
     /// One frame of the app loop's playback half, as the other URI fixtures run it.
@@ -1625,7 +1598,7 @@ mod uri_boot_tests {
         assert_eq!(windows(), held, "premise: the quarantined driver still holds its window");
         // The viewer asks for the title again.
         assert!(plx_media::route::request_play(&mut rig.app.player.session,
-            rig.app.runtime.metadata_mut(), plx_platform::devcaps::caps(), rig.sid, "1",
+            rig.app.runtime.metadata_mut(), plx_os::devcaps::caps(), rig.sid, "1",
             "/library/parts/1/file.mkv", "h264", "aac", "First", "", None, ""));
         let mut resolved = None;
         poll_until("the new request did not resolve", || {
@@ -1649,9 +1622,9 @@ mod uri_boot_tests {
     /// The URI driver composed over a scripted ACB display (`create_ids` is what its creates answer)
     /// with production's ACB evidence and `qualifier` standing in for the viewer's engine choice.
     fn compose_acb(rig: &mut Rig, create_ids: &[c_long], qualifier: Arc<dyn OriginalQualifier>)
-        -> (&'static Bus, &'static plx_platform::tv::sink::ScriptedPlaneSink) {
-        use plx_platform::tv::sink::{PlaneUnload, ScriptedPlaneSink};
-        plx_platform::tv::plane::installed().reset_for_test();
+        -> (&'static Bus, &'static plx_os::tv::sink::ScriptedPlaneSink) {
+        use plx_os::tv::sink::{PlaneUnload, ScriptedPlaneSink};
+        plx_os::tv::plane::installed().reset_for_test();
         plx_plex::plex::client_for(rig.sid).unwrap()
             .set_link(plx_plex::plex::probe::Location::Local);
         let bus: &'static Bus = Box::leak(Box::new(Bus::new()));
@@ -1661,10 +1634,9 @@ mod uri_boot_tests {
         let caps = Capabilities { progressive_uri: true, hls_uri: false,
             packet_feed: false, pause: true, seek: true, audio_track: true,
             subtitle_track: true, audio_off: false, subtitle_off: false };
-        let port = ResolvePort::new(ProductEvidence { display_exported: false, binding: Binding::Acb,
-            callable: caps, certified: caps, preview_rectangle: false }, qualifier);
+        let product = UriProduct { binding: Binding::Acb, callable: caps, certified: caps, qualifier };
         assert!(crate::app::adapters::backends::install_uri_product_with_ports(
-            &mut rig.app.adapters.player, &mut rig.app.player.session, port, bus, display));
+            &mut rig.app.adapters.player, &mut rig.app.player.session, product, bus, display));
         assert!(display.created_player_types().is_empty(), "composing the driver creates no handle");
         (bus, display)
     }
@@ -1728,7 +1700,7 @@ mod uri_boot_tests {
         let resolved = resolve_pending(&mut rig);
         let (offered, log) = offer_with_log(&mut rig, resolved.uri_offer.expect("original offered"));
         assert!(offered.is_ok());
-        assert_eq!(display.created_player_types(), [plx_platform::tv::plane::URI_PLAYER_TYPE],
+        assert_eq!(display.created_player_types(), [plx_os::tv::plane::URI_PLAYER_TYPE],
             "the offer made the handle, before any Start");
         assert!(log.contains("acb handle=uri ptype=0 create=22 initialized=true\n"), "{log}");
         assert!(bus.shapes().is_empty(), "nothing is opened by an offer");
@@ -1738,7 +1710,7 @@ mod uri_boot_tests {
         window_frame(&mut rig);
         assert_eq!(bus.shapes(), [Shape::Named], "the service is opened over the handle the offer made");
         assert_eq!(display.created_player_types(), [0], "the Start made no second handle");
-        plx_platform::tv::plane::installed().reset_for_test();
+        plx_os::tv::plane::installed().reset_for_test();
     }
 
     /// A create that fails declines the offer with the reason, and the same play goes to Feed.
@@ -1757,7 +1729,7 @@ mod uri_boot_tests {
         assert_eq!(rig.app.adapters.player.backend_snapshot().backend, Some(BackendKind::Feed));
         assert!(bus.shapes().is_empty(), "the URI service was never opened");
         assert_eq!(display.created_player_types(), [0], "one attempt");
-        plx_platform::tv::plane::installed().reset_for_test();
+        plx_os::tv::plane::installed().reset_for_test();
     }
 
     /// The failed create is recorded: a later offer in the same process declines at once and makes
@@ -1774,7 +1746,7 @@ mod uri_boot_tests {
         plx_media::player::stop_playback(&mut rig.app.player.session, &mut rig.app.adapters.player);
         assert_eq!(display.created_player_types(), [0]);
         assert!(plx_media::route::request_play(&mut rig.app.player.session,
-            rig.app.runtime.metadata_mut(), plx_platform::devcaps::caps(), rig.sid, "1",
+            rig.app.runtime.metadata_mut(), plx_os::devcaps::caps(), rig.sid, "1",
             "/library/parts/1/file.mkv", "h264", "aac", "First", "", None, ""));
         let resolved = resolve_pending(&mut rig);
         let (log, _) = decline_and_resolve_feed(&mut rig, resolved);
@@ -1782,7 +1754,7 @@ mod uri_boot_tests {
             "{log}");
         assert!(!log.contains("acb handle=uri"), "no second attempt is logged: {log}");
         assert_eq!(display.created_player_types(), [0], "a failed create is not retried");
-        plx_platform::tv::plane::installed().reset_for_test();
+        plx_os::tv::plane::installed().reset_for_test();
     }
 
     /// A viewer on Standard (the production qualifier answers `NotOptedIn`) is never offered the URI
@@ -1791,7 +1763,7 @@ mod uri_boot_tests {
     fn a_standard_viewers_play_on_an_acb_display_creates_no_uri_handle() {
         let _serial = plx_base::testlock::serial();
         let Some(mut rig) = Rig::serving(false) else { return };
-        let (bus, display) = compose_acb(&mut rig, &[22], Arc::new(plx_media::route::uri_preflight::ProductQualifier));
+        let (bus, display) = compose_acb(&mut rig, &[22], Arc::new(ProductQualifier::new(Binding::Acb)));
         rig.request();
         let resolved = resolve_pending(&mut rig);
         assert!(resolved.uri_offer.is_none(), "Standard is never offered the URI engine");
@@ -1801,6 +1773,6 @@ mod uri_boot_tests {
         window_frame(&mut rig);
         assert!(display.created_player_types().is_empty(), "no handle was made for a Standard play");
         assert!(bus.shapes().is_empty());
-        plx_platform::tv::plane::installed().reset_for_test();
+        plx_os::tv::plane::installed().reset_for_test();
     }
 }

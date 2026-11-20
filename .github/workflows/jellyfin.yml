@@ -12,7 +12,7 @@ on:
       - 'rust-modules/jellyfin/**'
       - 'rust-modules/plex/**'
       - 'rust-modules/base/**'
-      - 'rust-modules/platform/**'
+      - 'rust-modules/os/**'
       - 'rust-modules/net/**'
       - 'rust-modules/Cargo.toml'
       - 'rust-modules/Cargo.lock'
@@ -24,7 +24,7 @@ on:
       - 'rust-modules/jellyfin/**'
       - 'rust-modules/plex/**'
       - 'rust-modules/base/**'
-      - 'rust-modules/platform/**'
+      - 'rust-modules/os/**'
       - 'rust-modules/net/**'
       - 'rust-modules/Cargo.toml'
       - 'rust-modules/Cargo.lock'
@@ -65,7 +65,7 @@ jobs:
             *) echo "::warning::TMDB did not answer the key check ($status)" ;;
           esac
 
-      # plx_jellyfin depends on plx_plex, plx_base, plx_platform and plx_net only, none of which
+      # plx_jellyfin depends on plx_plex, plx_base, plx_os and plx_net only, none of which
       # links SDL, so the desktop libraries are not installed.
       - uses: ./.github/actions/host-rust
         with:

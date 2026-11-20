@@ -2,7 +2,7 @@
 //!
 //! The player decides direct play from its device profile and asks the server for a verdict
 //! before playing (`Backend::mde_decision`). Asking Jellyfin with a profile built from the same
-//! capability table (`plx_platform::devcaps`) lets the server apply what only it knows: the
+//! capability table (`plx_os::devcaps`) lets the server apply what only it knows: the
 //! bitrate limits set on the Dashboard for this user, and which subtitles must be burned into the
 //! picture because the profile does not list them. Its answer is a verdict (direct play, or not)
 //! and, when not, the `TranscodingUrl` it would serve: the progressive Matroska stream this
@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(p["DirectPlayProfiles"][0]["AudioCodec"], format!("aac,ac3,eac3,{CONVERTED_AUDIO}"));
         assert_eq!(p["TranscodingProfiles"][0]["AudioCodec"], "aac,ac3,eac3");
         for codec in CONVERTED_AUDIO.split(',') {
-            assert!(plx_platform::devcaps::tv_convertible(codec), "{codec} is one the app converts");
+            assert!(plx_os::devcaps::tv_convertible(codec), "{codec} is one the app converts");
         }
     }
 

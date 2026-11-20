@@ -14,20 +14,20 @@ pub const PLXNATIVE_BASE: &str = "0.11.0-dev";
 /// FinNative's policy: one Jellyfin server and no reporting, so none of the Plex services, the
 /// unencrypted-connection answers or the optional reports PlxNative's policy describes.
 pub(super) static PRIVACY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| [
-    plx_platform::i18n::msg::settings_legal_privacy_fin_responsible(),
-    plx_platform::i18n::msg::settings_legal_privacy_fin_responsible_body(),
-    plx_platform::i18n::msg::settings_legal_privacy_fin_jellyfin(),
-    plx_platform::i18n::msg::settings_legal_privacy_fin_jellyfin_body(),
-    plx_platform::i18n::msg::settings_legal_privacy_local(),
-    plx_platform::i18n::msg::settings_legal_privacy_fin_local_body(),
-    plx_platform::i18n::msg::settings_legal_privacy_fin_reports(),
-    plx_platform::i18n::msg::settings_legal_privacy_fin_reports_body(),
-    plx_platform::i18n::msg::settings_legal_privacy_retention(),
-    plx_platform::i18n::msg::settings_legal_privacy_fin_retention_body(),
-    plx_platform::i18n::msg::settings_legal_privacy_uninstall(),
-    plx_platform::i18n::msg::settings_legal_privacy_fin_uninstall_body(),
-    plx_platform::i18n::msg::settings_legal_privacy_contact(),
-    plx_platform::i18n::msg::settings_legal_privacy_fin_contact_body()
+    plx_os::i18n::msg::settings_legal_privacy_fin_responsible(),
+    plx_os::i18n::msg::settings_legal_privacy_fin_responsible_body(),
+    plx_os::i18n::msg::settings_legal_privacy_fin_jellyfin(),
+    plx_os::i18n::msg::settings_legal_privacy_fin_jellyfin_body(),
+    plx_os::i18n::msg::settings_legal_privacy_local(),
+    plx_os::i18n::msg::settings_legal_privacy_fin_local_body(),
+    plx_os::i18n::msg::settings_legal_privacy_fin_reports(),
+    plx_os::i18n::msg::settings_legal_privacy_fin_reports_body(),
+    plx_os::i18n::msg::settings_legal_privacy_retention(),
+    plx_os::i18n::msg::settings_legal_privacy_fin_retention_body(),
+    plx_os::i18n::msg::settings_legal_privacy_uninstall(),
+    plx_os::i18n::msg::settings_legal_privacy_fin_uninstall_body(),
+    plx_os::i18n::msg::settings_legal_privacy_contact(),
+    plx_os::i18n::msg::settings_legal_privacy_fin_contact_body()
 ].join("\n\n"));
 
 #[cfg(test)]

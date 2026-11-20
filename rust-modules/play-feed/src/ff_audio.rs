@@ -51,7 +51,7 @@ pub(super) fn app_decodes(name: &str) -> bool {
 }
 
 pub(super) fn app_decodes_with(converting: bool, name: &str) -> bool {
-    !converting && plx_platform::devcaps::app_decoded_by_ffmpeg_name(name).is_some()
+    !converting && plx_os::devcaps::app_decoded_by_ffmpeg_name(name).is_some()
 }
 
 /// The `AVSampleFormat` of the AC3 encoder's input, planar float (asserted in ci/ffabi-assert.c).
