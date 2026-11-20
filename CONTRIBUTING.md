@@ -6,9 +6,10 @@ about Jellyfin (the player, the interface, the TV integration) belongs in PlxNat
 there, and FinNative picks it up when it next merges PlxNative.
 
 New contributions to FinNative are offered under GPL-3.0-or-later, the licence of PlxNative and of
-FinNative's changes to it, without copyright assignment. Retain existing third-party notices and
-identify external code, its source revision, license and modifications. Do not submit code whose
-redistribution rights you cannot establish.
+FinNative's changes to it, without copyright assignment; to `rust-modules/owp/` (`plx_owp`), under
+Apache-2.0, as `LICENSING.md` says. Retain existing third-party notices and identify external code,
+its source revision, license and modifications. Do not submit code whose redistribution rights you
+cannot establish.
 
 Please include a `Signed-off-by: Your Name <email>` trailer certifying the
 [Developer Certificate of Origin 1.1](https://developercertificate.org/). This records your right

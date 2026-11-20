@@ -301,7 +301,7 @@ fn home_and_pages_ask_for_their_parts_at_once() {
 /// Shelf titles are the app's, in the viewer's language, not English from this layer.
 #[test]
 fn home_shelf_titles_follow_the_ui_language() {
-    let _pt = plx_platform::i18n::language_on_this_thread_for_test(plx_platform::i18n::Preference::Pt);
+    let _pt = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::Pt);
     let (c, _) = signed_in(vec![
         ("/UserViews", 200, VIEWS),
         ("/Items?userId=u1", 200, r#"{"Items":[{"Id":"m9","Name":"Loved","Type":"Movie","UserData":{"IsFavorite":true}}]}"#),
@@ -1238,7 +1238,7 @@ fn capabilities_are_posted_as_this_device() {
 /// films, or a reason this client does not word, is left out.
 #[test]
 fn a_movie_library_s_suggestions_are_titled_by_their_reason() {
-    let _en = plx_platform::i18n::language_on_this_thread_for_test(plx_platform::i18n::Preference::En);
+    let _en = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
     let (c, fake) = signed_in(vec![
         ("/UserViews", 200, VIEWS),
         ("/Movies/Recommendations", 200, r#"[

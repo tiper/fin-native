@@ -5,8 +5,8 @@
 
 use super::persistence::{self, CanonicalCommit, HelperEvidence, ProtectionFailure};
 use super::{SaveAuthority, Session};
-use plx_platform::storage::wire::{AuthPreservation, ProtectionOutcome};
-use plx_platform::storage::{CommitStage, StoreError};
+use plx_os::storage::wire::{AuthPreservation, ProtectionOutcome};
+use plx_os::storage::{CommitStage, StoreError};
 use plx_base::storage_worker::SubmitError;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -24,6 +24,11 @@ const NOT_LOCKED: u8 = 0;
 pub enum PersistOutcome {
     PersistedPlaintext,
     PersistedSealed,
+    /// A [`plx_os::tv::secure::StoreMode::MemoryOnly`] write: the process-local session holds the
+    /// edit and nothing credential-bearing was written. `persisted()` is true because that cell is
+    /// the authority there, so a caller asking "did the edit take" reads the same answer as ever;
+    /// only [`LiveWrite::classify`] says it did not reach a store, as `CompletionOutcome::Ephemeral`.
+    Memory,
     WriteFailed,
 }
 impl PersistOutcome {
@@ -102,7 +107,7 @@ pub enum Failure {
     Admission(SubmitError),
     Persistence(PersistOutcome),
     Storage(StoreError),
-    Helper(plx_platform::storage::wire::failure::HelperFailure, [Option<i32>; 8]),
+    Helper(plx_os::storage::wire::failure::HelperFailure, [Option<i32>; 8]),
     Protection(ProtectionFailure),
     WorkerDropped,
     Superseded,
@@ -111,6 +116,11 @@ pub enum Failure {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompletionOutcome {
     Durable(Operation),
+    /// The edit lives in this process alone, by design: the platform keeps no credential across
+    /// launches ([`plx_os::tv::secure::StoreMode::MemoryOnly`]). It is neither a failure to warn
+    /// about nor proof that a login was saved: a consumer that treats it as `Durable` claims a
+    /// saved login, one that treats it as a failure raises a persistence warning on every write.
+    Ephemeral,
     Uncertain {
         stage: CommitStage,
         errno: i32,
@@ -125,7 +135,7 @@ pub enum CompletionOutcome {
 impl CompletionOutcome {
     /// The warning and report consume the same completion-owned diagnostic, regardless of
     /// whether the helper failed outright or could not establish the commit's durability.
-    pub fn helper_evidence(&self) -> (Option<plx_platform::storage::wire::failure::HelperFailure>, [Option<i32>; 8]) {
+    pub fn helper_evidence(&self) -> (Option<plx_os::storage::wire::failure::HelperFailure>, [Option<i32>; 8]) {
         match self {
             Self::Uncertain { helper: Some((failure, errnos)), .. }
             | Self::Failed(Failure::Helper(failure, errnos)) => (Some(*failure), *errnos),
@@ -232,6 +242,8 @@ impl Receipt {
 pub enum LatestStatus {
     Pending,
     Durable,
+    /// Held in this process only ([`CompletionOutcome::Ephemeral`]).
+    Ephemeral,
     Uncertain { stage: CommitStage, errno: i32, helper: Option<HelperEvidence> },
     Failed(Failure),
     ProtectionUncertain(ProtectionFailure),
@@ -367,6 +379,8 @@ enum CommitDetail {
 
 #[derive(Clone, Copy)]
 enum DiskOutcome {
+    /// A [`LiveWrite::memory`] write: the process-local session took it and no store was touched.
+    Memory,
     ProtectionFailed(ProtectionFailure),
     Write {
         outcome: PersistOutcome,
@@ -383,6 +397,7 @@ enum DiskOutcome {
 impl DiskOutcome {
     fn classify(self) -> CompletionOutcome {
         match self {
+            Self::Memory => CompletionOutcome::Ephemeral,
             Self::ProtectionFailed(evidence) => {
                 if evidence.preservation == AuthPreservation::Uncertain {
                     CompletionOutcome::ProtectionUncertain(evidence)
@@ -466,8 +481,11 @@ pub struct LiveWrite {
     /// The canonical authority's own verdict, when this path consulted it. `None` only where the
     /// canonical store was deliberately bypassed (the `TEST_FILE` legacy-fixture path).
     pub commit: Option<CanonicalCommit>,
-    helper_failure: Option<plx_platform::storage::wire::failure::HelperFailure>,
+    helper_failure: Option<plx_os::storage::wire::failure::HelperFailure>,
     candidate_errnos: [Option<i32>; 8],
+    /// `Some` only for a [`StoreMode::MemoryOnly`](plx_os::tv::secure::StoreMode) write, holding
+    /// whether the install's own choices reached their file.
+    memory: Option<bool>,
 }
 
 impl LiveWrite {
@@ -476,7 +494,7 @@ impl LiveWrite {
     pub fn legacy(sealed: Option<bool>) -> Self {
         Self {
             outcome: Self::outcome_of(sealed),
-            commit: None, helper_failure: None, candidate_errnos: [None; 8],
+            commit: None, helper_failure: None, candidate_errnos: [None; 8], memory: None,
         }
     }
 
@@ -486,10 +504,29 @@ impl LiveWrite {
             outcome: Self::outcome_of(sealed),
             commit: Some(commit), helper_failure: None,
             candidate_errnos: super::candidate_errnos(),
+            memory: None,
         }
     }
 
-    pub fn with_helper_failure(mut self, failure: Option<plx_platform::storage::wire::failure::HelperFailure>) -> Self {
+    /// The [`StoreMode::MemoryOnly`](plx_os::tv::secure::StoreMode) path: the process-local session
+    /// took the write and no credential store, canonical or legacy, was touched. `install_kept` is
+    /// whether the install's own choices (client id, language, resolution) reached their file,
+    /// which is the only thing a caller promising "next launch" can ask of it.
+    pub fn memory(install_kept: bool) -> Self {
+        Self {
+            outcome: PersistOutcome::Memory,
+            commit: None, helper_failure: None, candidate_errnos: [None; 8],
+            memory: Some(install_kept),
+        }
+    }
+
+    /// Whether the install's own choices written by this [`memory`](Self::memory) write reached
+    /// their file. False for every other write.
+    pub fn install_choices_kept(&self) -> bool {
+        self.memory == Some(true)
+    }
+
+    pub fn with_helper_failure(mut self, failure: Option<plx_os::storage::wire::failure::HelperFailure>) -> Self {
         self.helper_failure = failure;
         self
     }
@@ -522,6 +559,9 @@ impl LiveWrite {
     }
 
     fn disk_outcome(&self) -> DiskOutcome {
+        if self.memory.is_some() {
+            return DiskOutcome::Memory;
+        }
         match &self.commit {
             Some(CanonicalCommit::ProtectionFailed(evidence)) => {
                 DiskOutcome::ProtectionFailed(*evidence)
@@ -926,11 +966,13 @@ impl CompletionGuard {
                 self.revision
             )),
             CompletionOutcome::Durable(_)
+            | CompletionOutcome::Ephemeral
             | CompletionOutcome::Superseded
             | CompletionOutcome::ProtectionUncertain(_) => {}
         }
         *self.status.lock().unwrap_or_else(|e| e.into_inner()) = match outcome {
             CompletionOutcome::Durable(_) => LatestStatus::Durable,
+            CompletionOutcome::Ephemeral => LatestStatus::Ephemeral,
             CompletionOutcome::Uncertain { stage, errno, helper } => {
                 LatestStatus::Uncertain { stage, errno, helper }
             }
@@ -1137,7 +1179,7 @@ fn execute_write(snapshot: Session, authority: SaveAuthority) -> DiskOutcome {
             protection,
             verified,
             outcome: if protection.is_some_and(|outcome| {
-                outcome.class == plx_platform::storage::wire::ProtectionClass::Keymanager
+                outcome.class == plx_os::storage::wire::ProtectionClass::Keymanager
             }) {
                 PersistOutcome::PersistedSealed
             } else {
@@ -1210,7 +1252,7 @@ mod tests {
 
     #[test]
     fn uncertain_write_and_clear_keep_helper_evidence_without_becoming_failed_or_durable() {
-        use plx_platform::storage::wire::failure::{HelperFailure, Stage};
+        use plx_os::storage::wire::failure::{HelperFailure, Stage};
         let helper = Some((HelperFailure::new(Stage::Db8, Some(-3963)), [None; 8]));
         let commit = CommitDetail::Uncertain { stage: CommitStage::Readback, errno: 0, helper };
         for disk in [
@@ -2033,12 +2075,12 @@ mod tests {
         }
     }
 
-    fn keymanager_failure() -> plx_platform::storage::wire::KeymanagerFailure {
-        plx_platform::storage::wire::KeymanagerFailure {
-            operation: plx_platform::storage::wire::KeymanagerOperation::Seal,
-            stage: plx_platform::storage::wire::KeymanagerStage::Finish,
-            code: plx_platform::storage::wire::ErrorCode::Unavailable,
-            category: plx_platform::storage::wire::KeymanagerFailureCategory::Unavailable,
+    fn keymanager_failure() -> plx_os::storage::wire::KeymanagerFailure {
+        plx_os::storage::wire::KeymanagerFailure {
+            operation: plx_os::storage::wire::KeymanagerOperation::Seal,
+            stage: plx_os::storage::wire::KeymanagerStage::Finish,
+            code: plx_os::storage::wire::ErrorCode::Unavailable,
+            category: plx_os::storage::wire::KeymanagerFailureCategory::Unavailable,
             service_code: None,
         }
     }

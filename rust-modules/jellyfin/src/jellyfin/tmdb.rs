@@ -51,7 +51,7 @@ pub fn sized_poster(url: &str, w: i64) -> Option<String> {
 /// larger than the disk cache keeps) and without a credential.
 pub fn fetch_image(url: &str) -> ArtFetch {
     use plx_net::net;
-    match net::request(url, &[], "GET", None, net::BULK, false, Some(plx_platform::imgcache::MAX_FILE), None) {
+    match net::request(url, &[], "GET", None, net::BULK, false, Some(plx_os::imgcache::MAX_FILE), None) {
         Some(r) if (200..300).contains(&r.status) => ArtFetch::Bytes(r.body),
         Some(r) => ArtFetch::Status(r.status.into()),
         None => ArtFetch::NoResponse,

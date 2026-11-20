@@ -17,11 +17,11 @@ pub(super) const FORM_GROUP: GroupId = GroupId(2);
 /// The open form's ids (`form.<word>`), in [`form::ELEMS`] order, with each element's role and the
 /// label it draws.
 const FORM_IDS: [(u32, &str, Role, fn() -> &'static CStr); 5] = [
-    (form::SERVER, "server", Role::Field, plx_platform::i18n::msg::browse_jf_server_c),
-    (form::USERNAME, "username", Role::Field, plx_platform::i18n::msg::browse_jf_username_c),
-    (form::PASSWORD, "password", Role::Field, plx_platform::i18n::msg::browse_jf_password_c),
-    (form::SIGN_IN, "sign_in", Role::Button, plx_platform::i18n::msg::browse_action_sign_in_c),
-    (form::QUICK_CONNECT, "quick_connect", Role::Button, plx_platform::i18n::msg::browse_jf_quick_connect_c),
+    (form::SERVER, "server", Role::Field, plx_os::i18n::msg::browse_jf_server_c),
+    (form::USERNAME, "username", Role::Field, plx_os::i18n::msg::browse_jf_username_c),
+    (form::PASSWORD, "password", Role::Field, plx_os::i18n::msg::browse_jf_password_c),
+    (form::SIGN_IN, "sign_in", Role::Button, plx_os::i18n::msg::browse_action_sign_in_c),
+    (form::QUICK_CONNECT, "quick_connect", Role::Button, plx_os::i18n::msg::browse_jf_quick_connect_c),
 ];
 
 impl LoginScreen {
@@ -38,7 +38,7 @@ impl LoginScreen {
         }
         (key == MANUAL && self.manual_offered() && !self.report.alert.is_open()).then(|| {
             let a = A11y::new(A11yPath::new().name("manual"), Role::Button);
-            match plx_platform::i18n::msg::browse_jf_manual_c().to_str() {
+            match plx_os::i18n::msg::browse_jf_manual_c().to_str() {
                 Ok(text) => a.with_label(text),
                 Err(_) => a,
             }
@@ -73,7 +73,7 @@ impl LoginScreen {
 
     /// The QR screen's *Manual sign-in*, on the narrative column's action band.
     pub(super) fn waiting_manual(measure: &dyn Measure) -> Rect {
-        let w = Button::pill_w_measured(plx_platform::i18n::msg::browse_jf_manual_c(), theme::size::BODY, false, None, measure);
+        let w = Button::pill_w_measured(plx_os::i18n::msg::browse_jf_manual_c(), theme::size::BODY, false, None, measure);
         RouteLayout::screen().action_pair(w, 0.0).0
     }
 

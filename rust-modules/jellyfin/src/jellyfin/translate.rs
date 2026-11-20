@@ -22,7 +22,7 @@ use crate::jellyfin::image_tags;
 use crate::jellyfin::languages;
 use crate::jellyfin::paths::{self, ImageKind};
 use crate::jellyfin::time::{iso_date, iso_to_unix, ticks_to_ms};
-use plx_platform::i18n::msg;
+use plx_os::i18n::msg;
 use plx_plex::plex::account::AudioPreferences;
 use plx_plex::plex::{
     Chapter, HexColor, Hub, LibrarySection, Marker, Media, MediaContainer, MediaId, MediaPart, Metadata, SearchResult, Stream,

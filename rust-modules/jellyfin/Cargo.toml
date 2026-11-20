@@ -23,7 +23,7 @@ plx_base = { path = "../base" }
 # `present::wake_from_worker`, so a favourite write's answer from the server is drawn at once.
 plx_machine = { path = "../machine" }
 # The app's translated strings (`i18n::msg`), for the shelf titles this layer names.
-plx_platform = { path = "../platform" }
+plx_os = { path = "../os" }
 # The libcurl transport (`plx_net::net::request`) the real `Transport` sends through.
 plx_net = { path = "../net" }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
@@ -36,6 +36,6 @@ workspace = true
 
 [dev-dependencies]
 # Tests read the shelf titles in English without the boot-time locale (`i18n::current`).
-plx_platform = { path = "../platform", features = ["test-support"] }
+plx_os = { path = "../os", features = ["test-support"] }
 # The server registry as a test fixture (`register_for_test`), for the tests that call `Client`.
 plx_plex = { path = "../plex", features = ["alt-backend", "test-support"] }

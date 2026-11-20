@@ -4051,17 +4051,17 @@ fn status_read(
     Some(match view.state {
         plx_data::pms::HubState::Loading => {
             // placeholder-exempt: builds the value only; counted where drawn (StatusOverlay::draw_geometry, Working)
-            (plx_platform::i18n::msg::browse_home_loading_c(), StatusKind::Working, None)
+            (plx_os::i18n::msg::browse_home_loading_c(), StatusKind::Working, None)
         }
         plx_data::pms::HubState::Failed => (
-            plx_platform::i18n::msg::browse_home_failed_c(),
+            plx_os::i18n::msg::browse_home_failed_c(),
             StatusKind::Failed,
-            Some(plx_platform::i18n::msg::browse_action_retry_c()),
+            Some(plx_os::i18n::msg::browse_action_retry_c()),
         ),
         plx_data::pms::HubState::Ready => (
-            plx_platform::i18n::msg::browse_home_empty_c(),
+            plx_os::i18n::msg::browse_home_empty_c(),
             StatusKind::Empty,
-            Some(plx_platform::i18n::msg::browse_home_refresh_c()),
+            Some(plx_os::i18n::msg::browse_home_refresh_c()),
         ),
     })
 }
@@ -4439,7 +4439,7 @@ fn prefetch_armed(snap: f32, sliding: bool) -> bool {
 /// The copy beneath the title. Playback progress lives in the action row.
 enum HeroLine<'a> {
     Premise(&'a str),
-    Metadata { identity: String, date: String, length: String, genres: String, quality: Option<String>, rating: &'a str },
+    Metadata { identity: String, date: String, length: String, genres: String, quality: Option<String>, range: Option<&'static str>, rating: &'a str },
 }
 
 fn hero_resumes(hero: &PmsMovie) -> bool {
@@ -4461,7 +4461,7 @@ fn hero_action(hero: &PmsMovie) -> (std::borrow::Cow<'static, std::ffi::CStr>, O
 
 fn hero_line(hero: &PmsMovie) -> Option<HeroLine<'_>> {
     use plx_data::pms::{KIND_EPISODE, KIND_MOVIE, KIND_SHOW};
-    use plx_platform::i18n::msg;
+    use plx_os::i18n::msg;
     use plx_ui::fmt;
     let is_episode = hero.kind == KIND_EPISODE;
     let is_show = hero.kind == KIND_SHOW;
@@ -4500,9 +4500,10 @@ fn hero_line(hero: &PmsMovie) -> Option<HeroLine<'_>> {
         let quality = if is_show { None } else {
             hero.video_resolution.as_deref().and_then(|resolution| fmt::resolution(resolution, 0, 0))
         };
+        let range = if is_show { None } else { fmt::dynamic_range(plx_base::detail_parts::DynamicRange::carried(hero.hdr, hero.dolby_vision)) };
         let rating = hero.rating.trim();
-        if !(identity.is_empty() && date.is_empty() && length.is_empty() && genres.is_empty() && quality.is_none() && rating.is_empty()) {
-            return Some(HeroLine::Metadata { identity, date, length, genres, quality, rating });
+        if !(identity.is_empty() && date.is_empty() && length.is_empty() && genres.is_empty() && quality.is_none() && range.is_none() && rating.is_empty()) {
+            return Some(HeroLine::Metadata { identity, date, length, genres, quality, range, rating });
         }
     }
     Some(first_sentence(&hero.summary)).filter(|s| !s.is_empty()).map(HeroLine::Premise)
@@ -4524,9 +4525,9 @@ fn hero_content(hero: &PmsMovie, p: Painter, dx: f32, measure: &dyn Measure) {
         .draw(p, hero_title_band(&stack), measure);
     let Some(block) = stack.block else { return };
     match line {
-        Some(HeroLine::Metadata { identity, date, length, genres, quality, rating }) => {
+        Some(HeroLine::Metadata { identity, date, length, genres, quality, range, rating }) => {
             let r = Rect::new(MARGIN_X, block.y, HERO_COL_W, block.h);
-            plx_ui::widgets::hero_metadata(p, r, &[&identity, &date, &length, &genres], quality.as_deref(), rating, measure);
+            plx_ui::widgets::hero_metadata(p, r, &[&identity, &date, &length, &genres], quality.as_deref(), range, rating, measure);
         }
         Some(HeroLine::Premise(premise)) => {
             home_synopsis(premise).draw(p, Rect::new(MARGIN_X, block.y, theme::hero::HOME_SYNOPSIS_W, 0.0));

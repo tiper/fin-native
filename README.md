@@ -145,8 +145,9 @@ The default `FLAVOR=debug` package installs as `io.github.tiper.finnative.debug`
 
 ## Licence
 
-GPL-3.0-or-later, the same as PlxNative. [`LICENSE`](LICENSE) is the unmodified GPLv3 text and
-[`LICENSING.md`](LICENSING.md) states the "or later" choice.
+GPL-3.0-or-later, the same as PlxNative; `rust-modules/owp/` is Apache-2.0. [`LICENSE`](LICENSE) is
+the unmodified GPLv3 text and [`LICENSING.md`](LICENSING.md) states the "or later" choice and the
+Apache-2.0 crate.
 
 Jellyfin is a project of the Jellyfin team; Plex is a trademark of Plex, Inc.; LG and webOS are
 trademarks of LG Electronics. FinNative is not affiliated with or endorsed by any of them.

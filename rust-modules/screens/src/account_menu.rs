@@ -66,7 +66,7 @@ pub enum Action {
     /// button (BLUE, `wcode` 489 on the dev set), and an LG Cloud Test Lab virtual remote may not
     /// offer colour buttons at all — nor is that code guaranteed on a set nobody here has touched
     /// (`docs/lab-diagnostics.md` §7). Never offered in any other build —
-    /// [`plx_platform::labcfg::menu_row_enabled`] is `false` at compile time.
+    /// [`plx_os::labcfg::menu_row_enabled`] is `false` at compile time.
     SendDiagnostics,
     /// FinNative: sign another user in beside the saved ones ([`plx_plex::plex::can_add_users`]).
     AddUser,
@@ -120,7 +120,7 @@ struct AccountInputs {
     /// *Change profile* is on offer: plex.tv can serve a roster and the Session has not refused this
     /// identity one (`switch_refused`, [`plx_session::auth::owner::SessionSnapshot::switch_refused`]).
     can_switch: bool,
-    /// The lab-only *Send diagnostics* row ([`plx_platform::labcfg::menu_row_enabled`], compile-time `false`
+    /// The lab-only *Send diagnostics* row ([`plx_os::labcfg::menu_row_enabled`], compile-time `false`
     /// outside lab builds).
     lab: bool,
     /// FinNative's *Add user* ([`plx_plex::plex::can_add_users`]).
@@ -142,7 +142,7 @@ impl AccountInputs {
             name: acc.name.clone(),
             signed_in: acc.signed_in,
             can_switch: acc.can_switch && !switch_refused,
-            lab: plx_platform::labcfg::menu_row_enabled(),
+            lab: plx_os::labcfg::menu_row_enabled(),
             add_user: acc.signed_in && plx_plex::plex::can_add_users(),
         }
     }
@@ -173,19 +173,19 @@ pub fn chip_label(acc: &Account) -> String {
 fn chip_text(name: Option<&str>, signed_in: bool) -> String {
     match (name, signed_in) {
         (Some(n), _) => n.to_string(),
-        (None, true) => plx_platform::i18n::msg::settings_account_title().to_string(),
+        (None, true) => plx_os::i18n::msg::settings_account_title().to_string(),
         (None, false) => label(Action::SignIn).to_string(),
     }
 }
 
 fn label(a: Action) -> &'static str {
     match a {
-        Action::ChangeProfile => plx_platform::i18n::msg::settings_account_change_profile(),
-        Action::SignIn => plx_platform::i18n::msg::settings_account_sign_in(),
-        Action::SignOut => plx_platform::i18n::msg::settings_account_sign_out(),
-        Action::Settings => plx_platform::i18n::msg::settings_account_settings(),
-        Action::SendDiagnostics => plx_platform::i18n::msg::settings_account_diagnostics(),
-        Action::AddUser => plx_platform::i18n::msg::settings_account_add_user(),
+        Action::ChangeProfile => plx_os::i18n::msg::settings_account_change_profile(),
+        Action::SignIn => plx_os::i18n::msg::settings_account_sign_in(),
+        Action::SignOut => plx_os::i18n::msg::settings_account_sign_out(),
+        Action::Settings => plx_os::i18n::msg::settings_account_settings(),
+        Action::SendDiagnostics => plx_os::i18n::msg::settings_account_diagnostics(),
+        Action::AddUser => plx_os::i18n::msg::settings_account_add_user(),
     }
 }
 
@@ -198,7 +198,7 @@ fn account_form(inputs: &AccountInputs) -> (String, Form<Action, Action, Infalli
     let header = inputs
         .name
         .clone()
-        .unwrap_or_else(|| plx_platform::i18n::msg::settings_account_title().to_string());
+        .unwrap_or_else(|| plx_os::i18n::msg::settings_account_title().to_string());
     // The chip this menu hangs from already says who the account is (N-c): a head that only repeats
     // it is dropped (an empty header draws no header row), so the panel opens on its first action.
     // Signed out, the chip reads "Sign in" and the head "Account": different words, so it stays.
@@ -293,7 +293,7 @@ impl AccountMenuScreen {
     pub fn new(entry: EntryId) -> Self {
         Self {
             entry,
-            header: plx_platform::i18n::msg::settings_account_title().to_string(),
+            header: plx_os::i18n::msg::settings_account_title().to_string(),
             form: FormTable::new(crate::registry::BAND),
             built: false,
             session_watch: Default::default(),
@@ -941,7 +941,7 @@ impl AuthLike for MenuHost {
         let acc = s.account(active);
         let rows = rows_of(&acc, false);
         (
-            acc.name.unwrap_or_else(|| plx_platform::i18n::msg::settings_account_title().to_string()),
+            acc.name.unwrap_or_else(|| plx_os::i18n::msg::settings_account_title().to_string()),
             rows.iter().map(|a| label(*a)).collect(),
         )
     }
@@ -1085,7 +1085,7 @@ impl AuthLike for MenuHost {
             ..Default::default()
         })
         .account(None);
-        assert_eq!(chip_label(&nameless), plx_platform::i18n::msg::settings_account_title());
+        assert_eq!(chip_label(&nameless), plx_os::i18n::msg::settings_account_title());
 
         // Signed out: the chip says exactly what the ACCOUNT row behind it says. That row is
         // first, and the assertion is on `[0]` rather than on the whole set — the set also carries
@@ -1170,8 +1170,8 @@ impl AuthLike for MenuHost {
         assert!(heads(&named_inputs).iter().all(String::is_empty), "named: no head repeats the chip: {:?}", heads(&named_inputs));
         // signed out the chip says "Sign in" and the menu "Account": different words, so the head stays
         let out = Session::default().account(None);
-        assert_ne!(chip_label(&out), plx_platform::i18n::msg::settings_account_title(), "premise: the chip says another word");
-        assert_eq!(heads(&AccountInputs::of(&out, false)), [plx_platform::i18n::msg::settings_account_title()],
+        assert_ne!(chip_label(&out), plx_os::i18n::msg::settings_account_title(), "premise: the chip says another word");
+        assert_eq!(heads(&AccountInputs::of(&out, false)), [plx_os::i18n::msg::settings_account_title()],
             "signed out: the \"Account\" head stays");
         // the rows are the same with the head or without
         assert_eq!(ids(account_form(&named_inputs).1), rows_of(&named, false));
@@ -1249,7 +1249,7 @@ impl AuthLike for MenuHost {
     /// compact table `build` draws, at the shared menu cap.
     #[test]
     fn every_app_owned_run_fits_the_panel_in_every_language() {
-        use plx_platform::i18n::{language_on_this_thread_for_test, SHIPPED};
+        use plx_os::i18n::{language_on_this_thread_for_test, SHIPPED};
         let mut out = Vec::new();
         for language in SHIPPED {
             let _guard = language_on_this_thread_for_test(language);

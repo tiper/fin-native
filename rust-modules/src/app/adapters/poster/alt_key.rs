@@ -5,7 +5,7 @@
 //! artwork does, so the whole request is the identity. A TMDB poster (a Filmography title the
 //! library does not hold) is an address whose path names its picture, so it is its own identity.
 
-use plx_platform::imgcache::{classify_baked, DiskKey};
+use plx_os::imgcache::{classify_baked, DiskKey};
 
 const KIND: &str = "alt-image";
 
