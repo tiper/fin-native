@@ -466,7 +466,9 @@ Citations in this section quote the tree at e9924f0f9 with its old names (see "N
     `MemoryOnly` gate sits above that selection. W8a re-keyed plex's 21 sites to `tv::authority::authority()`:
     `persistence.rs`'s dispatchers take the authority and the helper's transport, so a host test drives the helper
     arm with a fake one. Telemetry's consent store was re-keyed first (#1490), and that PR installs the account-clear
-    sweep on every platform, so consent on a Tizen build takes the files arm, not DB8.
+    sweep on every platform. The re-keyed store takes the authority's arm on a `Durable` platform (files off
+    webOS); under `MemoryOnly`, where Tizen starts, consent is neither read nor written
+    (`PersistResult::NotAttempted`) and the question is asked again each launch (Decision 7 B).
 
 ### Evidence from the second reviews: F40-F46 (each citation checked in the tree)
 
@@ -861,9 +863,10 @@ split by who reads it (critic M4):
      migration inputs, the marked fallback of a helper outage and the install-preferences file a sign-out writes
      when the helper's clear is not durable) or `Authority::Files` (desktop, Tizen, a host
      test: the app's own record files are the store), read through
-     `tv::authority::authority()`. `secure::mode()` decides the session record ahead of it: under `MemoryOnly`
-     (where Tizen starts, W9) the session lives in memory and no credential store is read or written, whatever the
-     authority says; only the install's own preference file persists. It replaces the `target_os = "linux"` + `target_arch = "arm"` fence the persistence
+     `tv::authority::authority()`. `secure::mode()` decides the session record AND the consent record ahead of it: under
+     `MemoryOnly` (where Tizen starts, W9) the session lives in memory, no credential store is read or written
+     and consent is neither read nor written, whatever the authority says; only the install's own preference
+     file persists. It replaces the `target_os = "linux"` + `target_arch = "arm"` fence the persistence
      layers chose their store by; the helper's wake-up (`storage::client::install_activator`) joins it after W7b;
    - `legacy_webos_media { sink, display_sink, uri_media }`: the Starfish, ACB and `com.webos.media` verbs (F31),
      named for what they are (critic M3). Every hook is required (Decision 2, C): a platform states each field,

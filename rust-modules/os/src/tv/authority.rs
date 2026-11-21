@@ -6,11 +6,11 @@
 //! state root ([`Authority::Files`]): the desktop simulator, a host test, and a platform with no
 //! helper at all (Tizen).
 //!
-//! The authority is not the whole answer for the session record: the platform's persistence mode
-//! ([`secure::mode()`](super::secure::mode)) decides it first. Under `StoreMode::MemoryOnly`, where
-//! Tizen starts (W9), the session lives in memory and no credential store is read or written,
-//! whatever the authority says; only the install's own preference file (client id, language and
-//! Interface resolution) persists.
+//! The authority is not the whole answer for the session record and the consent record: the
+//! platform's persistence mode ([`secure::mode()`](super::secure::mode)) decides them first. Under
+//! `StoreMode::MemoryOnly`, where Tizen starts (W9), the session lives in memory, no credential
+//! store is read or written and consent is neither read nor written, whatever the authority says;
+//! only the install's own preference file (client id, language and Interface resolution) persists.
 //!
 //! Under `Helper` the app's own files are not the store. Three kinds remain:
 //! - the legacy migration inputs an older build left;
