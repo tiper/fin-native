@@ -7,9 +7,9 @@ television runs, packaged so it starts on a Mac that has none of this repo's bui
 no Homebrew, no SDL, no toolchain. `ci/mkmacapp.py` is the whole recipe; this note is why it looks
 the way it does and what the result is and is not.
 
-It is **not a new build of the app**. It is `--features hostsim,play-feed` — the desktop simulator
-(`docs/…`/`rust-modules/src/bin/sim.rs`, and the `ui-sim` skill) — with the dev features off and a
-bundle around it. (`play-feed` is named because `--no-default-features` drops it, and the simulator's
+It is **not a new build of the app**. It is `--features hostsim,play-feed` — the desktop simulator,
+which boots the app on the desktop's own platform (`rust-modules/src/platform_desktop.rs`, entered by
+`rust-modules/src/bin/sim.rs`; the `ui-sim` skill) — with the dev features off and a bundle around it. (`play-feed` is named because `--no-default-features` drops it, and the simulator's
 video sink belongs to that backend.) Every UI change, every Plex data-layer change, is the same code the ipk ships.
 
 ## What it can do, and the one thing it cannot
@@ -70,7 +70,7 @@ Four things, and three of them were bugs that had been sitting in the tree unrea
    recipe are untouched.
 
 The window changed too, though that is taste rather than a bug: it opens at an exact integer
-divisor of the 1920x1080 canvas (`app::boot::plan_desktop_window`) with ALLOW_HIGHDPI, and is not
+divisor of the 1920x1080 canvas (`plx_shell_sdl::window::plan_desktop_window`) with ALLOW_HIGHDPI, and is not
 resizable. The window's pixel density is measured from the window itself (`SDL_GetDisplayDPI` is
 unreliable on macOS), and the window is then sized in points for the drawable it should give, so a
 display of any size lands on the same result. On a Retina display that means a 960x540-point window

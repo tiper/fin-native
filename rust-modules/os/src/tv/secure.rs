@@ -4,13 +4,42 @@
 //! Beside them, [`StoreMode`] says whether this platform keeps a credential across launches at
 //! all.
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
+use std::borrow::Cow;
 
+/// Which key store sealed an envelope: an opaque tag, written to disk exactly as spelled.
+///
+/// It is not a closed set. The tag is the only thing in the stored envelope that says which
+/// platform's store can open it, and a platform names its own in its own code ([`Backend::new`]);
+/// no shared code branches on one, but the legacy-migration decoder
+/// (`plex::session::persistence::decode_legacy_at_depth`), which accepts only `keymanager3` from
+/// the files earlier builds wrote. A tag that no installed platform knows is REFUSED when the
+/// envelope is opened (the platform's `open` answers `None`, the session layer reports the file
+/// locked) and is never read as another store's: the stored text is not ours to reinterpret.
+///
+/// Serde-transparent, so the wire form is the bare string: an envelope written before this type
+/// stopped being an enum reads back unchanged, and one written now reads in an older build.
+/// `the_sealed_envelope_keeps_its_wire_form_for_every_backend_tag` pins both directions.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Backend {
-    Keymanager3,
-    PalmKeymanager,
+#[serde(transparent)]
+pub struct Backend(Cow<'static, str>);
+
+impl Backend {
+    /// webOS's public `com.webos.service.keymanager3`: AES-GCM under a key the service holds.
+    pub const KEYMANAGER3: Backend = Backend::new("keymanager3");
+    /// webOS's archival `com.palm.keymanager`. Only ever READ from a file an interim build
+    /// wrote: nothing seals with it and nothing opens it (its AES-CFB does not authenticate).
+    pub const PALM_KEYMANAGER: Backend = Backend::new("palm_keymanager");
+
+    /// A tag a platform names for its own store. The spelling is a wire format: it is stored in
+    /// every sealed session, so it never changes once a build has written it.
+    pub const fn new(tag: &'static str) -> Self {
+        Self(Cow::Borrowed(tag))
+    }
+
+    /// The tag as stored.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -40,7 +69,7 @@ pub fn seal(plain: &[u8]) -> Option<Sealed> {
     if let Some(store) = STORE_FOR_TEST.with(|cell| cell.get()) {
         return (store.seal)(plain);
     }
-    (super::port().seal)(plain)
+    (super::services().secure.seal)(plain)
 }
 
 pub fn open(sealed: &Sealed) -> Option<Vec<u8>> {
@@ -48,7 +77,7 @@ pub fn open(sealed: &Sealed) -> Option<Vec<u8>> {
     if let Some(store) = STORE_FOR_TEST.with(|cell| cell.get()) {
         return (store.open)(sealed);
     }
-    (super::port().open)(sealed)
+    (super::services().secure.open)(sealed)
 }
 
 pub fn remove(backend: &Backend, key: &str) {
@@ -56,7 +85,7 @@ pub fn remove(backend: &Backend, key: &str) {
     if let Some(store) = STORE_FOR_TEST.with(|cell| cell.get()) {
         return (store.remove)(backend, key);
     }
-    (super::port().remove)(backend, key)
+    (super::services().secure.remove)(backend, key)
 }
 
 /// Whether this platform keeps the signed-in session across launches.
@@ -76,25 +105,19 @@ pub enum StoreMode {
     MemoryOnly,
 }
 
-/// The mode the platform published at startup, set once. Unset reads as [`StoreMode::Durable`],
-/// which is what every platform before this value existed was.
-static MODE: OnceLock<StoreMode> = OnceLock::new();
-
-/// Publish the platform's mode before the first session read. Once; later calls are ignored.
-pub fn publish_mode(mode: StoreMode) {
-    let _ = MODE.set(mode);
-}
-
 /// The persistence mode of this process: what the session layer reads before it touches a store.
+/// The platform states it once, as the `mode` of its [`SecureHooks`](super::SecureHooks); a process
+/// that installed none is a host test, whose `NONE` group says [`StoreMode::Durable`], which is
+/// what every platform before this value existed was.
 pub fn mode() -> StoreMode {
     #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = mode_override() {
         return mode;
     }
-    MODE.get().copied().unwrap_or_default()
+    super::services().secure.mode
 }
 
-/// A host test's replacement for the published mode. It cannot be thread-local like
+/// A host test's replacement for the platform's stated mode. It cannot be thread-local like
 /// [`STORE_FOR_TEST`]: the session writes on `plx_base::storage_worker`, a thread the test that
 /// sets it does not own. It is a process global, so [`set_mode_for_test`] asserts the crate test
 /// lock is held and its guard clears the override.
@@ -148,11 +171,78 @@ pub fn set_mode_for_test(mode: StoreMode) -> ModeReset {
 mod tests {
     use super::*;
 
+    /// **The sealed envelope's wire form, pinned for every backend tag a TV may have written.** The
+    /// envelope is what `plex::session` stores on disk, so a changed spelling of a tag would leave
+    /// every saved session on every TV unreadable. The literals are what this type wrote when the
+    /// test was added; a refactor of `Backend` must keep them byte for byte, in both directions.
+    /// `tests/fixtures/persistence/v0.6.*/secure-envelope-v1.json` carries the `keymanager3` tag
+    /// inside the session file's wrapper, and nothing pinned `palm_keymanager` at all.
+    #[test]
+    fn the_sealed_envelope_keeps_its_wire_form_for_every_backend_tag() {
+        let sealed = |backend| Sealed {
+            backend,
+            key: "plxnative.session.v1".into(),
+            iv: "MDEyMzQ1Njc4OWFi".into(),
+            data: "Y2lwaGVydGV4dA==".into(),
+        };
+        let cases = [
+            (
+                Backend::KEYMANAGER3,
+                r#"{"backend":"keymanager3","key":"plxnative.session.v1","iv":"MDEyMzQ1Njc4OWFi","data":"Y2lwaGVydGV4dA=="}"#,
+            ),
+            (
+                Backend::PALM_KEYMANAGER,
+                r#"{"backend":"palm_keymanager","key":"plxnative.session.v1","iv":"MDEyMzQ1Njc4OWFi","data":"Y2lwaGVydGV4dA=="}"#,
+            ),
+        ];
+        for (backend, literal) in cases {
+            let value = sealed(backend);
+            assert_eq!(serde_json::to_string(&value).unwrap(), literal, "{value:?} serializes to its literal");
+            assert_eq!(serde_json::from_str::<Sealed>(literal).unwrap(), value, "{literal} reads back as {value:?}");
+        }
+    }
+
+    /// The 0.6.3 to 0.6.5 files carry an `identity` member the envelope has no field for: it is
+    /// ignored on read, and a rewrite no longer carries it. Pinned beside the tags above because
+    /// both are the same promise: a file an earlier build wrote still opens.
+    #[test]
+    fn an_envelope_with_a_member_this_type_no_longer_has_still_reads() {
+        let literal = r#"{"backend":"keymanager3","key":"plxnative.session.v1","iv":"MDEyMzQ1Njc4OWFi","data":"Y2lwaGVydGV4dA==","identity":"named"}"#;
+        let read: Sealed = serde_json::from_str(literal).unwrap();
+        assert_eq!(read.backend, Backend::KEYMANAGER3);
+        assert_eq!(read.key, "plxnative.session.v1");
+        assert_eq!(read.iv, "MDEyMzQ1Njc4OWFi");
+        assert_eq!(read.data, "Y2lwaGVydGV4dA==");
+    }
+
+    /// A tag nobody here has a name for is carried through as written, and no constant equals it:
+    /// it is the platform's `open` that refuses it, never this type that reads it as another store.
+    #[test]
+    fn a_tag_no_platform_knows_is_kept_verbatim_and_equals_no_known_tag() {
+        let literal = r#"{"backend":"host_file","key":"plxnative.session.v1","iv":"aXY=","data":"ZGF0YQ=="}"#;
+        let read: Sealed = serde_json::from_str(literal).unwrap();
+        assert_eq!(read.backend.as_str(), "host_file");
+        assert_ne!(read.backend, Backend::KEYMANAGER3);
+        assert_ne!(read.backend, Backend::PALM_KEYMANAGER);
+        assert_eq!(serde_json::to_string(&read).unwrap(), literal, "written back as it was read");
+        assert_eq!(read.backend, Backend::new("host_file"));
+    }
+
+    /// With no platform installed nothing opens an envelope, whatever its tag: a refusal is the
+    /// absence of an answer, not a reinterpretation.
+    #[test]
+    fn no_installed_platform_opens_any_tag() {
+        for backend in [Backend::KEYMANAGER3, Backend::PALM_KEYMANAGER, Backend::new("host_file")] {
+            let sealed = Sealed { backend, key: "k".into(), iv: "i".into(), data: "d".into() };
+            assert!(open(&sealed).is_none(), "{sealed:?}");
+        }
+    }
+
     #[test]
     fn the_default_mode_is_durable() {
         let _serial = plx_base::testlock::serial();
         assert_eq!(StoreMode::default(), StoreMode::Durable);
-        assert_eq!(mode(), StoreMode::Durable, "nothing is published in a test process");
+        assert_eq!(mode(), StoreMode::Durable, "no services are installed in a test process");
     }
 
     #[test]

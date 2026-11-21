@@ -999,6 +999,20 @@ GET /library/metadata/{rk}?includeMarkers=1&includeChapters=1
   playhead routinely stops short of — treat it as open-ended rather than exclusive, or an
   end-of-item prompt blinks out over the last frames.
 
+### Reads by key — `skipRefresh` (the spec, and timed on one PMS)
+
+`plex-openapi.json` describes `skipRefresh=1` on `GET /library/metadata/{ids}` as skipping the synchronous
+local media agent and analysis refresh, which the default (false) runs. This client's background reads by
+key (`plex::Client::metadata_many`, which a Home row re-read, a hub or listing page's batch, the
+view-state read-back after Mark Watched or a stopped play and a person's filmography go through,
+`Client::metadata_background`, and the `includePreferences=1` show-preferences read of every episode play)
+send `skipRefresh=1`; the preferences read still returns the same `Preferences` with it (3 shows on one
+PMS). The detail read (`Client::metadata`), which a viewer opened, sends none. Plex Web 4.162.1 sends `skipRefresh=1` on its
+re-reads by key and never takes the refresh. On one household PMS the first batch read without it took 138
+to 948 ms in four of five sets, and no read with it was slow; a field log over a remote link read 4 to 9 s
+per Home row, with a timeline "item processed" notification about once a second while Home scrolled
+(issue #1458).
+
 ### Up Next — the `continuous=1` PlayQueue already carries it (verified live 2026-07-29)
 
 There is no "what plays next" endpoint to call: the `POST /playQueues?continuous=1` the app makes
@@ -1732,13 +1746,21 @@ What a hint does for the Watchlist: a session on a matched title that the page h
 any held card. A `timeline` create or delete does not read the item: it owes the Watchlist store ONE re-match
 of that server and kind (a delete of the item a tile is matched to asks again about that guid, a create asks
 again about the kind's titles the server was not seen to hold, `/library/all?type=T&guid=…` at 40 guids to a
-request), deduplicated per pump, at most once per quiet-refetch spacing (5 s) per server and kind, only once
-the Watchlist has loaded and only when `reread_allowed`; it stays queued otherwise. A feed that came back
+request), deduplicated per server and kind, only once the Watchlist has loaded and only when `reread_allowed`
+(it stays queued otherwise). A feed that came back
 after a gap re-asks the server's titles whole. The tile flips when the answer lands (`docs/watchlist.md`,
 *Live-update gaps*). The same create or delete also moves that server's lists: one quiet Home refetch
-and one section-shelf invalidate (spaced like a `stopped`'s), and one `BrowseCmd::ListingsChanged` for its
-library listings, at most once per quiet-refetch spacing per server (a change inside it stays owed and is
-spent when due). PMS sends the same `finished` frame for a refreshed item as for a new one, so the open grid
+and one section-shelf invalidate (coalesced like a `stopped`'s), and one `BrowseCmd::ListingsChanged` for its
+library listings. **None of these four (the re-match, the refetch, the invalidate and the re-list) is made
+when the entry arrives.** A scan delivers about one finished entry a second for minutes, and over a remote
+link one row read takes seconds, so re-reading on each entry kept every read the viewer scrolled to stuck in
+a queue (#1458). A server's entries wait for ITS feed to go quiet: the four are made once, when no library
+entry for that server has arrived for 10 s (`LIBRARY_QUIET_FRAMES`) or when 60 s
+(`LIBRARY_LONGEST_WAIT_FRAMES`) have passed since the oldest entry not yet spent, so a feed that never goes
+quiet still refreshes about once a minute; the next entry starts a new wait. The wait is counted in pumped frames and holds only library entries: a `stopped` session's
+refetch and invalidate, a feed gap's sweep and the read-backs above are not waited on, and the spacings
+downstream (5 s per quiet refetch, per section shelf and per re-match) still apply.
+PMS sends the same `finished` frame for a refreshed item as for a new one, so the open grid
 is never listed again while it is visible: it is marked stale, as a read-back that moves a row's membership
 marks it, and re-queried keeping the reader's place when a page covers it (at once when no Library page is
 on the navigation stack). The server's other sections forget their pages and fetch afresh on their next

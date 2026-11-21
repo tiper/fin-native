@@ -14,7 +14,7 @@
 #   present  — the present gate's worker door: ONE atomic static in machine/src/present.rs and ONE
 #              `wake_from_worker`.
 #   effect   — `Effect::` spelled nowhere (the enum is `Fx::`, the app's `AppFx::`).
-#   sink     — `tv::sink::installed` and `VideoSink` only under player/, tv/, tv.rs, port.rs and app/adapters/backends.rs
+#   sink     — `tv::sink::installed` and `VideoSink` only under player/, tv/, tv.rs, port.rs, platform_desktop.rs and app/adapters/backends.rs
 #              (step L15: the Starfish/ACB verbs are the player's alone).
 #
 # Phase 4 rule (D3 rewrite, phase 12):
@@ -129,8 +129,8 @@ SRC=rust-modules/src
 # of a gate. A rule scoped to a directory of $SRC (ui/, screens/, app/ ...) cannot reach a layer
 # below them and stays as it is, UNLESS the files it policed there were moved out: `machine` came
 # from ui/, so the rules that read `ui/` read $SRC_MACHINE too, and `ui` is $SRC_UI now (docs/module-layers.md, Split 6). `os` is the layer that held
-# `tv/` and `storage/`, and the rules that name a moved module by path (`crate::tv::window::`,
-# `crate::storage::`) now spell it `plx_os::`. `gfx` held `text.rs`, the one file the textmeasure
+# `tv/` and `storage/`, and the rules that name a moved module by path (`crate::storage::`)
+# now spell it `plx_os::`. `gfx` held `text.rs`, the one file the textmeasure
 # rule exempts, and the rule's pattern now accepts `plx_gfx::text::`. `net` held the loopback fixtures
 # the `threads` gate skips as test code; they are `cfg(any(test, feature = "test-support"))` now,
 # which it accepts.
@@ -152,6 +152,7 @@ SRC_MEDIA_CODECS=rust-modules/media-codecs/src
 SRC_APPKIT=rust-modules/appkit/src
 SRC_SCREENS=rust-modules/screens/src
 SRC_OWP=rust-modules/owp/src
+SRC_SHELL_SDL=rust-modules/shell-sdl/src
 fails=0
 fail() { echo "::error::check-deps: $*"; fails=$((fails+1)); }
 ok()   { echo "  ok — $*"; }
@@ -353,6 +354,7 @@ wholly_test_files() {
   python3 ci/rust_test_modules.py "$SRC_APPKIT"
   python3 ci/rust_test_modules.py "$SRC_SCREENS"
   python3 ci/rust_test_modules.py "$SRC_OWP"
+  python3 ci/rust_test_modules.py "$SRC_SHELL_SDL"
 }
 
 # is_wholly_test <path>: the `wholly_test` list as a builtin lookup. Three gates below asked this
@@ -720,7 +722,7 @@ fi # metadata-owner
 # Wholly-test files (see `wholly_test_files`) are skipped like inline `#[cfg(test)]` blocks: a
 # test's reference colour maths is not logical state.
 if want libm; then
-libm_lines=$(grep_code '\.(exp|ln|log|powf|powi|cbrt|sin|cos|tan|atan2|hypot|mul_add|sin_cos)\(' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" \
+libm_lines=$(grep_code '\.(exp|ln|log|powf|powi|cbrt|sin|cos|tan|atan2|hypot|mul_add|sin_cos)\(' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL" \
   | grep -vE '\.log\((&|")' | grep -v "^$SRC_MACHINE/motion.rs:")
 libm_bad=0
 while IFS= read -r line; do
@@ -732,7 +734,7 @@ done <<< "$libm_lines"
 if [ "$libm_bad" -eq 0 ]; then ok "libm"; else fail "libm: $libm_bad line(s) outside ci/allow/libm.txt"; fi
 fi # libm
 
-want ticks && gate ticks 'SDL_GetTicks\(' "$SRC" "$SRC_BASE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP"
+want ticks && gate ticks 'SDL_GetTicks\(' "$SRC" "$SRC_BASE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL"
 # Every data/session module is logic unless its exact reviewed IO/instrument file is in ports.ini.
 if want wall; then
 if python3 ci/check-ports.py; then ok "wall"; else fail "wall: outside exact ci/ports.ini files"; fi
@@ -750,7 +752,7 @@ if [ "$n" -eq 1 ] && [ "$d" -eq 1 ]; then ok "present: one worker door"; else fa
 fi # present
 
 if want effect; then
-if [ -n "$(grep_code '\bEffect::' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP")" ]; then fail "effect: \`Effect::\` is spelled (use Fx:: / AppFx::)"; else ok "effect"; fi
+if [ -n "$(grep_code '\bEffect::' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL")" ]; then fail "effect: \`Effect::\` is spelled (use Fx:: / AppFx::)"; else ok "effect"; fi
 fi # effect
 
 # mutators: production lines of ui/, screens/ and app/ (everything before the file's first
@@ -862,7 +864,7 @@ want nav && gate nav '(crate::ui|plx_ui)::nav::' "$SRC" "$SRC_UI" "$SRC_APPKIT" 
 
 # Completed ownership migration: legacy publications and the old gate cannot return.
 if want ui-owner-legacy; then
-ui_owner_hits=$(grep_code '(plx_ui|crate::ui)::press::|(plx_machine|crate)::idle::' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP")
+ui_owner_hits=$(grep_code '(plx_ui|crate::ui)::press::|(plx_machine|crate)::idle::' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL")
 if [ -z "$ui_owner_hits" ]; then ok "ui-owner-legacy"; else
   printf '%s\n' "$ui_owner_hits"
   fail "ui-owner-legacy: retired global readers must not return"
@@ -962,7 +964,7 @@ want uistorage && gate uistorage '(crate|super|plx_os)::storage::' "$SRC_UI" "$S
 # legacypage: the word itself, anywhere under src — a doc that still describes the type is as much
 # a hit as a declaration, which is the point (nothing compiles the prose either).
 if want legacypage; then
-legacy_hits=$(grep -rn --include='*.rs' 'LegacyPage' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" 2>/dev/null || true)
+legacy_hits=$(grep -rn --include='*.rs' 'LegacyPage' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL" 2>/dev/null || true)
 if [ -z "$legacy_hits" ]; then ok "legacypage"; else
   echo "$legacy_hits" | sed 's/^/    /'
   fail "legacypage: $(echo "$legacy_hits" | wc -l | tr -d ' ') mention(s) — the type is retired (§15.2)"
@@ -1056,7 +1058,7 @@ fi # textmeasure
 # the documented intent (spec §4.2: the ONLY file licensed to touch a raw per-frame delta), not a
 # live carve-out.
 if want dt; then
-dt_hits=$(grep_code 'idle::dt\(\)|(\+=|-=)\s*dt\b' "$SRC" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" | grep -v "^$SRC_MACHINE/motion.rs:")
+dt_hits=$(grep_code 'idle::dt\(\)|(\+=|-=)\s*dt\b' "$SRC" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL" | grep -v "^$SRC_MACHINE/motion.rs:")
 if [ -z "$dt_hits" ]; then ok "dt"; else
   echo "$dt_hits" | sed 's/^/    /'
   fail "dt: $(echo "$dt_hits" | wc -l | tr -d ' ') line(s) — see rule comment above"
@@ -1082,13 +1084,27 @@ want ladder && gate_zero ladder 'fn move_focus|fn pointer_focus|fn top_focus|fn 
 # resume_at/memory_at/open_settings_at/write_at, which are unrelated lookups.
 want hittest && gate_zero hittest 'pointer_focus\(|\b(failure_quality|icon|scrub)_hit\(' "$SRC/app"
 
-# frame: the three privileged OS-primitive calls, ZERO-TOLERANCE outside `app/run.rs` (D4) — no
-# allowlist file, because there is exactly one legitimate home once D1 lands: `app/run.rs` is the
-# frame loop, and `app/bridge.rs`'s `Rig` impl delegates to `run::rig_opaque_route`/
-# `rig_clear_opaque_region` (a one-line pass-through) rather than naming `plx_os::tv::window::` itself,
+# frame: the three privileged OS-primitive calls — `pump_bus`, `opaque_route` and `clear_opaque_region`
+# on the platform's `Shell` (`app::platform`, passed to `run_application` by `port.rs`) — ZERO-TOLERANCE outside
+# `app/run.rs` (D4) — no allowlist file, because there is exactly one legitimate home once D1 lands:
+# `app/run.rs` is the frame loop, and `app/bridge.rs`'s `Rig` impl delegates to `run::rig_opaque_route`/
+# `rig_clear_opaque_region` (a one-line pass-through) rather than naming the `shell` itself,
 # which is what keeps this gate's text out of bridge.rs without splitting the `impl Rig<AppHost>
 # for Bridge` block (a trait's impl for a type is one syntactic unit; it carries two dozen other
-# methods beside these three). A self-test that spells two of the three call shapes as STRING
+# methods beside these three).
+#
+# The method names alone are NOT the pin: `Rig` has `opaque_route` and `clear_opaque_region` too, and
+# `Bridge`'s forwarding (`self.bridge.opaque_route(..)`) is not an OS call. So the pin is the RECEIVER:
+# a call on something named `shell` (`app.platform.shell.pump_bus()`, `p.shell.opaque_route(..)`), on the
+# trait by path (`Shell::pump_bus(..)`, `<dyn Shell>::pump_bus(..)`), or a continuation line (`.pump_bus(`
+# first on its line) whose PREVIOUS non-blank line ends in `shell`, which is how rustfmt breaks
+# `app.platform.shell.pump_bus()` apart. A continuation line after any other receiver is not a shell
+# call, so a wrapped `Rig` forward (`self.bridge\n    .opaque_route(true)`, the dispatcher's
+# `rig\n    .clear_opaque_region()`) passes. A shell held in a differently named local does not match: this
+# is a text gate on the loop's own call shape, and the no-op host-test shell is driven that way by its
+# pin test.
+#
+# A self-test that spells two of the three call shapes as STRING
 # LITERALS — it reads app/run.rs's own source text at runtime and compares against a copy of the
 # exact line it expects, which is data, not a call (`app/run.rs`'s own `video_plane_gate_tests`
 # today, `machine/src/idle.rs`'s before the machine layer left `ui/`) — must not trip this gate in any file
@@ -1096,12 +1112,19 @@ want hittest && gate_zero hittest 'pointer_focus\(|\b(failure_quality|icon|scrub
 # double-quote-depth tracking `tmppath` below uses), rather than exempting files by name: an
 # actual call typed outside a string still fails this gate. `// `-prefixed comment lines (`app/run.rs` keeps one, describing where a call
 # used to live) are stripped the same way `grep_code` above does for every other rule.
-frame_pat='(crate|plx_os)::tv::window::(pump_bus|opaque_route|clear_opaque_region)\('
+# `[.]` and `[(]`, not `\.` and `\(`: `awk -v` would eat the backslashes.
+frame_recv='(^|[^A-Za-z0-9_])shell[[:space:]]*[.][[:space:]]*(pump_bus|opaque_route|clear_opaque_region)[[:space:]]*[(]|Shell>?::(pump_bus|opaque_route|clear_opaque_region)[[:space:]]*[(]'
+frame_cont='^[[:space:]]*[.][[:space:]]*(pump_bus|opaque_route|clear_opaque_region)[[:space:]]*[(]'
+frame_tail='(^|[^A-Za-z0-9_])shell[[:space:]]*$'
+# The files to look at: any line of either shape (the cheap `grep` pass); `awk` below decides which hit counts.
+frame_pat="$frame_recv|$frame_cont"
 if want frame; then
 frame_bad=0
 while IFS= read -r f; do
   [ "$f" = "$SRC/app/run.rs" ] && continue
-  hits=$(strip_strings_and_comments "$f" | grep -nE "$frame_pat" || true)
+  hits=$(strip_strings_and_comments "$f" | awk -v recv="$frame_recv" -v cont="$frame_cont" -v tail="$frame_tail" '
+    $0 ~ recv || ($0 ~ cont && prev ~ tail) { print NR ":" $0 }
+    $0 !~ /^[[:space:]]*$/ { prev = $0 }' || true)
   [ -z "$hits" ] && continue
   while IFS= read -r h; do
     ln="${h%%:*}"
@@ -1113,14 +1136,14 @@ while IFS= read -r f; do
 # REMOVES matches, so a file with no raw hit cannot fail this gate — and running its `awk` plus a
 # `grep` over all 420 files, to reach the two that mention the shape, was the single most expensive
 # rule in this script (4.8 s of its 17 s).
-done < <(grep -rlE --include='*.rs' "$frame_pat" "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" 2>/dev/null | sort)
+done < <(grep -rlE --include='*.rs' "$frame_pat" "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL" 2>/dev/null | sort)
 if [ "$frame_bad" -eq 0 ]; then ok "frame"
 else fail "frame: $frame_bad line(s) of a privileged OS-primitive call outside app/run.rs"; fi
 fi # frame
 
 # sink: the Starfish/ACB verbs (`tv::sink::VideoSink`) are the player's alone (step L15). Only
-# `player/`, `play-uri/`, the native `webos/` port, and `port.rs` (which installs one)
-# and `tv.rs` with `tv/` (which hold it) name `tv::sink::installed` or `VideoSink`; so does
+# `player/`, `play-uri/`, the native `webos/` port, and `port.rs` and `platform_desktop.rs` (which
+# name one each) and `tv.rs` with `tv/` (which hold it) name `tv::sink::installed` or `VideoSink`; so does
 # `app/adapters/backends.rs`, the boot composition that resolves the installed display once for the
 # ACB plane's boot and hands it on (it was `player/plane_boot.rs`; the composition root is where the
 # driver set is built). Every other module reaches the television through the narrower `tv` interfaces. Wholly-test files are skipped like inline
@@ -1135,12 +1158,12 @@ while IFS= read -r line; do
   case "$p" in "$SRC_PLAY_FEED"/*|"$SRC_PLAY_URI"/*)
     case "$line" in *tv::sink::installed*|*tv::sink::display_installed*) ;; *) continue ;; esac ;;
   esac
-  case "$p" in "$SRC_MEDIA"/player/*|"$SRC_OS"/tv/*|"$SRC_OS"/tv.rs|"$SRC_OS"/webos/*|"$SRC"/port.rs|"$SRC"/app/adapters/backends.rs) continue ;; esac
+  case "$p" in "$SRC_MEDIA"/player/*|"$SRC_OS"/tv/*|"$SRC_OS"/tv.rs|"$SRC_OS"/webos/*|"$SRC"/port.rs|"$SRC"/platform_desktop.rs|"$SRC"/app/adapters/backends.rs) continue ;; esac
   if is_wholly_test "$p"; then continue; fi
   echo "    $line"; sink_bad=$((sink_bad+1))
-done < <(grep_code 'tv::sink::(installed|display_installed)|\b(VideoSink|DisplaySink)\b' "$SRC" "$SRC_OS" "$SRC_UI" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP")
+done < <(grep_code 'tv::sink::(installed|display_installed)|\b(VideoSink|DisplaySink)\b' "$SRC" "$SRC_OS" "$SRC_UI" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL")
 if [ "$sink_bad" -eq 0 ]; then ok "sink"
-else fail "sink: $sink_bad line(s) naming the video sink outside playback execution, port.rs, tv.rs and tv/"; fi
+else fail "sink: $sink_bad line(s) naming the video sink outside playback execution, port.rs, platform_desktop.rs, tv.rs and tv/"; fi
 fi # sink
 
 # route: `Route::` in app/ = 0, and `enum Route` gone from the whole tree (D1/D4). No allowlist:
@@ -1158,7 +1181,7 @@ fi
 fi # route
 
 # fnlen: app/run.rs::run <= 200 lines, run_application (app/mod.rs, the D4 skeleton) <= 10 and
-# plex_run (port.rs: install, then hand over) <= 10 — counted by brace
+# plex_main (port.rs: the clear hook, hand the platform over, end the process) <= 10 — counted by brace
 # depth from the `fn` line to its matching close, not by grep pattern.
 fn_body_lines() {
   # fn_body_lines <file> <fn-name-pattern> — prints the line count of the first matching fn's body
@@ -1178,9 +1201,15 @@ else fail "fnlen: app/run.rs::run is ${run_len:-unknown} lines, budget 200 — a
 runapp_len=$(fn_body_lines "$SRC/app/mod.rs" 'run_application')
 if [ -n "$runapp_len" ] && [ "$runapp_len" -le 10 ]; then ok "fnlen: run_application (app/mod.rs) ($runapp_len lines)"
 else fail "fnlen: run_application (app/mod.rs) is ${runapp_len:-unknown} lines, budget 10"; fi
+plexmain_len=$(fn_body_lines "$SRC/port.rs" 'plex_main')
+if [ -n "$plexmain_len" ] && [ "$plexmain_len" -le 10 ]; then ok "fnlen: plex_main (port.rs) ($plexmain_len lines)"
+else fail "fnlen: plex_main (port.rs) is ${plexmain_len:-unknown} lines, budget 10"; fi
+# plex_run is the one-line C wrapper over plex_main (the `-> !` entry the const beside it proves): its
+# signature, the call and the closing brace. `app::exit`'s lifecycle_no_production_exit test holds the
+# body to exactly that call.
 plexrun_len=$(fn_body_lines "$SRC/port.rs" 'plex_run')
-if [ -n "$plexrun_len" ] && [ "$plexrun_len" -le 10 ]; then ok "fnlen: plex_run (port.rs) ($plexrun_len lines)"
-else fail "fnlen: plex_run (port.rs) is ${plexrun_len:-unknown} lines, budget 10"; fi
+if [ -n "$plexrun_len" ] && [ "$plexrun_len" -le 3 ]; then ok "fnlen: plex_run (port.rs) ($plexrun_len lines)"
+else fail "fnlen: plex_run (port.rs) is ${plexrun_len:-unknown} lines, budget 3 — it only calls plex_main"; fi
 fi # fnlen
 
 # testmod: `#[cfg(test)] mod` count in app/mod.rs = 0 (D4/D8) — every test module named in D8's
@@ -1231,7 +1260,7 @@ while IFS= read -r f; do
     { print NR":"$0; prev=$0 }' "$f" | grep -E "$pat" | grep -vE '^[0-9]+:\s*//' || true)
 # ...over the files that spell `spawn(` at all — a superset of both matched spellings, and the `awk`
 # below only drops `#[cfg(test)] mod` blocks, so the count is unchanged.
-done < <(grep -rlE --include='*.rs' '\bspawn\(' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" 2>/dev/null | grep -v "^$SRC_BASE/task.rs\$" | sort)
+done < <(grep -rlE --include='*.rs' '\bspawn\(' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL" 2>/dev/null | grep -v "^$SRC_BASE/task.rs\$" | sort)
 threads_declared=$(sed -n 's/^# count: *//p' ci/allow/threads.txt | head -1)
 if [ "$threads_bad" -eq "${threads_declared:-0}" ]; then ok "threads"
 else fail "threads: $threads_bad line(s) outside ci/allow/threads.txt (declared count is exactly ${threads_declared:-0}, not a ceiling)"; fi
@@ -1376,7 +1405,7 @@ EOF_STALE
 # `ci/ledger.awk` (the ledger machinery above).
 if want blocking; then
 blocking_sites=$(
-  grep -rlE --include='*.rs' 'allow_blocking' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" 2>/dev/null \
+  grep -rlE --include='*.rs' 'allow_blocking' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL" 2>/dev/null \
     | grep -v "^$SRC_BASE/task/blocking.rs\$" | sort \
     | LG_MODE=call LG_SITE='(^|[^A-Za-z0-9_])allow_blocking\(' LG_DEF='fn[[:space:]]+allow_blocking\(' \
       LG_REF='(^|[^A-Za-z0-9_])allow_blocking([^A-Za-z0-9_(]|$)' LG_REEXPORT_FILE="$SRC_BASE/task.rs" \
@@ -1628,7 +1657,7 @@ fi # fxlanes
 # neither one is a `/tmp/plxnative-` literal in the first place and there is no second file to
 # name here (re-verify this if a log sink is ever given a hardcoded `/tmp/` path).
 if want tmppath; then
-tmp_hits=$(python3 - "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" <<'PY'
+tmp_hits=$(python3 - "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL" <<'PY'
 import os, sys
 
 src = sys.argv[1]
@@ -1729,7 +1758,7 @@ fi # tmppath
 # classification above) and `#[cfg(test)]` items, found from tokens so a literal inside a string is
 # never mistaken for a comment. Zero, no allowlist. Scans every crate root, not only plex's.
 if want paging; then
-paging_hits=$(WHOLLY_TEST="$wholly_test" python3 - "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" <<'PY'
+paging_hits=$(WHOLLY_TEST="$wholly_test" python3 - "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL" <<'PY'
 import os, sys
 sys.path.insert(0, "ci")
 from rust_test_modules import close, lex

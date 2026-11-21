@@ -125,7 +125,7 @@ copy a tile opens is chosen current server first, then owned, then shared, Reach
 **The other direction.** A `PmsMovie` carries `guid` and `show_guid` (an episode's `grandparentGuid`, a season's `parentGuid`: the server sends a season no `grandparentGuid`),
 each decoded once to `[u8; 12]`. The Detail and Home hero discs and the hold-menu rows use them to name the catalog
 id. `resolve_catalog_hex(known, fetch)` (`plex/models.rs`) is the helper for a row that lacks one: it
-fetches `client.metadata(rk or show_rk).guid` only when the id is not already known. A hold-menu card
+fetches `client.metadata_background(rk or show_rk).guid` only when the id is not already known. A hold-menu card
 whose row carries no guid asks for it (`WatchlistStore::want_hex`, a worker reading the item's own
 server record, an episode's SHOW record): the menu being opened omits the row, the next one offers it
 once the record named a portable id (tests in `app/watchlist_press_tests.rs`). The Detail disc reads
@@ -326,8 +326,10 @@ What the PMS notification feed (`docs/pms-api.md` section 9) does and does not c
   `filters=playing,timeline`; a finished movie or show create or delete (`TimelineEntry` state 5 with no `metadataState`, and
   state 9, which is UNVERIFIED: no delete has been captured) owes the Watchlist one re-match of that server (`stores::notify_map`, plan §1.11 B(a)):
   a delete of the item a tile is matched to asks again about that guid, a create asks again about the
-  titles of that kind the server was not seen to hold (40 guids to a request). It is made at most once
-  per quiet-refetch spacing per server and kind, only once the list has loaded and only when a re-read
+  titles of that kind the server was not seen to hold (40 guids to a request). It is made once the
+  server's feed has gone quiet (no library entry for 10 s, or 60 s since the oldest unspent one, so a
+  scan that never stops still refreshes about once a minute; #1458), at most once per quiet-refetch
+  spacing per server and kind, only once the list has loaded and only when a re-read
   is allowed, and the tile flips when the answer lands, with the page open or not. A feed that came back
   after a gap re-asks the server's titles whole. The `timeline` frame shape was captured from an owned server
   (`docs/pms-api.md` section 9, with the measured frame rates); this path is tested against frames

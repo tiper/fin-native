@@ -128,6 +128,37 @@ $(if $(strip $(FLAVORS)),,$(error ci/flavor.py --list produced no flavours — i
 FLAVOR      ?= debug
 $(if $(filter $(FLAVOR),$(FLAVORS)),,$(error unknown FLAVOR "$(FLAVOR)" — one of: $(FLAVORS)))
 
+# --- WHICH OS: the PLATFORM axis -----------------------------------------------------------
+#
+# `webos` (the television this file has always built for, and the default), `desktop` (the macOS and
+# Windows/WSLg simulators and the macOS app) or `tizen` (a name only: no goal builds it yet). It is the
+# TARGET OS and nothing else. FLAVOR stays the install identity, and the compatibility axis — the Rust
+# target (`RUST_TARGET`), the sysroot (`SYSROOT`) and, once a platform needs them, a managed TFM, a
+# firmware floor and the signing path — stays a set of separate variables that PLATFORM does not choose:
+# `make -s print-rust-target` answers the same under every PLATFORM. Today the axis labels and validates;
+# no recipe reads it, so the default `PLATFORM=webos` builds exactly what it built before the axis existed.
+#
+# The simulators and the macOS app are desktop builds, so `sim`, `sim-*`, `macapp` and `macapp-zip` imply
+# PLATFORM=desktop when it was not given: `$(origin PLATFORM)` is `undefined` (not on the command line,
+# not in the environment), and an explicit value wins. It is one value per invocation, read from the whole
+# goal list. The target names themselves do not change. This sits ABOVE the `?=`, so the literal default
+# line below stays the one place that says `webos`.
+#
+# Validated against `ci/platform_axis.py --list` the way FLAVOR is against `ci/flavor.py --list`, for the
+# same reason: `make PLATFORM=webso ...` must be a message on a terminal, not a build of something nobody
+# asked for. One word, exactly (a `filter` of the value against the list would also pass `webos bogus`
+# and `%`). The script is NOT `ci/platform.py`: scripts run from ci/ `import platform` (`mkmacapp.py`,
+# `build-libass.py`, `test-compat.py`), and a file of that name would shadow the standard library for them.
+PLATFORMS   := $(shell python3 ci/platform_axis.py --list)
+$(if $(strip $(PLATFORMS)),,$(error ci/platform_axis.py --list produced no platforms — is python3 available and does ci/platform_axis.py run?))
+ifeq ($(origin PLATFORM),undefined)
+ifneq ($(filter sim sim-% macapp macapp-zip,$(MAKECMDGOALS)),)
+PLATFORM    := desktop
+endif
+endif
+PLATFORM    ?= webos
+$(if $(and $(filter 1,$(words $(PLATFORM))),$(filter $(PLATFORMS),$(PLATFORM))),,$(error unknown PLATFORM "$(PLATFORM)" — one of: $(PLATFORMS)))
+
 # The id users get. Also `paths::STABLE_APP_ID` in the Rust half and `STABLE_ID` in ci/flavor.py —
 # three copies of one string, each in a language that cannot see the others, and ci/flavor.py's
 # selftest is what keeps them in step.
@@ -186,7 +217,8 @@ APPPORT      = $(if $(filter stable,$(FLAVOR)),8910,$(if $(filter nightly,$(FLAV
 QUERY_GOALS = print-flavor print-appid print-appdir print-rundir print-eventlog print-appport print-tv print-playback-config \
               print-simbin print-app-files print-deploy-files print-sentry-handler print-ffmpeg-staged \
               print-sentry-project print-bench-config print-disk-entries \
-              print-subs-font-files print-rust-toolchain print-rust-codegen print-cargo-env
+              print-subs-font-files print-rust-toolchain print-rust-codegen print-cargo-env \
+              print-platform print-rust-target
 print-flavor:   ; @echo '$(FLAVOR)'
 print-appid:    ; @echo '$(APPID)'
 print-appdir:   ; @echo '$(APPDIR)'
@@ -194,6 +226,11 @@ print-rundir:   ; @echo '$(RUNDIR)'
 print-eventlog: ; @echo '$(EVENTLOG)'
 print-appport:  ; @echo '$(APPPORT)'
 print-tv:       ; @echo '$(TV)'
+# The PLATFORM axis (above) and the Rust target the ARM recipes cross-compile for. They are two queries
+# because they are two axes: PLATFORM does not choose the Rust target, so `print-rust-target` does not
+# move with it. Both are in QUERY_GOALS, so asking resets nothing under `pkg/`.
+print-platform:    ; @echo '$(PLATFORM)'
+print-rust-target: ; @echo '$(RUST_TARGET)'
 # Where `make sim` put the simulator. It is `$(SIM_TDIR)`-derived and `SIM_TDIR` is deliberately
 # overridable — agents running several simulators at once keep separate target dirs, and the
 # `macapp` build has its own — so a tool that restates the path silently runs another lane's
@@ -545,8 +582,8 @@ ARM_PROFILE_FLAG = $(if $(filter release,$(ARM_PROFILE)),--release,--profile $(A
 #     make RUST_TOOLCHAIN=nightly HOST_THREADS=8 test-fast
 #
 # A HOST_THREADS above 1 on a non-nightly toolchain is a hard error here rather than a cargo failure
-# in the middle of a recipe. Which recipes: ONLY the host `cargo test` / `check-cargo-unit-*` builds,
-# `test-fast`, `test-crate`, `test-hostsim` and `build-bench` carry `$(HOST_ENV)`. It is NOT exported, so the ARM
+# in the middle of a recipe. Which recipes: the host `cargo test` builds and nothing else
+# (`grep -n HOST_ENV Makefile` is the exact set; `ci/test_host_threads.py`'s `HOST_RECIPES` pins it). It is NOT exported, so the ARM
 # staticlib recipes (which set RUSTFLAGS themselves), the simulators' builds, clippy and the package
 # steps never see it (ci/test_host_threads.py pins both). 0 and 1 mean the serial front end. A
 # RUSTFLAGS the caller exported wins over it (cargo reads CARGO_BUILD_RUSTFLAGS last).
@@ -818,8 +855,8 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 # it from the recipe AND its prerequisites, never the name (`check-ass` is a test goal and stages the
 # host libass into `pkg/`). Two kinds qualify:
 #
-#   * HOST-ONLY goals: the unit-test loops, the fuzz runs and the lint pass (`test-hostsim`, `check-nodef`,
-#     `test-fast`, `test-crate`, `fuzz-hud`, `lint`, `build-bench`), the pieces of `check` that are plain host work
+#   * HOST-ONLY goals: the unit-test loops, the fuzz runs and the lint pass (`test-hostsim`, `test-host-interface`,
+#     `check-nodef`, `test-fast`, `test-crate`, `fuzz-hud`, `lint`, `build-bench`), the pieces of `check` that are plain host work
 #     (`check-cargo-lint`, `check-cargo-unit-hostsim`, `check-localization`, `check-c-unit`,
 #     `check-python-harness`), the notices tables, and the set-up and local tooling that writes outside
 #     `pkg/` (a toolchain install, the disk-watch agent, the test media, the demo library, the
@@ -844,7 +881,7 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 # goal in the two kinds above resets nothing under a dry run, and every goal named as NOT here stays out
 # of the list. The list is ONE line on purpose (`grep '^SIDE_EFFECT_FREE' Makefile` is the exact set,
 # and several tests read it that way).
-SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require
+SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim test-host-interface check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require
 PURE_QUERY := $(if $(MAKECMDGOALS),$(if $(filter-out $(SIDE_EFFECT_FREE),$(MAKECMDGOALS)),,yes),)
 # `PLAYBACK_BACKENDS=none` builds no television package. It is refused HERE, at parse time and before
 # the stamp reset below: a recipe-level refusal ran after that reset, so a mistyped
@@ -1016,7 +1053,7 @@ $(FFABI_STAMP): ci/ffabi-assert.c $(FFMPEG_INC)/libavformat/avformat.h Makefile
 # rule would leave every later `make` linking a library built by the OLD one. Cargo's own
 # `rerun-if-changed` cannot save that — it is only consulted when make decides to invoke cargo at
 # all, and this target is an ordinary timestamp comparison.
-RUST_INPUTS := $(shell find rust-modules/src rust-modules/base rust-modules/machine rust-modules/net rust-modules/os rust-modules/gfx rust-modules/ui rust-modules/plex rust-modules/jellyfin rust-modules/telemetry rust-modules/data rust-modules/session rust-modules/media rust-modules/playback-contract rust-modules/play-uri rust-modules/play-feed rust-modules/media-codecs rust-modules/appkit rust-modules/screens rust-modules/build_support locales locales-finnative assets -type f 2>/dev/null)
+RUST_INPUTS := $(shell find rust-modules/src rust-modules/base rust-modules/machine rust-modules/net rust-modules/os rust-modules/gfx rust-modules/ui rust-modules/plex rust-modules/jellyfin rust-modules/telemetry rust-modules/data rust-modules/session rust-modules/media rust-modules/playback-contract rust-modules/play-uri rust-modules/play-feed rust-modules/media-codecs rust-modules/appkit rust-modules/screens rust-modules/shell-sdl rust-modules/build_support locales locales-finnative assets -type f 2>/dev/null)
 $(RUST_LIB): LICENSE $(RUST_INPUTS) rust-modules/Cargo.toml rust-modules/Cargo.lock rust-modules/build.rs ci/install-identities.json rust-modules/.cargo/config.toml Makefile ci/check-staticlib-artifact.py $(FFABI_STAMP)
 	@# BEFORE the mkdir: the seed is only ever cloned into a target dir that does not exist yet.
 	$(CARGO_SEED) restore $(RUST_TDIR) rust-modules/$(RUST_TDIR)
@@ -1549,7 +1586,7 @@ test: deploy run
 # it is not the table's value for that dir's name (tools/disk-budget.py NEED_GIB). `ci/test_disk_preflight.py`
 # finds every target whose recipe runs cargo and fails when one is missing from this list.
 DISK_ENTRIES = check check-replay check-cargo-lint check-cargo-unit-default check-cargo-unit-hostsim lint \
-               test-fast test-crate test-hostsim check-nodef check-ass check-ffmpeg sim-macos sim-linux screenshots-sim site-video-sim \
+               test-fast test-crate test-hostsim test-host-interface check-nodef check-ass check-ffmpeg sim-macos sim-linux screenshots-sim site-video-sim \
                $(RUST_LIB) pkg/plxnative-storage macapp macapp-zip build-bench build-bench-quick fuzz-hud
 $(DISK_ENTRIES): | disk-preflight
 
@@ -1557,7 +1594,7 @@ $(DISK_ENTRIES): | disk-preflight
 DISK_TREE = $(if $(CARGO_TARGET_DIR),$(if $(filter /%,$(CARGO_TARGET_DIR)),$(CARGO_TARGET_DIR),$(CURDIR)/rust-modules/$(CARGO_TARGET_DIR)),$(CURDIR)/rust-modules/target)
 DISK_NEED =
 test-fast test-crate: DISK_TREE = $(CURDIR)/rust-modules/$(TEST_FAST_TDIR)
-test-hostsim: DISK_TREE = $(CURDIR)/rust-modules/$(TEST_HOSTSIM_TDIR)
+test-hostsim test-host-interface: DISK_TREE = $(CURDIR)/rust-modules/$(TEST_HOSTSIM_TDIR)
 # The fuzz tree (ASan + coverage, release with debuginfo, ten binaries): 3.1 GiB measured after a cold build
 # of the first eight; the ninth, `ws_frame`, adds 83 MiB, and the tenth, `owp_json`, 49 MiB with `plx_owp`
 # (measured on Linux x86_64).
@@ -1612,9 +1649,10 @@ check:
 # best. A bare `cargo test` builds for the host triple, which is exactly what we want — and it is
 # also why this suite cannot cover anything that links the TV's own libraries: media-codecs/src/ffi.rs gates its four
 # `#[link]` directives out of cfg(test) so the crate's pure logic stays host-testable, and a test
-# that actually calls into FFmpeg or GL fails to link by design. --lib keeps it to the crate's own
-# `#[cfg(test)] mod tests` blocks (there are no integration tests in tests/ — that directory is the
-# on-device Python harness, a different thing entirely).
+# that actually calls into FFmpeg or GL fails to link by design. --lib keeps it to the crates' own
+# `#[cfg(test)]` blocks. The one integration test, `rust-modules/tests/host_interface.rs`, needs `hostsim`
+# and runs in `check-cargo-unit-hostsim` (and `make test-host-interface`), not here; the repo-root `tests/`
+# is the on-device Python harness, a different thing entirely.
 # NB the suite APPENDS to `/tmp/plxnative-events.log` on the dev Mac, and deliberately cannot be
 # pointed elsewhere. Since 2026-08-15 enough of the tree logs its failures (stream, posters, img,
 # account, remote) that host tests exercising those paths write real lines. `PLXNATIVE_RUNTIME_DIR`
@@ -1683,7 +1721,7 @@ check-cargo-lint: lint
 	@# gate has nothing to reuse a cache for. No `pkg/lab.json` is involved — that file is `make
 	@# LAB=1`'s requirement (a live session secret), not the compiler's.
 	@set -e; cd rust-modules && CARGO_INCREMENTAL=0 PATH="$$HOME/.cargo/bin:$$PATH" \
-	  cargo +$(RUST_TOOLCHAIN) check --lib --tests -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_owp --features lab-diagnostics
+	  cargo +$(RUST_TOOLCHAIN) check --lib --tests -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_owp --features lab-diagnostics
 	@# And the demo-video dump build's pixel oracle, `placeholder-sentinel`: in no default set and
 	@# built only by `make site-video-sim`, which no gate runs and which compiles no `plx_ui` tests, so
 	@# this line is what keeps it compiling (its code AND its tests, `--tests`). `plx_ui` is the only
@@ -1702,7 +1740,7 @@ check-cargo-lint: lint
 # `-p` lists in the recipes below (those stay literal because ci/test_ci_split.py greps for them);
 # ci/test_test_crate.py pins the two equal.
 UNIT_RUN = python3 ../tools/cargo-test-parallel.py
-UNIT_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_net plx_ui plx_plex plx_telemetry plx_data plx_session plx_media plx_playback_contract plx_play_uri plx_play_feed plx_media_codecs plx_appkit plx_screens plx_owp
+UNIT_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_net plx_ui plx_plex plx_telemetry plx_data plx_session plx_media plx_playback_contract plx_play_uri plx_play_feed plx_media_codecs plx_appkit plx_screens plx_shell_sdl plx_owp
 # The `hostsim` pass runs only the crates that DECLARE a `hostsim` feature (HOSTSIM_SUITE, a subset of
 # UNIT_SUITE in the same order; ci/test_test_crate.py pins both the subset and the recipe). The eight that
 # do not (plx_net, plx_ui, plx_appkit, plx_screens, plx_media_codecs, plx_play_uri, plx_playback_contract,
@@ -1714,7 +1752,7 @@ UNIT_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_net plx_u
 # none of their tests observes those dependency-side differences; the guard does not check that, it
 # checks that the crate declares no `hostsim` feature and has no `feature = "hostsim"` in its src, and
 # fails when one gains either, which is the moment it must join the list.
-HOSTSIM_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_plex plx_telemetry plx_data plx_session plx_media plx_play_feed
+HOSTSIM_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_plex plx_telemetry plx_data plx_session plx_media plx_play_feed plx_shell_sdl
 
 # The default-feature unit suite and everything that drives cargo through ci/ self-tests.
 check-cargo-unit-default:
@@ -1743,7 +1781,7 @@ check-cargo-unit-default:
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
-	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_owp
+	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_owp
 	RUST_TOOLCHAIN=$(RUST_TOOLCHAIN) python3 ci/test_storage_service_package.py
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" cargo +$(RUST_TOOLCHAIN) test -p plxnative-storage --bin plxnative-storage
 	@# The helper is its own package, so building it compiles no copy of the app library; this reads
@@ -1773,11 +1811,19 @@ check-cargo-unit-hostsim:
 	@# was invisible to all 1398 default-feature tests because the seam it needs was not there.
 	@# Cargo keys fingerprints by feature set, so the two configurations coexist in one target/ and
 	@# this costs a few seconds warm rather than a rebuild.
+	@# The second cargo line is W7a's gate and a test executable of its own (`--lib` never builds an integration test):
+	@# `rust-modules/tests/host_interface.rs` uses the application crate's `host` module from outside the crate and boots
+	@# a fake platform to its shell's refusal. It needs `hostsim` and a throwaway runtime root, which this pass has;
+	@# `make test-host-interface` is the same line as an incremental loop.
 	@set -e; d=$$(mktemp -d /tmp/plxnative-check.XXXXXX); trap 'rm -rf "'"$$d"'"' EXIT; \
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
-	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_play_feed --features hostsim
+	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_play_feed -p plx_shell_sdl --features hostsim; \
+	PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
+	  $(TELEMETRY_ENV) \
+	  $(HOST_ENV) \
+	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test -p plxnative-modules --test host_interface --features hostsim
 
 # OPT-IN incremental inner loop: the default-feature unit suite (the same `cargo test --lib` as
 # `check-cargo-unit-default`, same throwaway runtime root and telemetry env) with
@@ -1801,7 +1847,7 @@ test-fast:
 	  PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
-	  $(UNIT_RUN) $(if $(T),--filter '$(T)') -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_owp
+	  $(UNIT_RUN) $(if $(T),--filter '$(T)') -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_owp
 
 # `make test-crate C=plx_ui [T=filter] [DEPS=1]` -- build and run ONLY the named crate's lib tests, in
 # the same incremental `$(TEST_FAST_TDIR)` tree and with the same flags as `test-fast`, so the two
@@ -1871,6 +1917,25 @@ test-hostsim:
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
 	  $(UNIT_RUN) --require-match $(if $(T),--filter '$(T)') -- cargo +$(RUST_TOOLCHAIN) test --lib $(addprefix -p ,$(HOSTSIM_PKGS)) --features hostsim
+
+# `make test-host-interface` -- W7a's gate (docs/platform-ports.md, Target shape 8): the application crate's `host`
+# module used from OUTSIDE the crate. `rust-modules/tests/host_interface.rs` is an integration test, a crate of its own
+# that can name only the `pub` items of `plxnative_modules`. It builds a `static Platform` from a fake `Shell`, `Surface`
+# and `FrameProbe` and boots it through `host::run` to the fake shell's refusal of the window (the boot cannot go
+# further without a GL context). It needs `hostsim`: only there is the runtime root steerable, so the boot's logs land
+# in the throwaway directory below. The incremental loop, in `rust-modules/$(TEST_HOSTSIM_TDIR)` beside `make test-hostsim`
+# (same feature set, same tree); `make check` runs the same test non-incrementally in `check-cargo-unit-hostsim`.
+# Refused under RELEASE=1 like `test-hostsim`.
+.PHONY: test-host-interface
+test-host-interface:
+	@$(if $(RELEASE),echo "make test-host-interface: refused under RELEASE=1 -- it runs the default-plus-hostsim feature set incrementally; RELEASE=1 is the shipping feature set (use make check-nodef for that)." >&2; exit 1,:)
+	@echo "test-host-interface: the host interface test of plxnative-modules in rust-modules/$(TEST_HOSTSIM_TDIR) -- see 'make disk'"
+	@set -e; d=$$(mktemp -d /tmp/plxnative-check.XXXXXX); trap 'rm -rf "'"$$d"'"' EXIT; \
+	cd rust-modules && CARGO_INCREMENTAL=1 CARGO_TARGET_DIR=$(TEST_HOSTSIM_TDIR) \
+	  PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
+	  $(TELEMETRY_ENV) \
+	  $(HOST_ENV) \
+	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test -p plxnative-modules --test host_interface --features hostsim
 
 # `make fuzz-hud [T=<target>] [SECS=60]` -- the `cargo fuzz` package over every parser a HUD package or the
 # registry reaches (`fuzz/`: its own workspace, outside rust-modules, so nothing shipped names it). T is one
@@ -2437,7 +2502,7 @@ SIM_SHOT  ?= $(SIM_DIR)/shot.png
 # reason BOOT_SH exists for `run`/`run-stream`.
 # Size of the simulator's DRAWABLE in pixels, 1:1 on any pixel density (the window is ALLOW_HIGHDPI, so
 # on a Retina display it is half this many points; `fit_window_to_density` does the conversion).
-# Empty = fit the display (see `plan_desktop_window`), which on a 1x screen is half the authored
+# Empty = fit the display (see `plx_shell_sdl`'s `plan_desktop_window`), which on a 1x screen is half the authored
 # canvas and therefore half the resolution of every screenshot. Set both to look at the UI the
 # size it is drawn:
 #   make sim-shot SIM_W=1920 SIM_H=1080

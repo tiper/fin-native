@@ -1876,6 +1876,31 @@ mod tests {
         }
     }
 
+    /// W5a: the loop reads a `HostEvent`, and the tape still records each lifecycle edge as the SDL
+    /// code it arrived as, so every recorded tape replays as it did. Each pair is spelled as the
+    /// literal record an earlier build wrote.
+    #[test]
+    fn a_lifecycle_edge_is_recorded_as_the_sdl_code_it_arrived_as() {
+        use super::super::events::{decode_host_event, HostEvent, Lifecycle};
+        for (code, edge, foreground) in [
+            (0x103u32, Lifecycle::WillBackground, false),
+            (0x104, Lifecycle::DidBackground, false),
+            (0x105, Lifecycle::WillForeground, true),
+            (0x106, Lifecycle::DidForeground, true),
+        ] {
+            let mut event = [0u8; 128];
+            event[..4].copy_from_slice(&code.to_ne_bytes());
+            assert_eq!(decode_host_event(&event), Some(HostEvent::Lifecycle(edge)), "{code:#x}");
+            let recorded = enc_lifecycle(edge.sdl_code());
+            let legacy: Value = serde_json::from_str(&format!(r#"{{"kind":"lifecycle","code":{code}}}"#)).unwrap();
+            assert_eq!(recorded, legacy, "{code:#x}");
+            assert_eq!(recorded.to_string(), legacy.to_string(), "{code:#x}: byte-equal on the tape");
+            assert_eq!(controlled_foreground(&recorded),
+                if foreground { Ok(Some(code)) } else { Err("unsupported controlled lifecycle") },
+                "{code:#x}: only the foreground pair is in the controlled domain");
+        }
+    }
+
     #[test]
     fn product_mode_encoding_is_bounded_explicit_and_fail_closed() {
         assert_eq!(ReplayMode::parse("/tmp/synthetic"),Ok((ReplayMode::Targets,"/tmp/synthetic")));
@@ -2117,12 +2142,12 @@ mod tests {
         let _serial=plx_base::testlock::serial();
         let initial=super::super::bootstrap::Initial::synthetic_home(1,32517,None).unwrap();
         let mt=unsafe {plx_base::task::MainThread::assume()};
-        let (runtime, retained) = super::super::bridge::BridgeRetained::controlled_home(||0,&initial,&mt,true);
+        let (runtime, retained) = super::super::bridge::BridgeRetained::controlled_home(||0, crate::app::platform::Platform::HOST_TEST.shell, &initial,&mt,true);
         let mut harness = crate::app::runtime_owners::Harness::from_parts(runtime, retained);
         let mut bridge = harness.bridge();
         bridge.split().measure.width(c"no fonts loaded",28,false);
         assert!(bridge.take_measurements().is_err(),"construction-order violations must latch");
-        let (runtime, retained) = super::super::bridge::BridgeRetained::controlled_home(||0,&initial,&mt,true);
+        let (runtime, retained) = super::super::bridge::BridgeRetained::controlled_home(||0, crate::app::platform::Platform::HOST_TEST.shell, &initial,&mt,true);
         let mut harness = crate::app::runtime_owners::Harness::from_parts(runtime, retained);
         let mut bridge = harness.bridge();
         let table=[

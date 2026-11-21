@@ -30,10 +30,10 @@
     }
   },
   "include": "include!(concat!(env!(\"OUT_DIR\"), \"/languages.rs\"));",
-  "lock": "9034a341236d78f3c943b2d86672dee5a9d802513cdbeac1b193952be4090bc8",
+  "lock": "12c48c67b18a0f96e240e029b5a078091164ab4f4396b7f1e0401a9633034c11",
   "machine_newtype": "reviewed local newtype macro emits pub struct Name(pub u32); doc attributes only",
   "manifests": {
-    "Cargo.toml": "e5e1f95985fc8f0827757692c393dc5f7a8b93298cc2c04db02576e95057f82a",
+    "Cargo.toml": "ad450eeb79ce723261f5eaee7acf91bc6332845cd5b52aae4354f1aaf59dff72",
     "appkit/Cargo.toml": "5cc1214cba7746fe0f2d4cfa5047b599e0d5124abe7bdaebe210381021b88c4a",
     "base/Cargo.toml": "ebe0b95553bd44f33f422f7d8e22b75ddeb53c7ee81bbe738f675690694568f7",
     "data/Cargo.toml": "74f79e6240f0965069ec34916ae276b3f7e5f4b944cf16a0846570a6b115afa0",
@@ -51,6 +51,7 @@
     "plex/Cargo.toml": "69e38307e21cce2e4f0a7efd288b64110b9af1dd7bbd0daceeca689ddbacd656",
     "screens/Cargo.toml": "772bc873f1779152f52807f1f5d6ea2dfa5a46cab42523b86821f50aa0627d2b",
     "session/Cargo.toml": "1a3b4b923b1fba49a1b9243d75c05d6f84521f7d035545adf754d948d69df3ba",
+    "shell-sdl/Cargo.toml": "9bccdb0abdb2ce9afdc030af9454117ed53884f9b50e1ee35a21bcfe6459e9a1",
     "storage/Cargo.toml": "4b8576b04a5877e95d084a49a16b30224c275ae29b4a192c40725ac819500150",
     "telemetry/Cargo.toml": "9e514e64ae4a35619294621f22534b5e5b109d9dd3b729b94ed20112f47197bf",
     "ui/Cargo.toml": "7375c6a73cb2558c7c0f62da7b0bd4beb2a5b78f5460ee35e93b1045c0e80eec"

@@ -32,9 +32,10 @@
 //!   dispatcher does not yet run a phase this early in the frame). `opaque_route` and
 //!   `clear_opaque_region` stopped being no-ops in phase 9 — the rig's hooks are real, but they
 //!   delegate to `app/run.rs::rig_opaque_route`/`rig_clear_opaque_region` rather than naming
-//!   `plx_os::tv::window::` here, which is what keeps the OS-facing call text in one file (D4;
+//!   the platform's `shell` here, which is what keeps the OS-facing call text in one file (D4;
 //!   `ci/check-deps.sh`'s `frame` gate).
 
+use super::platform::Shell;
 use std::ffi::CStr;
 
 #[cfg(test)]
@@ -731,9 +732,19 @@ pub(crate) struct BridgeRetained {
     effect_return: ReturnState<u32, PageMemory>,
 
     now_us: fn() -> u64,
+    /// **The platform's shell**, for the dispatcher's two opaque-region hooks (`Rig::opaque_route` and
+    /// `Rig::clear_opaque_region`, below), which take no platform argument. It is the one `App::platform`
+    /// holds, given to the constructor by the root that has it: a host test passes the host-test shell.
+    shell: &'static dyn Shell,
 }
 
 impl Bridge<'_> {
+    /// The platform's shell, which the pointer's callers (`playback`'s PLAY key and Back-cursor
+    /// commands) hide and show the Magic Remote's pointer through: the one `App::platform` holds.
+    pub(super) fn shell(&self) -> &'static dyn Shell {
+        self.retained.shell
+    }
+
     #[cfg(test)]
     pub(crate) fn measurement_queries(&self)->Vec<plx_ui::rec::MetricKey> { self.retained.measure.queries() }
     /// The measurer every screen of this bridge lays out with (a host test's has no fonts): the HUD
@@ -800,7 +811,8 @@ impl BridgeRetained {
     /// `Held` runner exists to remove (`Some(true)`/`Some(false)` flakes), and none does today; a
     /// test that needs to choose when a fetch settles builds its Bridge with `Held`
     /// (`StoreRunner::held`) instead.
-    pub(crate) fn controlled_home(now_us: fn() -> u64, initial: &super::bootstrap::Initial,
+    pub(crate) fn controlled_home(now_us: fn() -> u64, shell: &'static dyn Shell,
+        initial: &super::bootstrap::Initial,
         mt: &plx_base::task::MainThread, replay: bool) -> (super::runtime_owners::RuntimeOwners, Self) {
         static TTF: plx_gfx::text::TtfMeasure = plx_gfx::text::TtfMeasure;
         let preferences = initial.session.persisted.clone();
@@ -814,7 +826,7 @@ impl BridgeRetained {
         // adapter (`plx_data::metadata::record::arm`'s own doc has the history). Must run before this
         // `Bridge` can admit any detail request.
         stores.metadata.arm_detail_tracker(initial.content.is_some());
-        let (runtime, mut retained) = Self::with_publications_and_stores(&TTF, now_us, initial.session.clone(),
+        let (runtime, mut retained) = Self::with_publications_and_stores(&TTF, now_us, shell, initial.session.clone(),
             super::adapters::session::SessionAdapter::controlled_home(mt, replay),
             initial.consent.clone(), super::adapters::consent::ConsentAdapter::live(),
             super::adapters::stores::StoreRunner::live(), StorePublications {
@@ -835,14 +847,14 @@ impl BridgeRetained {
             failure: None, profile: runtime.session.adapter.profile_resource_view().expect("controlled publisher") });
         (runtime, retained)
     }
-    pub(crate) fn new(now_us: fn() -> u64, init: plx_session::auth::SessionInit,
+    pub(crate) fn new(now_us: fn() -> u64, shell: &'static dyn Shell, init: plx_session::auth::SessionInit,
         consent: plx_telemetry::telemetry::consent::Consent, mt: &plx_base::task::MainThread) -> (super::runtime_owners::RuntimeOwners, Self) {
         // A `static`, not `&TtfMeasure` inline: a unit-struct literal DOES const-promote to
         // `'static` today, but that is a rule about the expression rather than a promise about
         // this field, and a `static` states the lifetime outright. Same reasoning as the one
         // `screens::settings`'s test module writes out beside its own measure.
         static TTF: plx_gfx::text::TtfMeasure = plx_gfx::text::TtfMeasure;
-        Self::with_measure(&TTF, now_us, init, super::adapters::session::SessionAdapter::live(mt),
+        Self::with_measure(&TTF, now_us, shell, init, super::adapters::session::SessionAdapter::live(mt),
             consent, super::adapters::consent::ConsentAdapter::live(),
             super::adapters::stores::StoreRunner::live())
     }
@@ -852,8 +864,16 @@ impl BridgeRetained {
     /// dies inside `text.rs` on a `debug_assert!`, several frames away from anything it asserted.
     #[cfg(test)]
     pub(crate) fn for_test(now_us: fn() -> u64) -> (super::runtime_owners::RuntimeOwners, Self) {
+        Self::for_test_on(now_us, super::platform::Platform::HOST_TEST.shell)
+    }
+
+    /// [`Self::for_test`] on a given platform's shell, for a test that counts what the bridge's
+    /// callers ask of the shell (the PLAY key's and Back's pointer hide).
+    #[cfg(test)]
+    pub(crate) fn for_test_on(now_us: fn() -> u64, shell: &'static dyn Shell)
+        -> (super::runtime_owners::RuntimeOwners, Self) {
         static FIXTURE: plx_ui::fixture::FixtureMeasure = plx_ui::fixture::FixtureMeasure;
-        let (mut runtime, mut retained) = Self::with_measure(&FIXTURE, now_us,
+        let (mut runtime, mut retained) = Self::with_measure(&FIXTURE, now_us, shell,
             plx_session::auth::SessionInit::captured(plx_plex::plex::session::Session::default()),
             super::adapters::session::SessionAdapter::fixture(), Default::default(),
             super::adapters::consent::ConsentAdapter::fixture(),
@@ -866,7 +886,7 @@ impl BridgeRetained {
         (runtime, retained)
     }
 
-    fn with_measure(measure: &'static dyn Measure, now_us: fn() -> u64,
+    fn with_measure(measure: &'static dyn Measure, now_us: fn() -> u64, shell: &'static dyn Shell,
         init: plx_session::auth::SessionInit, session_adapter: super::adapters::session::SessionAdapter,
         consent: plx_telemetry::telemetry::consent::Consent,
         consent_adapter: super::adapters::consent::ConsentAdapter,
@@ -878,7 +898,7 @@ impl BridgeRetained {
             visible_generation: 0, settled: false, profile_key: "",
         });
 
-        let (mut runtime, mut retained) = Self::with_publications_and_stores(measure, now_us, init, session_adapter, consent,
+        let (mut runtime, mut retained) = Self::with_publications_and_stores(measure, now_us, shell, init, session_adapter, consent,
             consent_adapter, store_runner,
             StorePublications {
             hubs: stores.hubs.snapshot(), listing: browse.listing,
@@ -937,14 +957,15 @@ impl BridgeRetained {
         consent: plx_telemetry::telemetry::consent::Consent,
         consent_adapter: super::adapters::consent::ConsentAdapter,
         reads: StorePublications) -> (super::runtime_owners::RuntimeOwners, Self) {
-        let (runtime, mut retained) = Self::with_publications_and_stores(measure, now_us, init, session_adapter, consent,
+        let (runtime, mut retained) = Self::with_publications_and_stores(measure, now_us, super::platform::Platform::HOST_TEST.shell, init,
+            session_adapter, consent,
             consent_adapter, super::adapters::stores::StoreRunner::held(), reads, Default::default(), true);
         retained.metadata_alt_host = |request, _| request.answer(None);
         retained.card_motion_policy = super::card_motion_policy::Capture::neutral();
         (runtime, retained)
     }
 
-    fn with_publications_and_stores(measure: &'static dyn Measure, now_us: fn() -> u64,
+    fn with_publications_and_stores(measure: &'static dyn Measure, now_us: fn() -> u64, shell: &'static dyn Shell,
         init: plx_session::auth::SessionInit, session_adapter: super::adapters::session::SessionAdapter,
         consent: plx_telemetry::telemetry::consent::Consent,
         consent_adapter: super::adapters::consent::ConsentAdapter,
@@ -1033,6 +1054,7 @@ impl BridgeRetained {
             effect_return: ReturnState::default(),
 
             now_us,
+            shell,
         };
 
         if live_screen_inputs {
@@ -1640,8 +1662,12 @@ impl Bridge<'_> {
         // No Player replay domain exists: controlled owners retain explicit neutral/supplied facts.
         if !self.retained.live_screen_inputs { return false; }
         let next = super::player_presentation::capture(ps);
-        if self.retained.screen_inputs.player_presentation == next { return false; }
+        // The set the composition published: the screens read it to disable Play when none is composed.
+        let backends = ps.backends();
+        if self.retained.screen_inputs.player_presentation == next
+            && self.retained.screen_inputs.backends == backends { return false; }
         self.retained.screen_inputs.player_presentation = next;
+        self.retained.screen_inputs.backends = backends;
         self.retained.screen_inputs.revision = self.retained.screen_inputs.revision.wrapping_add(1);
         true
     }
@@ -3371,13 +3397,13 @@ impl Rig<AppHost> for Bridge<'_> {
     fn ls2_pump(&mut self) {}
     /// §3.3 step 9, every frame, presented or not. Real since phase 9: the argument is the
     /// dispatcher's `Present::video_plane()`, i.e. the Player machine's own bit arriving as
-    /// `PresentEvent::VideoPlane`, and `tv::window::opaque_route` only sends a wayland request when
+    /// `PresentEvent::VideoPlane`, and `Shell::opaque_route` only sends a wayland request when
     /// the answer CHANGES — so the loop's own call beside it (`app/run.rs`, from the same bit) is
     /// a `static` read and a return, not a second claim. Delegates to `run::rig_opaque_route`
-    /// (D4) rather than naming `plx_os::tv::window::opaque_route` here directly — see that function's
+    /// (D4) rather than naming the platform's `shell.opaque_route` here directly — see that function's
     /// doc for why.
     fn opaque_route(&mut self, video_plane_bound: bool) {
-        super::run::rig_opaque_route(video_plane_bound);
+        super::run::rig_opaque_route(self.retained.shell, video_plane_bound);
     }
     /// §3.3 step 10, at draw entry. Real since phase 9, and conditional on the same bit: NULLing
     /// the opaque region on a frame with no plane under it would silently retract the claim
@@ -3386,7 +3412,7 @@ impl Rig<AppHost> for Bridge<'_> {
     /// `run::rig_clear_opaque_region` (D4); the guard stays here.
     fn clear_opaque_region(&mut self) {
         if self.retained.video_plane {
-            super::run::rig_clear_opaque_region();
+            super::run::rig_clear_opaque_region(self.retained.shell);
         }
     }
     fn now_us(&self) -> u64 {
@@ -5326,7 +5352,7 @@ pub(crate) fn search_owns_input(d: &Dispatcher<AppHost>) -> bool {
 /// television's own keyboard through `SDL_TEXTINPUT`, a replayed text input). True while the system keyboard is
 /// up for whichever page or surface raised it (`Dispatcher::system_keyboard_up`: Settings > Player HUD's address
 /// field, and Search's), and while Search is on top, whose field takes text even when the dispatcher's record of
-/// the panel disagrees with the OS (the `SDL_TEXTINPUT` branch of `run::ingest_sdl_event` says why). Text that
+/// the panel disagrees with the OS (`run::ingest_text_commit` says why). Text that
 /// arrives while this is false goes to `textinput`'s bounded queue, which nothing reads.
 pub(crate) fn text_owner(d: &Dispatcher<AppHost>) -> bool {
     d.system_keyboard_up() || search_owns_input(d)
@@ -5897,7 +5923,7 @@ mod preference_effect_tests {
         let mode = plx_media::route::direct_play_mode();
         for replay in [false, true] {
             let initial = super::super::bootstrap::Initial::synthetic_home(17, 32517, None).unwrap();
-            let (runtime, retained) = BridgeRetained::controlled_home(|| 0, &initial, &mt, replay);
+            let (runtime, retained) = BridgeRetained::controlled_home(|| 0, crate::app::platform::Platform::HOST_TEST.shell, &initial, &mt, replay);
             let mut owner = crate::app::runtime_owners::Harness::from_parts(runtime, retained);
             let mut bridge = owner.bridge();
             let mut d = Dispatcher::<AppHost>::new();
@@ -5999,6 +6025,32 @@ mod screen_input_publication_tests {
             assert!(!bridge.publish_player_presentation(&ps), "controlled capture must perform no IO");
             assert_eq!(bridge.retained.screen_inputs.player_presentation, Default::default());
         });
+    }
+
+    /// W6c: the set the session was told reaches the screens as `ScreenInputs.backends`, moves the
+    /// frame's revision when it changes, and a controlled host keeps the default (today's) set.
+    #[test]
+    fn the_composed_backend_set_reaches_the_screen_inputs() {
+        use plx_media::route::BackendSet;
+        let _serial = plx_base::testlock::serial();
+        let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+        let mut bridge = owner.bridge();
+        let mut ps = plx_media::route::PlaybackSession::IDLE;
+        // The presentation half reads process-wide diagnostics another test may have left, so the
+        // first publication settles it and only the set's own effects are asserted.
+        bridge.publish_player_presentation(&ps);
+        assert_eq!(bridge.retained.screen_inputs.backends, BackendSet::FEED,
+            "the session's default set is the inputs' default");
+        let revision = bridge.retained.screen_inputs.revision;
+        ps.install_backends(BackendSet::NONE);
+        assert!(bridge.publish_player_presentation(&ps), "a platform with no driver is a visible change");
+        assert_eq!(bridge.retained.screen_inputs.backends, BackendSet::NONE);
+        assert_ne!(bridge.retained.screen_inputs.revision, revision);
+        assert!(!bridge.publish_player_presentation(&ps), "an unchanged set presents nothing");
+        bridge.retained.live_screen_inputs = false;
+        ps.install_backends(BackendSet::BOTH);
+        assert!(!bridge.publish_player_presentation(&ps), "a controlled host publishes nothing");
+        assert_eq!(bridge.retained.screen_inputs.backends, BackendSet::NONE);
     }
 
     #[test]
@@ -6113,7 +6165,7 @@ mod screen_input_publication_tests {
         let initial = crate::app::bootstrap::Initial::synthetic_home(17, 32517, None).unwrap();
         let mt = unsafe { plx_base::task::MainThread::assume() };
         for replay in [false, true] {
-            let (runtime, retained) = BridgeRetained::controlled_home(|| 0, &initial, &mt, replay);
+            let (runtime, retained) = BridgeRetained::controlled_home(|| 0, crate::app::platform::Platform::HOST_TEST.shell, &initial, &mt, replay);
             let mut owner = crate::app::runtime_owners::Harness::from_parts(runtime, retained);
             let mut bridge = owner.bridge();
             let mut present = plx_machine::present::Present::new();

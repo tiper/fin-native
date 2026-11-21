@@ -196,7 +196,7 @@ pub struct PlaybackSession {
     /// and a scrobble on top would be a second view. Read and cleared by [`scrobble_stop`].
     pub finished: bool,
     /// Read-only publication of Player.repair for the HUD. Never authorizes a resource effect.
-    pub repair_status: plx_os::tv::sandbox::State,
+    pub repair_status: plx_os::tv::native_video::State,
     /// The request which produced this attempt, retained for terminal Retry / Choose quality.
     /// Written synchronously by [`request_play`] rather than by [`apply_plan`], because the
     /// server can refuse before a playable plan exists.
@@ -1342,8 +1342,20 @@ impl PlaybackSession {
         self.source_selection = Some(selection);
     }
 
-    pub fn install_uri_preflight_port(&mut self, port: super::uri_preflight::ResolvePort) {
-        self.uri_preflight_port = Some(port);
+    /// Publish the composition's resolver, or its absence: a boot whose URI install was refused (or
+    /// that composed no URI driver) passes `None`, and the planner then answers `UriDecline::NoPort`.
+    /// Takes `Some(port)` or a bare port, so the set of installed drivers and this resolver are
+    /// published by the one call the boot makes (`app::platform::publish_composition`).
+    pub fn install_uri_preflight_port(
+        &mut self,
+        port: impl Into<Option<super::uri_preflight::ResolvePort>>,
+    ) {
+        self.uri_preflight_port = port.into();
+    }
+
+    /// The resolver the composition published, `None` when it published none.
+    pub fn uri_preflight_port(&self) -> Option<&super::uri_preflight::ResolvePort> {
+        self.uri_preflight_port.as_ref()
     }
 
     /// The playback backends the composition supplies. Boot installs the set its drivers form
@@ -1690,7 +1702,7 @@ impl PlaybackSession {
         native_start_refused: None,
         engine_failure: None,
         finished: false,
-        repair_status: plx_os::tv::sandbox::State::Idle,
+        repair_status: plx_os::tv::native_video::State::Idle,
         request: None,
         requested_resume_ns: 0,
         url: String::new(),
@@ -11645,7 +11657,7 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             native_start_refused: None,
             engine_failure: None,
             finished: false,
-            repair_status: plx_os::tv::sandbox::State::Idle,
+            repair_status: plx_os::tv::native_video::State::Idle,
             request,
             requested_resume_ns,
             url: plan.url,
