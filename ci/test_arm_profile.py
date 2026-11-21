@@ -124,6 +124,12 @@ HOST_ONLY_GOALS = (
     "print-subs-font-files", "print-rust-toolchain", "print-rust-codegen", "print-cargo-env",
     "print-playback-config",
 )
+# The Tizen goals (`mk/platform-tizen.mk`, read only under PLATFORM=tizen): the host library, the static SDL, the .NET host's package. None builds,
+# reads or ships the ARM artifacts or writes under pkg/ (it reads pkg/appfont*.ttf and pkg/OFL.txt and writes under tizen/ and rust-modules/target-tizen),
+# so none may reset the stamp: `make PLATFORM=tizen tizen-abi` after a `make ARM_PROFILE=release deploy` once deleted the release-built pkg/plxnative.
+# Run with PLATFORM=tizen: without it the goal does not exist and the test would pass for the wrong reason.
+TIZEN_GOALS = ("tizen-abi", "tizen-check", "tizen-sdl", "tizen-so", "tizen-verify", "tizen-stage", "tizen-signing", "tizen-tpk",
+               "print-tizen-config")
 # Goals that stay OUT of SIDE_EFFECT_FREE, each with the reason. A goal that builds, reads or ships the ARM
 # artifacts (or writes under pkg/) must reset the stamp: that is how a stale binary is never deployed.
 STAMPED_GOALS = {
@@ -202,17 +208,17 @@ class ScratchTree(unittest.TestCase):
             path.write_text("built by ARM_PROFILE=release\n")
         return stamp
 
-    def run_goal(self, goal: str, seeded_stamp: str):
+    def run_goal(self, goal: str, seeded_stamp: str, *extra: str):
         """Run `make <goal>` with the default (tvdev) configuration; report what the reset took."""
-        proc = self.make(f"TV={PLACEHOLDER_TV}", "FLAVOR=debug", goal)
+        proc = self.make(f"TV={PLACEHOLDER_TV}", "FLAVOR=debug", *extra, *([goal] if goal else []))  # "" is the bare `make`
         self.assertEqual(proc.returncode, 0, (goal, proc.stderr[-300:]))
         deleted = [rel for rel in RESET_PATHS if not (self.tree / rel).exists()]
         stamp = (self.tree / STAMP).read_text()
         return deleted, stamp != seeded_stamp, "+profile:tvdev" in stamp
 
-    def assert_keeps_the_build(self, goal: str):
+    def assert_keeps_the_build(self, goal: str, *extra: str):
         seeded = self.seed_release_build()
-        deleted, stamp_changed, stamp_is_tvdev = self.run_goal(goal, seeded)
+        deleted, stamp_changed, stamp_is_tvdev = self.run_goal(goal, seeded, *extra)
         self.assertEqual(deleted, [], f"make {goal} deleted a release build's files")
         self.assertFalse(stamp_changed, f"make {goal} rewrote the release stamp"
                                         f"{' to the tvdev configuration' if stamp_is_tvdev else ''}")
@@ -425,6 +431,30 @@ class HostOnlyGoalsKeepTheBuild(ScratchTree):
             with self.subTest(goal):
                 self.assert_keeps_the_build(goal)
 
+    def test_tizen_goals_keep_a_release_build(self):
+        for goal in TIZEN_GOALS:
+            with self.subTest(goal):
+                self.assert_keeps_the_build(goal, "PLATFORM=tizen")
+
+    def test_a_bare_make_of_the_tizen_platform_keeps_a_release_build(self):
+        # no goal: `.DEFAULT_GOAL := tizen-check` (docs/tizen.md says `make PLATFORM=tizen` is that), and MAKECMDGOALS is empty
+        self.assert_keeps_the_build("", "PLATFORM=tizen")
+
+    def test_a_bare_webos_make_still_resets_the_stamp(self):
+        # the other side: the default goal builds the package, so it is not a pure query and must keep resetting
+        seeded = self.seed_release_build()
+        deleted, stamp_changed, _ = self.run_goal("", seeded)
+        self.assertTrue(deleted or stamp_changed, "a bare webOS make no longer resets a stale stamp")
+
+    def test_every_tizen_goal_is_in_the_exempt_list_and_the_query_is_a_query(self):
+        text = (ROOT / "Makefile").read_text()
+        free = set(re.search(r"^SIDE_EFFECT_FREE = (.*)$", text, flags=re.M).group(1).split())
+        query = set(re.search(r"^QUERY_GOALS\s*=((?:.*\\\n)*.*)$", text, flags=re.M).group(1).replace("\\\n", " ").split())
+        self.assertEqual(sorted(g for g in TIZEN_GOALS if g not in free and g not in query), [])
+        self.assertIn("print-tizen-config", query)
+        declared = set(re.findall(r"^(tizen-[a-z]+)\b[^:=\n]*:", (ROOT / "mk/platform-tizen.mk").read_text(), flags=re.M))
+        self.assertEqual(declared - set(TIZEN_GOALS), set(), "a tizen-* goal the mk file declares is not covered here")
+
     def test_goals_that_build_or_ship_stay_out_of_the_list(self):
         listed = re.search(r"^SIDE_EFFECT_FREE = (.*)$", (ROOT / "Makefile").read_text(), flags=re.M)
         self.assertIsNotNone(listed, "the Makefile's SIDE_EFFECT_FREE must stay ONE line "
@@ -436,6 +466,7 @@ class HostOnlyGoalsKeepTheBuild(ScratchTree):
 
     def test_the_lists_do_not_overlap(self):
         self.assertEqual(set(HOST_ONLY_GOALS) & set(STAMPED_GOALS), set())
+        self.assertEqual(set(TIZEN_GOALS) & (set(STAMPED_GOALS) | set(HOST_ONLY_GOALS) | set(DEVICE_CONTROL_GOALS)), set())
         self.assertEqual(set(HOST_ONLY_GOALS) & set(DEVICE_CONTROL_GOALS), set())
         self.assertEqual(set(DEVICE_CONTROL_GOALS) & set(STAMPED_GOALS), set())
 

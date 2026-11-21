@@ -196,8 +196,10 @@ the log line names them (`worktrees: kept <lane> (<branch>): holds ignored files
 output: ...`). A lane whose ignored files git could not list is kept too (fail closed). Build output is
 the allow-list `derived_output` in `tools/build-gc.sh`: `rust-modules/target*`, the FFmpeg, Sentry and libass
 trees under `vendor/`, what `make` stages in `pkg/` (the binaries, `.so`s, `.link.*` evidence, `.flavor`,
-`.build-config`), `ipkroot/`, `src/*.o`, `stub/*.so`, `tools/node_modules`, `__pycache__`, `.DS_Store`
-and a TV session's `.tv-*.pid`/`.log` scratch. Everything else is kept: `pkg/*` is deliberately not a pattern,
+`.build-config`), `ipkroot/`, `src/*.o`, `stub/*.so`, `tools/node_modules`, `__pycache__`, `.DS_Store`,
+the Tizen build's `tizen/out`, `tizen/sdl-build` and the host project's staged `bin/`, `obj/`, `lib/` and `res/` files
+(`make PLATFORM=tizen`), and a TV session's `.tv-*.pid`/`.log` scratch. A Samsung certificate (`*.p12`, `*.pfx`) is a
+credential and is kept. Everything else is kept: `pkg/*` is deliberately not a pattern,
 and what was pulled from the television (`.abi-cache/`, `sysroot/`, `tests/fixtures/softfloat/arm.tbl`) is
 kept because getting it back needs the one TV. A new `.gitignore` pattern must be added to that list or named as
 private in `ci/test_build_gc.py`, which fails otherwise; until then a lane holding it is kept, never removed.

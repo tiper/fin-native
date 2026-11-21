@@ -9,7 +9,8 @@ refused at parse time instead of building something nobody asked for:
            existed, and the default.
   desktop  the macOS and Windows/WSLg simulators and the macOS app (`sim-*`, `macapp`): the Makefile
            makes it the default for those goals.
-  tizen    the Samsung Tizen television (the `.tpk`). Only the name exists yet; no goal builds it.
+  tizen    the Samsung Tizen television (the `.tpk`): `mk/platform-tizen.mk`, which the Makefile includes only for this value, builds its
+           library and package (docs/tizen.md). No other goal builds it.
 
 The axis is the TARGET OS and nothing else. It does not choose the compatibility axis: the Rust
 target (`RUST_TARGET`), the sysroot (`SYSROOT`), a managed TFM, a firmware floor and the signing

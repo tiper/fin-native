@@ -390,6 +390,9 @@ NOTICE_ROWS = {
     'harfbuzz': ['| HarfBuzz | {version} |'],
     'libunibreak': ['| libunibreak | {version} |'],
     'sentry-native': ['**Sentry Native {version}**'],
+    # The Tizen package's statically linked SDL (THIRD-PARTY-NOTICES.md section 2.8).
+    'sdl2': ['| SDL2 | {version} |'],
+    'sdl2-ttf': ['| SDL2_ttf | {version} |'],
 }
 
 

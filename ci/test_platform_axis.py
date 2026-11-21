@@ -234,6 +234,35 @@ class ImpliedPlatform(ScratchTree):
                 self.assertRegex(text, rf"(?m)^{goal}:")
 
 
+class TizenConfiguration(unittest.TestCase):
+    """`mk/platform-tizen.mk`'s own variables, read with `print-tizen-config` (a query: it touches nothing)."""
+
+    def config(self, *args: str) -> dict[str, str]:
+        proc = make("PLATFORM=tizen", *args, "print-tizen-config")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+
+    def test_a_release_library_carries_no_dev_trigger_seam(self):
+        """The webOS rule (`RELEASE=1` builds without `devtriggers`): a library that ships must not arm the dev boot."""
+        self.assertEqual(self.config()["TIZEN_FEATURES"], "tizen,devtriggers")
+        self.assertEqual(self.config("RELEASE=1")["TIZEN_FEATURES"], "tizen")
+        self.assertEqual(self.config("RELEASE=1")["TIZEN_PROFILE"], "release")
+        self.assertEqual(self.config("RELEASE=")["TIZEN_FEATURES"], "tizen,devtriggers")
+
+
+    def test_the_verification_comes_after_the_link(self):
+        """Under -j a verify that is a sibling of the link reads the OLD library. In a dry run the recipes print in the order they would
+        run, and `-j` with a serial dry run still shows the dependency order make enforces."""
+        for goals in (("tizen-tpk",), ("tizen-so", "tizen-verify"), ("tizen-verify", "tizen-so")):
+            with self.subTest(goals=goals):
+                proc = make("PLATFORM=tizen", "-j8", *goals, dry=True)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                lines = proc.stdout.splitlines()
+                link = max(i for i, l in enumerate(lines) if l.startswith("mv -f tizen/out/x86_64/libplx.so.part"))
+                verify = min(i for i, l in enumerate(lines) if "ci/check-tizen-so.py verify" in l)
+                self.assertGreater(verify, link, "tizen-verify would run before the link finished")
+
+
 class RefusedPlatform(ScratchTree):
     def test_a_refused_value_is_refused_whatever_the_goal(self):
         """The refusal is at parse time, above the stamp reset that deletes `pkg/plxnative` and the staged

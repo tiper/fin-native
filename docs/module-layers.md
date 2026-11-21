@@ -20,7 +20,7 @@ diagnostic surface, and `host`, its one published face (the types a platform bui
 It is a plain `rlib`: no archive is built from this crate. **The `[platform webos]` and `[platform desktop]` members left
 for crates of their own on top of it (L15f, W7b, landed; `docs/platform-ports.md`):** `plx_platform_webos`
 (`rust-modules/platform-webos/`: `port`, `system`, `webos` with the Starfish sink `webos::video_sink`, and `keymanager`) is
-the crate the one `staticlib` the Makefile links is built from, and `plx_platform_desktop` (`rust-modules/platform-desktop/`: the
+the crate the webOS build's `staticlib` is built from, and `plx_platform_desktop` (`rust-modules/platform-desktop/`: the
 simulator's tables and entry, and the `plxnative-sim` binary) is the simulator's and the macOS app's. A third, `plx_platform_tizen` (`rust-modules/platform-tizen/`, W9, `[platform tizen]`), is the Tizen hosted `.so` platform (emulator only) and
 is compiled only under its own `tizen` feature. Each names `app`
 through `host` and `plx_os` for the `tv` interfaces it fills; the application names neither, and `plx_os` kept `tv`, those interfaces,

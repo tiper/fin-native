@@ -1353,7 +1353,7 @@ Ecore names to `remote_token_key` pairs".
   does the same with a `tizen` feature.
 - Stages that need a second invocation exist already: the hostsim type-check (`.github/workflows/ci.yml:379`),
   `make test-hostsim`, the `sim-*`/`macapp` builds, `check-cargo-unit-hostsim` and `check-nodef`
-  (`Makefile:1928`), which after W7 also checks `-p plx_platform_webos`. A Tizen clippy pass runs in the Tizen CI job.
+  (`Makefile:1928`), which after W7 also checks `-p plx_platform_webos`. No clippy pass runs with the `tizen` feature yet: the Tizen CI job links and verifies, and `make PLATFORM=tizen tizen-check` only type-checks.
 - The hostsim gate (review M11, F35). `check-cargo-unit-hostsim` keeps its eleven packages, including
   `-p plxnative-modules --features hostsim`, and adds `plx_platform_desktop`; `HOSTSIM_PKGS` is the developer's
   loop. Before and after every PR that moves tests (W4, W7), a script lists the discovered test names
@@ -1361,13 +1361,16 @@ Ecore names to `remote_token_key` pairs".
   only, the app's lifecycle suite (`run.rs:3915`) and the Feed suites included. A separate check asserts that each
   artifact root has exactly one `plx_platform_*` in its normal dependency tree.
 - Tizen link shape: `cargo rustc --crate-type staticlib` of `plx_platform_tizen` (F24), then `cc -shared
-  -Wl,--whole-archive` over it plus `svg.o`, `sentry_context.o`, `crashtrace.o` and libass-plx. No `main.c`,
-  `access.c`, `exit.c`, `starfish.c` or `video_plane.c`; no cdylib crate type, so `ci/test_no_host_staticlib.py`
-  is untouched.
-- CI: `cross-build` (`ci.yml:531`) stays required and webOS-only. A new compile-only `tizen` job builds the `.so`
-  and checks its exports against the C# `DllImport` list (T7); it stops at the `.so` (`build.sh --so-only` needs
-  no certificate): the `.tpk` needs a device-bound profile that stays out of the repo (T7, E2). The simulators
-  job runs `PLATFORM=desktop`.
+  -Wl,--whole-archive` over it plus `svg.o` and a STATIC SDL2 + SDL2_ttf built from the pins in `ci/dependencies.json`
+  (`tizen/build-sdl.sh`), with `-z defs`, a version script that exports only the header's three `plx_host_*` names and
+  `-lGLESv2` (decision D3). No `main.c`, `access.c`, `exit.c`, `starfish.c` or `video_plane.c`, and none of
+  `sentry_context.o`, `crashtrace.o` or libass: nothing the emulator build reaches references them. No cdylib crate type,
+  so `ci/test_no_host_staticlib.py` is untouched. `docs/tizen.md` is the build's page.
+- CI: `cross-build` (`ci.yml:531`) stays required and webOS-only. The compile-only Tizen job is its own workflow,
+  `.github/workflows/tizen.yml` (job `tizen-so`, not a required check): it builds the `.so` (`make PLATFORM=tizen tizen-so`),
+  verifies it (`tizen-verify`: DT_NEEDED allowlist, undefined symbols, exports equal to `plx_host.h` and to the C# `DllImport`
+  list) and runs the platform crate's own tests with its feature; it stops at the `.so`: the `.tpk` needs a device-bound
+  profile that stays out of the repo (T7, E2). The simulators job runs `PLATFORM=desktop`.
 
 ## Workstreams (ordered; every PR ships webOS)
 

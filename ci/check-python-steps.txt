@@ -451,3 +451,9 @@ python3 ci/test_platform_axis.py
 # feature would unify over a whole default pass: the desktop's `hostsim` would turn it into a simulator pass), with no `version` on it (the
 # certificates refuse one). Manifests only, no cargo.
 python3 ci/test_platform_features.py
+# The Tizen hosted library's contract (W9 E2; mk/platform-tizen.mk, ci/check-tizen-so.py, tizen/package.py, tools/tizen-log-receiver.py): the
+# header/C# parsers and every rule of `tizen-verify` over canned readelf/nm text (each proven RED, so the Linux-only link check is tested on a Mac),
+# the signing refusal (names the missing variables, prints no value), the staging contract and the package check, and the log receiver's
+# sequence bookkeeping. No cargo, no dotnet, no certificate; temp dirs only.
+python3 ci/test_tizen_so_check.py
+python3 ci/test_tizen_package.py

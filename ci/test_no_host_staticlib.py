@@ -41,9 +41,9 @@ from rust_toolchain import pinned
 ROOT = Path(__file__).resolve().parent.parent
 CRATE = "plxnative_modules"
 # The layer crates split out of the app crate (docs/module-layers.md), each a dependency of it and
-# each held to the same rule: an rlib, never an archive. One archive is linked, and it is the webOS
-# platform crate's (the Makefile asks for it with `cargo rustc -p plx_platform_webos --crate-type
-# staticlib`).
+# each held to the same rule: an rlib, never an archive. One archive is linked per platform build: the
+# webOS one is the webOS platform crate's (the Makefile asks for it with `cargo rustc -p plx_platform_webos
+# --crate-type staticlib`), the Tizen one the Tizen platform crate's (`mk/platform-tizen.mk`, `PLATFORM=tizen`).
 LAYER_CRATES = ("plx_base", "plx_machine", "plx_net", "plx_os", "plx_gfx", "plx_ui", "plx_plex", "plx_telemetry", "plx_data", "plx_session", "plx_media", "plx_playback_contract", "plx_play_uri", "plx_play_feed", "plx_media_codecs", "plx_appkit", "plx_screens", "plx_shell_sdl")
 # The three platform crates (W7b, and W9's Tizen): dependents of the app crate, never dependencies of it, so they are
 # in a unit graph of their own, and held to the same rule.

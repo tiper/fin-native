@@ -74,6 +74,28 @@ rust-modules/target-sim-ci*/
 # pkg/plxnative-storage's own target dir, deliberately separate from $(RUST_TDIR) — see the
 # Makefile's STORAGE_TDIR comment. One glob for every RELEASE/LAB/SYMBOLS combination.
 rust-modules/target*-storage/
+# `make PLATFORM=tizen tizen-so` (mk/platform-tizen.mk, docs/tizen.md): the Tizen build's own cargo tree (the glob above does
+# not cover it: it names `target*-storage`), the library and package it writes, and the static SDL it builds from the pins.
+rust-modules/target-tizen/
+tizen/out/
+tizen/sdl-build/
+# The .NET host project's generated half (tizen/host/PlxHost/): `tizen-tpk` stages the library, the font, the icon and the two
+# dev-boot values into it and dotnet writes bin/ and obj/. The dev-boot files carry an address the builder chose (never a
+# credential), so they are listed one by one, and a stale one must never ride into the next package.
+tizen/host/PlxHost/bin/
+tizen/host/PlxHost/obj/
+tizen/host/PlxHost/lib/
+tizen/host/PlxHost/res/appfont.ttf
+tizen/host/PlxHost/res/appfont-bold.ttf
+tizen/host/PlxHost/res/OFL.txt
+tizen/host/PlxHost/res/THIRD-PARTY-NOTICES.md
+tizen/host/PlxHost/res/licenses/
+tizen/host/PlxHost/res/dev-boot.json
+tizen/host/PlxHost/res/log-host.txt
+tizen/host/PlxHost/shared/res/plxntizen0.png
+# Signing material is never source: a Samsung author or distributor certificate and its profile (docs/tizen.md, "Signing").
+*.p12
+*.pfx
 
 # dead prototype dir (code lives in rust-modules/ now)
 rust-poc/

@@ -131,12 +131,14 @@ $(if $(filter $(FLAVOR),$(FLAVORS)),,$(error unknown FLAVOR "$(FLAVOR)" — one 
 # --- WHICH OS: the PLATFORM axis -----------------------------------------------------------
 #
 # `webos` (the television this file has always built for, and the default), `desktop` (the macOS and
-# Windows/WSLg simulators and the macOS app) or `tizen` (a name only: no goal builds it yet). It is the
-# TARGET OS and nothing else. FLAVOR stays the install identity, and the compatibility axis — the Rust
+# Windows/WSLg simulators and the macOS app) or `tizen` (the Samsung television: `mk/platform-tizen.mk`,
+# included at the END of this file only under `PLATFORM=tizen`, builds its library and package; docs/tizen.md).
+# It is the TARGET OS and nothing else. FLAVOR stays the install identity, and the compatibility axis — the Rust
 # target (`RUST_TARGET`), the sysroot (`SYSROOT`) and, once a platform needs them, a managed TFM, a
 # firmware floor and the signing path — stays a set of separate variables that PLATFORM does not choose:
-# `make -s print-rust-target` answers the same under every PLATFORM. Today the axis labels and validates;
-# no recipe reads it, so the default `PLATFORM=webos` builds exactly what it built before the axis existed.
+# `make -s print-rust-target` answers the same under every PLATFORM. Apart from `tizen`'s own file, which
+# nothing reads under another platform, the axis labels and validates and no recipe reads it, so the default
+# `PLATFORM=webos` builds exactly what it built before the axis existed.
 #
 # The simulators and the macOS app are desktop builds, so `sim`, `sim-*`, `macapp` and `macapp-zip` imply
 # PLATFORM=desktop when it was not given: `$(origin PLATFORM)` is `undefined` (not on the command line,
@@ -217,7 +219,7 @@ QUERY_GOALS = print-flavor print-appid print-appdir print-rundir print-eventlog 
               print-simbin print-app-files print-deploy-files print-sentry-handler print-ffmpeg-staged \
               print-sentry-project print-bench-config print-disk-entries \
               print-subs-font-files print-rust-toolchain print-rust-codegen print-cargo-env \
-              print-platform print-rust-target
+              print-platform print-rust-target print-tizen-config
 print-flavor:   ; @echo '$(FLAVOR)'
 print-appid:    ; @echo '$(APPID)'
 print-appdir:   ; @echo '$(APPDIR)'
@@ -863,6 +865,9 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 #     deleted `pkg/plxnative` and rewrote the stamp to `+profile:tvdev` (2026-10-24): it had been missed
 #     when `test-hostsim` and `check-nodef` were listed. Each such goal builds a cargo tree under
 #     `rust-modules/` or runs a script, and none of them reads what the stamp guards.
+#   * The TIZEN goals (`tizen-*`, `print-tizen-config`; mk/platform-tizen.mk, read only under PLATFORM=tizen) build a host library under
+#     `tizen/` and `rust-modules/target-tizen` and read `pkg/` fonts only. `make PLATFORM=tizen tizen-abi` after a
+#     `make ARM_PROFILE=release deploy` deleted the release-built binary (a reviewer's find on the Tizen PR): ci/test_arm_profile.py pins them.
 #   * TV-CONTROL goals: `kill`, `run`, `run-stream`, `verify-deploy`, `uninstall`, `fetch-profile` and
 #     `softfloat-probe` each have `tv-lock-require` as their one prerequisite and an ssh/scp recipe, and
 #     `tv-lock-require` itself is a shell call, so they build and ship nothing. `tools/tv-session.sh`
@@ -880,8 +885,10 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 # goal in the two kinds above resets nothing under a dry run, and every goal named as NOT here stays out
 # of the list. The list is ONE line on purpose (`grep '^SIDE_EFFECT_FREE' Makefile` is the exact set,
 # and several tests read it that way).
-SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim test-host-interface check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require
-PURE_QUERY := $(if $(MAKECMDGOALS),$(if $(filter-out $(SIDE_EFFECT_FREE),$(MAKECMDGOALS)),,yes),)
+SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim test-host-interface check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require tizen-abi tizen-check tizen-sdl tizen-so tizen-verify tizen-stage tizen-signing tizen-tpk
+# A BARE `make PLATFORM=tizen` has no goal either, and its default goal is `tizen-check` (mk/platform-tizen.mk), which is side-effect free;
+# a bare webOS or desktop `make` builds the package and stays a reset.
+PURE_QUERY := $(if $(MAKECMDGOALS),$(if $(filter-out $(SIDE_EFFECT_FREE),$(MAKECMDGOALS)),,yes),$(if $(filter tizen,$(PLATFORM)),yes,))
 # `PLAYBACK_BACKENDS=none` builds no television package. It is refused HERE, at parse time and before
 # the stamp reset below: a recipe-level refusal ran after that reset, so a mistyped
 # `make PLAYBACK_BACKENDS=none [ipk|deploy]` first deleted the last real build's binary and staged
@@ -2806,3 +2813,12 @@ fetch-profile:
 
 .PHONY: setup-rust libass libass-host screenshots screenshots-sim demo-library disk symbols symbols-libs sentry-symbols sentry-native all setup-env telemetry-local deploy verify-deploy run run-stream kill check check-unlocked check-ffmpeg lint test ipk clean tv-lock-require threadprobe sockprobe logmprobe mali-hwcnt-probe tv-capture-bench mali-irq-sample plxnative-stackwalk sim sim-macos sim-linux site-video-sim sim-wsl sim-run sim-macos-run sim-shot sim-macos-shot sim-token sim-macos-token sim-play sim-macos-play sim-clean sim-macos-clean macapp macapp-zip fixtures fixtures-quick fixtures-pipeline fetch-profile \
         release-guard lab-guard install uninstall $(QUERY_GOALS)
+
+# --- the Tizen platform (W9, docs/tizen.md) ------------------------------------------------------------
+#
+# Last in the file, so its recipes see every variable above and its `.DEFAULT_GOAL` cannot become this file's: under
+# `PLATFORM=tizen` a bare `make` is `tizen-check` instead of the television package. Only `PLATFORM=tizen` reads it, so a
+# default `make` and `make -n` are the same text they were before the file existed (the dry-run diff in docs/tizen.md).
+ifeq ($(PLATFORM),tizen)
+include mk/platform-tizen.mk
+endif

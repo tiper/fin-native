@@ -226,7 +226,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   (`HOSTSIM_SUITE`: all of `UNIT_SUITE` except `plx_net`, `plx_ui`, `plx_appkit`, `plx_screens`,
   `plx_media_codecs`, `plx_play_uri`, `plx_playback_contract` and `plx_owp`, which have no `hostsim` cfg and run the
   same test names in both passes, and `plx_platform_tizen`, whose crate is `#![cfg(feature = "tizen")]`: both passes compile it
-  EMPTY, and its tests run only under `cargo test --lib -p plx_platform_tizen --features tizen`; `ci/test_test_crate.py` fails if one gains the feature or a cfg)**,
+  EMPTY, and its tests run only under `cargo test --lib -p plx_platform_tizen --features tizen`, which the `tizen-so` job of `.github/workflows/tizen.yml` runs (the only CI job that does, and only for a change under that workflow's path filter); `ci/test_test_crate.py` fails if one gains the feature or a cfg)**,
   which is not a duplicate run. The host feed seam (`play-feed/src/ffi_host.rs`) exists ONLY in the hostsim
   configuration, so every test that drives an access unit through `sf_feed` is compiled out of the
   default pass and cannot fail it — which is how the prime-livelock regression
@@ -1314,6 +1314,7 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   context, the remote's keys and a UDP log tap, emulator only, with `host::NO_MEDIA` and no playback. Its library is
   `#![cfg(feature = "tizen")]` (its own feature, in no default set), every dependency (the application, `plx_base`, `plx_os`, and
   `serde_json` for the launch string) is `optional` and only `tizen` enables them, it forwards every application feature but `hostsim`, and `[platform tizen]` in `ci/module-layers.ini` is its layer.
+  Its build (`PLATFORM=tizen`: `mk/platform-tizen.mk`, `tizen/`, the `tizen-so`/`tizen-verify`/`tizen-tpk` targets, the compile-only `.github/workflows/tizen.yml`) is `docs/tizen.md`.
 - `rust-modules/ui/src/` (workspace crate `plx_ui`) — **the UI, as a shared design system**: `theme.rs` tokens, the retui core
   (`lib.rs` `Painter`/`View`), reusable components (`widgets.rs`/`table.rs`/`label.rs`/`icons.rs`),
   and, since phase 9 (Player was the last), no legacy screens at all — every route mounts an owned
