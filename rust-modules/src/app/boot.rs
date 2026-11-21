@@ -1,280 +1,11 @@
-//! Boot-time helpers of the app core: the desktop window size, the panic logger, the replay
-//! budget, the direct-server trigger, the cursor and the loop-rate tick. Moved out of `app.rs`
-//! verbatim in phase 1a of the UI restructure (a pure move; `pub(crate)` widening only).
+//! Boot-time helpers of the app core: the panic logger, the window a stored setting asks for, the
+//! replay budget, the direct-server trigger and the loop-rate tick. Moved out of `app.rs`
+//! verbatim in phase 1a of the UI restructure (a pure move; `pub(crate)` widening only). The SDL
+//! shell's own steps (the window, the GL context, the display's density) moved on to
+//! `plx_shell_sdl`, and the LG SDL's two boot hooks to `system`.
 
 use super::*;
-
-/// What a DESKTOP window is asked to be, before the display's pixel density is known.
-#[cfg(any(feature = "hostsim", test))]
-#[derive(Clone, Copy)]
-enum WindowAsk {
-    /// `PLXNATIVE_WIN=<w>x<h>`: a DRAWABLE of exactly this many pixels, on any display.
-    Drawable(c_int, c_int),
-    /// No override: the largest whole fraction of the canvas whose window fits this usable display
-    /// area (`SDL_GetDisplayUsableBounds`, in points).
-    Fit(c_int, c_int),
-}
-
-/// How many drawable pixels a window point is worth on this display, as the integer pair SDL
-/// reported for a window that exists: `window_w` points wide, `drawable_w` pixels wide.
-///
-/// Integers, never a float multiplied back: 960 points of a 2x window must come out as exactly
-/// 1920 pixels, and a ratio that is not a whole number (a 150% Windows display) must round the
-/// same way on the way out as on the way in.
-#[cfg(any(feature = "hostsim", test))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Density {
-    window_w: c_int,
-    drawable_w: c_int,
-}
-
-#[cfg(any(feature = "hostsim", test))]
-impl Density {
-    /// One pixel per point: every 1x display, and what is assumed until a window has been measured.
-    const UNIT: Density = Density { window_w: 1, drawable_w: 1 };
-
-    /// The measured pair. A drawable that is not larger than the window (a 1x display) is
-    /// [`Density::UNIT`]: a drawable never has fewer pixels than points, and a window is never
-    /// grown to make up for one that seems to.
-    fn measured(window_w: c_int, drawable_w: c_int) -> Density {
-        if window_w <= 0 || drawable_w <= window_w {
-            Density::UNIT
-        } else {
-            Density { window_w, drawable_w }
-        }
-    }
-
-    /// The window size, in points, whose drawable is `px` pixels: the nearest whole number of
-    /// points, and one fewer if rounding up would make the drawable LARGER than asked (never
-    /// larger than the canvas is the contract; a pixel short is a letterbox, a pixel over is not).
-    fn points(self, px: c_int) -> c_int {
-        let (w, d) = (i64::from(self.window_w), i64::from(self.drawable_w));
-        let pt = ((i64::from(px) * w + d / 2) / d).max(1) as c_int;
-        if pt > 1 && self.pixels(pt) > px {
-            pt - 1
-        } else {
-            pt
-        }
-    }
-
-    /// The drawable, in pixels, of a window `pt` points wide.
-    fn pixels(self, pt: c_int) -> c_int {
-        let (w, d) = (i64::from(self.window_w), i64::from(self.drawable_w));
-        ((i64::from(pt) * d + w / 2) / w) as c_int
-    }
-}
-
-/// `PLXNATIVE_WIN`'s value: `<w>x<h>`, both positive. Anything else is no override.
-#[cfg(any(feature = "hostsim", test))]
-fn parse_window_override(v: &str) -> Option<(c_int, c_int)> {
-    let (w, h) = v.split_once(['x', 'X'])?;
-    match (w.trim().parse::<c_int>(), h.trim().parse::<c_int>()) {
-        (Ok(w), Ok(h)) if w > 0 && h > 0 => Some((w, h)),
-        _ => None,
-    }
-}
-
-/// The window a DESKTOP should open at, in points, for a display of this pixel `density`: the
-/// pure arithmetic of the size, so the Retina cases are testable without a Retina display.
-///
-/// **The drawable is what is sized; the window follows from it.** The UI is authored at a 1920x1080
-/// canvas and every glyph, icon mask and poster is rasterized for 1:1 texels against it
-/// (`gfx::snap`, the crispness contract in `theme.rs`), so a drawable LARGER than the canvas is
-/// not a sharper picture: it is the same atlas stretched, with every drawable-sized buffer (the
-/// page snapshot, the glass sources) four times the television's, which is how a 2x display once
-/// breached the render-set ceiling on every frame (`ui/src/frame/render_set.rs`).
-///
-/// * `Drawable` is that drawable, exactly. The fit below is chosen for a HUMAN looking at a
-///   window, and a screenshot is not that: on a 1x display its divisor lands on 2 and every shot
-///   comes back 960x540, half the canvas the UI is authored at, so a shot taken to JUDGE the
-///   interface asks for full size (`make sim-shot SIM_W=1920 SIM_H=1080`). Off-screen edges are
-///   fine for a headless grab: the drawable is the window's own framebuffer.
-/// * `Fit` is **an exact divisor, never a best fit**: the largest of 1/1, 1/2 and 1/3 of the canvas
-///   whose window, in points, fits the usable area. `surface::scale` will letterbox any drawable it
-///   is given, so an arbitrary size would *work*, but a fractional scale resamples all of the above.
-///   The bounds are in points, so the window is `canvas / div / density` of them.
-///
-/// The television asks for the canvas itself (1:1) unless the owner picked a smaller Interface
-/// resolution in Settings on webOS 1-3 (`requested_drawable`), in which case the compositor fills the panel.
-/// A Mac is the case the `surface` doc was written against — 1920x1080 exceeds the usable area of
-/// every laptop display Apple ships, so asking for it flatly would put the title bar above the
-/// screen and the bottom of the interface under the Dock.
-#[cfg(any(feature = "hostsim", test))]
-fn plan_desktop_window(ask: WindowAsk, density: Density) -> (c_int, c_int) {
-    let points = |(w, h): (c_int, c_int)| (density.points(w), density.points(h));
-    match ask {
-        WindowAsk::Drawable(w, h) => points((w, h)),
-        WindowAsk::Fit(uw, uh) => {
-            // A little headroom under the usable bounds: a window flush against them reads as a
-            // fullscreen that went wrong rather than as a deliberate size.
-            let (max_w, max_h) = ((uw as f32 * 0.95) as c_int, (uh as f32 * 0.95) as c_int);
-            let fits = |div| {
-                let (w, h) = points((SCR_W / div, SCR_H / div));
-                w <= max_w && h <= max_h
-            };
-            let div = (1..3).find(|&div| fits(div)).unwrap_or(3);
-            points((SCR_W / div, SCR_H / div))
-        }
-    }
-}
-
-/// `SDL_WINDOWPOS_CENTERED` on display 0.
-#[cfg(feature = "hostsim")]
-const WINDOWPOS_CENTERED: c_int = 0x2FFF_0000u32 as c_int;
-
-/// What this process is asked for: `PLXNATIVE_WIN` if it holds a size, else the fit to the display,
-/// or the canvas itself if SDL cannot say how big the display is.
-#[cfg(feature = "hostsim")]
-fn desktop_window_ask() -> WindowAsk {
-    if let Some((w, h)) = std::env::var_os("PLXNATIVE_WIN").and_then(|v| parse_window_override(&v.to_string_lossy())) {
-        return WindowAsk::Drawable(w, h);
-    }
-    let mut r = [0 as c_int; 4]; // SDL_Rect: x, y, w, h
-    let ok = unsafe { SDL_GetDisplayUsableBounds(0, r.as_mut_ptr()) } == 0 && r[2] > 0 && r[3] > 0;
-    if ok {
-        WindowAsk::Fit(r[2], r[3])
-    } else {
-        WindowAsk::Drawable(SCR_W, SCR_H)
-    }
-}
-
-/// Size the just-created desktop `win` for the pixel density of the display it opened on.
-///
-/// `SDL_GetDisplayDPI` is unreliable on macOS, so the density is MEASURED instead: the window was
-/// opened at the 1x answer of [`plan_desktop_window`], and `SDL_GL_GetDrawableSize` over
-/// `SDL_GetWindowSize` says how many pixels that bought per point. On a 1x display nothing happens.
-/// On a 2x display the window is resized (and put back in the middle of the display, since it was
-/// centred at the old size) to the points that give the drawable that was asked for:
-/// `PLXNATIVE_WIN=1920x1080` is a 960x540-point window, not a 1920x1080-point one with a 3840x2160
-/// drawable. Called before `surface::probe`, which reads the drawable once and for good.
-#[cfg(feature = "hostsim")]
-unsafe fn fit_window_to_density(win: *mut c_void, ask: WindowAsk) {
-    let ((ww, wh), (dw, dh)) = plx_base::surface::window_and_drawable_size(win);
-    let density = Density::measured(ww, dw);
-    if density == Density::UNIT {
-        return;
-    }
-    let (pw, ph) = plan_desktop_window(ask, density);
-    if (pw, ph) == (ww, wh) {
-        return;
-    }
-    SDL_SetWindowSize(win, pw, ph);
-    SDL_SetWindowPosition(win, WINDOWPOS_CENTERED, WINDOWPOS_CENTERED);
-    let ((nw, nh), (gw, gh)) = plx_base::surface::window_and_drawable_size(win);
-    log(&format!(
-        "surface: {:.3} pixels per point (a {ww}x{wh} point window read back a {dw}x{dh} drawable); \
-         resized to {pw}x{ph} points, which now reads {nw}x{nh} points / {gw}x{gh} drawable",
-        f64::from(dw) / f64::from(ww)
-    ));
-}
-
-#[cfg(test)]
-mod desktop_window_tests {
-    use super::WindowAsk::{Drawable, Fit};
-    use super::{parse_window_override, plan_desktop_window, Density, WindowAsk, SCR_H, SCR_W};
-
-    /// A window of 1920 points whose drawable reads back 3840 pixels: macOS Retina, the case this
-    /// module exists for. (macOS always reports a whole backing factor, even in a "scaled" mode.)
-    fn retina() -> Density {
-        Density::measured(1920, 3840)
-    }
-
-    /// The window the planner opens, in points, and the drawable that window gives.
-    fn plan(ask: WindowAsk, density: Density) -> ((i32, i32), (i32, i32)) {
-        let points = plan_desktop_window(ask, density);
-        (points, (density.pixels(points.0), density.pixels(points.1)))
-    }
-
-    /// `PLXNATIVE_WIN=1920x1080` on a 1x display is the 1920x1080 window it always was.
-    #[test]
-    fn a_1x_display_gives_the_override_as_asked() {
-        assert_eq!(plan(Drawable(1920, 1080), Density::UNIT), ((1920, 1080), (1920, 1080)));
-    }
-
-    /// THE BUG: `PLXNATIVE_WIN=1920x1080` on a 2x display was a 1920x1080-POINT window, whose
-    /// drawable is 3840x2160 (`scale=2.000`) and which breached the render-set ceiling on every
-    /// frame of a Library scroll. The override is the DRAWABLE, so the window is half of it.
-    #[test]
-    fn the_override_is_the_drawable_on_a_2x_display() {
-        assert_eq!(plan(Drawable(1920, 1080), retina()), ((960, 540), (1920, 1080)));
-    }
-
-    /// A 2x laptop (usable ~1512x945 points): 960x540 points, a 1:1 drawable. What it always got,
-    /// by the coincidence of div=2 meeting a 2x density; now by arithmetic.
-    #[test]
-    fn a_2x_laptop_fits_960x540_points_for_a_1_to_1_drawable() {
-        assert_eq!(plan(Fit(1512, 945), retina()), ((960, 540), (1920, 1080)));
-    }
-
-    /// THE SECOND HOLE: a 5K/4K display "looking like 2560x1440" has usable ~2560x1415 points, so
-    /// the fit in points took div=1 -- a 1920x1080-point window, a 3840x2160 drawable -- with no
-    /// override at all. The fit is of the DRAWABLE, measured in the points it occupies.
-    #[test]
-    fn a_large_2x_display_gives_the_same_1_to_1_drawable_without_any_override() {
-        assert_eq!(plan(Fit(2560, 1415), retina()), ((960, 540), (1920, 1080)));
-    }
-
-    /// Nothing changes on a 1x display: the divisor lands where it did, on every size.
-    #[test]
-    fn a_1x_display_fits_exactly_as_it_did() {
-        // a 1080p display's usable area under a menu bar and a Dock: div=2
-        assert_eq!(plan(Fit(1920, 1050), Density::UNIT), ((960, 540), (960, 540)));
-        // a display big enough for the canvas itself (div=1) needs 5% headroom: 1920 / 0.95 = 2021.05
-        assert_eq!(plan(Fit(2022, 1140), Density::UNIT), ((1920, 1080), (1920, 1080)));
-        assert_eq!(plan(Fit(2020, 1140), Density::UNIT), ((960, 540), (960, 540)));
-        // a small one: div=3
-        assert_eq!(plan(Fit(100, 100), Density::UNIT), ((640, 360), (640, 360)));
-    }
-
-    /// A density that is not a whole number (a 150% Windows display, a fractional Wayland scale):
-    /// the window is the drawable over the ratio, exactly where that is exact.
-    #[test]
-    fn a_fractional_density_is_divided_out_too() {
-        let d150 = Density::measured(1280, 1920);
-        assert_eq!(plan(Drawable(1920, 1080), d150), ((1280, 720), (1920, 1080)));
-        // 1280x720 points is over 95% of a 1280x800 display, so the half (960x540 px) wins
-        assert_eq!(plan(Fit(1280, 800), d150), ((640, 360), (960, 540)));
-    }
-
-    /// Whatever the ratio, the window never gives a drawable LARGER than the one asked for: a
-    /// pixel short is a letterbox, a pixel over is a texture that is not the canvas.
-    #[test]
-    fn the_drawable_is_never_larger_than_asked_on_any_density() {
-        for (window_w, drawable_w) in [(1000, 1100), (1000, 1250), (1000, 1333), (1000, 1750), (1000, 2000), (1000, 2500), (1000, 3000), (1920, 2880), (1366, 2049)] {
-            let d = Density::measured(window_w, drawable_w);
-            for (w, h) in [(1920, 1080), (960, 540), (640, 360), (1280, 720)] {
-                let (_, got) = plan(Drawable(w, h), d);
-                assert!(got.0 <= w && got.1 <= h, "{window_w}->{drawable_w} asked {w}x{h}: {got:?}");
-                // and no more than a point short of it, in either axis
-                let point = (drawable_w + window_w - 1) / window_w;
-                assert!(w - got.0 < point && h - got.1 < point, "{window_w}->{drawable_w} asked {w}x{h}: {got:?}");
-            }
-            for (uw, uh) in [(1280, 720), (1512, 945), (1920, 1050), (2560, 1415), (3840, 2100)] {
-                let (_, got) = plan(Fit(uw, uh), d);
-                assert!(got.0 <= SCR_W && got.1 <= SCR_H, "{window_w}->{drawable_w} usable {uw}x{uh}: {got:?}");
-            }
-        }
-    }
-
-    /// A drawable that is not larger than the window is no HiDPI at all, however it got that way:
-    /// a window is never grown to cover for a measurement that failed.
-    #[test]
-    fn a_drawable_no_larger_than_the_window_is_unit_density() {
-        assert_eq!(Density::measured(1920, 1920), Density::UNIT);
-        assert_eq!(Density::measured(0, 1920), Density::UNIT);
-        assert_eq!(Density::measured(1920, 960), Density::UNIT);
-    }
-
-    #[test]
-    fn the_override_parses_a_positive_size_and_nothing_else() {
-        assert_eq!(parse_window_override("1920x1080"), Some((1920, 1080)));
-        assert_eq!(parse_window_override(" 640X360 "), Some((640, 360)));
-        assert_eq!(parse_window_override("1920 x 1080"), Some((1920, 1080)));
-        for bad in ["", "1920", "x", "0x1080", "1920x0", "-1x5", "axb", "1920x1080x2"] {
-            assert_eq!(parse_window_override(bad), None, "{bad:?}");
-        }
-    }
-}
+use super::platform::{OpenAsk, Placement, Platform};
 
 /// Log every Rust panic (message + source location + thread) to the event log AND the
 /// persistent crash log BEFORE it unwinds. A panic that crosses an extern "C" boundary
@@ -433,37 +164,15 @@ mod panic_log_tests {
 /// * `plex::session::install_auto_quality_ready` — `route::auto_quality_ready`, the gate a fresh
 ///   session record's default quality is seeded from (unset, `plex` reads `true`, the gate's value);
 /// * `plex::session::install_account_clear_cleanup` — `telemetry::cleanup_after_account_clear`, the
-///   telemetry/consent legacy-file sweep a durable sign-out runs. It exists only where the sweep does
-///   (ARM, not the simulator, not a test build); unset, `plex` reads it as already retired.
+///   telemetry/consent legacy-file sweep a durable sign-out runs. It is installed on every platform:
+///   the sweep retires files only where the storage helper owns them; unset, `plex` reads it as retired.
 pub(crate) fn install_plex_seams() {
     // FinNative: every hooked `Client` call is answered by the Jellyfin backend. Not in unit
     // tests, which drive the Plex paths against their own fakes.
     #[cfg(not(test))]
     plx_jellyfin::jellyfin::backend::install();
     plx_plex::plex::session::install_auto_quality_ready(plx_media::route::auto_quality_ready);
-    #[cfg(all(target_os = "linux", target_arch = "arm", not(feature = "hostsim"), not(test)))]
     plx_plex::plex::session::install_account_clear_cleanup(plx_telemetry::telemetry::cleanup_after_account_clear);
-}
-
-#[cfg(test)]
-mod relaunch_tap_tests {
-    use super::slot_holds;
-
-    #[test]
-    fn relaunch_slot_must_hold_libhelpers() {
-        assert!(slot_holds(0x1000, Some(0x1000)), "the slot holds libhelpers' function");
-        assert!(!slot_holds(0x1000, Some(0x1001)), "a different value, even by the Thumb bit");
-        assert!(!slot_holds(0x1000, None), "libhelpers is not mapped or lacks the symbol");
-        assert!(!slot_holds(0, None));
-    }
-
-    #[test]
-    fn the_slot_must_be_word_aligned() {
-        use super::slot_aligned;
-        let word = core::mem::align_of::<usize>();
-        assert!(slot_aligned(0x1000) && slot_aligned(word));
-        assert!(!slot_aligned(0x1000 + 1) && !slot_aligned(word + word / 2));
-    }
 }
 
 #[cfg(test)]
@@ -529,77 +238,10 @@ mod seam_order_tests {
             "one production hand-in; a second could name a different version"
         );
         assert_eq!(
-            source.matches(concat!("enter_application(", "pms_host,pms_port)")).count(),
+            source.matches(concat!("enter_application(", "platform, pms_host, pms_port)")).count(),
             1,
             "enter_application has one caller, run_application"
         );
-    }
-
-    /// **No exit of the app process returns into libc's `exit`.** `exit` runs libcrypto's
-    /// `OPENSSL_cleanup`, which frees and NULLs its global locks while the detached curl workers
-    /// still run (#1115). The run-and-shutdown sequence and the entry point are typed `-> !` (a
-    /// path that returns does not compile): these consts are the compile-time proof, and the
-    /// source scan below finds any other `exit` call, which would sidestep
-    /// `plx_base::process::exit_now`.
-    const _: unsafe fn(&mut super::super::App) -> ! = super::super::run_and_shutdown;
-    const _: fn(*const std::os::raw::c_char, std::os::raw::c_int) -> ! =
-        super::super::run_application;
-
-    #[test]
-    fn no_production_code_calls_libc_exit_outside_the_shared_helper() {
-        // The app process links every crate under rust-modules except `storage` (the separate
-        // `plxstorage` helper binary, no OpenSSL workers) and the os layer's `storage_service/` (that
-        // helper's body). `base/src/process.rs` is the helper itself.
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut files = Vec::new();
-        collect_rs(&root.join("src"), &mut files);
-        for entry in std::fs::read_dir(root).expect("rust-modules") {
-            let dir = entry.expect("entry").path();
-            let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-            if matches!(name.as_str(), "storage" | "target" | "tests")
-                || name.starts_with("target-")
-                || !dir.join("src").is_dir()
-            {
-                continue;
-            }
-            collect_rs(&dir.join("src"), &mut files);
-        }
-        assert!(files.len() > 100, "the scan must see the whole tree");
-        let (a, b) = (concat!("process::", "exit("), concat!("libc::", "exit("));
-        let mut hits = Vec::new();
-        for f in files {
-            let path = f.to_string_lossy().replace('\\', "/");
-            if path.ends_with("base/src/process.rs")
-                || path.contains("/storage_service/")
-                || path.contains("/tests/")
-                || path.ends_with("_tests.rs")
-            {
-                continue;
-            }
-            let text = std::fs::read_to_string(&f).expect("read");
-            let prod = text.split("#[cfg(test)]").next().unwrap_or("");
-            for (n, line) in prod.lines().enumerate() {
-                let code = line.split("//").next().unwrap_or("");
-                if code.contains(a) || code.contains(b) {
-                    hits.push(format!("{path}:{}", n + 1));
-                }
-            }
-        }
-        assert!(
-            hits.is_empty(),
-            "exit through plx_base::process::exit_now, never libc exit (#1115): {hits:?}"
-        );
-    }
-
-    fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("read_dir").flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                collect_rs(&p, out);
-            } else if p.extension().is_some_and(|e| e == "rs") {
-                out.push(p);
-            }
-        }
     }
 
     /// `enter_application` installs the player's error-trace eraser before telemetry first loads a
@@ -625,7 +267,7 @@ mod seam_order_tests {
         let telemetry = body
             .find(".then(pre_boot_diagnostics)")
             .expect("telemetry's boot load");
-        let boot = body.find("boot(pms_host").expect("application boot");
+        let boot = body.find("boot(platform, pms_host").expect("application boot");
         assert!(
             eraser < telemetry && eraser < boot,
             "the eraser must be installed before telemetry loads and before anything can play"
@@ -671,7 +313,7 @@ mod seam_order_tests {
         let diagnostics = body
             .find("plx_os::storage::diagnostics::start(")
             .expect("diagnostics start");
-        let boot = body.find("boot(pms_host").expect("application boot");
+        let boot = body.find("boot(platform, pms_host").expect("application boot");
         assert!(identity < diagnostics && diagnostics < boot);
     }
 
@@ -694,25 +336,11 @@ mod seam_order_tests {
         assert!(user_agent < init, "set_user_agent must come before net::global_init");
     }
 
-    /// SDL reads `SDL_WEBOS_CURSOR_SLEEP_TIME` in `SDL_Init`, so the hint set after it does nothing.
-    #[test]
-    fn the_cursor_sleep_hint_is_set_before_sdl_init() {
-        // Split with `concat!` for the reason the test above gives.
-        let source = include_str!("boot.rs");
-        let body = source
-            .split_once(concat!("pub(crate) unsafe fn ", "construct("))
-            .expect("construct")
-            .1;
-        let hint = body
-            .find(concat!("webos3_cursor_", "sleep_hint()"))
-            .expect("construct must set the cursor sleep hint");
-        let init = body.find(concat!("SDL_Init(", "SDL_INIT_VIDEO)")).expect("construct's SDL_Init");
-        assert!(hint < init, "the cursor sleep hint must come before SDL_Init");
-    }
-
     /// The Interface resolution is read from the stored session, so the session has to be read
-    /// BEFORE `SDL_CreateWindow` (the one place the window size is applied) and the window request
-    /// has to come from it. Reads the source for the reason the tests above give.
+    /// BEFORE the window is created (`Shell::open`, the one place the window size is applied) and the
+    /// window request has to come from it. SDL itself comes up before the session is read, as it always
+    /// has (`plx_shell_sdl::init` pins the order of its own steps). Reads the source for the reason the
+    /// tests above give.
     #[test]
     fn the_stored_session_is_read_before_the_window_is_created() {
         let source = include_str!("boot.rs");
@@ -726,8 +354,10 @@ mod seam_order_tests {
         let request = body
             .find(concat!("requested_drawable(", "&session)"))
             .expect("the window request is derived from the session");
-        let window = body.find(concat!("SDL_CreateWindow(", "title")).expect("construct creates the window");
-        assert!(load < request && request < window, "session read, then request, then SDL_CreateWindow");
+        let window = body.find(concat!("shell.", "open(")).expect("construct opens the window");
+        assert!(load < request && request < window, "session read, then request, then Shell::open");
+        let init = body.find(concat!("shell.", "init(")).expect("construct brings the platform's SDL up");
+        assert!(init < load, "SDL comes up before the session is read, the order boot has always had");
     }
 
     /// Automatic is the native canvas on every set and asks for no smaller window. The other
@@ -768,119 +398,21 @@ mod seam_order_tests {
         assert_eq!(super::window_fallback((super::SCR_W, super::SCR_H)), None, "the native canvas has no fallback");
     }
 
-    /// `surface::probe` reads the drawable once, at boot, for good: the desktop window has to be
-    /// sized for the display's pixel density BEFORE it, or a 2x display keeps the 3840x2160
-    /// drawable the 1x size gave it. Reads the source for the reason the tests above give.
+    /// The smaller-window retry is armed before the first window is asked for, from the size that
+    /// request carries: `construct` evaluates `window_fallback(` as part of the placement it hands
+    /// `Shell::open`. The retry loop itself, the destroy of a half-made window before it, and the
+    /// density fit before the drawable probe are the shell crate's (`plx_shell_sdl::Window::open`,
+    /// which pins their order). Reads the source for the reason the tests above give.
     #[test]
-    fn the_desktop_window_is_fitted_to_the_density_before_the_drawable_is_probed() {
+    fn the_smaller_window_fallback_is_armed_before_the_window_is_opened() {
         let source = include_str!("boot.rs");
         let body = source.split_once(concat!("pub(crate) unsafe fn ", "construct(")).expect("construct").1;
-        let create = body.find(concat!("SDL_CreateWindow(", "title")).expect("creates the window");
-        let fit = body.find(concat!("fit_window_to_", "density(win")).expect("fits the window to the density");
-        let probe = body.find(concat!("surface::", "probe(win)")).expect("probes the drawable");
-        assert!(create < fit && fit < probe, "create the window, fit it to the density, then probe the drawable");
-    }
-
-    /// `construct` frees a half-made window before it retries (a leaked one would keep the display).
-    #[test]
-    fn construct_destroys_a_half_made_window_before_the_retry() {
-        let source = include_str!("boot.rs");
-        let body = source.split_once(concat!("pub(crate) unsafe fn ", "construct(")).expect("construct").1;
-        let create = body.find(concat!("SDL_CreateWindow(", "title")).expect("creates the window");
-        let destroy = body.find(concat!("SDL_DestroyWindow(", "win)")).expect("destroys a half-made window");
-        let retry = body.find(concat!("window_fallback(", "(ww_req")).expect("asks for the fallback size");
-        assert!(create < destroy && destroy < body[create..].find("probe(win)").map(|i| i + create).unwrap(),
-            "the half-made window is destroyed inside the creation loop, before `surface::probe`");
-        assert!(retry < create, "the retry is armed before the first attempt");
+        let retry = body.find(concat!("window_fallback(", "size)")).expect("asks for the fallback size");
+        let open = body.find(concat!("shell.", "open(")).expect("opens the window");
+        assert!(retry < open, "the retry is armed before the first attempt");
     }
 }
 
-/// Hide the Magic Remote's on-screen pointer. A webOS-only concept: there is no such cursor to
-/// hide on a desktop, and `SDL_webOSCursorVisibility` exists in no SDL but LG's fork.
-///
-/// One door rather than a branch at each caller, so the platform question is asked once
-/// and the callers read the same on LG's extension and on the transparent-cursor path.
-///
-/// Resolved at runtime rather than linked: webOS 3.4 ships SDL 2.0.3, which has none of LG's
-/// `SDL_webOS*` extensions, and a strong reference there is a lazily-bound PLT slot that kills
-/// the process on the first D-pad press (`tools/fwcompat.py --release 3.4.0`).
-///
-/// **Without LG's extension the pointer is SDL's own cursor, and it is swapped for a transparent
-/// one rather than switched off.** webOS 3.9.3 ships SDL 2.0.4 with no `SDL_webOS*` export at all,
-/// and that SDL draws the pointer itself (its `.rodata` carries `/usr/share/im/cursorType*.png`
-/// and `wl_starfish_pointer`). With nothing to call, every hide was a no-op and the pointer stayed
-/// up until LG's ~5-minute idle timeout, issue #642. `SDL_ShowCursor(SDL_DISABLE)` does hide it
-/// there, but measured on that set it also stops pointer motion reaching the app until the pointer
-/// re-enters the window (opening and closing the Settings overlay), so no motion could bring it
-/// back. With a transparent cursor the motion keeps arriving, and [`show_cursor_after_motion`] puts
-/// the previous cursor back on the next one. Every SDL call is dlsym'd, so the binary gains no
-/// import.
-#[inline]
-pub(crate) unsafe fn hide_cursor() {
-    #[cfg(not(feature = "hostsim"))]
-    {
-        hide_through(cursor_door(), &SHOWN_CURSOR);
-    }
-}
-
-/// True where the pointer is hidden by swapping in a transparent cursor rather than by LG's call,
-/// so the system's pointer stays up and the remote's OK arrives as a click (`input::click_is_ok`).
-/// False on the host simulator, where a click is always a real one.
-pub(crate) unsafe fn cursor_is_transparent() -> bool {
-    #[cfg(not(feature = "hostsim"))]
-    {
-        matches!(cursor_door(), CursorDoor::Sdl { .. })
-    }
-    #[cfg(feature = "hostsim")]
-    {
-        false
-    }
-}
-
-/// Bring the pointer back after [`hide_cursor`] swapped in the transparent cursor. Call on pointer
-/// motion while the cursor is hidden. A no-op wherever LG's extension exists: there the
-/// compositor shows its own pointer on motion, as it always has.
-#[inline]
-pub(crate) unsafe fn show_cursor_after_motion() {
-    #[cfg(not(feature = "hostsim"))]
-    {
-        show_through(cursor_door(), &SHOWN_CURSOR);
-    }
-}
-
-/// [`hide_cursor`] on a given door, the cursor it replaced kept in `shown`. Split out so the
-/// bookkeeping is gradeable on the host with a door of fake functions.
-#[cfg(not(feature = "hostsim"))]
-unsafe fn hide_through(door: CursorDoor, shown: &std::sync::atomic::AtomicUsize) {
-    match door {
-        CursorDoor::Lg(f) => {
-            f(0);
-        }
-        CursorDoor::Sdl { set, get, def, blank } => {
-            let cur = get() as usize;
-            if cur != blank {
-                let keep = if cur != 0 { cur } else { def() as usize };
-                if keep == 0 {
-                    return; // nothing to put back, so the pointer would never return: leave it
-                }
-                shown.store(keep, std::sync::atomic::Ordering::Relaxed);
-            }
-            set(blank as *mut std::ffi::c_void);
-        }
-        CursorDoor::None => {}
-    }
-}
-
-/// [`show_cursor_after_motion`] on a given door.
-#[cfg(not(feature = "hostsim"))]
-unsafe fn show_through(door: CursorDoor, shown: &std::sync::atomic::AtomicUsize) {
-    if let CursorDoor::Sdl { set, .. } = door {
-        let shown = shown.load(std::sync::atomic::Ordering::Relaxed);
-        if shown != 0 {
-            set(shown as *mut std::ffi::c_void);
-        }
-    }
-}
 /// The window to ask for when it is not the 1920x1080 canvas, `None` for the canvas (1:1): whatever
 /// `/tmp/plxnative-drawable=<W>x<H>` says when that trigger is armed (debug builds only; it
 /// outranks the setting and is bounded to 640x360..=1920x1080 so a typo cannot ask for nonsense),
@@ -928,313 +460,6 @@ fn window_fallback(asked: (c_int, c_int)) -> Option<(c_int, c_int)> {
 fn drawable_for_setting(major: u32, chosen: plx_plex::plex::session::UiResolution) -> Option<(c_int, c_int)> {
     if plx_os::tv::device::offers_ui_resolution(major) { chosen.size() } else { None }
 }
-
-
-/// **webOS 3.x: shorten LG's own idle hide from about five minutes to five seconds.** Without
-/// LG's extension, LG's SDL hides its pointer by itself after `SDL_WEBOS_CURSOR_SLEEP_TIME` of
-/// stillness, and its default is about five minutes (timed on a 3.9.3 set, issue #642), where
-/// every other app on that television hides it within seconds. Measured on the same set: the value
-/// is milliseconds, `5000` hides a still pointer after about five seconds, and a deliberate
-/// movement brings it back. Set only where `SDL_webOSCursorVisibility` is absent, so webOS 4+
-/// keeps its SDL's own behaviour. Must run before `SDL_Init`, which reads the hint.
-#[cfg(not(feature = "hostsim"))]
-unsafe fn webos3_cursor_sleep_hint() {
-    if let Some(ms) = cursor_sleep_hint(self_sym("SDL_webOSCursorVisibility").is_some()) {
-        SDL_SetHint(c"SDL_WEBOS_CURSOR_SLEEP_TIME".as_ptr(), ms.as_ptr());
-        log("cursor: SDL_WEBOS_CURSOR_SLEEP_TIME=5000 (no SDL_webOS* in this SDL)");
-    }
-}
-#[cfg(feature = "hostsim")]
-unsafe fn webos3_cursor_sleep_hint() {}
-
-/// The idle-hide time to ask SDL for, in milliseconds as a string; `None` where LG's extension is
-/// present and its SDL keeps its own behaviour.
-#[cfg(not(feature = "hostsim"))]
-fn cursor_sleep_hint(has_lg_extension: bool) -> Option<&'static std::ffi::CStr> {
-    (!has_lg_extension).then_some(c"5000")
-}
-
-/// A symbol of the running process (the system SDL), resolved at runtime; `None` if absent or NULL.
-#[cfg(not(feature = "hostsim"))]
-fn self_sym(name: &str) -> Option<*mut std::ffi::c_void> {
-    plx_base::dynlib::Handle::self_handle().sym(name).filter(|p| !p.is_null())
-}
-
-/// **A warm launch's parameters, read where LG's SDL reads its `registerApp` replies.** SAM sends a
-/// relaunch's parameters only to the `registerApp` subscriber, which is LG's SDL; its handler
-/// (`callback_RegistNativeApp`) raises the window and never reads `parameters`. It fetches every
-/// reply's payload through `HELPER_HLunaServiceMessage`, an exported pointer slot that
-/// `LoadWEBOSBASELibrary` fills from `libhelpers.so.2` inside `SDL_Init` and that the handler
-/// reloads on every call. Wrapping that slot hands a relaunch payload to `tv::launch` and returns
-/// it unchanged, so SDL still raises the window. No new Luna registration: SAM refuses the app's
-/// own (`tv::launch`). The firmware inventories have the slot from webOS 7.4 on; where it is missing
-/// or empty (webOS 4.x to 6.x), nothing changes and callers keep closing the app first.
-/// The tap installs only when the slot holds the address `libhelpers.so.2` (already mapped,
-/// `RTLD_NOLOAD`) exports as `HLunaServiceMessage` ([`slot_holds`]); any other value is left alone.
-#[cfg(not(feature = "hostsim"))]
-unsafe fn tap_relaunch_payloads() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let Some(slot) = self_sym("HELPER_HLunaServiceMessage") else {
-        log("relaunch tap: no HELPER_HLunaServiceMessage in this SDL");
-        return;
-    };
-    // An atomic reference to a misaligned address is undefined behaviour: refuse a symbol that is
-    // not a word-aligned slot before forming it.
-    if !slot_aligned(slot as usize) {
-        log("relaunch tap: slot misaligned \u{2014} not installed");
-        return;
-    }
-    // SDL's Luna thread may read the slot while it is replaced: store it atomically, after the
-    // function it forwards to is published.
-    let slot = &*(slot as *const AtomicUsize);
-    let wrapped = wrapped_message as *const () as usize;
-    let current = slot.load(Ordering::Acquire);
-    if current == 0 || current == wrapped {
-        log(if current == 0 { "relaunch tap: HELPER_HLunaServiceMessage is empty" }
-            else { "relaunch tap: already installed" });
-        return;
-    }
-    // The slot is only ours to wrap while it holds libhelpers' own `HLunaServiceMessage`: another
-    // value (a different SDL build, a slot of some other type) would be called as a function
-    // pointer it is not.
-    let expected = plx_base::dynlib::Handle::open_loaded(&["libhelpers.so.2"])
-        .and_then(|(h, _)| h.sym("HLunaServiceMessage"))
-        .filter(|p| !p.is_null())
-        .map(|p| p as usize);
-    if !slot_holds(current, expected) {
-        log("relaunch tap: slot does not hold libhelpers' HLunaServiceMessage \u{2014} not installed");
-        return;
-    }
-    REAL_MESSAGE.store(current, Ordering::Release);
-    MAIN_THREAD.store(libc::pthread_self() as usize, Ordering::Relaxed);
-    slot.store(wrapped, Ordering::Release);
-    log("relaunch tap: installed");
-}
-#[cfg(feature = "hostsim")]
-unsafe fn tap_relaunch_payloads() {}
-
-/// Does the SDL slot hold exactly the function `libhelpers.so.2` exports as `HLunaServiceMessage`?
-/// The Thumb bit is compared as `dlsym` and the slot both carry it. `expected` is `None` when
-/// libhelpers is not mapped or lacks the symbol, and then nothing holds.
-#[cfg(any(test, not(feature = "hostsim")))]
-fn slot_holds(current: usize, expected: Option<usize>) -> bool {
-    expected == Some(current)
-}
-
-/// Is `addr` aligned for the `AtomicUsize` the slot is read and written as?
-#[cfg(any(test, not(feature = "hostsim")))]
-fn slot_aligned(addr: usize) -> bool {
-    addr % core::mem::align_of::<usize>() == 0
-}
-
-#[cfg(not(feature = "hostsim"))]
-type LunaMessageFn = unsafe extern "C" fn(*mut std::ffi::c_void) -> *const std::ffi::c_char;
-#[cfg(not(feature = "hostsim"))]
-static REAL_MESSAGE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-#[cfg(not(feature = "hostsim"))]
-static MAIN_THREAD: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-/// SDL's payload read, passed through. Every Luna reply SDL subscribed to comes through here, so
-/// anything that is not a relaunch costs one substring scan and nothing else.
-#[cfg(not(feature = "hostsim"))]
-unsafe extern "C" fn wrapped_message(msg: *mut std::ffi::c_void) -> *const std::ffi::c_char {
-    let real = REAL_MESSAGE.load(std::sync::atomic::Ordering::Acquire);
-    if real == 0 {
-        return std::ptr::null();
-    }
-    let real: LunaMessageFn = std::mem::transmute(real);
-    let p = real(msg);
-    if !p.is_null() {
-        let payload = std::ffi::CStr::from_ptr(p).to_string_lossy();
-        if payload.contains("\"relaunch\"") {
-            let main = libc::pthread_self() as usize == MAIN_THREAD.load(std::sync::atomic::Ordering::Relaxed);
-            log(&format!("relaunch tap: {} bytes on the {} thread, parameters={}",
-                payload.len(), if main { "main" } else { "other" }, payload.contains("\"parameters\"")));
-            plx_os::tv::launch::offer(&payload);
-        }
-    }
-    p
-}
-
-/// The cursor [`hide_cursor`] replaced with the transparent one, for the motion that restores it.
-#[cfg(not(feature = "hostsim"))]
-static SHOWN_CURSOR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-#[cfg(not(feature = "hostsim"))]
-type CursorVisibilityFn = unsafe extern "C" fn(c_int) -> c_int;
-#[cfg(not(feature = "hostsim"))]
-type SetCursorFn = unsafe extern "C" fn(*mut std::ffi::c_void);
-#[cfg(not(feature = "hostsim"))]
-type GetCursorFn = unsafe extern "C" fn() -> *mut std::ffi::c_void;
-#[cfg(not(feature = "hostsim"))]
-type CreateCursorFn =
-    unsafe extern "C" fn(*const u8, *const u8, c_int, c_int, c_int, c_int) -> *mut std::ffi::c_void;
-
-/// Which call hides the pointer on this firmware, resolved once: LG's extension when the system
-/// SDL has it (webOS 4+), else a transparent SDL cursor (webOS 3.x).
-#[cfg(not(feature = "hostsim"))]
-#[derive(Clone, Copy)]
-enum CursorDoor {
-    Lg(CursorVisibilityFn),
-    /// `SDL_SetCursor` / `SDL_GetCursor` / `SDL_GetDefaultCursor`, and the transparent cursor.
-    Sdl { set: SetCursorFn, get: GetCursorFn, def: GetCursorFn, blank: usize },
-    None,
-}
-
-/// Resolved on the first hide, after `SDL_Init`, because `SDL_CreateCursor` needs the video
-/// subsystem.
-#[cfg(not(feature = "hostsim"))]
-fn cursor_door() -> CursorDoor {
-    static DOOR: std::sync::OnceLock<CursorDoor> = std::sync::OnceLock::new();
-    *DOOR.get_or_init(|| {
-        use std::ffi::c_void;
-        use std::mem::transmute;
-        // SAFETY: each symbol is transmuted to the signature SDL2's public API (or, for
-        // `SDL_webOSCursorVisibility`, LG's fork) gives it, and is called on the main thread.
-        let door = unsafe {
-            if let Some(f) = self_sym("SDL_webOSCursorVisibility") {
-                CursorDoor::Lg(transmute::<*mut c_void, CursorVisibilityFn>(f))
-            } else if let (Some(set), Some(get), Some(def), Some(create)) = (
-                self_sym("SDL_SetCursor"),
-                self_sym("SDL_GetCursor"),
-                self_sym("SDL_GetDefaultCursor"),
-                self_sym("SDL_CreateCursor"),
-            ) {
-                // 8x1 with every data and mask bit clear: SDL's transparent pixel throughout.
-                let bits = [0u8; 1];
-                let create = transmute::<*mut c_void, CreateCursorFn>(create);
-                let blank = create(bits.as_ptr(), bits.as_ptr(), 8, 1, 0, 0);
-                if blank.is_null() {
-                    CursorDoor::None
-                } else {
-                    CursorDoor::Sdl {
-                        set: transmute::<*mut c_void, SetCursorFn>(set),
-                        get: transmute::<*mut c_void, GetCursorFn>(get),
-                        def: transmute::<*mut c_void, GetCursorFn>(def),
-                        blank: blank as usize,
-                    }
-                }
-            } else {
-                CursorDoor::None
-            }
-        };
-        log(match door {
-            CursorDoor::Lg(_) => "cursor: SDL_webOSCursorVisibility",
-            CursorDoor::Sdl { .. } => "cursor: transparent SDL cursor (no SDL_webOS* in this SDL)",
-            CursorDoor::None => "cursor: no way to hide the pointer",
-        });
-        door
-    })
-}
-#[cfg(all(test, not(feature = "hostsim")))]
-mod cursor_door_tests {
-    use super::*;
-    use std::cell::{Cell, RefCell};
-    use std::ffi::c_void;
-    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-
-    const BLANK: usize = 0x99;
-
-    thread_local! {
-        static CURRENT: Cell<usize> = const { Cell::new(0) };
-        static DEFAULT: Cell<usize> = const { Cell::new(0) };
-        static SET: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
-        static LG: RefCell<Vec<c_int>> = const { RefCell::new(Vec::new()) };
-    }
-
-    unsafe extern "C" fn set(c: *mut c_void) {
-        SET.with(|s| s.borrow_mut().push(c as usize));
-        CURRENT.with(|cur| cur.set(c as usize));
-    }
-    unsafe extern "C" fn get() -> *mut c_void {
-        CURRENT.with(Cell::get) as *mut c_void
-    }
-    unsafe extern "C" fn def() -> *mut c_void {
-        DEFAULT.with(Cell::get) as *mut c_void
-    }
-    unsafe extern "C" fn lg(visible: c_int) -> c_int {
-        LG.with(|l| l.borrow_mut().push(visible));
-        0
-    }
-
-    /// A fresh door with SDL's current cursor and default cursor as given (0 = NULL).
-    fn sdl(current: usize, default: usize) -> CursorDoor {
-        CURRENT.with(|c| c.set(current));
-        DEFAULT.with(|d| d.set(default));
-        SET.with(|s| s.borrow_mut().clear());
-        CursorDoor::Sdl { set, get, def, blank: BLANK }
-    }
-    fn installed() -> Vec<usize> {
-        SET.with(|s| s.borrow().clone())
-    }
-
-    #[test]
-    fn hiding_swaps_in_the_blank_cursor_and_motion_puts_the_previous_one_back() {
-        let shown = AtomicUsize::new(0);
-        let door = sdl(0x10, 0x20);
-        unsafe {
-            hide_through(door, &shown);
-            assert_eq!(installed(), [BLANK]);
-            show_through(door, &shown);
-        }
-        assert_eq!(installed(), [BLANK, 0x10]);
-    }
-
-    #[test]
-    fn with_no_current_cursor_the_default_one_is_what_comes_back() {
-        let shown = AtomicUsize::new(0);
-        let door = sdl(0, 0x20);
-        unsafe {
-            hide_through(door, &shown);
-            show_through(door, &shown);
-        }
-        assert_eq!(installed(), [BLANK, 0x20]);
-    }
-
-    #[test]
-    fn hiding_again_while_hidden_keeps_the_cursor_to_restore() {
-        let shown = AtomicUsize::new(0);
-        let door = sdl(0x10, 0x20);
-        unsafe {
-            hide_through(door, &shown);
-            hide_through(door, &shown); // `get` now answers the blank cursor
-            show_through(door, &shown);
-        }
-        assert_eq!(installed(), [BLANK, BLANK, 0x10]);
-    }
-
-    /// With no current and no default cursor there is nothing to put back, so the pointer must not
-    /// be hidden: it would never come back.
-    #[test]
-    fn with_nothing_to_restore_the_cursor_is_left_alone() {
-        let shown = AtomicUsize::new(0);
-        let door = sdl(0, 0);
-        unsafe {
-            hide_through(door, &shown);
-            show_through(door, &shown);
-        }
-        assert_eq!(installed(), Vec::<usize>::new());
-        assert_eq!(shown.load(Relaxed), 0);
-    }
-
-    #[test]
-    fn lgs_extension_is_asked_to_hide_and_motion_leaves_it_to_the_compositor() {
-        let shown = AtomicUsize::new(0);
-        LG.with(|l| l.borrow_mut().clear());
-        unsafe {
-            hide_through(CursorDoor::Lg(lg), &shown);
-            show_through(CursorDoor::Lg(lg), &shown);
-        }
-        assert_eq!(LG.with(|l| l.borrow().clone()), [0]);
-    }
-
-    #[test]
-    fn the_idle_hide_hint_is_asked_for_only_where_lgs_extension_is_absent() {
-        assert_eq!(cursor_sleep_hint(false), Some(c"5000"));
-        assert_eq!(cursor_sleep_hint(true), None);
-    }
-}
-
 
 /// Advance the once-per-second LOOP-RATE window: bump `iters_ct` and, when a full second has
 /// elapsed, recompute `loop_shown`, reset the window, and return `true` so the caller logs the
@@ -1370,7 +595,7 @@ pub(crate) fn direct_trigger_server() -> Result<plx_plex::plex::ServerId, String
 }
 
 // ---- boot, and the loop's own between-frame state ---------------------------------------------
-/// Which screen the boot gate landed on — see the gate itself in `plex_run`, which is where the
+/// Which screen the boot gate landed on — see the gate itself in `boot`, which is where the
 /// order of its four cases is argued.
 pub(crate) enum BootTo {
     Home,
@@ -1443,41 +668,41 @@ pub(super) fn install_pms_owned(
 /// Everything before the loop: SDL and the window, GL, text, the poster workers, the boot gate
 /// (login / token / session / picker), every dev trigger read once, and the `App` literal —
 /// `plex_run`'s former body up to `while app.running`, moved verbatim in phase 1b-ii. An early
-/// exit ends the process through `plx_base::process::exit_now` (the caller maps `Err(code)` to it).
+/// refusal returns its `Exit` (the entry ends the process with its code: `port::plex_run` on the
+/// television, `src/bin/sim.rs` after `platform_desktop::run` on a desktop; a hosted entry reports it
+/// and stays alive).
 ///
-/// `mt`, THE main-thread token, is minted once by `plex_run` itself (`plx_base::task::MainThread::
-/// assume()` — that function IS the SDL main thread) and MOVES into `App.adapters.player` here,
+/// `mt`, THE main-thread token, is minted once by `enter_application` (`app/mod.rs`:
+/// `plx_base::task::MainThread::assume()`, the thread that runs it IS the SDL main thread), which both
+/// entries reach through `run_application` (`port::plex_run` on the television, `platform_desktop::run`
+/// on a desktop), and MOVES into `App.adapters.player` here,
 /// from where a `&mut PlayerAdapter` is the proof it is still held: the ACB/Starfish seam takes
 /// `&MainThread` (which is `!Send`, so `task::spawn` rejects any closure that captured one), and
 /// the native session slot takes the adapter itself. See `task::MainThread` and `player::adapter`.
 pub(crate) unsafe fn boot(
+    platform: &'static Platform,
     pms_host: *const c_char,
     pms_port: c_int,
     mt: plx_base::task::MainThread,
     preflight: super::bootstrap::Preflight,
-) -> Result<App, c_int> {
+) -> Result<App, Exit> {
     // The Up Next still prefetch `route::pump_play` asks for is `ui`'s, which `route` may not name,
     // so it is handed over here, before any playback can land. Replay boots take it too.
     plx_media::route::install_up_next_still_warm(super::playback::warm_up_next_still);
-    // The dev frame probe's clock is `os`'s, which `gfx` does not depend on.
-    plx_gfx::gfx::install_clear_probe(
-        plx_os::tv::window::frame_probe_waiting,
-        plx_os::tv::window::frame_probe_acquired,
-    );
     let initial = match &preflight {
         super::bootstrap::Preflight::Live => None,
         super::bootstrap::Preflight::Record => {
             let host = std::ffi::CStr::from_ptr(pms_host).to_string_lossy();
             match super::bootstrap::Initial::capture_home(&host, pms_port) {
                 Ok(initial) => Some(initial),
-                Err(reason) => { log(&format!("rec: REFUSED — {reason}")); return Err(1); }
+                Err(reason) => { log(&format!("rec: REFUSED — {reason}")); return Err(Exit::refused(1)); }
             }
         }
         super::bootstrap::Preflight::Replay { initial, .. } => Some((initial.clone(), None)),
     };
     match initial {
-        Some((initial, deferred)) => App::from_init(initial, preflight, pms_host, pms_port, mt, deferred),
-        None => construct(pms_host, pms_port, mt, preflight, None, None),
+        Some((initial, deferred)) => App::from_init(platform, initial, preflight, pms_host, pms_port, mt, deferred),
+        None => construct(platform, pms_host, pms_port, mt, preflight, None, None),
     }
 }
 
@@ -1523,83 +748,23 @@ pub(super) fn resume_stored(pages: &mut plx_ui::dispatch::Dispatcher<super::brid
 }
 
 pub(crate) unsafe fn construct(
-    pms_host: *const c_char, pms_port: c_int, mt: plx_base::task::MainThread,
+    platform: &'static Platform, pms_host: *const c_char, pms_port: c_int, mt: plx_base::task::MainThread,
     preflight: super::bootstrap::Preflight, initial: Option<super::bootstrap::Initial>,
     deferred: Option<plx_plex::plex::session::DeferredLoad>,
-) -> Result<App, c_int> {
+) -> Result<App, Exit> {
     let controlled = preflight.controlled();
     if let Some(initial) = &initial {
         plx_data::stores::tape::init(initial.person_credits(), preflight.replay());
-        initial.home.restore(&mt).map_err(|_| 1)?;
-        plx_plex::plex::Client::restore_generation_seed(initial.primary_client).map_err(|_| 1)?;
+        initial.home.restore(&mt).map_err(|_| Exit::refused(1))?;
+        plx_plex::plex::Client::restore_generation_seed(initial.primary_client).map_err(|_| Exit::refused(1))?;
     }
-    SDL_SetMainReady();
-    // DEAD END, measured 2026-07-31 — do not re-try this. The obvious answer to "a parked TV
-    // should blank itself" is to stop inhibiting the platform screensaver here (and re-allow it
-    // per route, since webOS BACKGROUNDS the app to run one and `0x103` suspends the
-    // buffer-feed, so it could never be on during playback). It does not work, for a reason
-    // upstream of this app: the TV's SDL 2.0.4 fork carries the
-    // `SDL_VIDEO_ALLOW_SCREENSAVER` hint STRING but implements no wayland idle-inhibit
-    // (`strings libSDL2-2.0.so.0` finds no `idle_inhibit`/`suspend_screensaver` symbol), so
-    // this call and `SDL_EnableScreenSaver` are both no-ops. Soaked 34 min on Home with the
-    // TV's own `screenSaverEnabled: on`: no screensaver, no `LIFECYCLE: background`, CPU flat,
-    // our UI still at full brightness on the panel. webOS does not blank a foreground native
-    // app, and nothing reachable from SDL changes that. The line stays because it costs
-    // nothing and states the intent; it is not what keeps the screensaver away.
-    SDL_SetHint(c"SDL_VIDEO_ALLOW_SCREENSAVER".as_ptr(), c"0".as_ptr());
-    webos3_cursor_sleep_hint();
-    if SDL_Init(SDL_INIT_VIDEO) != 0 {
-        log("SDL_Init failed");
-        return Err(1);
-    }
-    tap_relaunch_payloads();
-    {
-        let d = SDL_GetCurrentVideoDriver();
-        if !d.is_null() {
-            log(&format!(
-                "video driver: {}",
-                std::ffi::CStr::from_ptr(d).to_string_lossy()
-            ));
-        }
-    }
-    // The television has a real GLES2 driver (a shim over libmali). macOS has none at all —
-    // Apple ships desktop GL only, capped at 4.1 core — so asking for ES here fails context
-    // creation outright. 4.1 core is the closest thing that exists, and it is a superset for
-    // everything this renderer does: a real VBO (never client arrays) and RGBA/UNSIGNED_BYTE
-    // textures, both core-profile-legal. The shader sources are adapted at compile time by
-    // `gfx::glsl_preamble`, which reads the driver's GLSL version rather than assuming.
-    if cfg!(feature = "hostsim") {
-        SDL_GL_SetAttribute(A_CTX_PROFILE_MASK, CTX_PROFILE_CORE);
-        SDL_GL_SetAttribute(A_CTX_MAJOR, 4);
-        SDL_GL_SetAttribute(A_CTX_MINOR, 1);
-    } else {
-        SDL_GL_SetAttribute(A_CTX_PROFILE_MASK, CTX_PROFILE_ES);
-        SDL_GL_SetAttribute(A_CTX_MAJOR, 2);
-        SDL_GL_SetAttribute(A_CTX_MINOR, 0);
-    }
-    // full 32-bit RGBA so the video plane shows through
-    SDL_GL_SetAttribute(A_RED, 8);
-    SDL_GL_SetAttribute(A_GREEN, 8);
-    SDL_GL_SetAttribute(A_BLUE, 8);
-    SDL_GL_SetAttribute(A_ALPHA, 8);
-    SDL_GL_SetAttribute(A_BUFFER_SIZE, 32);
-    // ...and NO depth or stencil, which SDL would otherwise give us anyway: its defaults are
-    // 16 bits of depth and 0 of stencil, and asking for neither had simply never been written
-    // down. **This renderer has no use for either.** There is no `GL_DEPTH_TEST`, no
-    // `glDepthFunc`, no `glDepthMask` and no `glClear(GL_DEPTH_BUFFER_BIT)` anywhere in the
-    // crate — every screen is painter's-algorithm 2-D, drawn back to front — and the one
-    // scissor user (`gfx::clip_set`) is a scissor, not a stencil.
-    //
-    // On a TILER this is not merely 4 MB of address space. Midgard allocates the depth buffer
-    // per tile alongside colour and, unless the driver proves it dead, RESOLVES it to memory at
-    // end-of-frame: 1920x1080x2 bytes written per presented frame for a buffer nothing ever
-    // reads. `system.rs` logs what the config actually came back with — a request is not a
-    // grant, and the only honest confirmation is `FB bits: … depth=0`.
-    SDL_GL_SetAttribute(A_DEPTH, 0);
-    SDL_GL_SetAttribute(A_STENCIL, 0);
+    // SDL up: the screensaver hint, the platform's two steps around `SDL_Init`, the GL context request.
+    // The platform's (`Shell::init`; `plx_shell_sdl::init` is the one SDL implementation, and it pins the
+    // order inside it) and FIRST: before the stored session is read and before the window exists.
+    platform.shell.init(&mt)?;
     // **The stored session is read HERE, before the window.** The window size is a setting
     // (Settings > System > Interface resolution, install-wide: `Session::ui_resolution`), and
-    // `SDL_CreateWindow` below is the only moment it can be applied, so the record has to be read
+    // the window's creation (`Shell::open`) is the only moment it can be applied, so the record has to be read
     // first. `peek_settled` would not do: it only reads the cache, which the session owner fills
     // after boot, so its first call answers "not yet". The seams `load` consults (`install_plex_seams`) are installed by
     // `enter_application`, before `boot`. A replay or captured boot brings its own session.
@@ -1608,21 +773,19 @@ pub(crate) unsafe fn construct(
         None => plx_plex::plex::session::load(),
     };
     // The television is placed at 0,0 at exactly canvas size (unless a webOS 1-3 owner picked a smaller
-    // Interface resolution, `requested_drawable`) and takes the panel. A desktop
-    // window is centred (`SDL_WINDOWPOS_CENTERED`) at whatever fits — see `plan_desktop_window`.
-    // The density is not known until a window exists, so this is the 1x answer; `fit_window_to_density`
-    // below corrects it on a display where that was wrong.
+    // Interface resolution, `requested_drawable`) and takes the panel. A desktop window is centred at
+    // whatever fits the display: `Placement::Desktop`, which the shell plans and corrects for the
+    // display's pixel density once a window exists (`plx_shell_sdl::window`).
+    // **A stored size the set will not give must never brick launch.** If the window or its GL
+    // context is refused at a smaller size the owner chose, the shell frees whatever was made and
+    // retries ONCE at the native canvas (`fallback`); only a refused native window is fatal. On a
+    // desktop the request is the desktop's own size, not a setting, so there is no retry there.
     #[cfg(feature = "hostsim")]
-    let desktop_ask = desktop_window_ask();
-    #[cfg(feature = "hostsim")]
-    let (wx, wy, ww_req, wh_req) = {
-        let (w, h) = plan_desktop_window(desktop_ask, Density::UNIT);
-        (WINDOWPOS_CENTERED, WINDOWPOS_CENTERED, w, h)
-    };
+    let placement = Placement::Desktop;
     #[cfg(not(feature = "hostsim"))]
-    let (wx, wy, ww_req, wh_req) = {
-        let (w, h) = requested_drawable(&session).unwrap_or((SCR_W, SCR_H));
-        (0, 0, w, h)
+    let placement = {
+        let size = requested_drawable(&session).unwrap_or((SCR_W, SCR_H));
+        Placement::Panel { size, fallback: window_fallback(size) }
     };
     // The title is furniture a television never draws (no window manager, no decoration) and
     // the first thing a desktop shows, so the two builds spell it differently: the device keeps
@@ -1632,42 +795,18 @@ pub(crate) unsafe fn construct(
     #[cfg(not(feature = "hostsim"))]
     let title = c"plxnative";
     // A frame dump's drawable is exactly the window's size in points: it is the one desktop window
-    // that does not ask for ALLOW_HIGHDPI (0x2000), so its window is the 1920x1080 points of the
-    // canonical Linux host on a Retina display too, and `fit_window_to_density` finds nothing to
-    // correct. (Absent from every shipping build.)
+    // that does not ask for ALLOW_HIGHDPI, so its window is the 1920x1080 points of the canonical
+    // Linux host on a Retina display too, and the shell's density fit finds nothing to correct.
+    // (Absent from every shipping build.)
     #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
-    let window_flags = if crate::dev::framedump::requested() { SDL_WINDOW_FLAGS & !0x2000 } else { SDL_WINDOW_FLAGS };
+    let high_dpi = !crate::dev::framedump::requested();
     #[cfg(not(all(feature = "hostsim", feature = "devtriggers")))]
-    let window_flags = SDL_WINDOW_FLAGS;
-    // **A stored size the set will not give must never brick launch.** If the window or its GL
-    // context is refused at a smaller size the owner chose, free whatever was made and retry ONCE
-    // at the native canvas; only a refused native window is fatal. On a desktop the request is the
-    // desktop's own size, not a setting, so there is no retry there.
-    #[cfg(not(feature = "hostsim"))]
-    let mut fallback = window_fallback((ww_req, wh_req));
-    #[cfg(feature = "hostsim")]
-    let mut fallback: Option<(c_int, c_int)> = None;
-    let (mut ww_try, mut wh_try) = (ww_req, wh_req);
-    let win = loop {
-        let win = SDL_CreateWindow(title.as_ptr(), wx, wy, ww_try, wh_try, window_flags);
-        if win.is_null() {
-            log(&format!("CreateWindow failed at {ww_try}x{wh_try}"));
-        } else {
-            let ctx = SDL_GL_CreateContext(win);
-            if !ctx.is_null() {
-                break win;
-            }
-            log(&format!("GL ctx failed at {ww_try}x{wh_try}"));
-            SDL_DestroyWindow(win);
-        }
-        let Some((w, h)) = fallback.take() else { return Err(1); };
-        log(&format!("surface: retrying the window at the native {w}x{h}"));
-        (ww_try, wh_try) = (w, h);
-    };
-    // Correct the size for the display's density now: `surface::probe` below reads the drawable once.
-    #[cfg(feature = "hostsim")]
-    fit_window_to_density(win, desktop_ask);
-    plx_base::surface::probe(win);
+    let high_dpi = true;
+    // The window and its GL context: created (with the retry above), corrected for the display's
+    // density, and its drawable probed (`surface::probe` reads it once, for good). The `Surface` it
+    // returns is the `App`'s for the rest of the process.
+    let surface = platform.shell.open(&mt, &OpenAsk { title, placement, high_dpi })?;
+    let win = surface.window();
     // vsync on → the frame rate locks to the panel refresh. `/tmp/plxnative-novsync` uncaps it so
     // `fps=` reports the true GPU render rate. WSLg's X11/GLX swap accepts interval 1 without
     // blocking, so the software budget in `run` follows the same switch.
@@ -1678,7 +817,7 @@ pub(crate) unsafe fn construct(
     #[cfg(not(all(feature = "hostsim", feature = "devtriggers")))]
     let dumping = false;
     let vsync_enabled = !dumping && (controlled || !crate::dev::scenarios::novsync_armed());
-    SDL_GL_SetSwapInterval(if vsync_enabled { 1 } else { 0 });
+    surface.set_swap_interval(if vsync_enabled { 1 } else { 0 });
     #[cfg(all(feature = "hostsim", target_os = "linux"))]
     let wslg_frame_pacing = vsync_enabled
         && std::env::var_os("WSL_DISTRO_NAME").is_some()
@@ -1717,23 +856,26 @@ pub(crate) unsafe fn construct(
     crate::textinput::bind(win);
     // …and the same handshake for the ROOT press: `tv::home::go_home`'s fallback leg minimizes
     // this window, and the window is created here, a long way from where BACK is decided.
-    plx_os::tv::window::bind_window(win);
-    let wflags = SDL_GetWindowFlags(win);
+    platform.shell.bind_window(win);
+    let keyboard = plx_shell_sdl::text::keyboard_probe(win);
     log(&format!(
-        "keyboard: support={} active={} focus={} winflags=0x{wflags:x}",
-        SDL_HasScreenKeyboardSupport(),
-        SDL_IsTextInputActive(),
-        i32::from(wflags & SDL_WINDOW_INPUT_FOCUS != 0)
+        "keyboard: support={} active={} focus={} winflags=0x{:x}",
+        keyboard.support,
+        keyboard.active,
+        i32::from(keyboard.wflags & SDL_WINDOW_INPUT_FOCUS != 0),
+        keyboard.wflags
     ));
 
-    plx_os::tv::window::grab(win);
+    platform.shell.grab_surface(win);
     // EXPERIMENT (`/tmp/plxnative-opaque`), no-op without the trigger: build the full-surface
     // wl_region once, so `opaque_route` below can declare the UI plane opaque on every screen
     // that has nothing behind it. See `system.rs`'s section on it.
-    plx_os::tv::window::arm_opaque_region();
-    plx_gfx::gfx::init_gl();
-    plx_gfx::text::init_text();
-    plx_gfx::gfx::init_image();
+    platform.shell.arm_opaque_region();
+    // A required shader the driver refuses is a refusal like any other (`Exit::from(GfxFault)`):
+    // the same status the process always ended with, returned instead of `exit_now`'d from inside GL.
+    plx_gfx::gfx::init_gl()?;
+    plx_gfx::text::init_text()?;
+    plx_gfx::gfx::init_image()?;
     plx_gfx::gfx::init_blur();
     // The transport takes the client's `User-Agent` as a value (it names no Plex layer): hand it
     // over before any request can be made, so the first one already carries it.
@@ -1902,10 +1044,10 @@ pub(crate) unsafe fn construct(
             captured_dev_sources(&dev_servers.unwrap_or_default())),
     };
     let (mut runtime, mut retained) = if controlled {
-        super::bridge::BridgeRetained::controlled_home(plx_base::diag::heartbeat::now_us,
+        super::bridge::BridgeRetained::controlled_home(plx_base::diag::heartbeat::now_us, platform.shell,
             initial.as_ref().expect("controlled initialization"), &mt, preflight.replay())
     } else {
-        super::bridge::BridgeRetained::new(plx_base::diag::heartbeat::now_us, session_init,
+        super::bridge::BridgeRetained::new(plx_base::diag::heartbeat::now_us, platform.shell, session_init,
             plx_telemetry::telemetry::consent::current().unwrap_or_default(), &mt)
     };
     let mut bridge = runtime.bridge(&mut retained);
@@ -2044,7 +1186,7 @@ pub(crate) unsafe fn construct(
         activate_session(&mut bridge, &mut pages, &mut super::recorder::Recplay::Off)
     };
     if !controlled {
-        super::adapters::backends::acb_init(&mt); // every backend set: the plane owner's boot facts
+        (platform.media.early_init)(&mt); // every backend set: the platform's boot facts (webOS: the plane owner's)
         plx_media_codecs::ffi::boot(); // Codec resource boot; controlled Home cannot invoke ABI probes.
         #[cfg(feature = "play-feed")]
         plx_play_feed::publish_audio_converter(); // FinNative: "Convert audio: on the TV" needs the loaded FFmpeg's components
@@ -2321,12 +1463,13 @@ pub(crate) unsafe fn construct(
     let adapters = super::Adapters {
         player: plx_media::player::adapter::PlayerAdapter::new(mt),
     };
-    // The session's backend set is the one the installed drivers form (after the product URI driver
-    // is installed, and for every build, not only a URI one).
+    // The platform installs its drivers, and the session is told what they form: the set and the
+    // resolver, together, for every platform (`platform::publish_composition`).
     let (player, adapters) = {
         let mut player = player;
         let mut adapters = adapters;
-        super::adapters::backends::compose_backends(&mut adapters.player, &mut player.session, controlled);
+        let composed = (platform.media.compose)(&mut adapters.player, controlled);
+        super::platform::publish_composition(&mut player.session, &adapters.player, composed);
         (player, adapters)
     };
     let repause_at = 0i64;
@@ -2478,6 +1621,7 @@ pub(crate) unsafe fn construct(
     // End the bootstrap capability before moving its physical owners into App.
     drop(bridge);
     let mut app = App {
+        platform,
         last_input,
         loop_t,
         iters_ct,
@@ -2514,7 +1658,7 @@ pub(crate) unsafe fn construct(
         reread: Default::default(),
         ev,
         remote,
-        win,
+        surface,
         #[cfg(all(feature = "hostsim", target_os = "linux"))]
         wslg_frame_pacing,
         t0,
@@ -2524,6 +1668,8 @@ pub(crate) unsafe fn construct(
         rec: super::recorder::Recplay::Off,
         boot_initial: initial,
         telemetry_guard: None,
+        #[cfg(test)]
+        drop_probe: Default::default(),
 
         glass,
         // **The application's page stack runs the route DIP** (§6.2). It ran `Immediate` until
@@ -2645,16 +1791,16 @@ pub(crate) unsafe fn construct(
     plx_plex::plex::account::announce_discover();
     if controlled {
         let initial = app.snapshot_init().expect("controlled constructor retains initial inputs");
-        initial.validate().map_err(|reason| { log(&format!("rec: REFUSED — {reason}")); 1 })?;
+        initial.validate().map_err(|reason| { log(&format!("rec: REFUSED — {reason}")); Exit::refused(1) })?;
         let replay = preflight.replay();
         app.rec = super::recorder::Recplay::controlled(preflight, &initial)
-            .map_err(|reason| { log(&format!("rec: REFUSED — {reason}")); 1 })?;
+            .map_err(|reason| { log(&format!("rec: REFUSED — {reason}")); Exit::refused(1) })?;
         let mut bridge = app.runtime.bridge(&mut app.bridge);
         app.rec.arm_landgate(bridge.landgate());
         log("bootstrap: captured pre-effect initial state");
         if let Some(deferred) = deferred {
             apply_deferred_capture(&mut app.rec, bridge.landgate(), deferred)
-                .map_err(|reason| { log(&format!("rec: REFUSED — {reason}")); 1 })?;
+                .map_err(|reason| { log(&format!("rec: REFUSED — {reason}")); Exit::refused(1) })?;
             log("bootstrap: captured session persistence applied");
         }
         if !replay {
@@ -2665,13 +1811,13 @@ pub(crate) unsafe fn construct(
         app.rec.prepare_resources(&mut bridge);
         if !matches!(activate_session(&mut bridge, &mut app.pages, &mut app.rec), BootTo::Home) {
             log("bootstrap: controlled Home activation refused");
-            return Err(1);
+            return Err(Exit::refused(1));
         }
         let tree = app.pages.state_hash();
         app.rec.resource_requests(bridge.take_resource_requests());
         if let Some(reason) = app.rec.failure().or_else(|| bridge.controlled_failure()) {
             log(&format!("bootstrap: REFUSED — {reason}"));
-            return Err(1);
+            return Err(Exit::refused(1));
         }
         super::run::recorder_end_frame(&mut app.rec, &bridge,
             "home", "", "bootstrap", tree);
@@ -2704,7 +1850,7 @@ pub(crate) unsafe fn construct(
             // Preflight refuses the still-unsupported first-run surface before resource boot.
             if plx_screens::consent::should_show(&initial.consent, initial.automated) {
                 log("bootstrap: REFUSED — unsupported initial consent route");
-                return Err(1);
+                return Err(Exit::refused(1));
             }
         } else {
             maybe_ask_consent(&mut app.pages, &mut app.runtime.consent.machine.ask);

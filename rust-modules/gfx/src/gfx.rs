@@ -328,7 +328,7 @@ extern "C" {
     #[cfg(feature = "devtriggers")]
     fn glFlush();
     fn glGenTextures(n: c_int, textures: *mut c_uint);
-    // `#[allow(dead_code)]` — the same shape as `app/mod.rs`'s SDL text-input externs: the sole
+    // `#[allow(dead_code)]` — the same shape as `plx_shell_sdl`'s SDL text-input externs (`sys.rs`): the sole
     // caller (`delete_tex`, below) compiles its real call out under `cfg(test)`, so this
     // declaration loses its only use in the TEST build alone and warns there. It stays live on
     // device and in the simulator, where `delete_tex` still calls it for real.
@@ -754,9 +754,11 @@ fn probed_clear(presented: impl FnOnce() -> bool, clear: impl FnOnce()) {
 
 /// The frame's first framebuffer-0 command is where this driver parks the wait for a free back
 /// buffer, and on every route but the player it is the page's [`frame_clear`]. The dev frame
-/// probe (`/tmp/plxnative-framecb`) prices that wait, but its clock is `os`'s and this
-/// crate does not depend on `os`, so the application hands the two edges down once at boot:
-/// `waiting` runs just before the clear, `acquired` just after it returns.
+/// probe (`/tmp/plxnative-framecb`) prices that wait, but its clock is the platform's
+/// (`crate::system` on webOS, which the loop reaches as `app::platform::FrameProbe`), in the
+/// application crate above this one, so the platform's entry (`port::plex_main`) hands the two
+/// edges down once, before `run_application`: `waiting` runs just before the clear, `acquired`
+/// just after it returns.
 pub fn install_clear_probe(waiting: fn(), acquired: fn()) {
     CLEAR_PROBE.with(|p| p.hooks.set(Some((waiting, acquired))));
 }
@@ -1192,7 +1194,7 @@ fn gl_is_es() -> bool {
         // and therefore the safe default — a wrong guess there changes nothing.
         // `starts_with`, not a substring scan: the ES spec mandates this exact prefix, while a
         // desktop vendor string containing "ES" anywhere would otherwise skip the preamble and
-        // hard-exit at the first shader compile.
+        // fail the boot at the first shader compile.
         v.is_null() || CStr::from_ptr(v).to_bytes().starts_with(b"OpenGL ES")
     })
 }
@@ -1228,12 +1230,53 @@ unsafe fn supersample_aa(src: *const c_char) -> Option<std::ffi::CString> {
     std::ffi::CString::new(text.replace(EDGE, &format!("smoothstep(-{w:.6}, {w:.6}, d)"))).ok()
 }
 
-pub fn gfx_compile(ty: c_uint, src: *const c_char) -> c_uint {
-    try_compile(ty, src).unwrap_or_else(|| plx_base::process::exit_now(1))
+/// A required shader program the driver refused: the typed form of the two `exit_now(1)` calls
+/// this module made (a compile rejection inside `gfx_compile`, the base program's link failure in
+/// `init_gl`). [`init_gl`], [`init_text`](crate::text::init_text) and [`init_image`] return it and
+/// the application's entry turns it into its exit, so a process that hosts the app is told instead
+/// of being killed under its host. What each refusal costs is unchanged: a compile rejection of
+/// any program linked through [`link_program`] is a fault; a link failure is one only for the base
+/// program, and the others degrade ([`degrade_on_link_failure`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GfxFault {
+    /// The driver rejected a shader's source (the compile log is already in the event log).
+    Compile,
+    /// The driver compiled both shaders and refused to link them.
+    Link,
 }
 
-/// Optional programs may degrade on a driver's compile rejection; required shaders keep the
-/// existing exit policy through `gfx_compile` above.
+impl std::fmt::Display for GfxFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GfxFault::Compile => f.write_str("a required shader failed to compile"),
+            GfxFault::Link => f.write_str("a required shader program failed to link"),
+        }
+    }
+}
+
+/// The two driver steps a program's bring-up takes, so what a refusal costs is decided in
+/// [`link_required`] and graded without a GL context (`fault_tests`).
+trait ProgramDriver {
+    /// Compile one shader; `None` is the driver's rejection.
+    fn compile(&self, ty: c_uint, src: *const c_char) -> Option<c_uint>;
+    /// Link a program from two compiled shaders; `None` is the driver's refusal.
+    fn link(&self, vs: c_uint, fs: c_uint) -> Option<c_uint>;
+}
+
+/// The GLES driver.
+struct Gles;
+
+impl ProgramDriver for Gles {
+    fn compile(&self, ty: c_uint, src: *const c_char) -> Option<c_uint> {
+        try_compile(ty, src)
+    }
+    fn link(&self, vs: c_uint, fs: c_uint) -> Option<c_uint> {
+        link_shaders(vs, fs)
+    }
+}
+
+/// Optional programs may degrade on a driver's compile rejection; required shaders report it as a
+/// [`GfxFault`] through [`link_required`].
 fn try_compile(ty: c_uint, src: *const c_char) -> Option<c_uint> {
     unsafe {
         let s = glCreateShader(ty);
@@ -1276,10 +1319,33 @@ fn try_compile(ty: c_uint, src: *const c_char) -> Option<c_uint> {
 }
 
 /// Shared program bring-up for every shader pair: create → attach VS/FS → bind `a_pos`
-/// (attrib 0, the shared unit quad) → link. `None` = link failure; each caller keeps its
-/// own failure policy (hard-exit, degrade to 0, or early-return).
-pub fn link_program(vs: *const c_char, fs: *const c_char) -> Option<c_uint> {
-    link_shaders(gfx_compile(GL_VERTEX_SHADER, vs), gfx_compile(GL_FRAGMENT_SHADER, fs))
+/// (attrib 0, the shared unit quad) → link. A compile rejection is `Err(GfxFault::Compile)` for
+/// every caller; a link failure is `Err(GfxFault::Link)` and each caller keeps its own policy
+/// (return the fault, degrade to 0 through [`degrade_on_link_failure`], or early-return).
+///
+/// **Boot only.** The frame loop must not link a required program: it would have to end the loop
+/// with a fault where boot returns one. The program a frame links on demand takes
+/// [`link_optional_program`] (`blur_lazy_init`) and degrades on either refusal.
+pub fn link_program(vs: *const c_char, fs: *const c_char) -> Result<c_uint, GfxFault> {
+    link_required(&Gles, vs, fs)
+}
+
+fn link_required(driver: &dyn ProgramDriver, vs: *const c_char, fs: *const c_char) -> Result<c_uint, GfxFault> {
+    let vs = driver.compile(GL_VERTEX_SHADER, vs).ok_or(GfxFault::Compile)?;
+    let fs = driver.compile(GL_FRAGMENT_SHADER, fs).ok_or(GfxFault::Compile)?;
+    driver.link(vs, fs).ok_or(GfxFault::Link)
+}
+
+/// The policy of a required program that the frame can do without: a link failure is logged with
+/// `note` and answered `0` ("no program"), a compile rejection stays a fault.
+pub(crate) fn degrade_on_link_failure(program: Result<c_uint, GfxFault>, note: &str) -> Result<c_uint, GfxFault> {
+    program.or_else(|fault| match fault {
+        GfxFault::Link => {
+            log(note);
+            Ok(0)
+        }
+        GfxFault::Compile => Err(fault),
+    })
 }
 
 fn link_optional_program(vs: *const c_char, fs: *const c_char) -> Option<c_uint> {
@@ -1433,7 +1499,7 @@ fn bind_core_profile_vao() {
     }
 }
 
-pub fn init_gl() {
+pub fn init_gl() -> Result<(), GfxFault> {
     unsafe {
         WARM_TARGET = None;
         // Before any buffer or attribute state is touched — in a core profile the calls below are
@@ -1441,15 +1507,17 @@ pub fn init_gl() {
         #[cfg(feature = "hostsim")]
         bind_core_profile_vao();
 
-        PROG = link_program(VS_SRC.as_ptr(), FS_SRC.as_ptr()).unwrap_or_else(|| {
-            // Logged for the same reason as the compile failure in `gfx_compile`: stderr is not the
-            // event log and a clean exit is not a crash, so this line is the only trace the death
-            // leaves. The base program is the one every draw needs, hence the exit where the
-            // ambient/shadow/image programs below merely degrade.
-            log("base prog link FAILED — exiting");
-            eprintln!("link failed");
-            plx_base::process::exit_now(1);
-        });
+        PROG = link_program(VS_SRC.as_ptr(), FS_SRC.as_ptr()).map_err(|fault| {
+            // A compile rejection logged itself in `try_compile`. A link failure is logged here,
+            // for the same reason: stderr is not the event log and a clean exit is not a crash, so
+            // this line is the only trace the death leaves. The base program is the one every draw
+            // needs, hence the fault where the ambient/shadow/image programs below merely degrade.
+            if fault == GfxFault::Link {
+                log("base prog link FAILED — exiting");
+                eprintln!("link failed");
+            }
+            fault
+        })?;
         use_prog(PROG);
         RECT_UNIFORMS = RectUniforms::of(PROG);
         glUniform2f(RECT_UNIFORMS.screen, SCR_W, SCR_H);
@@ -1488,10 +1556,11 @@ pub fn init_gl() {
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, std::ptr::null());
 
-        APROG = link_program(VS_AMBIENT_DITHERED.as_ptr(), FS_AMBIENT.as_ptr()).unwrap_or_else(|| {
-            log("ambient prog link failed");
-            0 // draw_ambient then binds program 0 and draws nothing — the corner wash is a nicety
-        });
+        APROG = degrade_on_link_failure(
+            link_program(VS_AMBIENT_DITHERED.as_ptr(), FS_AMBIENT.as_ptr()),
+            // draw_ambient then binds program 0 and draws nothing — the corner wash is a nicety
+            "ambient prog link failed",
+        )?;
         if APROG != 0 {
             AL_RECT = glGetUniformLocation(APROG, c"u_rect".as_ptr());
             AL_SCREEN = glGetUniformLocation(APROG, c"u_screen".as_ptr());
@@ -1505,10 +1574,10 @@ pub fn init_gl() {
             AL_SCRIM = ScrimLoc::of(APROG);
         }
         SCRIM_SENT = [scrim::GroundShade::NONE; 3];
-        SCRIM_PROG = link_program(VS_SCRIM_LAYER.as_ptr(), FS_AMBIENT_PLAIN.as_ptr()).unwrap_or_else(|| {
-            log("scrim layer prog link failed — a layered hero draws no scrim over its art");
-            0
-        });
+        SCRIM_PROG = degrade_on_link_failure(
+            link_program(VS_SCRIM_LAYER.as_ptr(), FS_AMBIENT_PLAIN.as_ptr()),
+            "scrim layer prog link failed — a layered hero draws no scrim over its art",
+        )?;
         if SCRIM_PROG != 0 {
             SCL_RECT = glGetUniformLocation(SCRIM_PROG, c"u_rect".as_ptr());
             SCL_INK = glGetUniformLocation(SCRIM_PROG, c"u_ink".as_ptr());
@@ -1518,10 +1587,10 @@ pub fn init_gl() {
         }
         bind_dither_tile();
 
-        APROG_PLAIN = link_program(VS_AMBIENT.as_ptr(), FS_AMBIENT_PLAIN.as_ptr()).unwrap_or_else(|| {
-            log("ambient (plain) prog link failed — the dithered program serves every frame");
-            0
-        });
+        APROG_PLAIN = degrade_on_link_failure(
+            link_program(VS_AMBIENT.as_ptr(), FS_AMBIENT_PLAIN.as_ptr()),
+            "ambient (plain) prog link failed — the dithered program serves every frame",
+        )?;
         if APROG_PLAIN != 0 {
             PL_RECT = glGetUniformLocation(APROG_PLAIN, c"u_rect".as_ptr());
             PL_TL = glGetUniformLocation(APROG_PLAIN, c"u_atl".as_ptr());
@@ -1533,10 +1602,11 @@ pub fn init_gl() {
         }
 
         // Soft-shadow program (own program so the hot FS_SRC pays nothing; mirrors init_image).
-        SPROG = link_program(VS_SRC.as_ptr(), FS_SHADOW.as_ptr()).unwrap_or_else(|| {
-            log("shadow prog link failed");
-            0 // draw_shadow no-ops → cards simply lose the drop-shadow, nothing else breaks
-        });
+        SPROG = degrade_on_link_failure(
+            link_program(VS_SRC.as_ptr(), FS_SHADOW.as_ptr()),
+            // draw_shadow no-ops → cards simply lose the drop-shadow, nothing else breaks
+            "shadow prog link failed",
+        )?;
         if SPROG != 0 {
             SL_RECT = glGetUniformLocation(SPROG, c"u_rect".as_ptr());
             SL_SCREEN = glGetUniformLocation(SPROG, c"u_screen".as_ptr());
@@ -1549,10 +1619,10 @@ pub fn init_gl() {
             SL_COL = glGetUniformLocation(SPROG, c"u_col".as_ptr());
         }
 
-        FPROG = link_program(VS_SRC.as_ptr(), FS_FLAT.as_ptr()).unwrap_or_else(|| {
-            log("flat prog link failed — uniform rects take the fill program's flat path");
-            0
-        });
+        FPROG = degrade_on_link_failure(
+            link_program(VS_SRC.as_ptr(), FS_FLAT.as_ptr()),
+            "flat prog link failed — uniform rects take the fill program's flat path",
+        )?;
         if FPROG != 0 {
             FL_RECT = glGetUniformLocation(FPROG, c"u_rect".as_ptr());
             FL_COL = glGetUniformLocation(FPROG, c"u_col".as_ptr());
@@ -1560,8 +1630,8 @@ pub fn init_gl() {
             glUniform2f(glGetUniformLocation(FPROG, c"u_screen".as_ptr()), SCR_W, SCR_H);
         }
 
-        // Optional on purpose: `link_program` exits the process on a compile rejection
-        // (`gfx_compile`), which would make `draw_ramp`'s fallback unreachable for the failure a
+        // Optional on purpose: `link_program` makes a compile rejection a fault boot returns
+        // (`link_required`), which would make `draw_ramp`'s fallback unreachable for the failure a
         // driver is likeliest to give a new program. `try_compile` logs the compile error itself.
         RPROG = link_optional_program(VS_SRC.as_ptr(), FS_RAMP.as_ptr()).unwrap_or_else(|| {
             log("ramp prog compile/link failed — square gradients take the fill program's flat path");
@@ -1579,10 +1649,10 @@ pub fn init_gl() {
         // unit quad IS the texture coordinate and there is nothing for a `u_uvrect` to express.
         // DITHERED: `fs_field.frag` is built with `glsl_dithered!`, so its paired vertex source
         // must be the `PLX_DITHER_NC` variant that supplies `v_dither_nc` (cost rule 4).
-        UPROG = link_program(VS_SRC_DITHERED.as_ptr(), FS_FIELD.as_ptr()).unwrap_or_else(|| {
-            log("field prog link failed — an underlay field draws nothing");
-            0
-        });
+        UPROG = degrade_on_link_failure(
+            link_program(VS_SRC_DITHERED.as_ptr(), FS_FIELD.as_ptr()),
+            "field prog link failed — an underlay field draws nothing",
+        )?;
         if UPROG != 0 {
             UL_RECT = glGetUniformLocation(UPROG, c"u_rect".as_ptr());
             UL_TINT = glGetUniformLocation(UPROG, c"u_tint".as_ptr());
@@ -1595,10 +1665,10 @@ pub fn init_gl() {
         // The same field as a popover's material — `draw_field_panel`. DITHERED, same contract as
         // `UPROG` above: `fs_field_panel.frag` is built with `glsl_dithered!`, so it must link
         // against the `PLX_DITHER_NC` vertex variant.
-        PPROG = link_program(VS_SRC_DITHERED.as_ptr(), FS_FIELD_PANEL.as_ptr()).unwrap_or_else(|| {
-            log("field-panel prog link failed — popover panels fall back to the flat sheet");
-            0
-        });
+        PPROG = degrade_on_link_failure(
+            link_program(VS_SRC_DITHERED.as_ptr(), FS_FIELD_PANEL.as_ptr()),
+            "field-panel prog link failed — popover panels fall back to the flat sheet",
+        )?;
         if PPROG != 0 {
             FP_RECT = glGetUniformLocation(PPROG, c"u_rect".as_ptr());
             FP_TINT = glGetUniformLocation(PPROG, c"u_tint".as_ptr());
@@ -1681,6 +1751,7 @@ pub fn init_gl() {
         // Last: it reads GL's extension string and links against the context just built.
         straighten::init();
     }
+    Ok(())
 }
 
 /// The CAPSULE OUTLINE's solved geometry as the shader takes it — `[R, f, r, big centre y, end
@@ -2725,14 +2796,15 @@ pub fn draw_number(mut n: i32, right_x: f32, y: f32, s: f32, col: *const f32) {
 }
 
 // ---- image program: RGBA textures (posters/logos/backdrop) with rounded corners ----
-pub fn init_image() {
+pub fn init_image() -> Result<(), GfxFault> {
     unsafe {
         IPROG = match link_program(VS_IMG.as_ptr(), FS_IMG.as_ptr()) {
-            Some(p) => p,
-            None => {
+            Ok(p) => p,
+            Err(GfxFault::Link) => {
                 log("image prog link failed");
-                return;
+                return Ok(());
             }
+            Err(fault) => return Err(fault),
         };
         IL_RECT = glGetUniformLocation(IPROG, c"u_trect".as_ptr());
         IL_SCREEN = glGetUniformLocation(IPROG, c"u_tscreen".as_ptr());
@@ -2836,6 +2908,7 @@ pub fn init_image() {
 
         use_prog(PROG);
     }
+    Ok(())
 }
 
 /// Can the wash carry its artwork in one pass? `false` means the caller draws [`draw_ambient`] and
@@ -6222,7 +6295,10 @@ fn blur_lazy_init() -> bool {
         if (*std::ptr::addr_of!(BLURST)).is_some() {
             return true;
         }
-        BPROG = match link_program(VS_IMG.as_ptr(), FS_BLUR.as_ptr()) {
+        // OPTIONAL, both programs: this runs from the frame (`draw_blur_backdrop`) as well as from
+        // boot, and a frame has no way to return a fault, so a compile rejection degrades exactly
+        // as a link failure does (`link_program` is boot-only).
+        BPROG = match link_optional_program(VS_IMG.as_ptr(), FS_BLUR.as_ptr()) {
             Some(p) => p,
             None => {
                 log("blur: prog link failed — backdrop blur off");
@@ -6243,7 +6319,7 @@ fn blur_lazy_init() -> bool {
         glUniform4f(BL_RECT, 0.0, 0.0, SCR_W, SCR_H);
         glUniform4f(BL_UVRECT, 0.0, 0.0, 1.0, 1.0);
 
-        GPROG = match link_program(VS_IMG_DITHERED.as_ptr(), FS_GLASS.as_ptr()) {
+        GPROG = match link_optional_program(VS_IMG_DITHERED.as_ptr(), FS_GLASS.as_ptr()) {
             Some(p) => p,
             None => {
                 log("blur: glass prog link failed — backdrop blur off");
@@ -9554,28 +9630,214 @@ mod tests {
     /// directory, so a new shader is covered by being added.
     #[test]
     fn no_shader_source_names_a_dev_trigger() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shaders");
-        let mut scanned = 0;
         let mut found = Vec::new();
-        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
-            let path = entry.expect("a directory entry").path();
-            // Lossy: a stray non-UTF-8 file (a Finder `.DS_Store`) is not a shader and must not
-            // turn this red; the bytes the scan reads are the same either way.
-            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            let text = String::from_utf8_lossy(&bytes);
-            scanned += 1;
+        for (path, text) in shader_files() {
             for (n, line) in text.lines().enumerate() {
                 if line.contains("plxnative-") {
                     found.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
                 }
             }
         }
-        assert!(scanned > 0, "no shader sources under {}", dir.display());
         assert!(
             found.is_empty(),
             "shader sources are embedded verbatim in the binary, comments included, and the \
              stable/nightly package scan (ci/check-package.py) refuses any dev-trigger name in it; \
              reword these without the `plxnative-` name:\n{}",
+            found.join("\n")
+        );
+    }
+
+    /// Every file under `shaders/`, as (path, text), in path order: the one directory walk the
+    /// whole-directory source scans share, so a new shader is covered by being added.
+    fn shader_files() -> Vec<(std::path::PathBuf, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/shaders");
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+            let path = entry.expect("a directory entry").path();
+            // Lossy: a stray non-UTF-8 file (a Finder `.DS_Store`) is not a shader and must not
+            // turn a scan red; the bytes a scan reads are the same either way.
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            files.push((path, String::from_utf8_lossy(&bytes).into_owned()));
+        }
+        assert!(!files.is_empty(), "no shader sources under {}", dir.display());
+        files.sort();
+        files
+    }
+
+    /// The `uniform` / `varying` / `attribute` statements in `src` that declare more than one name
+    /// (`uniform vec4 a, b;`), as (line of the storage keyword, the statement on one line).
+    ///
+    /// Comments and preprocessor lines are blanked first (a trailing `// (x, y, 1/w, 1/h)` note
+    /// holds commas), then the text is cut into statements at `;`, `{` and `}`; a statement
+    /// holding a storage keyword as a whole word is multi-declarator when a comma sits outside
+    /// every `(…)` and `[…]`, which keeps an array size such as `u_sc[12]` out of the count and
+    /// catches `u_a[2], u_b` and a statement that runs over several lines.
+    fn multi_declarator_statements(src: &str) -> Vec<(usize, String)> {
+        // Pass 1: blank comments and preprocessor lines, keeping every newline so line numbers hold.
+        let mut code = String::with_capacity(src.len());
+        let mut chars = src.chars().peekable();
+        let mut line_start = true;
+        while let Some(c) = chars.next() {
+            match (c, chars.peek().copied()) {
+                ('/', Some('/')) => {
+                    while chars.peek().is_some_and(|&n| n != '\n') {
+                        chars.next();
+                    }
+                }
+                ('/', Some('*')) => {
+                    chars.next();
+                    let mut prev = ' ';
+                    for n in chars.by_ref() {
+                        if n == '\n' {
+                            code.push('\n');
+                        }
+                        if prev == '*' && n == '/' {
+                            break;
+                        }
+                        prev = n;
+                    }
+                }
+                ('#', _) if line_start => {
+                    // A directive runs to the end of its line, or past a `\` continuation.
+                    let mut prev = ' ';
+                    while let Some(&n) = chars.peek() {
+                        if n == '\n' && prev != '\\' {
+                            break;
+                        }
+                        if n == '\n' {
+                            code.push('\n');
+                        }
+                        prev = n;
+                        chars.next();
+                    }
+                }
+                _ => {
+                    code.push(c);
+                    if c == '\n' {
+                        line_start = true;
+                    } else if !c.is_whitespace() {
+                        line_start = false;
+                    }
+                }
+            }
+        }
+        // Pass 2: statements, and the commas at depth 0 of the storage-qualified ones.
+        let mut found = Vec::new();
+        let mut line = 1;
+        let mut stmt = String::new();
+        let mut stmt_line = 1;
+        for c in code.chars().chain(std::iter::once(';')) {
+            if !matches!(c, ';' | '{' | '}') {
+                if stmt.is_empty() && c.is_whitespace() {
+                    if c == '\n' {
+                        line += 1;
+                    }
+                    continue;
+                }
+                if stmt.is_empty() {
+                    stmt_line = line;
+                }
+                stmt.push(c);
+                if c == '\n' {
+                    line += 1;
+                }
+                continue;
+            }
+            let storage = stmt
+                .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+                .any(|w| matches!(w, "uniform" | "varying" | "attribute"));
+            if storage {
+                let mut depth = 0i32;
+                let mut multi = false;
+                for ch in stmt.chars() {
+                    match ch {
+                        '(' | '[' => depth += 1,
+                        ')' | ']' => depth -= 1,
+                        ',' if depth == 0 => multi = true,
+                        _ => {}
+                    }
+                }
+                if multi {
+                    found.push((stmt_line, stmt.split_whitespace().collect::<Vec<_>>().join(" ")));
+                }
+            }
+            stmt.clear();
+        }
+        found
+    }
+
+    /// **The scan that keeps a shader to one name per `uniform` / `varying` / `attribute`
+    /// statement is itself right.** It must count `uniform vec4 a, b;` and its array and multi-line
+    /// forms, and must not count a comma in a comment, a function's parameter list, an array
+    /// size, a local declaration or a longer identifier that merely contains a storage keyword.
+    #[test]
+    fn the_one_name_per_declaration_scan_counts_exactly_the_storage_statements_with_two_names() {
+        let hits = |src: &str| multi_declarator_statements(src).len();
+        for src in [
+            "uniform vec4 a, b;",
+            "varying highp vec2 a, b;",
+            "attribute vec2 a, b;",
+            "uniform vec4 u_a[2], u_b;",
+            "uniform vec4 u_a, u_b[2];",
+            "invariant varying vec4 a, b;",
+            "uniform float a,\n  b;",
+            "uniform vec4 a, b, c;",
+            "#ifdef X\nuniform vec4 a, b;\n#endif",
+            "float f(int i) { return 1.0; }\nuniform vec4 a, b;",
+        ] {
+            assert_eq!(hits(src), 1, "must count: {src:?}");
+        }
+        for src in [
+            "uniform vec4 a;\nuniform vec4 b;",
+            "uniform vec4 u_sc[12];",
+            "uniform highp vec4 u_art;    // the art quad: (x, y, 1/w, 1/h) in authored pixels",
+            "// uniform vec4 a, b;",
+            "/* uniform vec4 a,\n b; */ uniform vec4 c;",
+            "float shade_block(int i, vec2 px) { return 1.0; }",
+            "void main(){ vec2 a, b; a = b; }",
+            "float uniform_scale = 1.0, y;",
+            "#define PAIR uniform vec4 a, b;",
+            "#define LONG(a) \\\n  uniform vec4 a, b;\nuniform vec4 c;",
+            "uniform vec4 u_m[2 * (1 + 2)];",
+            "",
+        ] {
+            assert_eq!(hits(src), 0, "must not count: {src:?}");
+        }
+        // The line is that of the storage keyword, past the blanked comments and directives.
+        assert_eq!(
+            multi_declarator_statements("// note\n#define A 1\n\nuniform vec4 a,\n  b;\nuniform vec4 c;"),
+            vec![(4, "uniform vec4 a, b".to_string())]
+        );
+    }
+
+    /// **A shader declares one name per `uniform` / `varying` / `attribute` statement.** The Samsung
+    /// TV 10.0 emulator (YaGL over Mesa llvmpipe) rejected `VS_AMBIENT_DITHERED` at
+    /// `varying highp vec2 v_dither_nc;` ("syntax error, unexpected NEW_IDENTIFIER"), and a required
+    /// shader's rejection stops the app from starting. `vs_ambient.vert`'s
+    /// `uniform vec4 u_atl, u_atr, u_abr, u_abl;` was the only multi-declarator in `shaders/`, and
+    /// splitting it is what made the program compile there. Measured on that emulator with the Tizen
+    /// hello-world probe (`samsung/hello-tpk` at `e8da14ce6`): the unsplit source failed, the split
+    /// source compiled, a cut-down variant did the same, and with the split all 14 required programs
+    /// compiled and linked and `plx_gfx` drew. Why YaGL rejects the statement is not established (the
+    /// message is the one Mesa gives for raw desktop GLSL 1.10, where `highp` is an ordinary
+    /// identifier), and an optional program, the straighten copy variant, still fails there with the
+    /// same kind of error and no multi-declarator, its cause also not established. Every other source
+    /// already spelled one name per statement, and a driver that reads either spelling sees the same
+    /// program, so the sources keep to the spelling the other drivers have read. It lists the
+    /// directory, so a new shader is covered by being added.
+    #[test]
+    fn every_shader_keeps_one_name_per_declaration_in_a_uniform_varying_or_attribute_statement() {
+        let mut found = Vec::new();
+        for (path, text) in shader_files() {
+            for (line, stmt) in multi_declarator_statements(&text) {
+                found.push(format!("{}:{line}: {stmt}", path.display()));
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "a multi-declarator made the TV 10.0 emulator (YaGL) reject `vs_ambient.vert` until it \
+             was split, so a `uniform` / `varying` / `attribute` statement names one variable; \
+             split these:\n{}",
             found.join("\n")
         );
     }
@@ -10035,8 +10297,8 @@ mod tests {
     /// overdraw ledger BEFORE choosing a program, and fall back to the fill program rather than
     /// draw nothing when the ramp program did not compile or link. Each arm of the routing must call
     /// ITS program (a swap would still contain both calls), and the ramp program must be built from
-    /// `VS_SRC` + `FS_RAMP` through `link_optional_program`: `link_program` exits the process on a
-    /// compile rejection, so the fallback above would never be reached for it.
+    /// `VS_SRC` + `FS_RAMP` through `link_optional_program`: `link_program` makes a compile rejection a
+    /// boot fault, so the fallback above would never be reached for it.
     #[test]
     fn the_ramp_program_is_the_fill_programs_flat_path_in_a_smaller_shader() {
         let ramp = shader_code(FS_RAMP);
@@ -13140,5 +13402,94 @@ mod frost_tests {
     fn the_frost_is_stored_bottom_up_after_four_flips() {
         assert!(FROST_BOTTOM_UP);
         assert_eq!(FROST_TAPS.iter().map(|d| d * d + 0.25).sum::<f32>(), 9.0, "sigma 3 texels = 24 px at 1/8");
+    }
+}
+
+/// What a driver's refusal costs a required program, graded without a GL context: the decision is
+/// [`link_required`] / [`degrade_on_link_failure`], which take the driver as a parameter.
+#[cfg(test)]
+mod fault_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// A driver that rejects what it is told to and records the steps it was asked for.
+    struct Refusing {
+        reject_compile_of: Option<c_uint>,
+        refuse_link: bool,
+        steps: RefCell<Vec<&'static str>>,
+    }
+
+    impl Refusing {
+        fn new(reject_compile_of: Option<c_uint>, refuse_link: bool) -> Self {
+            Self { reject_compile_of, refuse_link, steps: RefCell::new(Vec::new()) }
+        }
+    }
+
+    impl ProgramDriver for Refusing {
+        fn compile(&self, ty: c_uint, _src: *const c_char) -> Option<c_uint> {
+            self.steps.borrow_mut().push(if ty == GL_VERTEX_SHADER { "compile vs" } else { "compile fs" });
+            (self.reject_compile_of != Some(ty)).then_some(ty)
+        }
+        fn link(&self, _vs: c_uint, _fs: c_uint) -> Option<c_uint> {
+            self.steps.borrow_mut().push("link");
+            (!self.refuse_link).then_some(7)
+        }
+    }
+
+    #[test]
+    fn an_injected_compile_rejection_is_a_fault_for_either_shader() {
+        let vertex = Refusing::new(Some(GL_VERTEX_SHADER), false);
+        assert_eq!(link_required(&vertex, std::ptr::null(), std::ptr::null()), Err(GfxFault::Compile));
+        assert_eq!(*vertex.steps.borrow(), ["compile vs"], "the first rejection ends it, as the exit did");
+        let fragment = Refusing::new(Some(GL_FRAGMENT_SHADER), false);
+        assert_eq!(link_required(&fragment, std::ptr::null(), std::ptr::null()), Err(GfxFault::Compile));
+        assert_eq!(*fragment.steps.borrow(), ["compile vs", "compile fs"], "and nothing is linked after it");
+    }
+
+    #[test]
+    fn an_injected_link_refusal_is_a_link_fault() {
+        let driver = Refusing::new(None, true);
+        assert_eq!(link_required(&driver, std::ptr::null(), std::ptr::null()), Err(GfxFault::Link));
+        assert_eq!(*driver.steps.borrow(), ["compile vs", "compile fs", "link"]);
+    }
+
+    #[test]
+    fn a_program_the_driver_accepts_comes_back() {
+        let driver = Refusing::new(None, false);
+        assert_eq!(link_required(&driver, std::ptr::null(), std::ptr::null()), Ok(7));
+    }
+
+    /// The split the exits had: a link failure costs the base program the boot and every other
+    /// required program only itself; a compile rejection costs the boot whichever program it was.
+    #[test]
+    fn a_link_fault_degrades_a_program_and_a_compile_fault_never_does() {
+        assert_eq!(degrade_on_link_failure(Ok(5), "kept"), Ok(5));
+        assert_eq!(degrade_on_link_failure(Err(GfxFault::Link), "a fault test's degraded program"), Ok(0),
+            "no program: the draw that needs it does nothing or falls back");
+        assert_eq!(degrade_on_link_failure(Err(GfxFault::Compile), "unused"), Err(GfxFault::Compile));
+    }
+
+    #[test]
+    fn a_fault_names_what_failed() {
+        assert_eq!(GfxFault::Compile.to_string(), "a required shader failed to compile");
+        assert_eq!(GfxFault::Link.to_string(), "a required shader program failed to link");
+    }
+
+    /// `blur_lazy_init` runs from the frame, which cannot return a fault: it links only optional
+    /// programs, so a driver's rejection degrades it exactly as its link failure did. Reads the
+    /// source for the reason the neighbouring tests do (no host test has a GL context).
+    #[test]
+    fn the_frames_lazy_link_is_optional_so_the_loop_never_owes_a_fault() {
+        let source = include_str!("gfx.rs");
+        let body = source
+            .split_once(concat!("\nfn blur_lazy_", "init() -> bool {"))
+            .expect("blur_lazy_init")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of blur_lazy_init")
+            .0;
+        assert!(!body.contains(concat!("link_", "program(")), "a required program linked from the frame");
+        assert_eq!(body.matches(concat!("link_optional_", "program(")).count(), 3,
+            "the blur, the glass and the frost programs are all optional");
     }
 }

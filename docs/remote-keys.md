@@ -20,7 +20,7 @@ done offline is read out of the television's own harvested `libSDL2`, which is s
 ## 1. How a press reaches the app
 
 An `SDL_KEYDOWN` / `SDL_KEYUP` from LG's SDL fork is read by raw byte offset, because the fork's
-`SDL_KeyboardEvent` is **shifted four bytes** against the headers (`app/events.rs::decode_key`, and the
+`SDL_KeyboardEvent` is **shifted four bytes** against the headers (`plx_shell_sdl::event::decode_key` in `rust-modules/shell-sdl/src/event.rs`, and the
 gotcha in `docs/agent-reference.md`):
 
 | offset | field | the app calls it |
@@ -121,7 +121,7 @@ before `SDL_Init` (§5).
 | `301` | `wcode` | `page_dir`, Library route only | CH▼ pages down (evdev 403 `KEY_CHANNELDOWN`) |
 | `8` | `sym` | `screens::search::SearchScreen::step`, while editing | backspace |
 | `156 \| 1<<30` | `sym` | `screens::search::SearchScreen::step`, while editing | the panel's **Clear all**. **Not producible from the evdev table** — it reaches us through the fork's own text/IME path, which is why it is measured but has no evdev provenance. |
-| `48..=57` | `sym` | `screens::profiles`, PIN keypad | type that digit into the PIN. `screens::profiles::digit_of` also reads the range out of `wcode`, where it is **not** a digit — §9. |
+| `48..=57` | `sym` | `screens::profiles`, PIN keypad | type that digit into the PIN. `consts::pin_digit` (moved from `screens::profiles::digit_of`) also reads the range out of `wcode`, where it is **not** a digit — §9. |
 
 ### Swallowed
 
@@ -201,10 +201,10 @@ change rather than a tidy-up, and the sibling codes (`402`, `415`, `413`) come f
 `linux/input.h` does not name — so unlike `33`/`34` there is no positive evidence about them in
 either direction. **Settle all four together, with the §7 capture plus a USB keyboard, in one pass.**
 
-### 4.3 and 4.4 — `SDLK_SELECT`, and `digit_of`'s `wcode` arm
+### 4.3 and 4.4 — `SDLK_SELECT`, and `pin_digit`'s `wcode` arm
 
 The other two are written up in §9, whose first and third bullets they are: `SDLK_SELECT` is
-`SDL_SCANCODE_END`, and `screens::profiles::digit_of` reads ASCII digits out of the scancode field. Both are
+`SDL_SCANCODE_END`, and `consts::pin_digit` (the old `screens::profiles::digit_of`) reads ASCII digits out of the scancode field. Both are
 misreadings of the same field, both are recorded rather than changed, and the reasons are there.
 `is_bound` (§6) declines to inherit the second of them.
 
@@ -276,17 +276,18 @@ predicate: `classify` names a `Key`, **or** `page_dir` answers, **or** the sym i
 build's configured upload trigger (`crate::labcfg::is_trigger_key`, `false` at compile time in every
 build anyone can install; `docs/lab-diagnostics.md`). The guarded half lives in
 `app/input.rs::note_global_press`, split
-out so `make check` can grade it — `begin_fresh_press` itself calls `hide_cursor`, which acts on
-whatever pointer calls the process's SDL exports, so a host test that reached it would be grading the
-host's SDL rather than the press. The bare player samples the HUD for bound keys in ordered screen
+out so `make check` can grade it — `begin_fresh_press` itself hides the pointer through the platform's
+`Shell` (`hide_pointer`), which on a television acts on whatever pointer calls the process's SDL
+exports, so a test that reached the television's shell would be grading the host's SDL rather than the
+press. The bare player samples the HUD for bound keys in ordered screen
 delivery. A second Back in the same SDL batch sees the first one's dismissal, and an intervening
 bound press spends any exit arming. The LG pointer-hidden notification only stops edge scrolling.
 
-**The digit term reads `sym` and not `wcode`, diverging from `screens::profiles::digit_of`, on purpose.**
+**The digit term reads `sym` and not `wcode`, diverging from `consts::pin_digit` (the old `screens::profiles::digit_of`), on purpose.**
 48–57 in the scancode field are `]` `\` `#` `;` `'` `` ` `` `,` `.` `/` and CapsLock (the digits'
 scancodes are 30–39, which is how 33/34 turned out to be `4` and `5` in the first place). Mirroring
-`digit_of` would have put the retired mis-reading straight back inside the gate that exists to stop
-it. The consequence is that `is_bound` is not a strict superset of `digit_of` for a wcode-only
+`pin_digit` would have put the retired mis-reading straight back inside the gate that exists to stop
+it. The same term is `action_of`'s `Action::Digit`, which `is_bound` is now defined by. The consequence is that `is_bound` is not a strict superset of `pin_digit` for a wcode-only
 punctuation press — which is harmless, because the PIN pad has neither a HUD nor an armed click.
 
 Three things stay unconditional, each for its own reason. `held.down_sym` is bookkeeping about the
@@ -323,10 +324,13 @@ un-dismisses the HUD. Narrowing that means making the predicate route-aware, i.e
 the ladder's own order — the duplication `page_dir` exists to have ended. A number key is also,
 unlike a colour button, a key this app really does bind, so calling it bound is honest.
 
-Graded twice, because neither half implies the other: `app/input.rs`'s `unsupported_key_tests` covers the
-two global effects (invisible to any focus fingerprint), and `tools/keytable.py` covers "moves
+Graded in three places, because no one of them implies the others: `app/input.rs`'s
+`unsupported_key_tests` covers the HUD wake (invisible to any focus fingerprint); the press half is
+observed on the dispatcher's real press in `run.rs`'s `lifecycle_regression_tests` (an unbound key
+leaves a click armed and live, a direction key abandons it); and `tools/keytable.py` covers "moves
 nothing on any screen" — its `k:0,269` (HOME) and `k:53,34` (the digit 5) rows are inert on Home,
-Library and Search in `tests/keytable.json`.
+Library and Search in `tests/keytable.json`. The trap to avoid is an `armed` assertion beside
+`note_global_press`: that function holds no press, so such an assertion cannot fail.
 
 **What neither covers**: the player route. The simulator has no video path, so no fingerprint in
 that table was taken with a HUD on screen. The HUD half of this invariant has been graded as a unit
@@ -432,10 +436,10 @@ reproduce rather than a rule to obey by quitting.
   `SDL_SCANCODE_RETURN`, captured and bound.
 * **§4.2** — `19` is `SDL_SCANCODE_P` and is bound to PLAY. Untested on a device; needs a USB
   keyboard as well as §7.
-* **`screens::profiles`' `digit_of` reads the digit range in `wcode` too**, where 48–57 are not digits at
+* **`consts::pin_digit` (moved from `screens::profiles::digit_of`) reads the digit range in `wcode` too**, where 48–57 are not digits at
   all but `]` `\` `#` `;` `'` `` ` `` `,` `.` `/` and CapsLock — and its own test asserts
-  `digit_of(0, 55) == Some(b'7')`, where scancode 55 is a full stop. No remote has those keys, so it
-  is harmless in practice and `screens/profiles.rs` is left alone here; a USB keyboard on the PIN screen
+  `pin_digit(0, 55) == Some(b'7')`, where scancode 55 is a full stop. No remote has those keys, so it
+  is harmless in practice and the reader moved down to `consts` unchanged; a USB keyboard on the PIN screen
   would type digits from punctuation. `is_bound` deliberately does **not** mirror it (§6). The same
   capture settles both.
 * **`461` and `156` are not producible from the evdev table.** 156 is explained — the panel's *Clear

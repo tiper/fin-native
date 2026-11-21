@@ -16,8 +16,8 @@
 //! — see `docs/async-model-decision.md`).
 //!
 //! The reasoning is unchanged and the enforcement is stronger. **The token is now CONSUMED at
-//! construction** ([`PlayerAdapter::new`] takes it by value, and `plex_run` is the only place that
-//! can mint one), so holding a `&mut PlayerAdapter` IS the proof the old argument stood in for —
+//! construction** ([`PlayerAdapter::new`] takes it by value, and `enter_application` is the only
+//! production place that mints one), so holding a `&mut PlayerAdapter` IS the proof the old argument stood in for —
 //! and it is a proof the borrow checker keeps rather than one a caller could satisfy twice. Two
 //! live `&mut` to the engine no longer requires a convention: it does not compile. The native
 //! feed owns that borrow; common callers receive addressed facts or coarse physical actions.
@@ -507,7 +507,7 @@ pub struct PlayerAdapter {
     abr_inbox: Option<(crate::route::RouteStartAttempt, crate::adaptive::AbrInbox)>,
     /// Backend-independent periodic reporting resource for the current physical attempt.
     timeline: Option<timeline::TimelineRunner>,
-    repair: Option<(u64, std::sync::mpsc::Receiver<Result<(), plx_os::tv::sandbox::Failure>>)>,
+    repair: Option<(u64, std::sync::mpsc::Receiver<Result<(), plx_os::tv::native_video::Failure>>)>,
     release: super::release::NativeRelease,
     /// Effects produced by an addressed URI release while the backend poll has no session
     /// borrow. The release machine owns the sole queued transaction; these are only its IO work.
@@ -558,7 +558,7 @@ pub enum QueuedLanding {
 }
 
 impl PlayerAdapter {
-    /// Take the token. `app::boot` calls this once, with the token `plex_run` minted.
+    /// Take the token. `app::boot` calls this once, with the token `enter_application` minted.
     pub fn new(mt: MainThread) -> Self {
         Self {
             mt,
@@ -1759,11 +1759,11 @@ impl PlayerAdapter {
         let Some(token) = owner.begin(supported) else { return; };
         let (tx, rx) = std::sync::mpsc::channel();
         if plx_base::task::spawn_small("jail repair", move || {
-            let _ = tx.send(plx_os::tv::sandbox::repair());
+            let _ = tx.send(plx_os::tv::native_video::repair());
         }) {
             self.repair = Some((token, rx));
         } else {
-            owner.complete(token, Err(plx_os::tv::sandbox::Failure::StartFailed));
+            owner.complete(token, Err(plx_os::tv::native_video::Failure::StartFailed));
         }
     }
 
@@ -1773,7 +1773,7 @@ impl PlayerAdapter {
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(std::sync::mpsc::TryRecvError::Empty) => return false,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(plx_os::tv::sandbox::Failure::StartFailed),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(plx_os::tv::native_video::Failure::StartFailed),
         };
         let changed = owner.complete(*token, result);
         self.repair = None;
@@ -2254,7 +2254,7 @@ impl PlayerAdapter {
 #[cfg(test)]
 mod repair_receipt_tests {
     use super::*;
-    use plx_os::tv::sandbox::{Failure, State};
+    use plx_os::tv::native_video::{Failure, State};
     #[test]
     fn local_metric_history_evicts_old_effects_after_real_reducer_results() {
         use super::super::attempt_metrics::{Origin, RequestOutcome, Tick, Fx};

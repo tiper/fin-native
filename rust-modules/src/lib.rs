@@ -19,6 +19,11 @@ mod capture; // dev live UI capture stream: own-GLES-frame grab → MPEG1/TS or 
 mod coldstart; // retires old last-page bookmarks; authenticated cold boots now stay on Home
 mod dev; // the /tmp/plxnative-* trigger surface, behind one `devtriggers` feature — read it before adding a trigger
 mod focusprobe; // dev: one diffable line naming everything app.rs's key ladder can move, logged when it changes
+/// The one narrow public face of the application for a platform crate: the types it builds and implements
+/// (`Platform`, `Shell`, `Surface`, `EventSink`, ...) and the entry `run`, as re-exports. Every other module of
+/// the application stays private to a television build (`docs/platform-ports.md`, Target shape 8; a `hostsim`
+/// build also exposes the simulator binary's own doors below).
+pub mod host;
 // The simulator's HUD tools (`--hud-lint`, `--hud-schema`, `--hud-export`): a library function the thin
 // `src/bin/sim.rs` calls before it reads a PMS host. `pub` because that binary is a separate crate; absent
 // from the television build, which has no use for a linter and no argv to read it from.
@@ -72,17 +77,17 @@ pub fn sim_events_log() -> std::path::PathBuf {
     plx_base::eventlog::events_log()
 }
 
-/// The port holds `plex_run`, the C entry the simulator binary calls too. It is reached by path
-/// (`plxnative_modules::port::plex_run`) so the SAME entry the C shim calls is the one called, with
-/// the compiler checking the signature. It previously re-declared `plex_run` in its own `extern "C"`
-/// block, which meant the one binary whose whole premise is "cannot drift from the shipped boot
-/// path" was the one place a signature change would become a silent ABI mismatch instead of a
-/// compile error. There is deliberately no `pub use` here: a re-export would be a reference from
-/// the crate root into the port.
-#[cfg(feature = "hostsim")]
-pub mod port;
-#[cfg(not(feature = "hostsim"))]
+/// The webOS port: `plex_run`, the C entry `src/main.c` calls, and the two tables it hands the
+/// application. Every build compiles it, the desktop ones included, and a desktop executable never
+/// reaches it.
 mod port;
+/// The desktop platform, the simulator's and the macOS app's own: its tables and its entry, which
+/// `src/bin/sim.rs` calls by path (`plxnative_modules::platform_desktop::run`) because that binary
+/// is a separate crate. It never names the webOS port, so the television's code stays unreferenced
+/// in its executable. There is deliberately no `pub use` here: a re-export would be a reference from
+/// the crate root into the platform.
+#[cfg(feature = "hostsim")]
+pub mod platform_desktop;
 #[cfg(feature = "hostsim")]
 pub use app::synthetic_home_initial;
 
