@@ -144,7 +144,7 @@ class PlatformVariable(unittest.TestCase):
             with self.subTest(platform=platform):
                 proc = make("print-flavor", "print-appid", "print-appport", f"PLATFORM={platform}")
                 self.assertEqual(proc.returncode, 0, proc.stderr)
-                self.assertEqual(proc.stdout.split(), ["debug", "com.beb.plxnative.debug", "8911"])
+                self.assertEqual(proc.stdout.split(), ["debug", "io.github.tiper.finnative.debug", "8911"])
 
 
 class ScratchTree(unittest.TestCase):
