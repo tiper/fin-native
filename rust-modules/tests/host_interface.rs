@@ -288,7 +288,7 @@ fn run_boots_the_fake_platform_through_init_then_open_and_returns_the_refusal() 
     assert_eq!(exit, Exit { code: REFUSAL, release: Release::Retained }, "the fake's refusal is the entry's Exit");
     assert_eq!(*SHELL.log.lock().unwrap(), ["init", "open"], "init, then open, and nothing after the refusal");
     let (title, placement, high_dpi) = SHELL.asked.lock().unwrap().clone().expect("open was asked for a window");
-    assert_eq!(title, "PlxNative", "the title a hostsim build asks for");
+    assert_eq!(title, "FinNative", "the title a hostsim build asks for");
     assert_eq!(placement, Placement::Desktop, "a hostsim build asks for the desktop placement");
     eprintln!("open was asked for: title {title:?}, {placement:?}, high_dpi {high_dpi}");
     assert!(
