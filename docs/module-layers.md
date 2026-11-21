@@ -366,11 +366,11 @@ L15's 44 entries, 205 references of which 95 were in production code. The port's
 their layers, so none of this held up the split.
 
 L15 moved every one of those references behind an interface in `os`'s new `tv` module that
-the port fills at boot. `tv::Services` is a table of function pointers and stated values in five groups (`identity`, `secure`, `system`, `storage` and `legacy_webos_media`), installed once by `app::run_application` (from the `Platform` its entry hands it) before anything
+the port fills at boot. `tv::Services` is a table of function pointers and stated values in six groups (`identity`, `secure`, `system`, `storage`, `layout` and `legacy_webos_media`; `layout` is `plx_base::paths`'s type, which `install_services` publishes into `paths` rather than keeping in `tv`), installed once by `app::run_application` (from the `Platform` its entry hands it) before anything
 that reads it. With nothing installed (host unit
 tests, where nothing calls `plex_run`) `tv::Services::HOST_TEST` answers what the host arms answered before; a
 shipping build that reaches it logs `tv: port not installed - using the no-port defaults` once.
-Only `tv`'s own modules read the table. Two things leave it: the sink, through
+Only `tv`'s own modules read the table, except its `layout` group, which `Platform::install_services` reads to publish into `plx_base::paths`. Two things leave it: the sink, through
 `tv::sink::installed()` (rule `sink` of `ci/check-deps.sh` fences naming `VideoSink` or `installed` to `media`'s
 `player/`, `os`'s `tv/` and `tv.rs`, `platform-webos`'s `webos/` and `port.rs`, `platform-desktop`'s `lib.rs` (each platform's table names its own
 sink) and `app/adapters/backends.rs`; those are three paths, not the platform crates, so `system.rs`, `keymanager.rs`, `webos.rs` and the `lib.rs` of

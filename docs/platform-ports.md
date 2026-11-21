@@ -868,6 +868,14 @@ split by who reads it (critic M4):
      and consent is neither read nor written, whatever the authority says; only the install's own preference
      file persists. It replaces the `target_os = "linux"` + `target_arch = "arm"` fence the persistence
      layers chose their store by; the helper's wake-up (`storage::client::install_activator`) is not a member: its type is the helper's wire diagnostics and `tv` names no `storage` (L15), so it stays a `storage`-owned install point the webOS port calls;
+   - `layout { payload_dir, state_root }` (W9): two `fn() -> PathBuf` hooks, the package's read-only payload directory
+     and the directory the app's record files live under. The type is `plx_base::paths::Layout` (`paths` is below `tv`
+     and cannot read it; `tv` re-exports it), and `Platform::install_services` publishes it into a publish-once slot in
+     `paths` as its second line, after the `tv` install, so `app_dir()` and `persistent_state_root()` answer from it and
+     fall back to the derivation (`current_exe` and the environment) when none was published. `Layout::DERIVED` states
+     "no layout of my own": webOS, the desktop and the host-test value say it, and their `appdir:` line is unchanged.
+     A publish after `app_dir()` was read, or a second one, is refused (`paths` never logs, so `install_services` logs
+     the refusal). The runtime root and the app id stay out: the webOS C shim freezes both before any Rust runs;
    - `legacy_webos_media { sink, display_sink, uri_media }`: the Starfish, ACB and `com.webos.media` verbs (F31),
      named for what they are (critic M3). Every hook is required (Decision 2, C): a platform states each field,
      a named `NONE` being a statement and a `Default`-filled gap not allowed. The one exemption is this group:

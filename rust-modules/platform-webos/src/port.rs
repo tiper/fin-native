@@ -43,6 +43,7 @@ static SERVICES: plx_os::tv::Services = plx_os::tv::Services {
         deliver_toast: crate::webos::toast::deliver,
     },
     storage: plx_os::tv::StorageHooks { authority: plx_os::tv::authority::Authority::Helper },
+    layout: plx_os::tv::Layout::DERIVED,
     legacy_webos_media: plx_os::tv::LegacyWebosMedia {
         sink: SINK,
         display_sink: DISPLAY,

@@ -37,7 +37,7 @@
 use plxnative_modules::host::{self, sdl_init, sdl_open, Exit, FrameProbe, InitHooks, MediaBoot, OpenAsk, Platform, Shell, Surface};
 use plx_os::devcaps::dv::{self, DvCapability, DvProbe, ProbeSource};
 use plx_os::tv::toast::{Identity, Outcome, Sent};
-use plx_os::tv::{IdentityHooks, LegacyWebosMedia, SecureHooks, Services, StorageHooks, SystemHooks};
+use plx_os::tv::{IdentityHooks, Layout, LegacyWebosMedia, SecureHooks, Services, StorageHooks, SystemHooks};
 use std::ffi::CStr;
 use std::os::raw::{c_int, c_void};
 
@@ -67,6 +67,7 @@ static SERVICES: Services = Services {
     secure: SecureHooks::NONE,
     system: SystemHooks { go_home, poll_home: SystemHooks::NONE.poll_home, deliver_toast },
     storage: StorageHooks::NONE,
+    layout: Layout::DERIVED,
     legacy_webos_media: LegacyWebosMedia {
         sink: SINK,
         display_sink: DISPLAY,
