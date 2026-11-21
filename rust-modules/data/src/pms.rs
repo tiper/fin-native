@@ -4332,7 +4332,7 @@ pub fn land_deck_lane_for_test(state: &mut PmsState, adapter: &Arc<PmsAdapter>, 
     let build = merge_with_scope(&srcs, &scope);
     state.srcs = srcs;
     remember_roster(state, &scope);
-    state.seen_facts = facts_key();
+    state.seen_facts = facts_key(&scope);
     commit(state, build);
 }
 
