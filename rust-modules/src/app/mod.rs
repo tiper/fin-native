@@ -80,7 +80,7 @@ mod window_activity;
 mod exit;
 // `pub`, not `pub(crate)`, because `host` re-exports them: a `pub use` cannot re-export a binding the crate
 // only sees, and `app` itself is private, so this reaches no further than `host`.
-pub use exit::{Exit, Release};
+pub use exit::{Completion, Exit, HostGate, InFlight, Release, Stopped};
 pub(crate) mod events;
 pub(crate) mod lifecycle;
 pub(crate) mod playback;

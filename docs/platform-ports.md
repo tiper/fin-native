@@ -1190,8 +1190,9 @@ Ecore names to `remote_token_key` pairs".
   `Services`, `Shell`, `Surface`, `FrameProbe`, `MediaBoot`, `Composition`, `Exit`, `Release` and an `EventSink`
   trait, the two SDL helpers `sdl_init` and `sdl_open` with `InitHooks` (W7b), and the vocabulary their signatures
   use: `MainThread`, `OpenAsk`, `Placement`, `Lifecycle`, `PointerEdge`, `Action`, `RawKey` and `Edge`. The eight application-crate items (`Platform`, `Shell`, `Surface`, `FrameProbe`, `MediaBoot`,
-  `Composition`, `Exit`, `Release`) are reachable ONLY through `host` (owner ruling, 2026-11-21; Decision 3, amended):
-  `Exit` and `Release` are `pub` inside the private `app`, and `Platform` and the traits are `pub` in a private
+  `Composition`, `Exit`, `Release`), and the four of the hosted contract's exit half added in W9 (`HostGate`, `InFlight`,
+  `Completion`, `Stopped`), are reachable ONLY through `host` (owner ruling, 2026-11-21; Decision 3, amended):
+  `Exit`, `Release` and the four are `pub` inside the private `app`, and `Platform` and the traits are `pub` in a private
   module, so no path outside `host` names them. `Services` is not one of the eight: it stays `plx_os::tv::Services`,
   already a `pub` type of a lower crate, which `host` re-exports beside them. A platform crate names the APPLICATION
   crate's types through `host` alone, but not everything it builds is the application's: a `Services` is built from
@@ -1219,12 +1220,20 @@ Ecore names to `remote_token_key` pairs".
     compiled in every build of the application because it carries no `cfg` (the application cannot know which platform crate names it);
   - `FEED_MEDIA` (`hostsim` builds only), the desktop's `MediaBoot`: a no-op `early_init` and `compose` over
     `backends::compose_feed` alone, so no URI driver and no resolver;
+  - `NO_MEDIA` (W9; no `cfg`, like `WEBOS_MEDIA`), the `MediaBoot` of a platform with no playback yet (Tizen): a no-op
+    `early_init` and a `compose` that installs nothing, so `BackendSet::NONE` and no resolver, which the one
+    `publish_composition` path logs as `compose: backends=none resolver=no`;
+  - `HostGate`, `InFlight`, `Completion` and `Stopped` (W9; no `cfg`), the exit half of the hosted contract (Target shape 7):
+    `HostGate::enter` admits each host-bound callback until the stop, `stop` closes it, `report` answers the loop thread's
+    `on_stopped` only once nothing is in flight (`clean` needs `Release::Complete` too) and `expire` is the deadline
+    thread's never-clean report; `Completion::deliver` makes `on_stopped` fire exactly once. They are the application's
+    own types beside `Exit` and `Release` and do NOT retire at W11a; a platform that is not hosted never names them;
   - `HOST_SINK` (`hostsim` and `play-feed`, the cfg of the module it lives in), the simulator's video sink the desktop's
     `Services` hold, re-exported under exactly that cfg so a television build never has it;
   - `sdl_init`, `sdl_open` and `InitHooks`, which the webOS crate's `port.rs` and the desktop crate's `src/lib.rs` call. `sdl_open` stays in the
     application crate: `impl Surface for plx_shell_sdl::Window` can live only there (the orphan rule).
 
-  Each media value and the `HOST_SINK` re-export RETIRE AT W11a, when the composition moves into the webOS platform (and
+  Each media value (`WEBOS_MEDIA`, `FEED_MEDIA`, `NO_MEDIA`) and the `HOST_SINK` re-export RETIRE AT W11a, when the composition moves into the webOS platform (and
   the Feed over the host sink into the desktop); the SDL helpers are not part of that. `publish_composition` is not
   exported: the desktop's test of the published composition (`platform_desktop.rs`'s, before the move) named it, and the move reworked that test onto
   `PlayerAdapter::composed_backends()`, which is why the desktop crate needs `plx_media` in that test only and the webOS crate

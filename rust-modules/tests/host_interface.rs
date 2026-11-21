@@ -170,11 +170,34 @@ const _: fn() = || {
     let _: unsafe fn(&MainThread, plxnative_modules::host::InitHooks) -> Result<(), Exit> = plxnative_modules::host::sdl_init;
     let _: fn(&MainThread, &OpenAsk) -> Result<Box<dyn Surface>, Exit> = plxnative_modules::host::sdl_open;
     let _: MediaBoot = plxnative_modules::host::WEBOS_MEDIA;
+    let _: MediaBoot = plxnative_modules::host::NO_MEDIA;
     #[cfg(feature = "hostsim")]
     let _: MediaBoot = plxnative_modules::host::FEED_MEDIA;
     #[cfg(all(feature = "hostsim", feature = "play-feed"))]
     let _ = &plxnative_modules::host::HOST_SINK;
 };
+
+/// **The hosted contract's exit half, driven from outside the crate**, as a hosted platform's `static` and its two
+/// threads would: the gate, the exactly-once guard and the report they deliver. `static`s of them compile (`const fn new`).
+static GATE: plxnative_modules::host::HostGate = plxnative_modules::host::HostGate::new();
+static COMPLETION: plxnative_modules::host::Completion = plxnative_modules::host::Completion::new();
+
+#[test]
+fn a_hosted_platform_can_hold_the_exit_gate_and_report_once_from_outside() {
+    use plxnative_modules::host::{InFlight, Stopped};
+    let callback: InFlight<'_> = GATE.enter().expect("admitted before the stop");
+    assert_eq!(GATE.in_flight(), 1);
+    let exit = Exit { code: 0, release: plxnative_modules::host::Release::Complete };
+    assert_eq!(GATE.report(&exit), None, "a callback is still running: ask again");
+    assert!(GATE.enter().is_none(), "and the stop refuses a later one");
+    drop(callback);
+    let stopped = GATE.report(&exit).expect("drained");
+    assert_eq!(stopped, Stopped { code: 0, clean: true });
+    let mut seen = Vec::new();
+    assert!(COMPLETION.deliver(stopped, |s| seen.push(s)), "the first report is delivered");
+    assert!(!COMPLETION.deliver(GATE.expire(1), |s| seen.push(s)), "the loser's report is suppressed");
+    assert_eq!(seen, [Stopped { code: 0, clean: true }]);
+}
 
 /// The registration data is `Sync` (a `static` of it compiles), and the thread-affine surface is not
 /// required to be: a `Surface` holding a `Cell` is accepted as `Box<dyn Surface>`.

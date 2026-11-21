@@ -1338,7 +1338,7 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   search queries and this household's names are rewritten **before the write**, not on the way out.
   **Two exits, differing in exactly one respect** — `scrub` (network) may DROP a line it cannot
   make safe; `scrub_local` (disk) may only rewrite one, because a line silently vanishing from the
-  primary debugging surface is worse than a leaky one. `eventlog/ring.rs` and `diag/zlib.rs` (both in `plx_base`) stay feature-gated to
+  primary debugging surface is worse than a leaky one. The platform's log tap (`eventlog::set_tap`, a UDP sender on a hosted platform) is a network consumer: it is handed the `scrub_local` line only when the network exit's refuse decision (`scrub::still_looks_secret`) keeps it, counts the rest (`eventlog::tap_refused`), and the file still gets every line. `eventlog/ring.rs` and `diag/zlib.rs` (both in `plx_base`) stay feature-gated to
   their consumer. Lifted out of `lab/` on 2026-08-29 — which also fixed the fact that the 31
   assertions guarding this function **never ran in `make check`**, `lab/` being wholly behind a
   feature the default gate does not build.

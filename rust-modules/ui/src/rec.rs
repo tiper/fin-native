@@ -252,7 +252,14 @@ fn bounded_read(path: &Path, remaining: usize) -> Result<Vec<u8>, RecError> {
 /// Generic typed-initial input transport, with exactly the recording reader's bounds and JSON
 /// integrity checks. Application decoding happens afterwards and never reads a fallback file.
 pub fn initial_value(path: &Path) -> Result<Value, RecError> {
-    strict_json::decode(&bounded_read(path,DATA_CAP_BYTES)?).map_err(|_| malformed(0,"initial JSON"))
+    initial_from_bytes(&bounded_read(path,DATA_CAP_BYTES)?)
+}
+
+/// [`initial_value`] over bytes the caller already holds (a platform's preset table instead of a file): the same
+/// size bound and the same strict JSON decode.
+pub fn initial_from_bytes(bytes: &[u8]) -> Result<Value, RecError> {
+    if bytes.len() > DATA_CAP_BYTES { return Err(RecError::RecordingTooLarge { limit:CAP_BYTES }); }
+    strict_json::decode(bytes).map_err(|_| malformed(0,"initial JSON"))
 }
 
 pub fn mode_value(path: &Path) -> Result<Option<String>, RecError> {
@@ -1209,6 +1216,20 @@ mod tests {
         }
     }
     use super::*;
+
+    /// A preset's text decodes exactly as the same bytes in a file do, under the same bound.
+    #[test]
+    fn an_initial_from_bytes_decodes_as_the_file_does_and_keeps_the_bound() {
+        let dir = std::env::temp_dir().join(format!("plx-initial-bytes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("initial.json");
+        let text = br#"{"a":1,"b":[true,null]}"#;
+        std::fs::write(&file, text).unwrap();
+        assert_eq!(initial_from_bytes(text).unwrap(), initial_value(&file).unwrap());
+        assert!(initial_from_bytes(b"{\"a\":1,\"a\":2}").is_err(), "the same strict decode: a repeated key is refused");
+        assert!(initial_from_bytes(&vec![b' '; DATA_CAP_BYTES + 1]).is_err(), "and the same size bound");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn decoded_budget_tracks_live_trees_not_discarded_scalar_rows() {

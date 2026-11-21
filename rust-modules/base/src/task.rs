@@ -103,7 +103,8 @@ impl OffFrame {
     }
 }
 
-/// Proof that the holder runs on the SDL main thread.
+/// Proof that the holder runs on the thread that runs the application's loop: the SDL main thread on the television and
+/// the desktop, the loop thread a hosted platform starts (see [`MainThread::assume`]).
 ///
 /// A ZST whose only content is a `!Send + !Sync` marker, so neither it nor a `&` to it can be
 /// captured by anything handed to [`spawn`]. That is the whole mechanism: functions that must
@@ -134,7 +135,9 @@ impl MainThread {
     /// `run_application`), and nothing else should; a test rig assumes its own.
     ///
     /// # Safety
-    /// The caller asserts this is the SDL main thread. It is not a memory-safety obligation in
+    /// The caller asserts this is the thread that runs the application's loop: the SDL main thread on the
+    /// television and the desktop, and, for a hosted platform that starts its own loop thread (its
+    /// host's main thread belongs to the host), that thread. It is not a memory-safety obligation in
     /// itself — it is the premise every `&MainThread` downstream is trusted on, including the
     /// one the Player adapter holds, so a false one reintroduces exactly the races this prevents.
     pub unsafe fn assume() -> Self {

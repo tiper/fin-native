@@ -4,8 +4,9 @@
 //! written down.
 //!
 //! **It is no longer lab-only.** `crate::eventlog::log` applies [`scrub_local`] to every line before the file
-//! write, and the telemetry client applies the full [`scrub`] to everything that leaves. Both live
-//! in a build that has no `lab-diagnostics` feature, so this module is UNGATED — which also means
+//! write, and the full [`scrub`] is applied by the two consumers that send a line off the device: the Cloud Lab snapshot
+//! (`lab/snapshot.rs`) and the platform's log tap (`eventlog::set_tap`, through [`still_looks_secret`]). The log lives
+//! in a build that has no `lab-diagnostics` feature, and so does the tap, so this module is UNGATED, the refuse half included — which also means
 //! its tests finally run in `make check`. They did not before: everything under `lab/` is
 //! `#[cfg(feature = "lab-diagnostics")]`, so the 31 assertions guarding the one function the whole
 //! privacy argument rests on were skipped by the default gate entirely.
@@ -19,10 +20,12 @@
 //!   leaky one — that file is what `make run`, `tests/run.py`'s assertions and `crash-triage` all
 //!   read, and `docs/agent-reference.md` calls it "the primary debugging surface".
 //!
-//! So: rewrite locally, rewrite-or-refuse remotely, and never a second scrubber anywhere.
+//! So: rewrite locally, rewrite-or-refuse remotely, and never a second scrubber anywhere. The network exit's REFUSE
+//! decision is [`still_looks_secret`], which [`scrub_with`] applies to its own rewrite and which `eventlog::log` applies
+//! to the [`scrub_local`] line (the same rewrites, so the same line) before it hands the line to the platform's tap
+//! (`eventlog::set_tap`, a UDP sender on a hosted platform: a network consumer, so it takes only what this exit keeps).
 
 /// What [`scrub`] decided about one record.
-#[cfg(feature = "lab-diagnostics")]
 pub enum Scrubbed {
     /// keep it, in this (possibly rewritten) form
     Keep(String),
@@ -60,7 +63,6 @@ const CREDENTIAL_PARAMS: [&str; 6] = [
 /// label), and any remaining `scheme://host` authority. A record that still contains a credential
 /// header name after rewriting is refused outright rather than shipped — that can only happen if
 /// the rewrite failed to find the value it was sure was there.
-#[cfg(feature = "lab-diagnostics")]
 pub fn scrub(line: &str) -> Scrubbed {
     scrub_with(line, &identities())
 }
@@ -95,7 +97,6 @@ pub fn scrub_local_with(line: &str, ids: &[String]) -> String {
 
 /// [`scrub`], against a caller-supplied identity list — the testable half. The list is what the
 /// APP knows about this household (see [`identities`]); everything else here is a pure rewrite.
-#[cfg(feature = "lab-diagnostics")]
 pub fn scrub_with(line: &str, ids: &[String]) -> Scrubbed {
     let s = crate::eventlog::redact_tokens(line).into_owned();
     let s = scrub_headers(&s);
@@ -440,13 +441,16 @@ fn identities() -> Vec<String> {
 /// The last gate: a line that STILL looks like it carries a credential after all four rewrites is
 /// dropped rather than shipped.
 ///
+/// **The network exit's one refuse decision, over a line that has already been rewritten.** [`scrub_with`] asks it of
+/// its own rewrite; `eventlog::log` asks it of the [`scrub_local`] line (identical rewrites), so the platform's tap
+/// refuses exactly what the upload would, with no second scrubber.
+///
 /// It exists because the rewrites are string surgery on a format nobody validates — a credential
 /// spelled some way none of them anticipated (`Bearer` with no header name in front of it, a
 /// parameter separated by `;`) would sail through every one of them. Dropping a record costs one
 /// line of a several-hundred-line document and is counted in the envelope; shipping it costs a
 /// credential.
-#[cfg(feature = "lab-diagnostics")]
-fn still_looks_secret(s: &str) -> bool {
+pub fn still_looks_secret(s: &str) -> bool {
     let lower = s.to_ascii_lowercase();
     if lower.contains("bearer ") {
         return true;
@@ -573,8 +577,6 @@ fn scrub_host_kv(s: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    // NB the `Refuse` half is gated to its only present caller (the lab bridge); Phase G widens
-    // the gate to `telemetry` when the Sentry client becomes a second one.
     use super::*;
 
     /// Every rewrite assertion below runs through the LOCAL exit, so it is graded in the default
@@ -774,8 +776,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "lab-diagnostics")]
-    fn ambiguous_decimal_final_groups_are_redacted_on_the_remote_exit_too() {
+        fn ambiguous_decimal_final_groups_are_redacted_on_the_remote_exit_too() {
         for (line, address) in [
             ("peer ::1:80 connected", "::1:80"),
             ("utf8 — ::0:80 — tail", "::0:80"),
@@ -852,6 +853,25 @@ mod tests {
             out.starts_with("auth ok,"),
             "and it is still recognisably that line: {out}"
         );
+    }
+
+    /// **One refuse decision, two callers.** `eventlog::log` asks `still_looks_secret` of the local line to decide what the
+    /// platform's tap may carry; the upload asks it of `scrub_with`'s own rewrite. The rewrites are the same, so the two
+    /// must agree on every line, the refused ones included.
+    #[test]
+    fn the_tap_refuses_exactly_what_the_network_exit_refuses() {
+        for line in [
+            "auth ok, Bearer eyJhbGciOi.abc",
+            "GET /x?X-Plex-Token=SECRET1 ok",
+            "hdr Authorization: Bearer ey.Jh.abc",
+            "login a;token=abc;b",
+            "route=home focus ok",
+            "server 203.0.113.7:32400 up",
+        ] {
+            let refused = matches!(scrub_with(line, &[]), Scrubbed::Refuse);
+            assert_eq!(still_looks_secret(&scrub_local_with(line, &[])), refused, "{line}");
+        }
+        assert!(still_looks_secret(&scrub_local_with("auth ok, Bearer eyJhbGciOi.abc", &[])), "the pinned local-keeps line is refused");
     }
 
     /// Multi-byte text must not panic any of the four rewrites (the app logs remote tokens, item

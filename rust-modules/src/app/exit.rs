@@ -34,9 +34,11 @@
 //!
 //! # The host doorway
 //!
-//! [`HostGate`], [`Completion`] and [`Stopped`] are the hosted entry's half of the contract (the
-//! Tizen host's callbacks, `plx_host_stop` and its deadline watchdog). They are plain values, not
-//! statics, and decide nothing by themselves that a runner has to wait for: [`HostGate::report`]
+//! [`HostGate`], [`InFlight`], [`Completion`] and [`Stopped`] are the hosted entry's half of the contract (the
+//! Tizen host's callbacks, `plx_host_stop` and its deadline watchdog). They are `pub` and reach a platform
+//! crate through `host`, like [`Exit`] and [`Release`]. They are plain values with a
+//! `const fn new`: the application declares no `static` of them, and the hosted platform keeps them in its own (its
+//! `plx_host_stop` takes no argument, so the gate it closes has to be reachable from a static). They decide nothing by themselves that a runner has to wait for: [`HostGate::report`]
 //! answers "not yet" while a gated callback is running and the runner asks again. The C ABI that
 //! drives them is the hosted platform's; `lifecycle_tests` drives them through a fake host.
 //!
@@ -150,17 +152,15 @@ impl Drop for DropProbe {
 /// `stopping` alone could only choose which sender reports; it cannot drain a callback that is
 /// already running. `inflight` is that drain: [`HostGate::report`] answers `clean` only once it is
 /// zero.
-// The first caller is the hosted entry (the Tizen platform); `lifecycle_tests` grade it until then.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct HostGate {
+#[derive(Default)]
+pub struct HostGate {
     stopping: AtomicBool,
     inflight: AtomicUsize,
 }
 
 /// A callback that was admitted by [`HostGate::enter`] and has not returned. Dropping it is the
 /// return.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct InFlight<'a>(&'a HostGate);
+pub struct InFlight<'a>(&'a HostGate);
 
 impl Drop for InFlight<'_> {
     fn drop(&mut self) {
@@ -168,9 +168,8 @@ impl Drop for InFlight<'_> {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl HostGate {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self { stopping: AtomicBool::new(false), inflight: AtomicUsize::new(0) }
     }
 
@@ -181,7 +180,7 @@ impl HostGate {
     /// order lets a callback read "not stopping", lose the CPU while [`HostGate::stop`] and
     /// [`HostGate::report`] run, and then start with the report already sent as clean. All four
     /// operations are `SeqCst`, so either the callback sees the stop or `report` sees the callback.
-    pub(crate) fn enter(&self) -> Option<InFlight<'_>> {
+    pub fn enter(&self) -> Option<InFlight<'_>> {
         self.inflight.fetch_add(1, Ordering::SeqCst);
         if self.stopping.load(Ordering::SeqCst) {
             self.inflight.fetch_sub(1, Ordering::SeqCst);
@@ -192,24 +191,24 @@ impl HostGate {
 
     /// `plx_host_stop`: refuse every later callback. Answers whether THIS call is the one that
     /// stopped (a second `stop` is harmless and answers `false`).
-    pub(crate) fn stop(&self) -> bool {
+    pub fn stop(&self) -> bool {
         !self.stopping.swap(true, Ordering::SeqCst)
     }
 
-    pub(crate) fn stopping(&self) -> bool {
+    pub fn stopping(&self) -> bool {
         self.stopping.load(Ordering::SeqCst)
     }
 
     /// Callbacks admitted and not yet returned. A refused [`HostGate::enter`] shows here for an
     /// instant, which is why [`HostGate::report`] is asked again rather than trusted once.
-    pub(crate) fn in_flight(&self) -> usize {
+    pub fn in_flight(&self) -> usize {
         self.inflight.load(Ordering::SeqCst)
     }
 
     /// The loop thread's report once `run_application` returned `exit`: it stops the gate, and
     /// answers `None` ("a callback is still running, ask again") until none is. `clean` is
     /// `Complete` AND drained: a `Retained` loop is never clean, whatever the callbacks did.
-    pub(crate) fn report(&self, exit: &Exit) -> Option<Stopped> {
+    pub fn report(&self, exit: &Exit) -> Option<Stopped> {
         self.stop();
         (self.in_flight() == 0)
             .then_some(Stopped { code: exit.code, clean: exit.release == Release::Complete })
@@ -217,7 +216,7 @@ impl HostGate {
 
     /// The deadline thread's report, when the loop has not finished in time (a stalled swap): never
     /// clean, because a loop that has not returned has released nothing.
-    pub(crate) fn expire(&self, code: c_int) -> Stopped {
+    pub fn expire(&self, code: c_int) -> Stopped {
         self.stop();
         Stopped { code, clean: false }
     }
@@ -226,29 +225,27 @@ impl HostGate {
 /// What `on_stopped(code, clean)` carries. With `clean` the host may release its callbacks and
 /// surfaces; without it, it releases nothing and treats process exit as the teardown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct Stopped {
-    pub(crate) code: c_int,
-    pub(crate) clean: bool,
+pub struct Stopped {
+    pub code: c_int,
+    pub clean: bool,
 }
 
 /// `on_stopped`'s exactly-once guard. The loop thread's report and the deadline thread's race for
 /// it; the first delivers, and the loser's report is suppressed (`false`).
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct Completion {
+#[derive(Default)]
+pub struct Completion {
     delivered: AtomicBool,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl Completion {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self { delivered: AtomicBool::new(false) }
     }
 
     /// Deliver `stopped` through `on_stopped`, unless a report was delivered already. The watchdog
     /// is disarmed first: the loop thread is about to end (its id with it), and after `on_stopped`
     /// the host may tear the process down around it.
-    pub(crate) fn deliver(&self, stopped: Stopped, on_stopped: impl FnOnce(Stopped)) -> bool {
+    pub fn deliver(&self, stopped: Stopped, on_stopped: impl FnOnce(Stopped)) -> bool {
         if self.delivered.swap(true, Ordering::SeqCst) {
             return false;
         }

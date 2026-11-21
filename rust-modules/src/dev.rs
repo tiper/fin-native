@@ -874,10 +874,14 @@ pub(crate) fn servers() -> Result<Vec<DevServer>, String> {
 /// headless run lands on a deterministic Home.
 ///
 /// This is the surface with no path literal: it `read_dir`s the runtime root and matches by
-/// prefix, so in a release build it would still have run — and still have changed the boot
+/// prefix (and takes the preset table's names, which arm a trigger as a file does), so in a release build it would still have run — and still have changed the boot
 /// screen from a squatted file — after every named read had been compiled out.
 ///
-/// **A trigger is a FILE.** Nothing else here names a path, so nothing else could have caught a
+/// **A trigger is a FILE in the runtime root, or a name of the platform's preset table**
+/// ([`plx_base::devtrig::set_preset`], which a hosted platform with no writable root fills): a preset arms a trigger
+/// exactly as a file does, for every reader, so a preset name that is not a [`DIAG`] entry counts here as a file would.
+///
+/// Nothing else here names a path, so nothing else could have caught a
 /// non-file entry whose name happens to match: a directory called `plxnative-anything` sitting in
 /// the runtime root would read as an armed trigger and permanently suppress the boot picker,
 /// silently changing which screen this install comes up on with no line in any log. That became
@@ -886,21 +890,30 @@ pub(crate) fn servers() -> Result<Vec<DevServer>, String> {
 /// it with a DOT instead. Two independent reasons is the right number for a failure this quiet.
 #[cfg(feature = "devtriggers")]
 pub(crate) fn any_trigger_present() -> bool {
-    std::fs::read_dir(plx_base::paths::runtime_dir())
-        .ok()
-        .map(|rd| rd.filter_map(|e| e.ok()).any(|e| is_armed_trigger(&e)))
-        .unwrap_or(false)
+    any_trigger_in(plx_base::paths::runtime_dir(), &plx_base::devtrig::preset_names())
 }
 
-/// Every `plxnative-*` FILE in the runtime root, by name (DIAG entries included), sorted — the
+/// [`any_trigger_present`] over a given root and a given list of preset names: the pure half, so a test states the
+/// names and never touches the process-global table. The global is read once, at the edge above.
+#[cfg(feature = "devtriggers")]
+fn any_trigger_in(root: &std::path::Path, preset: &[&str]) -> bool {
+    preset.iter().any(|name| is_armed_name(&format!("plxnative-{name}")))
+        || std::fs::read_dir(root)
+            .ok()
+            .map(|rd| rd.filter_map(|e| e.ok()).any(|e| is_armed_trigger(&e)))
+            .unwrap_or(false)
+}
+
+/// Every `plxnative-*` FILE in the runtime root and every name of the platform's preset table, by full name (DIAG
+/// entries included), sorted and without repeats — the
 /// recorder's header lists them so a replay can say what the recording boot had armed. Names
 /// only: a trigger's CONTENT can be a query or a path and never enters a recording.
 #[cfg(feature = "devtriggers")]
 pub(crate) fn armed_triggers() -> Vec<String> {
-    armed_triggers_in(plx_base::paths::runtime_dir())
+    armed_triggers_in(plx_base::paths::runtime_dir(), &plx_base::devtrig::preset_names())
 }
 #[cfg(feature = "devtriggers")]
-fn armed_triggers_in(root: &std::path::Path) -> Vec<String> {
+fn armed_triggers_in(root: &std::path::Path, preset: &[&str]) -> Vec<String> {
     let mut v: Vec<String> = std::fs::read_dir(root)
         .ok()
         .map(|rd| {
@@ -914,7 +927,9 @@ fn armed_triggers_in(root: &std::path::Path) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default();
+    v.extend(preset.iter().map(|name| format!("plxnative-{name}")));
     v.sort();
+    v.dedup();
     v
 }
 #[cfg(not(feature = "devtriggers"))]
@@ -927,9 +942,14 @@ fn is_armed_trigger(entry: &std::fs::DirEntry) -> bool {
     if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
         return false;
     }
-    let name = entry.file_name();
-    let name = name.to_string_lossy();
-    name.starts_with("plxnative-") && !DIAG.contains(&name.as_ref())
+    is_armed_name(&entry.file_name().to_string_lossy())
+}
+
+/// Is the full name `plxnative-<name>` automation: it carries the prefix and is not a [`DIAG`] entry. The one predicate
+/// for a file and for a preset name.
+#[cfg(feature = "devtriggers")]
+fn is_armed_name(name: &str) -> bool {
+    name.starts_with("plxnative-") && !DIAG.contains(&name)
 }
 #[cfg(not(feature = "devtriggers"))]
 pub(crate) fn any_trigger_present() -> bool {
@@ -996,9 +1016,44 @@ mod tests {
         std::fs::write(root.join(plx_os::storage::diagnostics::NAME), b"schema=1\n").unwrap();
         let entry = std::fs::read_dir(&root).unwrap().next().unwrap().unwrap();
         assert!(!super::is_armed_trigger(&entry));
-        assert!(super::armed_triggers_in(&root).is_empty());
+        assert!(super::armed_triggers_in(&root, &[]).is_empty());
         std::fs::write(root.join("plxnative-home"), b"").unwrap();
-        assert_eq!(super::armed_triggers_in(&root), vec!["plxnative-home"]);
+        assert_eq!(super::armed_triggers_in(&root, &[]), vec!["plxnative-home"]);
+    }
+
+    /// **A preset arms a trigger as a file does, for the scans too.** The names are GIVEN (the pure halves take them as an
+    /// argument; the process-global table is read only at the edge, and no test here sets it): a `token` preset with no file
+    /// makes the boot automated, so the consent question is not owed and the picker is skipped, lists beside the files without
+    /// a repeat, and a recording boot that carries a `url` preset is refused as a `url` file is.
+    #[cfg(feature = "devtriggers")]
+    #[test]
+    fn a_preset_name_arms_a_trigger_as_a_file_does() {
+        use plx_telemetry::telemetry::consent::{should_ask, Consent};
+        let _serial = plx_base::testlock::serial();
+        let root = std::env::temp_dir().join(format!(".plx-preset-trigger-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+        }
+        let _cleanup = Cleanup(root.clone());
+
+        assert!(!super::any_trigger_in(&root, &[]), "no file and no name: nothing is armed");
+        assert!(super::any_trigger_in(&root, &["token"]), "a `token` preset with no file is an armed trigger");
+        assert!(!super::any_trigger_in(&root, &["diag.log", "anim"]), "a diagnostics name is not automation, as a file's is not");
+        let owed = |automated: bool| should_ask(&Consent::default(), automated);
+        assert!(owed(super::any_trigger_in(&root, &[])), "an interactive boot is asked");
+        assert!(!owed(super::any_trigger_in(&root, &["token"])), "a harness-driven boot by preset is not asked");
+
+        std::fs::write(root.join("plxnative-token"), b"t").unwrap();
+        assert_eq!(super::armed_triggers_in(&root, &["token", "url"]), ["plxnative-token", "plxnative-url"], "listed once");
+        assert_eq!(super::armed_triggers_in(&root, &[]), ["plxnative-token"]);
+
+        let mut initial = crate::app::bootstrap::Initial::synthetic_home(17, 32517, None).unwrap();
+        initial.triggers = super::armed_triggers_in(&root, &["url"]);
+        assert_eq!(initial.validate(), Err("unsupported initial developer input"), "a recording boot armed by a preset `url` is refused");
+        initial.triggers = super::armed_triggers_in(&root, &["focus"]);
+        assert_eq!(initial.validate(), Ok(()), "and one armed by a controlled name is not");
     }
 
     /// A `state:<nonce>` request leaves `plxnative-a11y.json` (and, between its temp write and its
