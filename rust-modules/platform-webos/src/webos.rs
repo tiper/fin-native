@@ -510,7 +510,7 @@ fn ls2_probe() {
 
 /// Grade only the allowlisted fields in the LS2 wake reply. The raw platform JSON never enters a
 /// report or the local snapshot.
-#[cfg(any(test, all(target_os = "linux", target_arch = "arm")))]
+#[cfg(any(test, target_os = "linux"))]
 fn storage_activation_reply(reply: &str) -> plx_os::storage::wire::failure::Detail {
     use plx_os::storage::wire::failure::{Detail, Stage};
     if reply.len() > 4096 { return Detail::new(Stage::ActivationInvalidReply, None); }
@@ -529,10 +529,14 @@ fn storage_activation_reply(reply: &str) -> plx_os::storage::wire::failure::Deta
 
 /// Best-effort dynamic-service activation hint for the storage helper.
 ///
+/// The Linux gate here follows its one caller, `port::plex_main`'s install into the storage
+/// client, whose Unix-socket transport is Linux-only (`plx_os::storage::client`); it is not an
+/// "is webOS" test (the crate is the webOS platform) and not the CPU's.
+///
 /// The helper publishes readiness from its startup path, so neither a successful method reply nor
 /// delivery of `/wake` is required; the result is retained only as diagnostics and the authenticated
 /// Unix-socket `Hello` is the sole readiness proof.
-#[cfg(all(target_os = "linux", target_arch = "arm", not(test)))]
+#[cfg(all(target_os = "linux", not(test)))]
 pub fn activate_storage_helper(service: &str) -> plx_os::storage::wire::failure::Detail {
     use plx_os::storage::wire::failure::{Detail, Stage};
     let uri = format!("luna://{service}/wake");
@@ -547,11 +551,8 @@ pub fn activate_storage_helper(service: &str) -> plx_os::storage::wire::failure:
     detail
 }
 
-/// Hosts and the simulator have no storage helper to wake: the same answer an absent port gives.
-#[cfg(all(
-    target_os = "linux",
-    not(all(target_arch = "arm", not(test)))
-))]
+/// A test process has no storage helper to wake: the same answer an absent port gives.
+#[cfg(all(target_os = "linux", test))]
 pub fn activate_storage_helper(_service: &str) -> plx_os::storage::wire::failure::Detail {
     use plx_os::storage::wire::failure::{Detail, Stage};
     Detail::new(Stage::Unsupported, None)

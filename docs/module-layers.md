@@ -389,7 +389,7 @@ published values rather than hooks: the webOS code writes them into `tv::device`
 | native-video availability and repair | `tv::native_video::{blocked, context, repair, Verdict, State, Failure, FORCE_BLOCKED}`, `Verdict` being `Available`, `Blocked(reason)` or `NotApplicable`; the verdict is published by `webos::probe` and the repair is an optional port hook (`Services.identity.repair_native_video`) | `player`, `route`, `appkit::player_hud`, `screens::player`, `app::playback` |
 | video sink | `tv::sink::VideoSink`, implemented by `plx_platform_webos::webos::video_sink::StarfishSink` and `HostSink` (`plx_play_feed::ffi_host`), installed in `Services.legacy_webos_media.sink` and read through `tv::sink::installed` | `player::{adapter, test_physical}`, `plx_play_feed::{native_executor, native_load, physical, seek}` (which receive it injected), `app::adapters::backends` (which resolves `installed` and `display_installed`) |
 | secure store | `tv::secure::{seal, open, remove, Sealed, Backend}`; `Backend` is an opaque tag (a string on the wire, with constants for the two webOS spellings) | `plex::session` |
-| storage backend | `storage::client::install_activator`, which the port calls with `webos::activate_storage_helper` | `port::plex_run` |
+| storage backend | `storage::client::install_activator`, which `port::plex_main` calls with `webos::activate_storage_helper`; it stays a `storage`-owned install point (not a `tv::StorageHooks` member) because its type is the helper's wire diagnostics and `tv` names no `storage` (L15); its Linux gate is the socket transport's own, not "is webOS" | `storage::client` (the Linux `transact`) |
 | locale | `tv::system_locale` and `tv::LocaleReply`; `i18n` still owns the parse and the log lines | `i18n` |
 | sound output | `tv::sound::{output, parse_output, Reply}`, filled by `Services.identity.sound_output` (`webos::sound_output`); a blocking read, so never on the frame thread, and asked only on a stack whose lead follows the output (`liblxa` and 2018's `audiosink_new`; `devcaps::audio_stack`; the `lgaudiosink` stack's lead does not depend on the output, and the others have none, so they never ask) | `player::threads` (through `player::engine`, which owns the lead table) |
 | window, surface, video plane, bus pump and frame probe | `app::platform::{Shell, FrameProbe}`, in the application crate beside the loop that is their one consumer; the webOS crate's `port.rs` implements them over its own `system`, and `run_application` takes the `Platform` that holds them (kept as `App::platform`, and as the shell `BridgeRetained` holds for the dispatcher's two opaque-region hooks and lends, through `Bridge::shell`, to playback's pointer hide); `Shell` also carries the Magic Remote's pointer hide (`hide_pointer`, `show_pointer_after_motion`, `hide_is_cursor_swap`), which `port::WebosShell` forwards to `system` | `app::boot`, `app::run`, `app::bridge`, `app::input`, `app::playback` |
@@ -742,9 +742,11 @@ suite is 5603 tests before and after (157 + 66 + 218 + 5162). What it taught bey
   their real LS2 arms (`extern "C"` blocks a host test binary cannot link), `i18n::current()` with
   its "initialized before any screen" panic instead of the English default, and `storage` without
   the commit-failure hook. Each is `cfg(any(test, feature = "test-support"))` now, and
-  `cfg(not(any(...)))` for the shipping arm. Items that only the layer's own tests use
-  (`webos::storage_activation_reply`, `webos::caps::{ProbeFailure, parse_dv_reply}`) stay
-  `cfg(test)`: under `test-support` alone they would be dead code.
+  `cfg(not(any(...)))` for the shipping arm. In `plx_platform_webos`, which no other crate's
+  tests build, the pair is plain: `webos::caps::run_transport` is `cfg(not(test))` for the real
+  arm and `cfg(test)` for the host stub, and the items beside it (`ProbeFailure`, `parse_dv_reply`,
+  `platform_gate`) are ungated because the real arm calls them. Gating an item `cfg(test)` alone
+  is right only when nothing outside tests calls it; under `test-support` alone it would be dead code.
 - **`test-support` may add or switch behaviour; it may not remove an item the application names.**
   `cargo check --lib --tests` (the lab line of `make check`) builds the application's non-test
   library with the dev-dependency features unified in, so `i18n::initialize` and

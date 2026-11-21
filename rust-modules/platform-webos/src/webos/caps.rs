@@ -10,7 +10,6 @@ use plx_os::devcaps::dv::{self, DvCapability, DvProbe, ProbeSource};
 use std::sync::OnceLock;
 use std::time::Instant;
 
-#[cfg(any(test, all(target_arch = "arm", target_os = "linux")))]
 const KEY: &str = dv::CONFIG_KEY;
 
 static STARTED: OnceLock<()> = OnceLock::new();
@@ -48,11 +47,7 @@ fn run_probe() {
     run_transport(started);
 }
 
-#[cfg(all(
-    target_arch = "arm",
-    target_os = "linux",
-    not(test)
-))]
+#[cfg(not(test))]
 fn run_transport(started: Instant) {
     use std::time::Duration;
 
@@ -134,11 +129,7 @@ fn run_transport(started: Instant) {
     }
 }
 
-#[cfg(not(all(
-    target_arch = "arm",
-    target_os = "linux",
-    not(test)
-)))]
+#[cfg(test)]
 fn run_transport(started: Instant) {
     dv::publish_logged(
         DvProbe {
@@ -152,11 +143,7 @@ fn run_transport(started: Instant) {
     );
 }
 
-#[cfg(all(
-    target_arch = "arm",
-    target_os = "linux",
-    not(test)
-))]
+#[cfg(not(test))]
 fn reply_error_code(reply: &str) -> Option<i64> {
     serde_json::from_str::<serde_json::Value>(reply)
         .ok()?
@@ -166,10 +153,6 @@ fn reply_error_code(reply: &str) -> Option<i64> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(any(
-    test,
-    all(target_arch = "arm", target_os = "linux")
-))]
 enum ProbeFailure {
     Json,
     ReplyReturnValue,
@@ -178,16 +161,8 @@ enum ProbeFailure {
     ValueType,
 }
 
-#[cfg(any(
-    test,
-    all(target_arch = "arm", target_os = "linux")
-))]
 impl ProbeFailure {
-    #[cfg(all(
-        target_arch = "arm",
-        target_os = "linux",
-        not(test)
-    ))]
+    #[cfg(not(test))]
     const fn stage(self) -> &'static str {
         match self {
             Self::Json => "json",
@@ -207,10 +182,6 @@ impl ProbeFailure {
 /// Dolby Vision as unsupported to the route, which plays a cross-compatible base layer (Profile
 /// 8.1) as HDR and refuses one that has none (Profile 5) — the same answer an unsupported set
 /// gets. `major == 0` is an unknown version and keeps configd's answer; webOS 4+ is untouched.
-#[cfg(any(
-    test,
-    all(target_arch = "arm", target_os = "linux")
-))]
 fn platform_gate(probe: DvProbe, webos_major: u32) -> DvProbe {
     if probe.capability == DvCapability::Supported && (1..=3).contains(&webos_major) {
         return DvProbe {
@@ -225,10 +196,6 @@ fn platform_gate(probe: DvProbe, webos_major: u32) -> DvProbe {
 /// Strictly grade the one configd shape this decision is allowed to trust. A syntactically valid
 /// service refusal is still uncertainty, and a contradictory `missingConfigs` cannot be rescued
 /// by a boolean elsewhere in the object.
-#[cfg(any(
-    test,
-    all(target_arch = "arm", target_os = "linux")
-))]
 fn parse_dv_reply(reply: &str) -> Result<DvCapability, ProbeFailure> {
     let value: serde_json::Value = serde_json::from_str(reply).map_err(|_| ProbeFailure::Json)?;
     let root = value.as_object().ok_or(ProbeFailure::Json)?;

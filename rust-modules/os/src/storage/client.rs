@@ -259,8 +259,16 @@ pub fn install_activation_hint(hint: fn(&str)) -> Result<(), fn(&str)> {
     ACTIVATION_HINT.set(hint)
 }
 
-/// The platform's way to wake the helper, installed by the port at boot. With none installed (a
-/// host, the simulator) activation is [`Stage::Unsupported`].
+/// The platform's way to wake the helper, installed by the platform at boot. With none installed (a
+/// host, the simulator, a platform with no helper) activation is [`Stage::Unsupported`].
+///
+/// The Linux gate on this and on [`install_activator`] and `activate` is the socket
+/// transport's own truth, not "is webOS": the only caller is the Linux `transact` below (a Unix
+/// socket, `/proc/self/fd` and `SO_PEERCRED`), so on another OS the activator would be written and
+/// never read. Which platform installs one is the platform's call, and that is also why it stays a
+/// storage-owned install point here: its type is the helper's wire diagnostics ([`failure::Detail`]),
+/// and `tv` names no `storage` (`docs/module-layers.md`, L15), so it cannot be a `tv::StorageHooks`
+/// member. A process under `Authority::Files` never reaches the client at all.
 #[cfg(target_os = "linux")]
 static ACTIVATOR: std::sync::OnceLock<fn(&str) -> failure::Detail> = std::sync::OnceLock::new();
 #[cfg(target_os = "linux")]
@@ -270,8 +278,9 @@ pub fn install_activator(
     ACTIVATOR.set(activator)
 }
 
-/// The helper is a dynamic LS2 service: nothing starts it but a call to it (0.6.6's
-/// `activate_storage_helper`). Without this a television with no running helper never answers.
+/// Wake the helper through the installed activator. On webOS the helper is a dynamic LS2 service:
+/// nothing starts it but a call to it (0.6.6's `activate_storage_helper`), so without this a
+/// television with no running helper never answers.
 #[cfg(target_os = "linux")]
 fn activate(service: &str) -> failure::Detail {
     match ACTIVATOR.get() {
@@ -280,6 +289,7 @@ fn activate(service: &str) -> failure::Detail {
     }
 }
 
+// The transport needs Linux (peer credentials, procfs); any other OS answers `Unsupported`.
 #[cfg(not(target_os = "linux"))]
 fn transact(_command: Request) -> Result<Response, ClientError> {
     let _block = plx_base::task::assert_may_block(const { &plx_base::task::BlockingLabel::new("storage helper transact") });

@@ -867,7 +867,7 @@ split by who reads it (critic M4):
      `MemoryOnly` (where Tizen starts, W9) the session lives in memory, no credential store is read or written
      and consent is neither read nor written, whatever the authority says; only the install's own preference
      file persists. It replaces the `target_os = "linux"` + `target_arch = "arm"` fence the persistence
-     layers chose their store by; the helper's wake-up (`storage::client::install_activator`) joins it after W7b;
+     layers chose their store by; the helper's wake-up (`storage::client::install_activator`) is not a member: its type is the helper's wire diagnostics and `tv` names no `storage` (L15), so it stays a `storage`-owned install point the webOS port calls;
    - `legacy_webos_media { sink, display_sink, uri_media }`: the Starfish, ACB and `com.webos.media` verbs (F31),
      named for what they are (critic M3). Every hook is required (Decision 2, C): a platform states each field,
      a named `NONE` being a statement and a `Default`-filled gap not allowed. The one exemption is this group:
@@ -1818,6 +1818,10 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   lines in 27 files (F12). An "is webOS" site becomes a platform value or runner; an "is 32-bit ARM" or
   "is Linux" site stays. One PR per directory: os (45), telemetry (41), plex (21), src (20), base
   (11), storage (8, the LS2 helper), play-feed (5). Each reports its count before and after.
+  Done for os and the webOS crate (PR A): the nine redundant dead-code allows in `os/src/storage/mod.rs` are gone, the
+  `webos/caps.rs` arm/linux halves are the crate's own `not(test)`/`test`, `webos.rs` keeps a Linux gate only on
+  the storage activator, which follows the client's Linux socket transport, and the wake-up gets no `tv` hook (see above). The
+  `arm` lines left in `os` are the storage helper's own (W8b).
 - W8b, one row per fact: the library name lists (F27) become per-platform lists supplied through the
   platform (`dynlib!` stays shared); `paths`'s fallback install prefix becomes a platform value; the
   storage helper is packaged only by `PLATFORM=webos`; `main.c` and `starfish.c` are webOS-only.

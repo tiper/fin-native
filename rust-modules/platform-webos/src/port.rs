@@ -163,6 +163,11 @@ pub extern "C" fn plex_run(pms_host: *const c_char, pms_port: c_int) -> c_int {
 /// compile-time proof that replaced the ones `app::boot`'s `seam_order_tests` held for
 /// `run_application` and `run_and_shutdown` when those started to return an `Exit`: a later edit that
 /// lets this return does not compile.
+///
+/// The first line installs the storage helper's wake-up (`install_activator`) under a Linux gate.
+/// That is the storage client's transport truth (it is a Unix socket with peer
+/// credentials, see `plx_os::storage::client`), not a statement that this is a webOS build; the helper's
+/// own wire type keeps the wake-up out of `tv::StorageHooks`.
 fn plex_main(pms_host: *const c_char, pms_port: c_int) -> ! {
     #[cfg(target_os = "linux")]
     let _ = plx_os::storage::client::install_activator(crate::webos::activate_storage_helper);
