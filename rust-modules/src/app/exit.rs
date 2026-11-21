@@ -481,7 +481,7 @@ mod lifecycle_tests {
     /// a release build) and the helper itself. A new exit anywhere else fails here.
     #[test]
     fn lifecycle_no_production_exit_is_reachable_from_a_hosted_process() {
-        // The app process links every crate under rust-modules (the two platform crates among them, whose
+        // The app process links every crate under rust-modules (the platform crates among them, whose
         // `port.rs` and the desktop crate's `bin/sim.rs` are the entries) except `storage` (the separate
         // `plxstorage` helper binary, no OpenSSL workers) and os's `storage_service/` (that
         // helper's body). `base/src/process.rs` is the helper itself.

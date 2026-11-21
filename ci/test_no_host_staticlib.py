@@ -5,7 +5,7 @@
 only need the rlib, and the ARM archive `make` links is produced separately by
 `cargo rustc -p plx_platform_webos --crate-type staticlib` (the webOS platform crate is the staticlib
 crate, since it depends on the application; `ci/check-staticlib-artifact.py` checks the archive in the
-ARM build). The two platform crates are held to the same rule as every other crate: an rlib. A `staticlib` crate type on the crate makes EVERY cargo build of it (`cargo build`, the
+ARM build). The platform crates are held to the same rule as every other crate: an rlib. A `staticlib` crate type on the crate makes EVERY cargo build of it (`cargo build`, the
 simulator, anything that depends on the library) also write a ~200 MB archive that bundles every
 upstream crate, and makes the ARM build write an rlib nobody links.
 
@@ -22,7 +22,7 @@ rustc starts, and this reads it there at no compile cost:
     resolved graph.
 
 The platform crates are not dependencies of the application, so the application's graph does not
-contain them: their own `cargo build --lib -p plx_platform_webos -p plx_platform_desktop --unit-graph`
+contain them: their own `cargo build --lib -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen --unit-graph`
 is read the same way.
 
 The detector is proven RED against a manifest that adds `staticlib` (or `cdylib`) by
@@ -45,14 +45,14 @@ CRATE = "plxnative_modules"
 # platform crate's (the Makefile asks for it with `cargo rustc -p plx_platform_webos --crate-type
 # staticlib`).
 LAYER_CRATES = ("plx_base", "plx_machine", "plx_net", "plx_os", "plx_gfx", "plx_ui", "plx_plex", "plx_telemetry", "plx_data", "plx_session", "plx_media", "plx_playback_contract", "plx_play_uri", "plx_play_feed", "plx_media_codecs", "plx_appkit", "plx_screens", "plx_shell_sdl")
-# The two platform crates (W7b): dependents of the app crate, never dependencies of it, so they are
+# The three platform crates (W7b, and W9's Tizen): dependents of the app crate, never dependencies of it, so they are
 # in a unit graph of their own, and held to the same rule.
-PLATFORM_CRATES = ("plx_platform_webos", "plx_platform_desktop")
+PLATFORM_CRATES = ("plx_platform_webos", "plx_platform_desktop", "plx_platform_tizen")
 TOOLCHAIN = pinned()  # the repo's one toolchain
 # What the workspace needs for cargo to resolve (not compile) the app package: the manifest and
 # lockfile, the `.cargo/config.toml` that cargo finds from the working directory, and the sources
 # the manifest names. A mutated copy replaces `Cargo.toml` only.
-WORKSPACE_FILES = (".cargo", "Cargo.lock", "build.rs", "build_support", "src", "storage", "base", "machine", "net", "os", "gfx", "ui", "plex", "telemetry", "data", "session", "media", "playback-contract", "play-uri", "play-feed", "media-codecs", "appkit", "screens", "shell-sdl", "platform-webos", "platform-desktop", "owp")
+WORKSPACE_FILES = (".cargo", "Cargo.lock", "build.rs", "build_support", "src", "storage", "base", "machine", "net", "os", "gfx", "ui", "plex", "telemetry", "data", "session", "media", "playback-contract", "play-uri", "play-feed", "media-codecs", "appkit", "screens", "shell-sdl", "platform-webos", "platform-desktop", "platform-tizen", "owp")
 
 
 def offences(unit_graph=None, metadata=None, crate=CRATE):
@@ -114,7 +114,7 @@ def resolve(cwd):
 
 
 def resolve_platforms(cwd):
-    """The unit graph of `cargo build --lib` of the two platform crates (the application's own graph has neither)."""
+    """The unit graph of `cargo build --lib` of the platform crates (the application's own graph has neither)."""
     args = [arg for crate in PLATFORM_CRATES for arg in ("-p", crate)]
     return cargo(["build", "--lib", *args, "--unit-graph", "-Zunstable-options"], cwd)
 

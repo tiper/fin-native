@@ -14,7 +14,7 @@ objects with a `reason` are looked at; `cargo test` also prints harness text on 
 * `SecondBuildIsFreshTests` builds the real crate twice from `rust-modules/` and demands that the
   second run recompiled nothing of the crate: every `plxnative_modules` (and `plx_os`, the
   layer crate whose own build script generates the catalog, `plx_gfx`, whose build script
-  compiles the nanosvg object for its own test binary, and the two platform crates, whose build
+  compiles the nanosvg object for its own test binary, and the three platform crates, whose build
   scripts print the link argument for theirs) compiler-artifact is `fresh`, and the
   crate's build script did not write its output again (cargo replays a
   `build-script-executed` record even for a fresh script, so the mtime of the script's output file
@@ -65,16 +65,16 @@ PACKAGE = "plxnative-modules"  # the package's name, as it appears in a package_
 # always-dirty either, or every crate above it would rebuild with it.
 OS_CRATE = "plx_os"
 GFX_CRATE = "plx_gfx"
-# The two platform crates carry a build script of their own too (the nanosvg link argument,
+# The three platform crates carry a build script of their own too (the nanosvg link argument,
 # `rust-modules/build_support/host_link.rs`): an always-dirty one would relink the ARM archive's crate
 # and the simulator's on every build.
-PLATFORM_CRATES = ("plx_platform_webos", "plx_platform_desktop")
+PLATFORM_CRATES = ("plx_platform_webos", "plx_platform_desktop", "plx_platform_tizen")
 NIGHTLY = pinned()  # the repo's one toolchain (historic name)
 
 
-# The invocation `make check`'s lab line runs (Makefile, "cargo check --lib --tests -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_owp --features
+# The invocation `make check`'s lab line runs (Makefile, "cargo check --lib --tests -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp --features
 # lab-diagnostics"); identical arguments and CARGO_INCREMENTAL make the first run here a reuse.
-LIB_ARGS = ["check", "--lib", "--tests", "-p", "plxnative-modules", "-p", "plx_base", "-p", "plx_machine", "-p", "plx_os", "-p", "plx_gfx", "-p", "plx_net", "-p", "plx_ui", "-p", "plx_plex", "-p", "plx_telemetry", "-p", "plx_data", "-p", "plx_session", "-p", "plx_media", "-p", "plx_playback_contract", "-p", "plx_play_uri", "-p", "plx_play_feed", "-p", "plx_media_codecs", "-p", "plx_appkit", "-p", "plx_screens", "-p", "plx_shell_sdl", "-p", "plx_platform_webos", "-p", "plx_platform_desktop", "-p", "plx_owp", "--features", "lab-diagnostics"]
+LIB_ARGS = ["check", "--lib", "--tests", "-p", "plxnative-modules", "-p", "plx_base", "-p", "plx_machine", "-p", "plx_os", "-p", "plx_gfx", "-p", "plx_net", "-p", "plx_ui", "-p", "plx_plex", "-p", "plx_telemetry", "-p", "plx_data", "-p", "plx_session", "-p", "plx_media", "-p", "plx_playback_contract", "-p", "plx_play_uri", "-p", "plx_play_feed", "-p", "plx_media_codecs", "-p", "plx_appkit", "-p", "plx_screens", "-p", "plx_shell_sdl", "-p", "plx_platform_webos", "-p", "plx_platform_desktop", "-p", "plx_platform_tizen", "-p", "plx_owp", "--features", "lab-diagnostics"]
 
 
 def cargo_env():

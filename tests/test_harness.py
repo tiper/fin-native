@@ -8850,10 +8850,11 @@ class DepGates(unittest.TestCase):
         "rust-modules/play-feed/src",
         "rust-modules/appkit/src",
         "rust-modules/screens/src",
-        # `SRC_PLATFORM_WEBOS` / `SRC_PLATFORM_DESKTOP`: the platform crates' sources. `fnlen` reads the webOS
+        # `SRC_PLATFORM_WEBOS` / `SRC_PLATFORM_DESKTOP` / `SRC_PLATFORM_TIZEN`: the platform crates' sources. `fnlen` reads the webOS
         # crate's `port.rs`, so a copy without it fails that rule for a reason the real tree does not share.
         "rust-modules/platform-webos/src",
         "rust-modules/platform-desktop/src",
+        "rust-modules/platform-tizen/src",
         "rust-modules/Cargo.toml",
         "rust-modules/build.rs",
         "rust-modules/net/Cargo.toml",
@@ -8878,6 +8879,8 @@ class DepGates(unittest.TestCase):
         "rust-modules/platform-webos/build.rs",
         "rust-modules/platform-desktop/Cargo.toml",
         "rust-modules/platform-desktop/build.rs",
+        "rust-modules/platform-tizen/Cargo.toml",
+        "rust-modules/platform-tizen/build.rs",
         "rust-modules/.cargo",
         "Makefile",
     )
@@ -9085,6 +9088,7 @@ class DepGates(unittest.TestCase):
                   "rust-modules/storage/Cargo.toml",
                   "rust-modules/storage/build.rs", "rust-modules/platform-webos/Cargo.toml", "rust-modules/platform-webos/build.rs",
                   "rust-modules/platform-desktop/Cargo.toml", "rust-modules/platform-desktop/build.rs",
+                  "rust-modules/platform-tizen/Cargo.toml", "rust-modules/platform-tizen/build.rs",
                   "rust-modules/.cargo/config.toml", "Makefile")
         for rel in inputs:
             target = os.path.join(self.tree, rel)
@@ -10433,11 +10437,12 @@ impl PersonOwnerGateFixture {
         ("_check_deps_selftest_platform_webos.rs", "platform-webos"),
         ("_check_deps_selftest_platform_desktop.rs", "platform-desktop"),
         ("bin/_check_deps_selftest_platform_desktop_bin.rs", "platform-desktop"),
+        ("_check_deps_selftest_platform_tizen.rs", "platform-tizen"),
     )
 
     def _plant_in_platform_crates(self, body):
         """`body` planted in a file of each platform crate (the webOS crate's root, the desktop crate's root and its
-        simulator binary's directory), graded by ONE run. Returns the run and the three planted file names."""
+        simulator binary's directory, and the Tizen crate's root), graded by ONE run. Returns the run and the planted file names."""
         r = self._plant_all([(name, body, crate) for name, crate in self.PLATFORM_PLANT_SITES])
         return r, [f"{crate}/src/{name}" for name, crate in self.PLATFORM_PLANT_SITES]
 
@@ -10500,7 +10505,7 @@ impl PersonOwnerGateFixture {
     def test_a_gate_that_reads_the_whole_app_or_os_crate_reads_the_platform_crates(self):
         """W7b, the class: a rule that names `$SRC` (the application crate) or `$SRC_OS` WHOLE read the files the
         platform crates took out of them, and stops reading them if it is not given the platform roots. Every command in
-        `ci/check-deps.sh` that names either root whole names both `$SRC_PLATFORM_WEBOS` and `$SRC_PLATFORM_DESKTOP`.
+        `ci/check-deps.sh` that names either root whole names all three platform roots (`$SRC_PLATFORM_WEBOS`, `$SRC_PLATFORM_DESKTOP` and `$SRC_PLATFORM_TIZEN`).
         The one allowance is the wholly-test classification prelude, one `rust_test_modules.py <root>` command per root,
         which must have a line for each platform root instead. A rule scoped to a directory (`"$SRC/app"`) or a file
         (`"$SRC_OS/tv/plane.rs"`) cannot reach the moved files and is not matched. This reads `check-deps.sh` only: the
@@ -10520,7 +10525,7 @@ impl PersonOwnerGateFixture {
             current = ""
         whole_root = re.compile(r'"?\$SRC(?:_OS)?"?(?=[\s)]|$)')
         prelude = re.compile(r'\s*python3 ci/rust_test_modules\.py "\$SRC(?:_OS)?"\s*')
-        platform_roots = ('"$SRC_PLATFORM_WEBOS"', '"$SRC_PLATFORM_DESKTOP"')
+        platform_roots = ('"$SRC_PLATFORM_WEBOS"', '"$SRC_PLATFORM_DESKTOP"', '"$SRC_PLATFORM_TIZEN"')
         offenders = [command.strip()[:140] for command in logical
                      if whole_root.search(command) and not prelude.fullmatch(command)
                      and not all(root in command for root in platform_roots)]

@@ -506,7 +506,8 @@ class PlatformCrates(unittest.TestCase):
     declare the application and every layer it uses, and no package may declare a platform."""
     LAYERS = ('[low]\nuses =\nmembers = low\n[app]\nuses = low\nmembers = crate\n'
               '[platform webos]\nuses = low app\nmembers = platform_webos\n'
-              '[platform desktop]\nuses = low app\nmembers = platform_desktop\n')
+              '[platform desktop]\nuses = low app\nmembers = platform_desktop\n'
+              '[platform tizen]\nuses = low app\nmembers = platform_tizen\n')
     APP = '[package]\nname = "plxnative-modules"\n'
 
     @staticmethod
@@ -517,14 +518,17 @@ class PlatformCrates(unittest.TestCase):
     PLATFORM_DEPS = '[dependencies]\nplxnative-modules = { path = ".." }\nplx_low = { path = "../low" }\n'
 
     def run_platform_gate(self, **manifests):
-        """Manifests by directory (`root`, `low`, `webos`, `desktop`); a missing one gets its valid default."""
-        files = {'src/lib.rs': '', 'low/src/lib.rs': '', 'platform-webos/src/lib.rs': '', 'platform-desktop/src/lib.rs': ''}
+        """Manifests by directory (`root`, `low`, `webos`, `desktop`, `tizen`); a missing one gets its valid default."""
+        files = {'src/lib.rs': '', 'low/src/lib.rs': '', 'platform-webos/src/lib.rs': '', 'platform-desktop/src/lib.rs': '',
+                 'platform-tizen/src/lib.rs': ''}
         files['Cargo.toml'] = manifests.get('root', self.APP)
         files['low/Cargo.toml'] = manifests.get('low', self.package('plx_low', 'low'))
         files['platform-webos/Cargo.toml'] = manifests.get(
             'webos', self.package('plx_platform_webos', 'platform_webos', self.PLATFORM_DEPS))
         files['platform-desktop/Cargo.toml'] = manifests.get(
             'desktop', self.package('plx_platform_desktop', 'platform_desktop', '[dependencies]\nplxnative-modules = { path = ".." }\n'))
+        files['platform-tizen/Cargo.toml'] = manifests.get(
+            'tizen', self.package('plx_platform_tizen', 'platform_tizen', '[dependencies]\nplxnative-modules = { path = ".." }\n'))
         with Tree(files) as tree:
             layers = tree.root / 'layers.ini'
             layers.write_text(self.LAYERS)
@@ -537,14 +541,40 @@ class PlatformCrates(unittest.TestCase):
     def test_a_platform_crate_may_declare_the_application_and_the_layers_it_uses(self):
         code, out = self.run_platform_gate()
         self.assertEqual(code, 0, out)
-        self.assertIn('green — 2 layers and 2 platform crates, ', out)
-        self.assertIn('3 Cargo layer declarations', out)
+        self.assertIn('green — 2 layers and 3 platform crates, ', out)
+        self.assertIn('4 Cargo layer declarations', out)
 
     def test_a_platform_never_declares_another_platform(self):
         code, out = self.run_platform_gate(webos=self.package(
             'plx_platform_webos', 'platform_webos', self.PLATFORM_DEPS + 'plx_platform_desktop = { path = "../platform-desktop" }\n'))
         self.assertEqual(code, 1, out)
         self.assertIn('plx_platform_desktop declares [platform webos] -> [platform desktop]', out)
+
+    def test_the_tizen_platform_is_held_to_the_same_rules(self):
+        # W9: `plx_platform_tizen` is the one member of `[platform tizen]`, names no other platform, is named by none,
+        # and is mounted nowhere else.
+        code, out = self.run_platform_gate(tizen=self.package(
+            'plx_platform_tizen', 'platform_tizen',
+            '[dependencies]\nplxnative-modules = { path = ".." }\nplx_platform_webos = { path = "../platform-webos" }\n'))
+        self.assertEqual(code, 1, out)
+        self.assertIn('plx_platform_webos declares [platform tizen] -> [platform webos]', out)
+        code, out = self.run_platform_gate(desktop=self.package(
+            'plx_platform_desktop', 'platform_desktop',
+            '[dependencies]\nplxnative-modules = { path = ".." }\nplx_platform_tizen = { path = "../platform-tizen" }\n'))
+        self.assertEqual(code, 1, out)
+        self.assertIn('plx_platform_tizen declares [platform desktop] -> [platform tizen]', out)
+        code, out = self.run_platform_gate(low=self.package(
+            'plx_low', 'low', '[dev-dependencies]\nplx_platform_tizen = { path = "../platform-tizen" }\n'))
+        self.assertEqual(code, 1, out)
+        self.assertIn('plx_platform_tizen declares [low] -> [platform tizen]', out)
+        code, out = self.run_platform_gate(tizen=self.package(
+            'plx_platform_tizen', None, '[dependencies]\nplxnative-modules = { path = ".." }\n'))
+        self.assertEqual(code, 1, out)
+        self.assertIn('platform package plx_platform_tizen declares no [package.metadata.plx] mount', out)
+        code, out = self.run_platform_gate(tizen=self.package(
+            'plx_platform_tizen', 'platform_webos', '[dependencies]\nplxnative-modules = { path = ".." }\n'))
+        self.assertEqual(code, 1, out)
+        self.assertIn('plx_platform_tizen is mounted in [platform webos]', out)
 
     def test_nothing_declares_a_platform_the_application_and_a_layer_included(self):
         code, out = self.run_platform_gate(root=self.APP + '[dependencies]\nplx_platform_webos = { path = "platform-webos" }\n')

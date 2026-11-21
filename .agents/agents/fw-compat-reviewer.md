@@ -163,7 +163,7 @@ git -C <repo> diff HEAD -- rust-modules/base/src/dynlib.rs rust-modules/media-co
     rust-modules/net/src/net.rs rust-modules/net/src/curlio.rs src/starfish.c src/video_plane.c src/starfish.h \
     rust-modules/platform-webos/src/webos.rs rust-modules/platform-webos/src/webos/ls2/uri.rs Makefile \
     ci/expected-dt-needed.txt ci/expected-dt-needed-uri.txt
-grep -rn '#\[link\|extern "C"\|__asm__("' rust-modules/src rust-modules/shell-sdl/src rust-modules/platform-webos/src rust-modules/platform-desktop/src rust-modules/media/src rust-modules/play-feed/src rust-modules/play-uri/src rust-modules/os/src rust-modules/media-codecs/src rust-modules/net/src src   # against the diff, not the tree
+grep -rn '#\[link\|extern "C"\|__asm__("' rust-modules/src rust-modules/shell-sdl/src rust-modules/platform-webos/src rust-modules/platform-desktop/src rust-modules/platform-tizen/src rust-modules/media/src rust-modules/play-feed/src rust-modules/play-uri/src rust-modules/os/src rust-modules/media-codecs/src rust-modules/net/src src   # against the diff, not the tree
 ```
 
 ### 1. Decide, out loud, whether you are grading an ELF or grading source

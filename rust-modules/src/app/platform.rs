@@ -595,8 +595,27 @@ mod tests {
         assert!(hits.is_empty(), "an SDL function is declared outside `app/clock.rs`: {hits:?}");
     }
 
-    /// Every `.rs` file under the application crate's `src` and the two platform crates' (`../platform-webos`,
-    /// `../platform-desktop`: the code that builds a `Platform` and could install a table by itself), as text.
+    /// The source directories that can build a `Platform` and so could install a table by itself: the application
+    /// crate's `src` and every platform crate's (`../platform-*/src`, found by listing the workspace directory, so
+    /// the next platform crate needs no edit here), the platform ones sorted by name.
+    fn crate_source_dirs() -> Vec<std::path::PathBuf> {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut platforms: Vec<std::path::PathBuf> = std::fs::read_dir(manifest)
+            .expect("the rust-modules directory")
+            .map(|entry| entry.expect("a directory entry").path())
+            .filter(|dir| {
+                let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                name.starts_with("platform-") && dir.join("src").is_dir()
+            })
+            .map(|dir| dir.join("src"))
+            .collect();
+        platforms.sort();
+        let mut dirs = vec![manifest.join("src")];
+        dirs.extend(platforms);
+        dirs
+    }
+
+    /// Every `.rs` file under [`crate_source_dirs`], as text.
     fn crate_sources() -> Vec<String> {
         fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
             for entry in std::fs::read_dir(dir).expect("read a source directory") {
@@ -609,11 +628,29 @@ mod tests {
             }
         }
         let mut out = Vec::new();
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        for src in ["src", "platform-webos/src", "platform-desktop/src"] {
-            walk(&manifest.join(src), &mut out);
+        for src in crate_source_dirs() {
+            walk(&src, &mut out);
         }
         out
+    }
+
+    /// The walk above reads every platform crate, the Tizen one included: a platform that installs its table before
+    /// `run_application` must turn the install test red, so none can be missing from what it reads.
+    #[test]
+    fn the_install_walk_reads_every_platform_crate() {
+        let dirs = crate_source_dirs();
+        let names: Vec<&str> = dirs
+            .iter()
+            .map(|dir| dir.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).expect("a crate directory"))
+            .collect();
+        assert_eq!(
+            dirs.first(),
+            Some(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")),
+            "the application crate's src is first"
+        );
+        for platform in ["platform-webos", "platform-desktop", "platform-tizen"] {
+            assert!(names.contains(&platform), "{platform}/src is not walked: {names:?}");
+        }
     }
 
     /// `run_application` installs the services as its first statement, before anything can read

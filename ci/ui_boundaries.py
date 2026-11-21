@@ -469,9 +469,11 @@ def page_census_violations(source):
     return []
 
 
-# The application crate and the two platform crates that took files out of it (`port.rs`, `system.rs`,
-# `platform_desktop.rs` and `bin/sim.rs` were `rust-modules/src`'s): the ladder gate read all of them as one tree.
-EXTENSION_ROOTS = ('rust-modules/src', 'rust-modules/platform-webos/src', 'rust-modules/platform-desktop/src')
+# The application crate and the platform crates: the first two took files out of it (`port.rs`, `system.rs`,
+# `platform_desktop.rs` and `bin/sim.rs` were `rust-modules/src`'s) and the Tizen one (W9) is empty today; the ladder
+# gate reads all of them as one tree.
+EXTENSION_ROOTS = ('rust-modules/src', 'rust-modules/platform-webos/src', 'rust-modules/platform-desktop/src',
+                   'rust-modules/platform-tizen/src')
 
 
 def check_extension_registration(root):

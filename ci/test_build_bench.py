@@ -111,6 +111,7 @@ if "--no-run" in args:
     art('/shell-sdl', 'plx_shell_sdl', '0.0.0')
     art('/platform-webos', 'plx_platform_webos', '0.0.0')
     art('/platform-desktop', 'plx_platform_desktop', '0.0.0')
+    art('/platform-tizen', 'plx_platform_tizen', '0.0.0')
     art('/owp', 'plx_owp', '0.0.0')
     art('', 'plxnative-modules', '0.7.0')
 elif args[0] == "rustc":

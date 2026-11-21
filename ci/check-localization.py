@@ -331,7 +331,8 @@ CONST_SRCS = (*LAYER_SRCS, 'rust-modules/base/src', 'rust-modules/machine/src', 
               'rust-modules/appkit/src',
               'rust-modules/screens/src',
               'rust-modules/platform-webos/src',
-              'rust-modules/platform-desktop/src')
+              'rust-modules/platform-desktop/src',
+              'rust-modules/platform-tizen/src')
 
 
 def missing_roots(root: Path) -> list[str]:

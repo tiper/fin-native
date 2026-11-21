@@ -1,5 +1,5 @@
 # A cargo workspace with this package as its ROOT; the other members are the storage helper and the
-# layer crates split out of the application (everything under `rust-modules/*/` with a `[package.metadata.plx] mount`: base/, machine/, net/, os/, gfx/, ui/, plex/, telemetry/, data/, session/, media/, play-feed/, appkit/, screens/, shell-sdl/, owp/ and the contract and codec crates, and the two platform crates, platform-webos/ and platform-desktop/, which depend on this package;
+# layer crates split out of the application (everything under `rust-modules/*/` with a `[package.metadata.plx] mount`: base/, machine/, net/, os/, gfx/, ui/, plex/, telemetry/, data/, session/, media/, play-feed/, appkit/, screens/, shell-sdl/, owp/ and the contract and codec crates, and the three platform crates, platform-webos/, platform-desktop/ and platform-tizen/, which depend on this package;
 # docs/module-layers.md).
 # The root keeps the literal `version` below (release tooling reads it), `make`/CI run their usual
 # commands from this directory against this package (a bare `cargo test`/`check`/`build` here still
@@ -29,6 +29,7 @@ members = [
     "owp",
     "platform-webos",
     "platform-desktop",
+    "platform-tizen",
     "storage",
 ]
 resolver = "2"
@@ -55,7 +56,7 @@ repository = "https://github.com/GLinnik21/plx-native"
 # exposes the same C ABI its src/*.h declares, so the C code calls it unchanged.
 [lib]
 name = "plxnative_modules"
-# `rlib` only, and that is deliberate. The two platform crates (and the host tests) depend on this
+# `rlib` only, and that is deliberate. The platform crates (and the host tests) depend on this
 # crate as a Rust library -- the storage helper does NOT, it is its own workspace package -- and a
 # declared `staticlib` would make every cargo build that links it also write a ~200 MB archive that
 # bundles every upstream crate (and make the ARM build write an rlib nobody links). The archive the Makefile links into the ARM binary is asked for explicitly
@@ -170,7 +171,7 @@ placeholder-sentinel = ["plx_ui/placeholder-sentinel"]
 # installed `VideoSink` instead of the platform webOS native sink rather than adding to it, and it does
 # so only together with `play-feed` (the stand-in is the Feed backend's: a simulator built with
 # `--no-default-features` names `play-feed` again, which `ci/test_sim_backend.py` holds). That is safe here
-# because the only dependents of this crate are the two platform crates, and neither names `hostsim` in its
+# because the only dependents of this crate are the platform crates, and none names `hostsim` in its
 # dependency on this one (`ci/test_platform_features.py`): the desktop crate's OWN `hostsim` feature forwards
 # this one, so feature unification can never enable it behind someone's back. Do not give it
 # a mutually-exclusive partner feature; the television is the DEFAULT, and the simulator opts in.

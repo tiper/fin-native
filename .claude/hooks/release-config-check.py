@@ -277,6 +277,7 @@ def rust_src_target(payload, root, cwd=None):
     layer_srcs = [os.path.realpath(os.path.join(root, "rust-modules", layer, "src")) for layer in ("base", "machine", "net", "os", "gfx", "ui", "plex", "telemetry", "data", "session", "media", "appkit", "screens", "shell-sdl", "platform-webos")]
     # `platform-desktop` is deliberately NOT here: the crate is `#![cfg(feature = "hostsim")]` (its `lib.rs`) and its
     # one binary needs `hostsim`, so under the release configuration it compiles to nothing and an edit there grades nothing.
+    # Neither is `platform-tizen`: its library is `#![cfg(feature = "tizen")]`, which the release set never has.
     if not any(path.startswith(s + os.sep) for s in [src] + layer_srcs):
         return None
     # `--lib` compiles no bin target, and `sim.rs` needs `hostsim`, which the release set never has.

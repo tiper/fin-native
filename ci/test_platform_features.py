@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""The two platform crates forward the application's features, and enable none of them behind its back.
+"""The platform crates forward the application's features, and enable none of them behind its back.
 
-`plx_platform_webos` (the ARM staticlib's crate) and `plx_platform_desktop` (the simulator's) depend on the
-application crate, `plxnative-modules`. The Makefile and the workflows select features with `-p <platform
+`plx_platform_webos` (the ARM staticlib's crate), `plx_platform_desktop` (the simulator's) and `plx_platform_tizen`
+(W9, empty so far) depend on the application crate, `plxnative-modules`. The Makefile and the workflows select features with `-p <platform
 crate> --no-default-features --features <words>`, and a word is only meaningful on a package that declares it.
 So each platform crate declares every feature of the application and forwards it, with the application's own
 defaults. A feature added to the application and not forwarded here would pass `--workspace` and every host
@@ -17,7 +17,8 @@ dependencies exist only under it: each is `optional = true`, `hostsim` is the on
 (`dep:`), and every other feature forwards the application's WEAKLY (`plxnative-modules?/<feature>`), which
 adds the optional edge in no build. A default-feature pass, which lists the package beside the application,
 therefore enables nothing on the application and compiles nothing of the dependencies, and `make lint`
-reports no unused dependency for the empty library. No `version` on the edge either: the read-only
+reports no unused dependency for the empty library. The Tizen crate has the same shape with its own feature,
+`tizen`, in `hostsim`'s place (it forwards every application feature but the simulator's `hostsim`). No `version` on the edge either: the read-only
 certificates (ci/readonly_dependencies.py) refuse a versioned dependency on the root package.
 
 Reads manifests and one source file; compiles nothing and runs no cargo.
@@ -35,7 +36,11 @@ PLATFORMS = {
     # The demo-video dump build's pixel oracle (`plx_ui`): only the simulator's dump build names it.
     "platform-webos": {"placeholder-sentinel"},
     "platform-desktop": set(),
+    # The simulator's own build feature: the Tizen crate has its own enabling feature (`tizen`) and no simulator.
+    "platform-tizen": {"hostsim"},
 }
+# The crates whose application edge is `optional = true`, each with the one feature that enables it.
+OPTIONAL_EDGE = {"platform-desktop": "hostsim", "platform-tizen": "tizen"}
 
 
 def load(path):
@@ -58,12 +63,12 @@ def reachable(features, start):
     return seen
 
 
-def optional_edge_problems(app_features, features, dependencies, exempt):
-    """The shape of a platform crate whose application edge is `optional = true`, which only `hostsim` enables."""
+def optional_edge_problems(app_features, features, dependencies, exempt, own="hostsim"):
+    """The shape of a platform crate whose application edge is `optional = true`, which only `own` enables."""
     found = []
     enabling = {name for name, spec in features.items() if f"dep:{APP_NAME}" in spec}
-    if enabling != {"hostsim"}:
-        found.append(f"the features that enable the application are {sorted(enabling)}, not exactly ['hostsim']")
+    if enabling != {own}:
+        found.append(f"the features that enable the application are {sorted(enabling)}, not exactly ['{own}']")
     for feature in sorted(set(app_features) - {"default"} - set(exempt)):
         spec = features.get(feature, [])
         if feature in enabling:
@@ -85,14 +90,15 @@ def optional_edge_problems(app_features, features, dependencies, exempt):
         if name == APP_NAME:
             continue
         if not isinstance(entry, dict) or entry.get("optional") is not True:
-            found.append(f"`{name}` is not optional, but the library that uses it is empty without hostsim")
+            found.append(f"`{name}` is not optional, but the library that uses it is empty without {own}")
         elif not all(f"dep:{name}" in features.get(feature, []) for feature in enabling):
             found.append(f"`{name}` is optional and no enabling feature pulls it in with `dep:{name}`")
     return found
 
 
-def problems(app, platform, exempt):
-    """Every way `platform` (a parsed manifest) fails to forward `app`'s (a parsed manifest) features."""
+def problems(app, platform, exempt, own="hostsim"):
+    """Every way `platform` (a parsed manifest) fails to forward `app`'s (a parsed manifest) features.
+    `own` is the feature that enables an optional application edge (`hostsim` for the simulator, `tizen`)."""
     found = []
     app_features = app.get("features", {})
     features = platform.get("features", {})
@@ -103,7 +109,7 @@ def problems(app, platform, exempt):
         found.append(f"does not depend on `{APP_NAME}` with an inline table")
         return found
     if spec.get("optional") is True:
-        found.extend(optional_edge_problems(app_features, features, platform.get("dependencies", {}), exempt))
+        found.extend(optional_edge_problems(app_features, features, platform.get("dependencies", {}), exempt, own))
     else:
         for feature in sorted(set(app_features) - {"default"} - set(exempt)):
             if feature not in features:
@@ -131,7 +137,8 @@ class ForwardedFeatures(unittest.TestCase):
         app = load(MODULES / "Cargo.toml")
         for directory, exempt in PLATFORMS.items():
             with self.subTest(directory):
-                self.assertEqual(problems(app, load(MODULES / directory / "Cargo.toml"), exempt), [])
+                self.assertEqual(problems(app, load(MODULES / directory / "Cargo.toml"), exempt,
+                                          OPTIONAL_EDGE.get(directory, "hostsim")), [])
 
     def test_the_exemptions_are_application_features(self):
         features = load(MODULES / "Cargo.toml")["features"]
@@ -176,34 +183,48 @@ class ForwardedFeatures(unittest.TestCase):
                 self.assertNotIn("platform", alias, f"[{table}] {alias}: the dependency runs from the platform to the application")
                 self.assertNotIn("platform-", spec.get("path", "") if isinstance(spec, dict) else "")
 
-    def test_the_desktop_library_is_empty_without_hostsim(self):
-        # The library is `#![cfg(feature = "hostsim")]`, so a default-feature pass that lists the package
-        # builds nothing and runs no test; the feature itself is declared above (forwarded as `hostsim`).
-        source = (MODULES / "platform-desktop" / "src" / "lib.rs").read_text(encoding="utf-8")
-        code = [line for line in source.splitlines() if not line.lstrip().startswith("//")]
-        self.assertEqual(code[0], '#![cfg(feature = "hostsim")]')
-        for manifest in (MODULES / "platform-desktop" / "Cargo.toml",):
-            for binary in load(manifest).get("bin", []):
-                self.assertEqual(binary.get("required-features"), ["hostsim"], binary.get("name"))
+    def test_the_optional_crates_are_empty_without_their_feature(self):
+        # The desktop library is `#![cfg(feature = "hostsim")]` and the Tizen one `#![cfg(feature = "tizen")]`, so a
+        # default-feature pass that lists the package builds nothing and runs no test; the feature itself is declared
+        # above (the desktop forwards the application's `hostsim` as its own).
+        for directory, own in OPTIONAL_EDGE.items():
+            with self.subTest(directory):
+                source = (MODULES / directory / "src" / "lib.rs").read_text(encoding="utf-8")
+                code = [line for line in source.splitlines() if not line.lstrip().startswith("//")]
+                self.assertEqual(code[0], f'#![cfg(feature = "{own}")]')
+                for binary in load(MODULES / directory / "Cargo.toml").get("bin", []):
+                    self.assertEqual(binary.get("required-features"), [own], binary.get("name"))
 
-    def test_the_desktop_dependencies_exist_only_under_hostsim(self):
-        # An empty library with three dependencies reports three unused ones (`make lint`), and a default-feature
-        # pass that lists the package would compile all of them for nothing. So every dependency of the desktop
-        # crate is optional, `hostsim` alone enables them, and the default features reach none (the weak
-        # forwards: `plxnative-modules?/<feature>` adds the edge in no build).
-        doc = load(MODULES / "platform-desktop" / "Cargo.toml")
-        dependencies = doc["dependencies"]
-        self.assertEqual(sorted(dependencies), ["plx_base", "plx_os", APP_NAME])
-        for name, spec in dependencies.items():
-            self.assertIs(spec.get("optional"), True, name)
-        features = doc["features"]
-        self.assertEqual(sorted(word for word in features["hostsim"] if word.startswith("dep:")),
-                         sorted(f"dep:{name}" for name in dependencies))
-        self.assertIn(f"{APP_NAME}/hostsim", features["hostsim"])
-        self.assertEqual(reachable(features, "default") & {"hostsim"}, set())
-        for feature, words in features.items():
-            if feature != "hostsim":
-                self.assertFalse([w for w in words if w.startswith("dep:") or w.startswith(f"{APP_NAME}/")], feature)
+    def test_the_optional_crates_dependencies_exist_only_under_their_feature(self):
+        # An empty library with unused dependencies reports them (`make lint`), and a default-feature pass that lists
+        # the package would compile all of them for nothing. So every dependency of the desktop and Tizen crates is
+        # optional, their one feature (`hostsim`, `tizen`) alone enables them, and the default features reach none
+        # (the weak forwards: `plxnative-modules?/<feature>` adds the edge in no build).
+        expected = {"platform-desktop": ["plx_base", "plx_os", APP_NAME], "platform-tizen": [APP_NAME]}
+        for directory, own in OPTIONAL_EDGE.items():
+            with self.subTest(directory):
+                doc = load(MODULES / directory / "Cargo.toml")
+                dependencies = doc["dependencies"]
+                self.assertEqual(sorted(dependencies), sorted(expected[directory]))
+                for name, spec in dependencies.items():
+                    self.assertIs(spec.get("optional"), True, name)
+                features = doc["features"]
+                self.assertEqual(sorted(word for word in features[own] if word.startswith("dep:")),
+                                 sorted(f"dep:{name}" for name in dependencies))
+                if own == "hostsim":
+                    self.assertIn(f"{APP_NAME}/hostsim", features[own])
+                self.assertEqual(reachable(features, "default") & {own}, set())
+                for feature, words in features.items():
+                    if feature != own:
+                        self.assertFalse([w for w in words if w.startswith("dep:") or w.startswith(f"{APP_NAME}/")], feature)
+
+    def test_the_tizen_crate_is_not_the_simulator(self):
+        # `hostsim` is the desktop's: the Tizen crate neither declares it nor holds a binary, and the weak forwards
+        # of the application's features leave it exactly the application's defaults.
+        doc = load(MODULES / "platform-tizen" / "Cargo.toml")
+        self.assertNotIn("hostsim", doc["features"])
+        self.assertNotIn("bin", doc)
+        self.assertEqual(doc["features"]["default"], load(MODULES / "Cargo.toml")["features"]["default"])
 
 
     def test_the_simulator_is_the_desktop_crates_binary_and_the_applications_no_longer(self):
@@ -304,6 +325,20 @@ class TheCheckBites(unittest.TestCase):
         platform["features"]["hostsim"] = [f"dep:{APP_NAME}", "dep:lower"]
         self.assertEqual(problems(self.OPT_APP, platform, set()),
                          [f"`hostsim` enables the application without forwarding `{APP_NAME}/hostsim`"])
+
+    def test_an_optional_edge_is_enabled_by_the_crates_own_feature(self):
+        # The Tizen shape: `tizen` (not `hostsim`) enables the application, and `hostsim` is exempt.
+        app = {"features": {"default": ["a"], "a": ["x/a"], "hostsim": ["x/hostsim"]}}
+        tizen = {
+            "features": {"default": ["a"], "a": [f"{APP_NAME}?/a"], "tizen": [f"dep:{APP_NAME}"]},
+            "dependencies": {APP_NAME: {"path": "..", "default-features": False, "optional": True}},
+        }
+        self.assertEqual(problems(app, tizen, {"hostsim"}, own="tizen"), [])
+        found = problems(app, tizen, {"hostsim"})
+        self.assertTrue(any("not exactly ['hostsim']" in f for f in found), found)
+        tizen["features"]["a"] = [f"{APP_NAME}?/a", "tizen"]
+        found = problems(app, tizen, {"hostsim"}, own="tizen")
+        self.assertTrue(any("default features reach" in f for f in found), found)
 
     def test_a_dependency_the_empty_library_does_not_use_must_wait_for_hostsim(self):
         platform = self.good_optional()

@@ -221,10 +221,10 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   what the user can reach, which is the only class that is tracked rather than accepted; `--sites` lists every hit with its class.
   CI runs the three cargo targets plus those two as five parallel jobs
   (`host-lint`, `host-unit-default`, `host-unit-hostsim`, `host-python`, `host-python-harness`) behind an aggregator named
-  `host checks (NOT a device gate)`; `ci/test_ci_split.py` pins that no gate falls between them. The cargo half runs `cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_owp`
+  `host checks (NOT a device gate)`; `ci/test_ci_split.py` pins that no gate falls between them. The cargo half runs `cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp`
   **on the default feature set, and again with `--features hostsim` for the crates that declare it
   (`HOSTSIM_SUITE`: all of `UNIT_SUITE` except `plx_net`, `plx_ui`, `plx_appkit`, `plx_screens`,
-  `plx_media_codecs`, `plx_play_uri`, `plx_playback_contract` and `plx_owp`, which have no `hostsim` cfg and run the
+  `plx_media_codecs`, `plx_play_uri`, `plx_playback_contract`, `plx_platform_tizen` and `plx_owp`, which have no `hostsim` cfg and run the
   same test names in both passes; `ci/test_test_crate.py` fails if one gains the feature or a cfg)**,
   which is not a duplicate run. The host feed seam (`play-feed/src/ffi_host.rs`) exists ONLY in the hostsim
   configuration, so every test that drives an access unit through `sf_feed` is compiled out of the
@@ -267,7 +267,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   SDL event loop where no host test can see it. Needs the **clippy component of the pinned toolchain** (`make setup-rust` installs it with
   `--profile minimal --component clippy`).
 - `make test-fast [T=filter]` — **opt-in** incremental inner loop: the same default-feature
-  `cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_owp` as `check-cargo-unit-default` (throwaway runtime root, telemetry env), but
+  `cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp` as `check-cargo-unit-default` (throwaway runtime root, telemetry env), but
   with `CARGO_INCREMENTAL=1` in its own `rust-modules/target-fast` (gitignored). `T=route::`
   is the test-name filter, handed to every one of the per-crate test binaries; each prints its own libtest
   `test result:` line (the counts are per crate, never one total), followed by the wrapper's summary line. Use it for a long series of
@@ -403,12 +403,12 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
 - **CI build health** — four tools keep the build from growing unnoticed, and none of them is a
   device gate.
   - *Timings artifact.* `host-unit-default` compiles the test binary in its own step with
-    `cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_owp --no-run --timings`, then `make check-cargo-unit-default` runs against what that
+    `cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp --no-run --timings`, then `make check-cargo-unit-default` runs against what that
     built (`--timings` is not part of cargo's fingerprint: checked 2026-10-02 by building with and
     without it and getting `Fresh` for `plxnative-modules` both ways, so the step moves the compile
     rather than adding one). Download `cargo-timings-host-unit-default` from the run page
     ("Artifacts", kept 14 days) and open `cargo-timing.html`: it names the crates on the critical
-    path. Locally: `cd rust-modules && cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_owp --no-run --timings` writes
+    path. Locally: `cd rust-modules && cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp --no-run --timings` writes
     `target/cargo-timings/cargo-timing.html`.
   - *Trends.* `tools/ci-durations.py [--runs 30] [--recent 5] [--json]` reads the last 30 successful
     `main` runs of CI and Simulator CI through `gh api` and prints, per job, the median and p90 and
@@ -484,7 +484,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   before/after table instead of an ad-hoc scratch-script number. It prints a Markdown table (median /
   min / max over `--runs`, default 3, the scenarios interleaved round by round) and, with `--json`,
   a machine-readable document (git sha, `rustc -V` of the pinned toolchain, host, per-run load and swap). Rows:
-  a **no-op** host test build (`cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_owp --no-run`; it reports from cargo's JSON `fresh`
+  a **no-op** host test build (`cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp --no-run`; it reports from cargo's JSON `fresh`
   flag whether the app crate was rebuilt and flags a recompile as UNEXPECTED, the
   `ci/test_build_not_always_dirty.py` hazard); an **edit-rebuild** after appending a comment to a
   leaf file of each crate (`plx_base`'s `cbuf.rs`, `plx_machine`'s `landgate.rs`, `plx_os`'s `devcaps.rs`, `plx_gfx`'s `overdraw.rs`, `plx_net`'s `stream_redirect.rs`, `plx_ui`'s `dwell.rs`, `plx_plex`'s `retry.rs`, `plx_telemetry`'s `window.rs`, `plx_data`'s `tape.rs`, `plx_session`'s `scripted.rs`, `plx_media`'s `units.rs`, `plx_appkit`'s `skip_pill.rs`, `plx_screens`'s `clock_readout.rs`, the application's `coldstart.rs`) and to a hub (`plx_ui`'s `lib.rs`), non-incremental (`CARGO_INCREMENTAL=0`, the
@@ -963,7 +963,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   rather than the only one — it catches the break before the push, and CI does not run in somebody
   else's checkout. It type-checks the bare `--no-default-features` set, which drops `play-uri` and `play-feed` too (a build with
   no playback backend), so it does not replace `make check-nodef`, which passes the Makefile's `RUST_BACKEND_FEATURES`. It type-checks after
-  every edit to a `rust-modules/src/**.rs` or any crate `src/` directory in the hook's `layer_srcs` (the layer crates and `platform-webos`, which it checks with `-p plx_platform_webos` beside the application; `platform-desktop` is absent on purpose, its library is empty without `hostsim`; it does not watch `playback-contract`, `media-codecs`,
+  every edit to a `rust-modules/src/**.rs` or any crate `src/` directory in the hook's `layer_srcs` (the layer crates and `platform-webos`, which it checks with `-p plx_platform_webos` beside the application; `platform-desktop` and `platform-tizen` are absent on purpose, their libraries are empty without `hostsim` and `tizen`; it does not watch `playback-contract`, `media-codecs`,
   `play-feed` or `play-uri`, for which `make check-nodef` is the only gate that compiles them in the shipping set, nor `owp`, which the application does not link yet); it costs well under a second warm, because cargo keys
   fingerprints by feature set and the two configurations coexist in one `target/`. The hazard it
   guards is hand-written `#[cfg(feature = "devtriggers")]` PAIRS, where a spliced-in function
@@ -1309,6 +1309,9 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   Each has its own `build.rs` (the nanosvg link line reaches only the package that prints it), and each forwards the
   application's features with its defaults (the webOS crate omits `placeholder-sentinel`, which only the simulator's dump build names; `ci/test_platform_features.py`); the desktop's dependencies are `optional` and only its
   `hostsim` enables them, so a default-feature pass lists it and builds nothing of it.
+  `rust-modules/platform-tizen/` (crate `plx_platform_tizen`, W9) is the third platform crate, **empty so far**: its library is
+  `#![cfg(feature = "tizen")]` (its own feature, in no default set), its one dependency (the application) is `optional` and only
+  `tizen` enables it, it forwards every application feature but `hostsim`, and `[platform tizen]` in `ci/module-layers.ini` is its layer.
 - `rust-modules/ui/src/` (workspace crate `plx_ui`) — **the UI, as a shared design system**: `theme.rs` tokens, the retui core
   (`lib.rs` `Painter`/`View`), reusable components (`widgets.rs`/`table.rs`/`label.rs`/`icons.rs`),
   and, since phase 9 (Player was the last), no legacy screens at all — every route mounts an owned
@@ -1983,7 +1986,7 @@ behaviour; real GL copies, glyphs and presentation still need a device capture w
 There **is** a host unit suite, and it is not the real gate — both halves matter, and conflating
 them is how this section used to be wrong in three files at once.
 
-**Tier 1 — `make check` (host).** `cd rust-modules && cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_owp` (a bare `cargo test --lib` runs the application crate only and skips every layer crate: `plx_base`, `plx_machine`, `plx_os`, `plx_gfx`, `plx_net`, `plx_ui`, `plx_plex`, `plx_telemetry`, `plx_data`, `plx_session`, `plx_media`, `plx_appkit`, `plx_screens`, `plx_shell_sdl`) runs the whole
+**Tier 1 — `make check` (host).** `cd rust-modules && cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp` (a bare `cargo test --lib` runs the application crate only and skips every layer crate: `plx_base`, `plx_machine`, `plx_os`, `plx_gfx`, `plx_net`, `plx_ui`, `plx_plex`, `plx_telemetry`, `plx_data`, `plx_session`, `plx_media`, `plx_appkit`, `plx_screens`, `plx_shell_sdl`) runs the whole
 host suite on the dev Mac, no TV involved — and `make check` runs the crates that declare `hostsim`
 (`HOSTSIM_SUITE`, a subset of that list) a SECOND time under `--features hostsim`, because the host
 feed seam only exists there and the tests that need it are compiled out of the first pass (the build
@@ -1993,7 +1996,7 @@ documented 59 before that, which was five times stale before anyone noticed — 
 of this paragraph was stale within one *commit*, because two agents were adding tests to the same
 batch that documented it. Three numbers have now rotted here, so do not add a fourth: the only
 count worth having is the one you take yourself, with
-`cd rust-modules && cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_owp -- --list | grep -c ': test'`. **The per-module counts
+`cd rust-modules && cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp -- --list | grep -c ': test'`. **The per-module counts
 below have the same disease and are worse**, because a stale one reads as precise rather than round
 — several were written when the module was a third its present size, and two bullets have now
 outlived the file they named: `ui/home.rs` (retired to `screens/home/`) and `route.rs` (split in

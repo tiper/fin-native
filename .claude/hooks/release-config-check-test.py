@@ -96,6 +96,8 @@ CASES = [
      edit("/repo/rust-modules/platform-desktop/src/lib.rs"), ROOT),
     (SKIP, "the desktop platform crate's simulator binary",
      edit("/repo/rust-modules/platform-desktop/src/bin/sim.rs"), ROOT),
+    (SKIP, "the Tizen platform crate's source (tizen only: it compiles to nothing in the release set)",
+     edit("/repo/rust-modules/platform-tizen/src/lib.rs"), ROOT),
     (SKIP, "build.rs (cargo compiles the script in every configuration)",
      edit("/repo/rust-modules/build.rs"), ROOT),
     (SKIP, "tools/ script", edit("/repo/tools/some_helper.rs"), ROOT),

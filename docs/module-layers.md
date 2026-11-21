@@ -21,7 +21,8 @@ It is a plain `rlib`: no archive is built from this crate. **The `[platform webo
 for crates of their own on top of it (L15f, W7b, landed; `docs/platform-ports.md`):** `plx_platform_webos`
 (`rust-modules/platform-webos/`: `port`, `system`, `webos` with the Starfish sink `webos::video_sink`, and `keymanager`) is
 the crate the one `staticlib` the Makefile links is built from, and `plx_platform_desktop` (`rust-modules/platform-desktop/`: the
-simulator's tables and entry, and the `plxnative-sim` binary) is the simulator's and the macOS app's. Each names `app`
+simulator's tables and entry, and the `plxnative-sim` binary) is the simulator's and the macOS app's. A third, `plx_platform_tizen` (`rust-modules/platform-tizen/`, W9, `[platform tizen]`), exists empty and
+is compiled only under its own `tizen` feature. Each names `app`
 through `host` and `plx_os` for the `tv` interfaces it fills; the application names neither, and `plx_os` kept `tv`, those interfaces,
 with `storage`, `devcaps`, `imgcache`, `i18n` and `labcfg`: only `webos` and `keymanager` left it. **Decision, revised 2026-11-20: the `[platform webos]` members stayed where they were until the
 simulator was its own platform, and then left for crates of their own on top.** The earlier decision was to wait
