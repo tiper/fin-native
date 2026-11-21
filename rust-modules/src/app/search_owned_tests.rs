@@ -544,9 +544,8 @@ fn native_key_effect_search_edit_keys_edit_the_field() {
     frame(&mut d, &mut rig, AppArg::Search, tick(0), vec![]);
     let text = |s: &str, at| InputEvent { at, source: Source::Script,
         kind: InputKind::Text(plx_machine::machine::TextEdit::Commit(s.into())) };
-    let mut events = script_key(Key::Ok, tick(1));
-    events.push(text("abcd", tick(1)));
-    frame(&mut d, &mut rig, AppArg::Search, tick(1), events);
+    // The arrival raised the keyboard, so the text types straight into the field.
+    frame(&mut d, &mut rig, AppArg::Search, tick(1), vec![text("abcd", tick(1))]);
     assert_eq!(rig.stores.search.query(), "abcd", "premise: the field is editing and holds the text");
     for (n, (sym, wcode, action, query)) in [
         (8, 42, Action::Backspace, "abc"),
