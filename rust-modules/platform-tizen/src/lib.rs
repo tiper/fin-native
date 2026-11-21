@@ -1,13 +1,162 @@
-//! The Tizen platform: what the application is handed on a Samsung television (emulator only, for now).
+//! The Tizen platform: what the application is handed on a Samsung television, EMULATOR ONLY.
 //!
-//! This crate will hold the Tizen platform value the application's `host` module takes: a hosted `.so`
-//! entry the .NET host loads, an Ecore window the application draws into, the remote's keys and the
-//! UDP log channel. It is empty in this change: the crate, its place in the module layers
-//! (`[platform tizen]` in `ci/module-layers.ini`) and every list that names a platform crate exist so
-//! the code that follows lands in a gated crate (`docs/platform-ports.md`, W9).
+//! **What this is, and is not.** A hosted `.so`: the .NET host (a Tizen `.tpk`, built by the `tizen`
+//! packaging recipe, not here) `dlopen`s it, calls [`plx_host_start`](exports), and the application runs on
+//! a loop thread this crate starts while the host's main thread stays the Ecore main loop. It has run on the
+//! Tizen TV emulator and on no retail set, it does not play (its media boot is `host::NO_MEDIA`), and it says
+//! so: the platform the Plex server reads is `Tizen` with a version ending `(emulator)`
+//! ([`identity`]). The x86_64 build is not an `all(target_os = "linux", target_arch = "arm")` one, so the
+//! crash-capture branches the television build has are not selected here: a fault on the emulator leaves no
+//! crash file.
+//!
+//! **The contract** is `include/plx_host.h` (the .NET side is written against that text), mirrored by
+//! [`host_abi`] and pinned against it by a test. [`hosted`] holds the machinery: start and stop, the loop
+//! thread, the input queue, the deadline and the exactly-once `on_stopped`. [`exports`] is the three C
+//! symbols and the order `plx_host_start` brings things up in.
+//!
+//! **The pieces**, one module each:
+//!
+//! - [`launch`], the launch string the host passes (directories, the mock server's address, the locale, the
+//!   UDP log target, the dev values) and [`layout`], the two layout hooks that answer from it;
+//! - [`ecore`] and [`egl`], the window (Ecore_Wl2, on the host thread) and the ES2 context (EGL, on the loop
+//!   thread), both bound at run time through `plx_base::dynlib!`; [`surface`], the [`Shell`] and [`Surface`]
+//!   the application drives, with the hand-off between the two threads;
+//! - [`keys`], the remote's key names to the application's `Action`s, and the dump that shows an unbound
+//!   name; [`log_udp`], the event log's tap onto a UDP socket (the emulator has no file access);
+//! - [`devboot`], the dev-token boot armed from the launch string instead of trigger files;
+//! - [`identity`], the platform name and the locale.
 //!
 //! Like the other platform crates it reaches the application through `plxnative_modules::host` alone,
 //! names no other platform, and is named by nothing. The library is compiled only under `tizen` (its
 //! own feature, in no default set), so a default-feature pass that lists this package builds an empty
 //! library and no build of the television's or the desktop's ever contains it.
 #![cfg(feature = "tizen")]
+
+mod devboot;
+mod ecore;
+mod egl;
+mod exports;
+mod host_abi;
+mod hosted;
+mod identity;
+mod keys;
+mod launch;
+mod layout;
+mod log_udp;
+mod surface;
+
+use plx_os::tv::authority::Authority;
+use plx_os::tv::secure::StoreMode;
+use plx_os::tv::{IdentityHooks, LegacyWebosMedia, SecureHooks, Services, StorageHooks, SystemHooks};
+use plxnative_modules::host::{self, Platform};
+
+/// The process's one hosted run: the host's callbacks, the input queue, the stop gate. The three exports and
+/// the Ecore handlers reach it; nothing else does.
+pub(crate) static HOSTED: hosted::Hosted = hosted::Hosted::new();
+
+/// What the lower layers read from the Tizen platform. Every hook is stated, as `tv` requires; where Tizen
+/// has nothing to say the shared `NONE` group's own value is named.
+///
+/// - `identity`: the device probe publishes `Tizen`/`(emulator)` and the one honest log line; the locale is
+///   the host's (`DirectoryInfo`'s culture, passed in the launch string); there is no capability probe, no
+///   native video to repair, no device files and no sound-output service.
+/// - `secure`: no key manager, and `MemoryOnly`: nothing persists a credential on this platform, so a session
+///   is held for the run and the sign-in is asked again at the next (Decision 7 B).
+/// - `system`: no Home key and no system bus.
+/// - `storage`: no storage helper, the records are files under the state root.
+/// - `layout`: the host's two directories ([`layout`]).
+/// - `legacy_webos_media`: none: Starfish and ACB are webOS's.
+static SERVICES: Services = Services {
+    identity: IdentityHooks {
+        probe_device: identity::probe_device,
+        start_capability_probe: IdentityHooks::NONE.start_capability_probe,
+        repair_native_video: IdentityHooks::NONE.repair_native_video,
+        device_files: IdentityHooks::NONE.device_files,
+        system_locale: identity::system_locale,
+        sound_output: IdentityHooks::NONE.sound_output,
+    },
+    secure: SecureHooks { mode: StoreMode::MemoryOnly, ..SecureHooks::NONE },
+    system: SystemHooks::NONE,
+    storage: StorageHooks { authority: Authority::Files },
+    layout: layout::LAYOUT,
+    legacy_webos_media: LegacyWebosMedia::NONE,
+};
+
+static SHELL: surface::TizenShell = surface::TizenShell { hosted: &HOSTED };
+
+static PROBE: surface::NoProbe = surface::NoProbe;
+
+/// The Tizen platform: what [`exports`]' loop thread hands `host::run`. No playback: `host::NO_MEDIA`.
+pub(crate) static PLATFORM: Platform = Platform::new(&SERVICES, &SHELL, &PROBE, host::NO_MEDIA);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The table says what the module note says.** Nothing is persisted (`MemoryOnly`), the records are
+    /// files, and the playback pieces are the refusing ones.
+    #[test]
+    fn the_table_states_a_memory_only_files_platform_with_no_playback() {
+        assert_eq!(SERVICES.secure.mode, StoreMode::MemoryOnly);
+        assert_eq!(SERVICES.storage.authority, Authority::Files);
+        assert!(SERVICES.identity.repair_native_video.is_none());
+        assert!(matches!((SERVICES.identity.sound_output)(), plx_os::tv::sound::Reply::NoPlatform));
+        assert_eq!(SERVICES.legacy_webos_media.display_sink.window_mode(), plx_os::tv::sink::VP_NONE);
+        assert!(!SERVICES.legacy_webos_media.sink.feed_abi_is_cow(), "the refusing sink, not a native one");
+    }
+
+    /// Read every source of this crate, with its path relative to `src`.
+    fn sources() -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, src: &std::path::Path, out: &mut Vec<(String, String)>) {
+            for entry in std::fs::read_dir(dir).expect("read a source directory") {
+                let path = entry.expect("a directory entry").path();
+                if path.is_dir() {
+                    walk(&path, src, out);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let rel = path.strip_prefix(src).expect("under src").to_string_lossy().replace('\\', "/");
+                    out.push((rel, std::fs::read_to_string(&path).expect("read a source file")));
+                }
+            }
+        }
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = Vec::new();
+        walk(&src, &src, &mut out);
+        out
+    }
+
+    /// **The Tizen platform declares no SDL function.** SDL is the television's and the desktop's window
+    /// library; this platform's window is Ecore's, its D1 consequence (a null `Surface::window`) rests on SDL
+    /// never being initialised here, and a declaration here would be a second SDL seam beside the shell
+    /// crate's. Reads the sources, because no host test can see a declaration.
+    #[test]
+    fn the_tizen_platform_declares_no_sdl_function() {
+        let hits: Vec<String> = sources()
+            .into_iter()
+            // Split with `concat!`, so this file's own text is never what it matches.
+            .filter(|(_, text)| text.contains(concat!("fn ", "SDL_")) || text.contains(concat!("SDL_", "Init")))
+            .map(|(rel, _)| rel)
+            .collect();
+        assert!(hits.is_empty(), "SDL is named in the Tizen platform: {hits:?}");
+    }
+
+    /// **The application is reached through `host` and nothing else** (Decision 3's amendment): every path
+    /// this crate writes into `plxnative_modules` goes through `host`.
+    #[test]
+    fn the_application_is_named_only_through_host() {
+        let mut bad = Vec::new();
+        for (rel, text) in sources() {
+            for (n, line) in text.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or("");
+                let (mut rest, needle) = (code, concat!("plxnative_", "modules::"));
+                while let Some(at) = rest.find(needle) {
+                    let after = &rest[at + needle.len()..];
+                    if !after.starts_with("host") {
+                        bad.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+                    }
+                    rest = after;
+                }
+            }
+        }
+        assert!(bad.is_empty(), "the application is reached around `host`: {bad:?}");
+    }
+}

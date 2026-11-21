@@ -393,4 +393,21 @@ mod tests {
         assert_eq!(got.len(), MAX_PENDING);
         assert_eq!(got.last().unwrap(), &format!("{}", MAX_PENDING + 9));
     }
+
+    /// **A platform whose surface has no SDL window binds NULL and never reads SDL's focus flag.** The
+    /// Tizen `Surface::window()` is null (W9, D1): `has_focus` answers `None` before it asks SDL
+    /// anything, and `start` logs `focus=?` rather than calling `SDL_GetWindowFlags(NULL)`. (That SDL
+    /// itself takes a NULL window and an uninitialised video is the shell crate's own test,
+    /// `the_real_sdl_answers_a_null_window_with_video_uninitialised`: this module's calls are stubbed under
+    /// test, so only the shell crate can reach the real ones.)
+    #[test]
+    fn a_null_window_has_no_focus_reading_and_asks_sdl_nothing() {
+        let _g = BUF.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: the module's own singleton, under its test lock; restored below.
+        let before = unsafe { *addr_of!(WIN) };
+        bind(std::ptr::null_mut());
+        assert_eq!(has_focus(), None);
+        // SAFETY: as above.
+        unsafe { *addr_of_mut!(WIN) = before };
+    }
 }

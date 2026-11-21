@@ -224,8 +224,9 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   `host checks (NOT a device gate)`; `ci/test_ci_split.py` pins that no gate falls between them. The cargo half runs `cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp`
   **on the default feature set, and again with `--features hostsim` for the crates that declare it
   (`HOSTSIM_SUITE`: all of `UNIT_SUITE` except `plx_net`, `plx_ui`, `plx_appkit`, `plx_screens`,
-  `plx_media_codecs`, `plx_play_uri`, `plx_playback_contract`, `plx_platform_tizen` and `plx_owp`, which have no `hostsim` cfg and run the
-  same test names in both passes; `ci/test_test_crate.py` fails if one gains the feature or a cfg)**,
+  `plx_media_codecs`, `plx_play_uri`, `plx_playback_contract` and `plx_owp`, which have no `hostsim` cfg and run the
+  same test names in both passes, and `plx_platform_tizen`, whose crate is `#![cfg(feature = "tizen")]`: both passes compile it
+  EMPTY, and its tests run only under `cargo test --lib -p plx_platform_tizen --features tizen`; `ci/test_test_crate.py` fails if one gains the feature or a cfg)**,
   which is not a duplicate run. The host feed seam (`play-feed/src/ffi_host.rs`) exists ONLY in the hostsim
   configuration, so every test that drives an access unit through `sf_feed` is compiled out of the
   default pass and cannot fail it — which is how the prime-livelock regression
@@ -1309,9 +1310,10 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   Each has its own `build.rs` (the nanosvg link line reaches only the package that prints it), and each forwards the
   application's features with its defaults (the webOS crate omits `placeholder-sentinel`, which only the simulator's dump build names; `ci/test_platform_features.py`); the desktop's dependencies are `optional` and only its
   `hostsim` enables them, so a default-feature pass lists it and builds nothing of it.
-  `rust-modules/platform-tizen/` (crate `plx_platform_tizen`, W9) is the third platform crate, **empty so far**: its library is
-  `#![cfg(feature = "tizen")]` (its own feature, in no default set), its one dependency (the application) is `optional` and only
-  `tizen` enables it, it forwards every application feature but `hostsim`, and `[platform tizen]` in `ci/module-layers.ini` is its layer.
+  `rust-modules/platform-tizen/` (crate `plx_platform_tizen`, W9) is the third platform crate: a hosted `.so` entry, an Ecore window, an EGL
+  context, the remote's keys and a UDP log tap, emulator only, with `host::NO_MEDIA` and no playback. Its library is
+  `#![cfg(feature = "tizen")]` (its own feature, in no default set), every dependency (the application, `plx_base`, `plx_os`, and
+  `serde_json` for the launch string) is `optional` and only `tizen` enables them, it forwards every application feature but `hostsim`, and `[platform tizen]` in `ci/module-layers.ini` is its layer.
 - `rust-modules/ui/src/` (workspace crate `plx_ui`) — **the UI, as a shared design system**: `theme.rs` tokens, the retui core
   (`lib.rs` `Painter`/`View`), reusable components (`widgets.rs`/`table.rs`/`label.rs`/`icons.rs`),
   and, since phase 9 (Player was the last), no legacy screens at all — every route mounts an owned

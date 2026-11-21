@@ -911,7 +911,9 @@ ruled (2026-11-21, Decision 3 amended) that `Shell` and `Surface`, with the rest
 are reachable ONLY through `plxnative_modules::host` (Target shape 8), never as general `pub` items of the
 application crate; `HostEvent` stays app-private, and a platform reports input through `EventSink`. W7a publishes
 today's `Shell` (12 methods) and `Surface` (5, plus `deliver`) as they are; the fold toward the shape above (one
-`Surface`, `video_hole`, `pump`) is W9's, which is the first change with a second implementation to fold toward.
+`Surface`, `video_hole`, `pump`) was expected of W9, the first change with a second implementation to fold toward.
+W9 kept those calls (see its D1 note); the fold waits for the SDL shells to deliver through the sink and is not
+scheduled.
 The dispatcher's rig hooks (`ui/src/dispatch.rs:728-730`) keep delegating through `run::rig_*`.
 
 ### 2. Input and lifecycle: canonical actions (review M6, C8; critic F11)
@@ -1153,10 +1155,11 @@ Ecore names to `remote_token_key` pairs".
   - Threads. `plx_host_start` runs on the host's main thread inside `OnCreate`: it creates the Ecore_Wl2 window and
     registers the key handlers there (the hello-world's model, F28; E6, E8), copies the table and the launch
     string, spawns the loop thread and returns. `plx_host_post` may be called from any thread: a bounded queue
-    push and a wake, never a block. `plx_host_stop` runs on the host main thread, sets `stopping` and returns.
+    push (256 entries; a full queue drops the newest input and counts it), never a block; the loop drains it every
+    iteration through `Surface::deliver`, so nothing is woken. `plx_host_stop` runs on the host main thread, sets `stopping` and returns.
   - The loop thread runs `run_application` and mints `MainThread` (F32). There the token means "the loop thread":
     it authorises the player adapter and EGL, NOT Ecore window calls, and `MainThread::assume`'s safety text
-    (`base/src/task.rs:138`, "the SDL main thread") is updated in W9 before it is minted there. Work that must run
+    (`base/src/task.rs:138`, "the SDL main thread") is updated in W9 (landed): it names the loop thread of a hosted platform. Work that must run
     on the host thread leaves as a queued request through the callback table and comes back as an addressed
     completion event; the loop never waits on the host thread.
   - Ownership: a string passed into the library is copied before the call returns; a string passed to the host
@@ -1219,7 +1222,8 @@ Ecore names to `remote_token_key` pairs".
   the app's old path). `Surface::deliver(&self, &mut dyn EventSink)` is ADDITIVE, beside `Surface::poll`: `deliver` is
   required, `poll` is defaulted to `false` and `#[doc(hidden)]`, and the loop's `drain_sdl` drains `poll` as before and
   then calls `deliver` once. The SDL shells deliver nothing through the sink, so every SDL event still comes through
-  `poll` (a unit test pins both). `poll` is RETIRED once the SDL shells deliver through the sink, W9 at the latest.
+  `poll` (a unit test pins both). `poll` is RETIRED once the SDL shells deliver through the sink. W9 landed without that: `poll` remains, and
+  the retirement is not scheduled.
 - What `host` carries beyond the types (W7b). The application keeps the playback composition (`app/adapters/backends.rs`:
   `acb_init`, `compose_native`, `compose_feed`) until W11a moves it into the webOS platform, and the simulator's video
   sink (`HOST_SINK`, `adapters/hostsim.rs`) draws the decoded picture, which only the application may. So `host` hands a
@@ -1765,8 +1769,8 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   the application crate (W7a expected `plx_media` too; after W7b's first lane only the desktop crate's test of the composed backends needs it, see the next bullet). The test has no `[[test]]`
   entry (cargo discovers `tests/*.rs`), so no `Cargo.toml` and no `ci/proofs` certificate changed. `make
   test-host-interface` is the incremental loop and `check-cargo-unit-hostsim` runs the same line, pinned in
-  `ci/test_ci_split.py` (`GATES`). `Surface::poll` and `Surface::deliver` coexist until W9 retires `poll`; the SDL
-  shells' `deliver` delivers nothing. `sdl_init` and `sdl_open` were not published by W7a: the first lane of W7b decides
+  `ci/test_ci_split.py` (`GATES`). `Surface::poll` and `Surface::deliver` coexist until the SDL shells deliver through
+  the sink (W9 did not do it; not scheduled); the SDL shells' `deliver` delivers nothing. `sdl_init` and `sdl_open` were not published by W7a: the first lane of W7b decides
   what the two real platform crates need of them (the next bullet). The W6 minors rode along (the reviewer note's inventory claim, and the SDL crate's
   source-file pin reading only `*.rs` entries).
 - As landed (W7b, first lane, before the move; three commits, no file moves): (1) the surface pins read an attribute and its
@@ -1878,6 +1882,15 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   (`make -n` diff); fw-compat-reviewer; the packaged `.so`'s dependencies inspected, that exact `.tpk` loaded;
   `ci/check-deps.sh` confirms the new thread and the host-table static trip no ledger (UNVERIFIED: the ledgers scan
   machine crates; this crate is runner code).
+  - D1, the null window handle (landed): on Tizen `Surface::window()` returns null and `bind_window`,
+    `grab_surface` and the other SDL-shaped `Shell` calls are stated no-ops, because the window is Ecore's and the
+    W9 build never initialises SDL's video subsystem; of the calls that still read the handle,
+    `textinput`'s `has_focus` returns `None` for a null window before any SDL call (logged as `focus=?`), and only
+    the on-screen-keyboard probe (`keyboard_probe(win)`, called from `app/boot.rs`) takes SDL's "no window"
+    answer from `SDL_GetWindowFlags(NULL)`. Pinned by
+    `the_real_sdl_answers_a_null_window_with_video_uninitialised` (`shell-sdl/src/text.rs`) and
+    `a_null_window_has_no_focus_reading_and_asks_sdl_nothing` (`src/textinput.rs`); the Tizen crate's
+    own tests run under `cargo test --lib -p plx_platform_tizen --features tizen`.
   - MVP acceptance (Decision 8): an emulator run (x86_64, the TV 10.0 image) against `tests/mock_pms.py`, never a
     real account: the interface draws, the Ecore keys drive it, there is no playback, and the log reaches a UDP
     receiver with no sequence gap (E5). It is labelled emulator only and gives no frame-rate or latency claim (E6).

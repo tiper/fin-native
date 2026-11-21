@@ -530,4 +530,33 @@ mod tests {
             "the cut must not split a codepoint"
         );
     }
+
+    /// **A surface with no SDL window is safe to ask the SDL-shaped questions** (the Tizen platform's
+    /// `Surface::window()` is null and it never initialises SDL: `docs/platform-ports.md`, W9, D1).
+    /// This calls the REAL externs `keyboard_probe` and `textinput::available` reach, not
+    /// [`host_test_sdl`]'s stubs, which `cfg(test)` swaps in for the wrappers above: the declarations
+    /// in `sys.rs` resolve against the host's SDL2, whose video subsystem no host test initialises, so
+    /// this is exactly the state of a process that never called `SDL_Init`. SDL answers a NULL window with
+    /// "no flags" and an uninitialised video with "no screen keyboard", and sets an error string; it
+    /// does not fault. If this ever fails, `Surface::window` cannot be null and the SDL-shaped calls
+    /// have to move into the trait (the fold the plan keeps as the alternative).
+    #[test]
+    fn the_real_sdl_answers_a_null_window_with_video_uninitialised() {
+        // The event queue's tests bring SDL's events up and down; none initialises video.
+        let _serial = plx_base::testlock::serial();
+        // SAFETY: stock SDL2 calls with a NULL window and no subsystem running, the case under test.
+        let (flags, support, active) = unsafe {
+            (
+                sys::SDL_GetWindowFlags(std::ptr::null_mut()),
+                sys::SDL_HasScreenKeyboardSupport(),
+                sys::SDL_IsTextInputActive(),
+            )
+        };
+        assert_eq!(flags, 0, "a NULL window has no flags, so no input focus bit");
+        assert_eq!(support, 0, "no video driver, so no screen keyboard");
+        // Only a report: it is a number the boot log prints and it is whatever this SDL says (a desktop's
+        // answers 1 here; see `textinput`'s `STARTED`, which is why nothing decides on it). The property is
+        // that the call returned.
+        let _ = active;
+    }
 }

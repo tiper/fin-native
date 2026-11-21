@@ -1074,7 +1074,7 @@ unsafe fn drain_sdl(app: &mut App, fr: &mut Frame) {
     // The second path: what the platform's surface delivers through its sink. An SDL surface delivers
     // nothing here (every SDL event came through `poll` above), so on the television and a desktop this
     // is an empty queue; a surface that is not SDL's has no `poll` and only this. `poll` is retired once
-    // the SDL shells deliver through the sink (W9 at the latest, `docs/platform-ports.md`).
+    // the SDL shells deliver through the sink (not scheduled, `docs/platform-ports.md`).
     deliver_events(app, fr);
 }
 

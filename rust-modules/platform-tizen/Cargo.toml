@@ -3,7 +3,7 @@ name = "plx_platform_tizen"
 version = "0.0.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-description = "PlxNative's Tizen platform (Samsung TVs): a hosted .so entry, an Ecore window, keys and the UDP log channel. Empty for now; compiled only under tizen."
+description = "PlxNative's Tizen platform (Samsung TVs): a hosted .so entry, an Ecore window and EGL context, the remote's keys and the UDP log channel. Emulator only; compiled only under tizen."
 repository = "https://github.com/GLinnik21/plx-native"
 publish = false
 build = "build.rs"
@@ -38,12 +38,23 @@ devtriggers = ["plxnative-modules?/devtriggers"]
 threadcheck = ["plxnative-modules?/threadcheck"]
 lab-diagnostics = ["plxnative-modules?/lab-diagnostics"]
 placeholder-sentinel = ["plxnative-modules?/placeholder-sentinel"]
-tizen = ["dep:plxnative-modules"]
+tizen = ["dep:plxnative-modules", "dep:plx_base", "dep:plx_os", "dep:serde_json"]
 
 [dependencies]
 # The application, through its `host` module: the one crate a platform names. Optional, so the empty
 # default-feature library carries no unused dependency; `tizen` is the one feature that enables it.
 plxnative-modules = { path = "..", default-features = false, optional = true }
+# The lower layers this platform's tables are written from, and the one third-party package its launch
+# string needs (already in the lock: the application parses JSON with it). `plx_base` carries the event
+# log's tap, the dev-trigger preset, the layout, `dynlib!` and the task and watchdog seams; `plx_os` the
+# `tv` services and the published platform. All optional, enabled only by `tizen`.
+plx_base = { path = "../base", optional = true }
+plx_os = { path = "../os", optional = true }
+serde_json = { version = "1", default-features = false, features = ["alloc", "std"], optional = true }
+
+[dev-dependencies]
+# The host tests' process-global test lock and private event log (`test-support`).
+plx_base = { path = "../base", features = ["test-support"] }
 
 [lints]
 workspace = true

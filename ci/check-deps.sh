@@ -59,7 +59,7 @@
 # and machine, plex's session.rs, and the player's lifecycle.rs, recovery.rs (the failed-open ladder
 # machine) and route planners.
 #   workers  — a production worker start in a machine: `task::spawn`, `spawn_small*`,
-#              `spawn_off_frame*`, `storage_worker::submit`, `submit_retained`, the command worker's
+#              `spawn_sized`, `spawn_off_frame*`, `storage_worker::submit`, `submit_retained`, the command worker's
 #              `.submit_ticket`. A machine's work leaves as a typed effect the app runs.
 #   globals  — a production read of a process-global registry in a machine: `client_for`,
 #              `current_server`, `current_snapshot`, `keypin::revision`, `keypin::blocked_for`,
@@ -159,8 +159,8 @@ SRC_PLATFORM_WEBOS=rust-modules/platform-webos/src
 SRC_PLATFORM_DESKTOP=rust-modules/platform-desktop/src
 SRC_PLATFORM_TIZEN=rust-modules/platform-tizen/src
 # The webOS and desktop platform crates took files out of `$SRC` (`port.rs`, `system.rs`, `platform_desktop.rs`, `bin/sim.rs`) and
-# out of `$SRC_OS` (`keymanager.rs`, `webos.rs`, `webos/`); the Tizen one (W9) is empty today and is named in the same
-# rules so that its code is gated from its first line. A rule that reads the WHOLE of `$SRC` or of `$SRC_OS` reads
+# out of `$SRC_OS` (`keymanager.rs`, `webos.rs`, `webos/`); the Tizen one (W9) holds code now and is named in the same
+# rules so that it is gated like the others. A rule that reads the WHOLE of `$SRC` or of `$SRC_OS` reads
 # every platform crate too, so that moving a file into one does not move it out of the gate; only a rule scoped to a
 # directory of `$SRC` (`app/`, `dev/`) or to a file of `$SRC_OS` (`tv/plane.rs`) cannot reach them and stays as it is.
 # `tests/test_harness.py` (`DepGates.test_a_gate_that_reads_the_whole_app_or_os_crate_reads_the_platform_crates`) fails
@@ -1475,7 +1475,7 @@ fork_scope_re=$(scope_re "${FORK_SCOPE[@]}")
 # files costs ~0.5 s for all of them). It prints `<W|G|F><TAB><file>` for every file of a rule's scope that
 # has a line that could hold a site of that rule, and ci/ledger.awk then decides what is really one; a
 # file the pattern misses cannot hold one. W and G read the machines, F the fork scope.
-workers_pat='spawn_small|spawn_off_frame|submit_retained|submit_ticket|task::(spawn|\{|\*)|storage_worker::(submit|\{|\*)|(task|storage_worker)[[:space:]]+as[[:space:]]'
+workers_pat='spawn_small|spawn_sized|spawn_off_frame|submit_retained|submit_ticket|task::(spawn|\{|\*)|storage_worker::(submit|\{|\*)|(task|storage_worker)[[:space:]]+as[[:space:]]'
 globals_pat='client_for|current_server|current_snapshot|keypin::(revision|blocked_for|\{|\*)|session::(peek|current_gen|screen_input_revision|\{|\*)|grant::(offers|\{|\*)|(^|[^A-Za-z0-9_])transport::(viewer_paused|\{|\*)|(^|[^A-Za-z0-9_])preview::(paused|\{|\*)|player::TX|devcaps::(caps|\{|\*)|is_dp_audio|(^|[^A-Za-z0-9_])tape::(active|\{|\*)|(^|[^A-Za-z0-9_])(sidecar|ass_source)::(takes_colour|selected|\{|\*)|server_ids|server_roster_gen|server_facts_gen|server_probe_result|peek_settled|screen_input_revision|(session|keypin|grant|player|transport|preview|devcaps|tape|sidecar|ass_source|caps|is_dp_audio|is_dp_audio_track|peek|peek_settled|current_gen|screen_input_revision|revision|blocked_for|offers|paused|viewer_paused|TX|server_ids|server_roster_gen|server_facts_gen|server_probe_result)[[:space:]]+as[[:space:]]'
 # a cfg line: one with `test` on it, or an attribute / `cfg!` that opens on one line and closes on a later
 # one, where `test` may sit on the second. A line that is a test-only attribute outright — `#[cfg(test)]`,
@@ -1507,7 +1507,7 @@ ledger_candidates() {
 }
 
 # workers: a production call that starts a worker — `task::spawn(`, `spawn_small(`,
-# `spawn_small_keeping(`, `spawn_small_or_inline(`, `spawn_off_frame(`, `spawn_off_frame_keeping(` (base/src/task.rs),
+# `spawn_small_keeping(`, `spawn_small_or_inline(`, `spawn_sized(`, `spawn_off_frame(`, `spawn_off_frame_keeping(` (base/src/task.rs),
 # `storage_worker::submit(`, `submit_retained(` (base/src/storage_worker.rs) and the typed command
 # worker's `.submit_ticket(`, keyed `<path>::<enclosing fn>::<spelling>`. A BARE `spawn(` / `submit(` is a
 # site only in a file that imports it from `task` / `storage_worker` (no other `spawn(` is a worker start:
@@ -1521,9 +1521,9 @@ if want workers; then
 workers_sites=$(
   ledger_candidates W \
     | LG_MODE=call LG_KEYSPELL=1 LG_USE_OK=1 LG_REF_USE_ONLY=1 \
-      LG_SITE='(^|[^A-Za-z0-9_])(spawn_small|spawn_small_keeping|spawn_small_or_inline|spawn_off_frame|spawn_off_frame_keeping|submit_retained|submit_ticket|task::spawn|storage_worker::submit)([^A-Za-z0-9_]|$)' \
-      LG_DEF='fn[[:space:]]+(spawn|spawn_small|spawn_small_keeping|spawn_small_or_inline|spawn_off_frame|spawn_off_frame_keeping|submit|submit_retained|submit_ticket)[[:space:]]*[(<]' \
-      LG_REF='(^|[^A-Za-z0-9_])(spawn|spawn_small|spawn_small_keeping|spawn_small_or_inline|spawn_off_frame|spawn_off_frame_keeping|submit|submit_retained|submit_ticket|task|storage_worker)[[:space:]]+as[[:space:]]' \
+      LG_SITE='(^|[^A-Za-z0-9_])(spawn_small|spawn_small_keeping|spawn_small_or_inline|spawn_sized|spawn_off_frame|spawn_off_frame_keeping|submit_retained|submit_ticket|task::spawn|storage_worker::submit)([^A-Za-z0-9_]|$)' \
+      LG_DEF='fn[[:space:]]+(spawn|spawn_small|spawn_small_keeping|spawn_small_or_inline|spawn_sized|spawn_off_frame|spawn_off_frame_keeping|submit|submit_retained|submit_ticket)[[:space:]]*[(<]' \
+      LG_REF='(^|[^A-Za-z0-9_])(spawn|spawn_small|spawn_small_keeping|spawn_small_or_inline|spawn_sized|spawn_off_frame|spawn_off_frame_keeping|submit|submit_retained|submit_ticket|task|storage_worker)[[:space:]]+as[[:space:]]' \
       LG_BARE='task::(spawn([^A-Za-z0-9_]|$)|\*|\{([^}]*[^A-Za-z0-9_])?spawn([^A-Za-z0-9_}][^}]*)?\})@@(^|[^A-Za-z0-9_.:])spawn([^A-Za-z0-9_]|$);;storage_worker::(submit([^A-Za-z0-9_]|$)|\*|\{([^}]*[^A-Za-z0-9_])?submit([^A-Za-z0-9_}][^}]*)?\})@@(^|[^A-Za-z0-9_.:])submit([^A-Za-z0-9_]|$)' \
       ledger_scan | sort
 )

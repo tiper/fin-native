@@ -192,6 +192,14 @@ fn try_spawn(what: &str, stack: Option<usize>, f: impl FnOnce() + Send + 'static
     })
 }
 
+/// [`spawn`] on a stack of `stack` bytes, for the one long-lived thread that stands in for the process's
+/// main thread: a hosted platform's loop thread runs the application, which was written for the 8 MiB
+/// main thread of a television and not for the platform's 2 MiB default (`MainThread::assume`'s doc).
+/// `None` means the OS refused the thread; see [`spawn`].
+pub fn spawn_sized(what: &str, stack: usize, f: impl FnOnce() + Send + 'static) -> Option<JoinHandle<()>> {
+    spawn_with(what, Some(stack), f)
+}
+
 /// How many small-stack network workers (`spawn_small*`) are alive. A host test that returns while
 /// one is still running lets it write process globals (the player and route state, the season and
 /// detail mailboxes, libcurl's init) under the NEXT test's lock; [`drain_workers_for_test`] is the
@@ -583,6 +591,20 @@ mod tests {
             h.is_none(),
             "a spawn that cannot succeed must report, not hand back a handle"
         );
+    }
+
+    /// `spawn_sized` gives the thread the stack asked for: a 6 MiB frame overflows the platform default
+    /// (2 MiB) and fits the 16 MiB asked for here, so the closure returning is the proof.
+    #[test]
+    fn a_sized_spawn_gets_the_stack_it_asked_for() {
+        let (tx, rx) = mpsc::channel();
+        let h = super::spawn_sized("sized-stack", 16 << 20, move || {
+            let frame = [1u8; 6 << 20];
+            tx.send(std::hint::black_box(&frame).iter().map(|&b| usize::from(b)).sum::<usize>()).unwrap();
+        })
+        .expect("spawn");
+        h.join().unwrap();
+        assert_eq!(rx.recv().unwrap(), 6 << 20);
     }
 
     /// Workers carry their label as the thread name (what a scheduler trace and
