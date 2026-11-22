@@ -36,8 +36,9 @@ pub fn state_root() -> PathBuf {
     stored().map_or_else(|| (Layout::DERIVED.state_root)(), |l| l.state_dir.clone())
 }
 
-/// The layout group of the Tizen `Services` table.
-pub const LAYOUT: Layout = Layout { payload_dir, state_root };
+/// The layout group of the Tizen `Services` table. The payload's last resort is the derivation's neutral one:
+/// this platform has no install prefix of its own to name, because the host states the payload directory.
+pub const LAYOUT: Layout = Layout { payload_dir, state_root, fallback_dir: Layout::DERIVED.fallback_dir };
 
 #[cfg(test)]
 mod tests {

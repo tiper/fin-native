@@ -125,7 +125,7 @@ base
 
 | layer | members | prod lines | an edit there recompiles |
 |---|---|---:|---:|
-| base | `eventlog paths task cbuf sha256 sha1 b64 spki dynlib checkpoint storage_worker fontcov surface tile hold detail_parts devtrig diag::{zlib,spans,heartbeat} testlock testnet testscratch testrace` | 9k | everything |
+| base | `eventlog choice paths task cbuf sha256 sha1 b64 spki dynlib checkpoint storage_worker fontcov surface tile hold detail_parts devtrig diag::{zlib,spans,heartbeat} testlock testnet testscratch testrace` | 9k | everything |
 | machine | `ui::{machine,present,idle,landgate,landing,motion}` | 4k | 97% |
 | os | `webos storage keymanager devcaps imgcache i18n labcfg tv` | 11k | 96% |
 | gfx | `gfx egl text rtl img svg gpu_timer hwcnt overdraw dump` | 15k | 68% |
@@ -366,7 +366,7 @@ L15's 44 entries, 205 references of which 95 were in production code. The port's
 their layers, so none of this held up the split.
 
 L15 moved every one of those references behind an interface in `os`'s new `tv` module that
-the port fills at boot. `tv::Services` is a table of function pointers and stated values in six groups (`identity`, `secure`, `system`, `storage`, `layout` and `legacy_webos_media`; `layout` is `plx_base::paths`'s type, which `install_services` publishes into `paths` rather than keeping in `tv`), installed once by `app::run_application` (from the `Platform` its entry hands it) before anything
+the port fills at boot. `tv::Services` is a table of function pointers and stated values in seven groups (`identity`, `secure`, `system`, `storage`, `layout`, `libraries` and `legacy_webos_media`; `layout` is `plx_base::paths`'s type and `libraries` is `plx_base::dynlib`'s, which `install_services` publishes into those modules rather than keeping in `tv`, both through the one publish-once cell `plx_base::choice::Choice`), installed once by `app::run_application` (from the `Platform` its entry hands it) before anything
 that reads it. With nothing installed (host unit
 tests, where nothing calls `plex_run`) `tv::Services::HOST_TEST` answers what the host arms answered before; a
 shipping build that reaches it logs `tv: port not installed - using the no-port defaults` once.

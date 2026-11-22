@@ -308,10 +308,17 @@ impl Platform {
     /// (`paths` is below `tv` and cannot read it, as `scrub::set_identities` is pushed from above). It
     /// must run before the first read of `app_dir()` (`pre_boot_diagnostics`' `appdir:` line, the
     /// first one); a refusal is logged here, after the fact, because `paths` itself never logs.
+    ///
+    /// The third line publishes the platform's [`Libraries`](plx_os::tv::Libraries) into `plx_base::dynlib`
+    /// the same way (the shape is `plx_base::choice::Choice`'s, shared with the layout): it must run before
+    /// the first libcurl table or EGL probe loads, none of which runs before this install.
     pub(crate) fn install_services(&self) {
         let _ = plx_os::tv::install(self.services);
         if let Err(refused) = plx_base::paths::publish(self.services.layout) {
             plx_base::eventlog::log(&format!("layout: not published: {refused}"));
+        }
+        if let Err(refused) = plx_base::dynlib::publish(self.services.libraries) {
+            plx_base::eventlog::log(&format!("libraries: not published: {refused}"));
         }
     }
 }
@@ -734,6 +741,16 @@ mod tests {
             1,
             "`paths::publish` is called by `Platform::install_services` and nowhere else"
         );
+        // The library names are published by the install's third line, for the same reason: the first
+        // libcurl table or EGL probe that loads freezes `Libraries::HOST` and the platform's word is lost.
+        let libraries = install.find(concat!("dynlib::", "publish(")).expect("the libraries publish");
+        assert!(publish < libraries, "the libraries are published after the layout, right after the install");
+        assert_eq!(install.matches(concat!("dynlib::", "publish(")).count(), 1, "one publish, in install_services");
+        assert_eq!(
+            crate_sources().iter().map(|text| text.matches(concat!("dynlib::", "publish(")).count()).sum::<usize>(),
+            1,
+            "`dynlib::publish` is called by `Platform::install_services` and nowhere else"
+        );
 
         // What runs before the install: the application's entry up to it, `host::run`, and each
         // platform's own entry. None names a directory read.
@@ -782,9 +799,22 @@ mod tests {
             ("platform-desktop bin/sim.rs (main, up to the run call)", sim),
         ];
         texts.extend(tizen);
+        // Nor does any of it load a shared table or read the library names: the curl tables and the EGL
+        // probe are the application's own, after the install. (Tizen's Ecore and EGL tables are its OWN
+        // literals, loaded on the host thread before the install by design; they never call these.)
+        let loads = [
+            concat!("dynlib::", "libraries("),
+            concat!("curl::", "load("),
+            concat!("global_", "init("),
+            concat!("curlmulti::", "load("),
+            concat!("raw::", "load("),
+        ];
         for (what, text) in texts {
             for read in reads {
                 assert!(!text.contains(read), "{what} must not read `{read}` before the layout is published");
+            }
+            for load in loads {
+                assert!(!text.contains(load), "{what} must not use `{load}` before the libraries are published");
             }
         }
     }

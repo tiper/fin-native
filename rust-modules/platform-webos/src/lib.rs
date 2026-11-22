@@ -18,10 +18,44 @@
 //! layer and the application's `host`, nothing names it, and it names no other platform
 //! (`docs/platform-ports.md`, W7). The one thing `plx_os` keeps of all this is the interface the table
 //! fills (`plx_os::tv`).
+// Host checks may build without an executor; a native television artifact must select one.
+#[cfg(all(target_arch = "arm", target_os = "linux", not(feature = "hostsim"),
+    not(any(feature = "play-uri", feature = "play-feed"))))]
+compile_error!("native playback requires play-uri or play-feed");
 mod keymanager;
 mod port;
 mod system;
 mod webos;
+
+#[cfg(test)]
+mod backend_rule_tests {
+    /// **A native television build must name a playback backend, and this crate is where that is said.**
+    /// The rule used to sit in the application crate, which would have made it a rule of every 32-bit ARM
+    /// Linux build of the application, a Tizen one included; it is the webOS platform's own. A host test
+    /// cannot build for ARM, so this reads the source: the `compile_error!` is here with its whole `cfg`
+    /// (ARM, Linux, no `hostsim`, neither backend), and the application crate has none. The negative build
+    /// itself (`cargo check -p plx_platform_webos --target armv7-unknown-linux-gnueabi --no-default-features`)
+    /// is the one that fails on it. Needles are split with `concat!`, so this test's own text never matches.
+    #[test]
+    fn the_native_backend_rule_is_the_webos_platforms_and_not_the_applications() {
+        let here = include_str!("lib.rs");
+        let rule = concat!("compile_", "error!(\"native playback requires play-uri or play-feed\");");
+        assert_eq!(here.matches(rule).count(), 1, "exactly one rule in this crate");
+        let at = here.find(rule).expect("the rule");
+        let cfg = &here[..at];
+        let cfg = &cfg[cfg.rfind("#[cfg(all(").expect("the rule's cfg")..];
+        for part in [
+            "target_arch = \"arm\"",
+            "target_os = \"linux\"",
+            "not(feature = \"hostsim\")",
+            "not(any(feature = \"play-uri\", feature = \"play-feed\"))",
+        ] {
+            assert!(cfg.contains(part), "the rule's cfg lost `{part}`");
+        }
+        let application = include_str!("../../src/lib.rs");
+        assert!(!application.contains(concat!("compile_", "error!")), "the application crate states no platform rule");
+    }
+}
 
 #[cfg(test)]
 mod sdl_pin_tests {

@@ -53,7 +53,7 @@ In scope if the diff touches any of:
 | `rust-modules/base/src/dynlib.rs` | the one door for runtime-bound libraries; the macro's shape *is* the calling convention |
 | `rust-modules/media-codecs/src/ffi.rs` | the four bundled-FFmpeg `dynlib!` blocks + the pinned-major gate |
 | `rust-modules/media-codecs/src/venc.rs` | the moved encoder ABI self-check and its FFmpeg calls |
-| `rust-modules/net/src/net.rs` | the libcurl `dynlib!` block — variadic wrappers over two C symbols, plus the candidate list |
+| `rust-modules/net/src/net.rs` | the libcurl `dynlib!` block — variadic wrappers over two C symbols; its candidate list is the PLATFORM's (`curl: platform(curl)`), stated in `platform-webos/src/port.rs`, `platform-desktop/src/lib.rs` and `platform-tizen/src/lib.rs` |
 | `rust-modules/net/src/curlio.rs` | the byte-range `curl_multi_*` `dynlib!` table, exposed as `net::range_io` |
 | `src/starfish.c` | 15 mangled C++ externs against real libraries (built only when `PLAYBACK_HAS_FEED`) |
 | `src/video_plane.c`, `src/starfish.h` | the video-plane binding: its own `dlopen` of ACB, the `dlsym` probe for the SDL exported window, and `vp_mode()` choosing between them; the header declares the `acb_*` / `sf_*` seam the Rust externs mirror |
@@ -208,12 +208,16 @@ Four things, in this order:
    design, rather than returning a sentinel that would travel into the pipeline as a plausible
    value.
 3. **Candidate list, and its ORDER.** Order is by preference, not by age, and it bites wherever a
-   device carries both names — 5.3.1 and 6.4.0 do (see `--lib` under step 4). The live one is
-   `curl: ["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"]` in `net.rs`, and every position has
+   device carries both names — 5.3.1 and 6.4.0 do (see `--lib` under step 4). The three libcurl
+   tables (`net.rs`, `curlio.rs`, `connect_only.rs`) and the EGL probe (`gfx/src/egl.rs`) no longer
+   carry a literal: they read `Services::libraries` through `dynlib!`'s `platform(..)` form. The
+   webOS list is `["libcurl.so.4", "libcurl.so.5"]` in `platform-webos/src/port.rs`, the desktop
+   states `["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"]`, and a process that published nothing
+   reads that union (`Libraries::HOST`); every position has
    a written reason: `.so.4` first because that is what most of the fleet answers to, and the
-   macOS `.4.dylib` **last, deliberately** — a television never reaches it, so it costs the device
-   one extra failed `dlopen` only in the already-fatal no-curl case, while being the single
-   candidate that lets the desktop build sign in at all. Read any new list against
+   macOS `.4.dylib` **last, deliberately** in the desktop list and in `Libraries::HOST` (the
+   webOS list drops it: no television carries it), while being the single candidate that lets
+   the desktop build sign in at all. Read any new list against
    `tools/fwcompat.py --inventory <lib>`.
 4. **Is `dynlib!` even right here?** If the SONAME does not move, the answer is no; link it and
    keep the compile-time check.

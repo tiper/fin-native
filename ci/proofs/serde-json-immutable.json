@@ -412,7 +412,7 @@
         ],
         "edition": "2021",
         "lib": "src/lib.rs",
-        "lib_sha256": "8054c8db240db9c9e1b4bcb868eed5b95f94123c1726c7b9f0ff074dcd018e01"
+        "lib_sha256": "2c0a6e717b032ac984576518153276bfb9acdbacfb91a257be2ea66313e1bbb5"
       },
       "data/Cargo.toml": {
         "dependency": [
@@ -515,7 +515,7 @@
         ],
         "edition": "2021",
         "lib": "platform-tizen/src/lib.rs",
-        "lib_sha256": "d2e79e6c035ce2f2ec0ec1f27a632e755a2c70758ff163e1a435f0eecf71fa2e"
+        "lib_sha256": "53222448155080de40ccdf1ffd9c58d02c041d9ba6946ae9910efdc8c79c1984"
       },
       "platform-webos/Cargo.toml": {
         "dependency": [
@@ -530,7 +530,7 @@
         ],
         "edition": "2021",
         "lib": "platform-webos/src/lib.rs",
-        "lib_sha256": "0fe6e7bd426d93c761b8c123e991fc7d0fee050e9607133fa689c004b67d785f"
+        "lib_sha256": "659c21d9752b1d7b1ca6d8b3ca93b6656e0ce51891d71bc0834ea4ade686e3a5"
       },
       "play-feed/Cargo.toml": {
         "dependency": [

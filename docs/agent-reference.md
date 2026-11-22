@@ -1044,7 +1044,11 @@ kills the process at `exec()` — before `main`, before the event log exists. So
   Loading is **all-or-nothing** — every symbol resolves or the table stays empty and the missing
   names go to the event log. Read that module's doc before adding a library to it; the rule is
   *only* when the version actually varies, because moving a library there trades link-time symbol
-  checking for version tolerance.
+  checking for version tolerance. The names of the OS-owned libraries that differ per platform (the three
+  libcurl tables and the EGL probe) are the PLATFORM's statement, not a literal in the layer: a table
+  declared `dynlib! { curl: platform(curl) { .. } }` reads `Services::libraries`, which
+  `Platform::install_services` publishes into `plx_base::dynlib` before the first load (webOS, desktop and Tizen
+  each state their lists in their own `SERVICES`; a process that published nothing reads `Libraries::HOST`, the union).
 - **`src/video_plane.c`** resolves ACB and the webOS 5+ SDL exported-window API the same way, and
   picks between them (`vp_mode()`). The two are complementary across all 14 firmwares.
 - Adding a new FFmpeg/curl call means **adding it to the `dynlib!` block**. There is no link error
@@ -1407,7 +1411,7 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   a compatibility global or mailbox.
 - `rust-modules/base/src/dynlib.rs` — the runtime library binder (`dlopen`, by SONAME candidate list or
   by absolute path). Its callers (`git grep -l 'dynlib! {' -- rust-modules` lists them), each for its own
-  reason: `net.rs` binds **curl** by candidate list because its SONAME moves between releases;
+  reason: `net.rs` binds **curl** by candidate list (the platform's `libraries.curl`) because its SONAME moves between releases;
   `media-codecs/src/ffi.rs` binds the **bundled FFmpeg** by absolute path because ours ships beside the binary, on
   no library search path — not because any
   version varies; `player/ass.rs` and `gfx/src/rtl.rs` bind the **bundled libass-plx** the same way,

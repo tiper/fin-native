@@ -11,10 +11,6 @@
 //! native-crash spool through `plx_sentry_spool_external`, and forwards the two library-thread callbacks
 //! (`sf_on_event`, `plx_play_feed`'s sf_event.rs; `acb_on_event`, the platform crate's `webos::video_sink`).
 //! Everything else is Rust-internal (the per-module `repr(C)` shapes are migration legacy, not ABI).
-// Host checks may build without an executor; a native television artifact must select one.
-#[cfg(all(target_arch = "arm", target_os = "linux", not(feature = "hostsim"),
-    not(any(feature = "play-uri", feature = "play-feed"))))]
-compile_error!("native playback requires play-uri or play-feed");
 mod app; // run_application — the Rust app core / event loop (the entry inverted from main.c; the webOS platform crate's `plex_run` hands over to it)
 mod capture; // dev live UI capture stream: own-GLES-frame grab → MPEG1/TS or JPEG → TCP (UI plane only)
 mod coldstart; // retires old last-page bookmarks; authenticated cold boots now stay on Home

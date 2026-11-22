@@ -37,7 +37,7 @@
 use plxnative_modules::host::{self, sdl_init, sdl_open, Exit, FrameProbe, InitHooks, MediaBoot, OpenAsk, Platform, Shell, Surface};
 use plx_os::devcaps::dv::{self, DvCapability, DvProbe, ProbeSource};
 use plx_os::tv::toast::{Identity, Outcome, Sent};
-use plx_os::tv::{IdentityHooks, Layout, LegacyWebosMedia, SecureHooks, Services, StorageHooks, SystemHooks};
+use plx_os::tv::{IdentityHooks, Layout, Libraries, LegacyWebosMedia, SecureHooks, Services, StorageHooks, SystemHooks};
 use std::ffi::CStr;
 use std::os::raw::{c_int, c_void};
 
@@ -68,6 +68,12 @@ static SERVICES: Services = Services {
     system: SystemHooks { go_home, poll_home: SystemHooks::NONE.poll_home, deliver_toast },
     storage: StorageHooks::NONE,
     layout: Layout::DERIVED,
+    // One crate serves the Mac (libcurl in the dyld shared cache: `libcurl.4.dylib`) and Linux/WSLg (`.so.4`),
+    // and a developer's Linux box may carry either EGL: the union of every name, stated here.
+    libraries: Libraries {
+        curl: &["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"],
+        egl: &["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"],
+    },
     legacy_webos_media: LegacyWebosMedia {
         sink: SINK,
         display_sink: DISPLAY,
@@ -195,6 +201,18 @@ mod tests {
     #[test]
     fn the_desktop_table_keeps_the_account_in_files() {
         assert_eq!(SERVICES.storage.authority, plx_os::tv::authority::Authority::Files);
+    }
+
+    /// **The desktop states the union of library names and no install prefix.** The lists are the ones a
+    /// process that published nothing reads (`Libraries::HOST`), so the simulator and the host tests open the
+    /// same libcurl and EGL; the Mac's `libcurl.4.dylib` is what lets it sign in at all. The layout is the
+    /// derivation, whose last resort is the current directory.
+    #[test]
+    fn the_desktop_table_states_the_union_of_library_names_and_no_install_prefix() {
+        assert_eq!(SERVICES.libraries, Libraries::HOST);
+        assert_eq!(SERVICES.libraries.curl, ["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"]);
+        assert_eq!(SERVICES.libraries.egl, ["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"]);
+        assert_eq!(SERVICES.layout.fallback_dir, plx_base::paths::NO_FALLBACK_DIR);
     }
 
     /// **The desktop declares no SDL function.** The window, the GL context, the queue and the text-input

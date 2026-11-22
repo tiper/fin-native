@@ -12,6 +12,7 @@
 //! The application crate enables it in `[dev-dependencies]` only, so no shipped build sees it.
 
 pub mod eventlog; // THE event log: `eventlog::log` is the one sink every module writes through
+pub mod choice; // `Choice<T>`: a value a platform publishes once, before the first read (`paths`' layout, `dynlib`'s library names)
 pub mod paths; // where the app's own files live — /proc/self/exe, not a hardcoded install prefix
 pub mod process; // `exit_now`: the one way the app's own exits end the process (`_exit`, never libc `exit`, #1115)
 pub mod step; // test-time Sans-IO scope, shared by every layer

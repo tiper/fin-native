@@ -47,7 +47,7 @@ mod surface;
 
 use plx_os::tv::authority::Authority;
 use plx_os::tv::secure::StoreMode;
-use plx_os::tv::{IdentityHooks, LegacyWebosMedia, SecureHooks, Services, StorageHooks, SystemHooks};
+use plx_os::tv::{IdentityHooks, Libraries, LegacyWebosMedia, SecureHooks, Services, StorageHooks, SystemHooks};
 use plxnative_modules::host::{self, Platform};
 
 /// The process's one hosted run: the host's callbacks, the input queue, the stop gate. The three exports and
@@ -65,6 +65,9 @@ pub(crate) static HOSTED: hosted::Hosted = hosted::Hosted::new();
 /// - `system`: no Home key and no system bus.
 /// - `storage`: no storage helper, the records are files under the state root.
 /// - `layout`: the host's two directories ([`layout`]).
+/// - `libraries`: the names the shared tables open, measured on the emulator (E12/E13): `libcurl.so.4` and
+///   `libEGL.so.1`. This crate's own Ecore and EGL tables are literals in their own modules instead: they
+///   load on the host thread BEFORE the install publishes this group, so they cannot be read from it.
 /// - `legacy_webos_media`: none: Starfish and ACB are webOS's.
 static SERVICES: Services = Services {
     identity: IdentityHooks {
@@ -75,10 +78,16 @@ static SERVICES: Services = Services {
         system_locale: identity::system_locale,
         sound_output: IdentityHooks::NONE.sound_output,
     },
-    secure: SecureHooks { mode: StoreMode::MemoryOnly, ..SecureHooks::NONE },
+    secure: SecureHooks {
+        seal: SecureHooks::NONE.seal,
+        open: SecureHooks::NONE.open,
+        remove: SecureHooks::NONE.remove,
+        mode: StoreMode::MemoryOnly,
+    },
     system: SystemHooks::NONE,
     storage: StorageHooks { authority: Authority::Files },
     layout: layout::LAYOUT,
+    libraries: Libraries { curl: &["libcurl.so.4"], egl: &["libEGL.so.1"] },
     legacy_webos_media: LegacyWebosMedia::NONE,
 };
 
@@ -103,6 +112,18 @@ mod tests {
         assert!(matches!((SERVICES.identity.sound_output)(), plx_os::tv::sound::Reply::NoPlatform));
         assert_eq!(SERVICES.legacy_webos_media.display_sink.window_mode(), plx_os::tv::sink::VP_NONE);
         assert!(!SERVICES.legacy_webos_media.sink.feed_abi_is_cow(), "the refusing sink, not a native one");
+    }
+
+    /// **The shared-table names and the install fallback.** The emulator's `libcurl.so.4` and `libEGL.so.1`
+    /// (E12/E13), pinned; the EGL name is the one this crate's own EGL table opens, so the probe in
+    /// `plx_gfx` and the window's context cannot name two libraries. The layout states no install prefix:
+    /// the host names the payload in its launch string.
+    #[test]
+    fn the_table_states_the_emulators_library_names_and_no_install_prefix() {
+        assert_eq!(SERVICES.libraries.curl, ["libcurl.so.4"]);
+        assert_eq!(SERVICES.libraries.egl, ["libEGL.so.1"]);
+        assert_eq!(SERVICES.libraries.egl, egl::libegl::candidates());
+        assert_eq!(SERVICES.layout.fallback_dir, plx_base::paths::NO_FALLBACK_DIR);
     }
 
     /// Read every source of this crate, with its path relative to `src`.
