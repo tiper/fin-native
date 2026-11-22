@@ -227,11 +227,14 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   `plx_media_codecs`, `plx_play_uri`, `plx_playback_contract` and `plx_owp`, which have no `hostsim` cfg and run the
   same test names in both passes, and `plx_platform_tizen`, whose crate is `#![cfg(feature = "tizen")]`: both passes compile it
   EMPTY, and its tests run only under `cargo test --lib -p plx_platform_tizen --features tizen`, which the `tizen-so` job of `.github/workflows/tizen.yml` runs (the only CI job that does, and only for a change under that workflow's path filter); `ci/test_test_crate.py` fails if one gains the feature or a cfg)**,
-  which is not a duplicate run. The host feed seam (`play-feed/src/ffi_host.rs`) exists ONLY in the hostsim
-  configuration, so every test that drives an access unit through `sf_feed` is compiled out of the
-  default pass and cannot fail it — which is how the prime-livelock regression
+  which is not a duplicate run. The host feed seam (`play-feed/src/ffi_host.rs`) exists in the hostsim
+  configuration and, since W8c-1, in every test build (`cfg(test)`, or a dependent that enables
+  `test-support`), so a test that drives an access unit through `sf_feed` runs in the default pass
+  too. Until then it existed ONLY under hostsim and every such test was compiled out of the default
+  pass and could not fail it — which is how the prime-livelock regression
   (`player::engine::prime_livelock_tests`) sat outside the gate entirely while 1398 default-feature
-  tests passed. Cargo keys fingerprints by feature set, so the two coexist in one `target/` and the
+  tests passed. A test that needs `hostsim` itself (a runtime root the environment can steer, the
+  application crate's lifecycle rig) is still hostsim-only. Cargo keys fingerprints by feature set, so the two coexist in one `target/` and the
   second pass costs seconds warm. See the testing section for what it does and does not cover.
   **The per-crate test binaries (`UNIT_SUITE`) run side by side, not one after another.** `cargo test` executes the
   binaries it builds serially, so after the workspace split the suite's wall time was the SUM of
@@ -308,8 +311,9 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   process. Adopting it would also need the tool on every machine and CI job.
 - `make test-hostsim [C=<crate>] [T=filter]` — the `hostsim`-feature unit tests
   (`#[cfg(all(test, feature = "hostsim"))]`: the application crate's `app/run.rs`
-  `lifecycle_regression_tests`, the player-return rig; `plx_media`'s `player/engine.rs`, `pump.rs`,
-  `route/decision.rs`), which `test-fast` and `test-crate` do not build. `C` names the crate under
+  `lifecycle_regression_tests`, the player-return rig), which `test-fast` and `test-crate` do not
+  build; `plx_media`'s engine, pump and `route/decision.rs` tests were here until W8c-1 and are now
+  `cfg(test)`, so `test-crate` runs them and this pass re-runs them with the feature on. `C` names the crate under
   test, spelled as for `test-crate` (`C=plx_media`, `C=media`; several allowed) and defaulting to
   the application crate (`C=app`); it changes nothing else, so there is one recipe, one managed dir
   and one `--require-match` for all of them. It runs `cargo test --lib -p <crate> --features
@@ -1991,9 +1995,10 @@ them is how this section used to be wrong in three files at once.
 
 **Tier 1 — `make check` (host).** `cd rust-modules && cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp` (a bare `cargo test --lib` runs the application crate only and skips every layer crate: `plx_base`, `plx_machine`, `plx_os`, `plx_gfx`, `plx_net`, `plx_ui`, `plx_plex`, `plx_telemetry`, `plx_data`, `plx_session`, `plx_media`, `plx_appkit`, `plx_screens`, `plx_shell_sdl`) runs the whole
 host suite on the dev Mac, no TV involved — and `make check` runs the crates that declare `hostsim`
-(`HOSTSIM_SUITE`, a subset of that list) a SECOND time under `--features hostsim`, because the host
-feed seam only exists there and the tests that need it are compiled out of the first pass (the build
-section's paragraph on the two passes says which crates are left out and why). **Treat every test COUNT in this section as
+(`HOSTSIM_SUITE`, a subset of that list) a SECOND time under `--features hostsim`, because some tests need
+`hostsim` itself (the application's lifecycle rig, a runtime root the environment can steer); the host feed
+seam is no longer a reason, since W8c-1 it is in every test build (the build section's paragraph on the two
+passes says which crates are left out and why). **Treat every test COUNT in this section as
 already wrong, including the one in this sentence.** 386 measured 2026-08-13; 284 on 2026-08-02; a
 documented 59 before that, which was five times stale before anyone noticed — and the first version
 of this paragraph was stale within one *commit*, because two agents were adding tests to the same

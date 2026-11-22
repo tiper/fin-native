@@ -1780,7 +1780,7 @@ impl PlayerAdapter {
         changed
     }
 
-    /// Test-only access to the physical session for the existing hostsim rigs.
+    /// Test-only access to the physical session for the existing host-sink rigs.
     #[cfg(test)]
     #[inline]
     pub fn engine(&mut self) -> Option<std::cell::RefMut<'_, Engine>> {
@@ -2049,7 +2049,7 @@ impl PlayerAdapter {
     }
 
     /// Address one Load verdict without handing route state to the native worker.
-    #[cfg(all(test, feature = "hostsim"))]
+    #[cfg(test)]
     pub(super) fn load_receipt(&mut self, attempt: crate::route::RouteStartAttempt, native_epoch: u32,
         _trace_generation: u32) -> plx_play_feed::feed_resources::LoadReceipt {
         self.probe().resources(|resources|
@@ -2057,7 +2057,7 @@ impl PlayerAdapter {
     }
 
     /// A refused thread spawn cannot return a receipt; retire its mapping immediately.
-    #[cfg(all(test, feature = "hostsim"))]
+    #[cfg(test)]
     pub(super) fn cancel_load_receipt(&mut self, token: u64) {
         self.probe().resources(|resources| resources.cancel_load_receipt(token));
     }
@@ -2399,7 +2399,7 @@ mod uri_stop_refusal_tests {
     }
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod load_outcome_tests {
     use plx_play_feed::shared::FEED_TX;
     use super::*;

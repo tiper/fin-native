@@ -1852,6 +1852,14 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
 - W8c, the 363 non-fence `feature = "hostsim"` lines (360 cfg lines and three doc comments), sorted per crate: a
   host difference becomes a platform value or runner; simulator tooling goes under a renamed `sim` feature; a test
   seam goes to `test-support`.
+  As landed (W8c-1): `plx_media`'s 70 `all(test, hostsim)` gates are `cfg(test)`, and `play-feed`'s 8 test-seam lines
+  likewise (`shared.rs` hooks `any(test, test-support)`); `ffi_host` is two exclusive declarations of one file (`hostsim`;
+  `any(test, test-support)` without it), because one `cfg` mixing `hostsim` with `test` is a production-visible fork the
+  `forks` ledger counts. `test_physical`'s sink is always the host sink. `pump.rs`'s `cfg!(hostsim)` read is the required
+  `VideoSink::lacks_video_path` (webOS `false`, host `!clocksink`, `NoSink` `false`, `RefusingSink` forwards); the four `os`
+  dead-code `cfg_attr`s are deleted. Discovered tests, `cargo test --lib -- --list`: `plx_media` default 2272 -> 2592
+  (320 gained, 0 lost; with `hostsim` 2592 -> 2592), `plx_play_feed` default 351 -> 368 (17 gained; with `hostsim` 368 -> 368, one
+  test renamed `hostsim::` -> `host_seam::`), `plx_os` 417 -> 417 in both. `make test-crate C=plx_media` now runs 2488 passed / 104 ignored.
 - Verify: the F9/F12 grep count before and after; `ci/check-ledger-ratchet.py` at or below every family
   total (a host difference that needs IO becomes a runner, never a `forks/` line); fw-compat-reviewer on
   W8b; a build-bench table for W8b. Risk: size. W8c blocks nothing Tizen needs; only W8a does.

@@ -130,6 +130,10 @@ pub struct StarfishSink;
 
 #[cfg(feature = "feed-sink")]
 impl plx_os::tv::sink::VideoSink for StarfishSink {
+    /// The television's pipeline is there: a refused `Load` is the firmware's own answer.
+    #[inline]
+    fn lacks_video_path(&self) -> bool { false }
+
     /// **One of the two verbs of this seam that is NOT main-thread (the other is `unload`, on its
     /// `UnloadTicket`), and the missing token is how you can tell.** `Load` blocks for the pipeline construction and the library owns its own GMainContext
     /// behind it, so it runs on the media worker (`native_load::load_thread`) by design — putting it on

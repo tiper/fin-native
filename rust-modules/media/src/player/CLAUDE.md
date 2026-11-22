@@ -204,7 +204,7 @@ and seeks by time via `av_seek_frame` (libavformat's own Cues index).
 (Starfish-shaped: one method per verb, reached through `PlayerAdapter::display_sink`). `platform-webos/src/webos/video_sink.rs`'s `extern "C"`
 declarations are private to that module and only `StarfishSink` there implements the trait on the
 television; `HostSink` (`play-feed/src/ffi_host.rs`, `plx_play_feed::ffi_host`) is the simulator's. Every verb but `load` and `unload`
-takes a `task::MainThread` (the constant queries `feed_abi_is_cow`, `window_mode` and `window_id`
+takes a `task::MainThread` (the constant queries `feed_abi_is_cow`, `lacks_video_path`, `window_mode` and `window_id`
 take nothing); `unload` takes an `UnloadTicket`, which only a `&MainThread` can issue and which is
 `Send`, so the main thread decides when an Unload happens and a worker may carry it out.
 `MainThread` is a `!Send` ZST the application mints once. Since phase 9 it mints exactly one

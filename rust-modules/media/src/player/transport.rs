@@ -162,7 +162,7 @@ mod viewer_resume_for_load_tests {
     }
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod transport_pause_contract_tests {
     use plx_play_feed::shared::{FEED_SHARED, FEED_TX};
     use super::{paused, set_transport_paused};

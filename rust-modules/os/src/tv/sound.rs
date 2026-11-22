@@ -12,7 +12,6 @@
 //! as the hub takes, not by 300 ms.
 
 /// What the platform's settings service said. [`parse_output`] owns the reading of it.
-#[cfg_attr(any(feature = "hostsim", test, feature = "test-support"), allow(dead_code))] // Reply/Unavailable: TV arm only
 pub enum Reply { NoPlatform, Unavailable, Reply(String) }
 
 /// The active sound output's name as the firmware spells it, or `None` when there is no platform,

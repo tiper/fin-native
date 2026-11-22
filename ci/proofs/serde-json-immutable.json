@@ -545,7 +545,7 @@
         ],
         "edition": "2021",
         "lib": "play-feed/src/lib.rs",
-        "lib_sha256": "d3e124eb236e1c9c7cee328f4c01988f32589d5427123603dab8ca9b174e60c0"
+        "lib_sha256": "972c592f56d5532b64e869cfdcd57f28ef012ca4352fdd79a61510a41c8879f4"
       },
       "play-uri/Cargo.toml": {
         "dependency": [

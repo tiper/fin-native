@@ -22,21 +22,11 @@ use std::os::raw::c_char;
 
 /// The host sink these fixtures run over: the Feed backend's stand-in with no picture to draw.
 /// (The simulator's own, with its decoded picture, is the application's: `app::adapters::hostsim`.)
-#[cfg(feature = "hostsim")]
 static HOST_SINK: plx_play_feed::ffi_host::HostSink =
     plx_play_feed::ffi_host::HostSink::new(plx_play_feed::ffi_host::Hooks::over(&plx_play_feed::ffi_host::NoFrames));
 
-/// The seam itself, unfenced: the host sink in a hostsim run, the installed port's otherwise.
-pub(crate) fn raw_sink() -> &'static dyn VideoSink {
-    #[cfg(feature = "hostsim")]
-    {
-        &HOST_SINK
-    }
-    #[cfg(not(feature = "hostsim"))]
-    {
-        plx_os::tv::sink::installed()
-    }
-}
+/// The seam itself, unfenced: the host sink, in every test build.
+pub(crate) fn raw_sink() -> &'static dyn VideoSink { &HOST_SINK }
 
 const FENCE: SinkFence = SinkFence::new(raw_sink, &RefusingSink(raw_sink));
 
@@ -45,7 +35,6 @@ const FENCE: SinkFence = SinkFence::new(raw_sink, &RefusingSink(raw_sink));
 pub(crate) fn sink() -> &'static dyn VideoSink { FENCE.current() }
 
 /// [`super::diag`] over the fixtures' sink, for a test that holds no adapter.
-#[cfg(feature = "hostsim")]
 pub(crate) fn diag(ps: &crate::route::PlaybackSession) -> super::Diag { super::diag_on(ps, sink()) }
 
 thread_local! {
@@ -78,10 +67,8 @@ pub(crate) fn load_thread(payload: plx_play_feed::SendPtr<c_char>, native_epoch:
 }
 
 fn spawn_unload(ticket: UnloadTicket) -> Option<std::thread::JoinHandle<()>> {
-    #[cfg(feature = "hostsim")]
     let worker = plx_play_feed::ffi_host::UnloadWorker::enter();
     plx_base::task::spawn("sf-unload", move || {
-        #[cfg(feature = "hostsim")]
         let _worker = worker;
         unsafe { raw_sink().unload(&ticket) }
     })

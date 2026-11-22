@@ -1,20 +1,19 @@
 //! Common route and recovery pump. The physical feed tick in `feed_pump` binds the plane,
 //! feeds AUs, and returns the stage and EOS facts used here for common presentation policy.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_play_feed::shared::FEED_SHARED;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_play_feed::feed_state::Engine;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_playback_contract::feed::Stage;
 use super::SHARED;
 use plx_playback_contract::feed::SeekMode;
-#[cfg(all(test, feature = "hostsim"))]
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_base::task::MainThread;
 use std::sync::atomic::Ordering::Acquire;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use std::sync::atomic::Ordering::Release;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use std::time::Duration;
 
 /// Attach the physical Load gate's timeout to the current common trace: the feed ran the Load
@@ -236,8 +235,7 @@ fn finish_preview_open_failure(
     if crate::player::preview::abandoning() {
         return;
     }
-    let seam_absent = cfg!(feature = "hostsim") && !plx_base::devtrig::flag("clocksink");
-    if seam_absent {
+    if pa.display_sink().lacks_video_path() {
         crate::player::preview::note_admission_refused();
     } else {
         crate::player::preview::note_failed(601);
@@ -2210,7 +2208,7 @@ mod tests {
 /// the physical encoder through PMS. These tests run the REAL `pump` inside a `FrameScope` against
 /// the hostsim Engine and the loopback server of `route::flight_rig`, and grade what the frame
 /// thread did: a frame that makes a PMS round trip is a frame the viewer waits on.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod flight_tests {
     use std::sync::atomic::Ordering::Relaxed;
     use super::*;
@@ -4998,7 +4996,7 @@ mod flight_tests {
 /// armed (which reports `VP_EXPORTED`). `reload_at` has no route to reload in a unit rig (an empty
 /// URL is ignored), so each call is read off `engine::RELOAD_AT_LOG`; the rig stands in for the
 /// reload's EFFECT (a new Engine) where the next seek needs one.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod native_seek_pump_tests {
     use std::sync::atomic::Ordering::Relaxed;
     use super::*;
@@ -6293,14 +6291,14 @@ mod native_seek_pump_tests {
     }
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 #[path = "dv_start_pump_tests.rs"]
 mod dv_start_pump_tests;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 #[path = "held_prime_play_tests.rs"]
 mod held_prime_play_tests;
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 #[path = "progressive_rebuffer_pump_tests.rs"]
 mod progressive_rebuffer_pump_tests;
 
@@ -6310,7 +6308,7 @@ mod progressive_rebuffer_pump_tests;
 /// the film. These drive the REAL feed lanes and the REAL `pump` against the clock sink and grade
 /// `player::ended()`. Nothing here sets `Shared::pipeline_eos` or `ended`: what is graded is the
 /// whole chain, the sink, its callback, the flag and the pump.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod end_of_film_tests {
     use std::sync::atomic::Ordering::Relaxed;
     use super::*;

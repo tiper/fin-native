@@ -170,7 +170,7 @@ reads the whole crate for the same IO and clock gates as every other layer.
 (`rust-modules/play-feed/`) and it names `base`, `os`, `net`, `playback_contract` and `media_codecs`: the
 buffer-feed backend (the guarded transport, the physical FFmpeg demuxer and HLS parser, the native payload
 construction and executor, which implement the Feed port traits) and the simulator's `VideoSink` stand-in
-(`ffi_host`, behind that crate's `hostsim` feature). It was `plx_media::player`'s own until the player stopped
+(`ffi_host`, behind that crate's `hostsim` feature, and in test builds (`cfg(test)` / `test-support`)). It was `plx_media::player`'s own until the player stopped
 depending on a backend: `plx_media` is the neutral orchestration (routes, the engine, the `BackendRunner`) and
 does not name it in production code, while the application composes it
 (`app/adapters/backends.rs`, behind the application crate's `play-feed` feature, which the release build
@@ -415,7 +415,7 @@ ACB bind verbs that the Feed pump walks. Another TV OS cannot implement it as it
 through the sink the composition hands them (`PlayerAdapter::display_sink`; `app/adapters/backends.rs`).
 `ffi_host` is no longer swapped in under `webos::video_sink`. It is the simulator's own `VideoSink`
 (`HostSink`), outside the fence. It is the Feed backend's stand-in, so it lives in `plx_play_feed` behind that crate's
-`hostsim` feature and names only the layers below it; what its sink is built with arrives as
+`hostsim` feature, and in test builds (`cfg(test)` / `test-support`), and names only the layers below it; what its sink is built with arrives as
 `ffi_host::Hooks`: the pipeline-event entry and the inverse of its position rebase, both that
 crate's own (`Hooks::over`), and a `ffi_host::FrameSink` that the application's
 `app::adapters::hostsim::sim_video` implements (the one place that draws, so `plx_gfx` stays on the

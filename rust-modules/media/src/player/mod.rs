@@ -57,11 +57,11 @@ mod pump; // gated: the per-frame tick reads and drives `FEED_SHARED`/`FEED_TX` 
 pub mod report;
 #[cfg(test)]
 mod no_feed_tests; // the doors a session with no Feed composed answers as a URI-only build always did
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod diag_sample_tests; // the Stats-for-nerds rows the Feed writes are the readout's last sample of it
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod foreground_flight_tests;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod resume_tests;
 #[cfg(test)]
 mod shared;
@@ -565,12 +565,12 @@ pub fn finish_paused_seek(ps: &mut crate::route::PlaybackSession, pa: &mut adapt
     true
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 pub fn force_pause_result_for_test(result: Option<c_int>) {
     plx_play_feed::ffi_host::force_pause_result_for_test(result);
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 pub fn force_play_result_for_test(result: Option<c_int>) {
     plx_play_feed::ffi_host::force_play_result_for_test(result);
 }
@@ -3834,7 +3834,6 @@ mod tests {
     /// User Play releases the transport pause, but an internal runway hold owns the media clock.
     /// Calling the ordinary seam here would bypass the only place that checks fresh A/V media and
     /// recreate the short burst/freeze cycle after a manual Pause/Play during rebuffering.
-    #[cfg(feature = "hostsim")]
     #[test]
     fn user_resume_cannot_bypass_an_internal_hls_rebuffer_hold() {
         let _guard = plx_base::testlock::serial();
@@ -4749,7 +4748,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod native_failure_regressions {
     use super::*;
     struct JailGuard;

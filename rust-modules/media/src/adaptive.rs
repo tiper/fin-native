@@ -4342,9 +4342,9 @@ mod abr_readout_tests {
 
 /// What the diagnostics line prints for the Auto-quality members, now that the demux's half rides
 /// the sample and the worker's half is the readout's photograph: the same text and values the
-/// shared mirror held. `diag()` reaches the host stand-ins for the TV's seam, so these run in the
-/// `hostsim` pass.
-#[cfg(all(test, feature = "hostsim"))]
+/// shared mirror held. `diag()` reaches the host stand-ins for the TV's seam
+/// (`test_physical`'s host sink), which every test build composes.
+#[cfg(test)]
 mod abr_diag_tests {
     use super::*;
     use crate::player::attempt_view::Backend;

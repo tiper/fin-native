@@ -12,7 +12,7 @@
 //! publishes to the Feed's own state.
 #[cfg(test)]
 use plx_play_feed::shared::FEED_SHARED;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use super::route_start::{exit_native, exit_native_with, finish_release_for_test, poll_release,
     reap_abandoned_load, release_server_stopped_engine, NativeExit};
 #[cfg(test)]
@@ -38,20 +38,20 @@ use plx_play_feed::{
 pub(crate) use plx_os::devcaps::LoadVideo;
 #[cfg(test)]
 pub(crate) use plx_play_feed::load_video_refused;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_playback_contract::feed::Stage;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_play_feed::seek::{inplace_layout_known, old_abi_seek_tested, select_seek_mode};
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_playback_contract::feed::SeekMode;
 #[cfg(test)]
 use super::log;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_base::task::MainThread;
 #[cfg(test)]
 use plx_os::devcaps::AudioStack;
 use plx_telemetry::telemetry::window::Stage as WindowStage;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use std::os::raw::{c_char, c_int};
 use std::sync::atomic::Ordering;
 
@@ -112,12 +112,12 @@ pub const fn feed_leads_ms() -> (i64, i64) {
 // levers are one decision and neither is worth landing alone.
 // `docs/measurements/p0-plant-sizing.md` is the record; `requiredMemory` is 160 MB, so +2 MiB RSS
 // on a 32-bit set is inside the budget already declared.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_play_feed::feed_state::{AQ_VIDEO_BYTES, AQ_AUDIO_BYTES};
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_play_feed::feed_state::{Engine, FeedPace, Source};
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_play_feed::feed_state::engines_dropped_for_test;
 
 // The `ENGINE` slot is `App.adapters.player` since phase 9 — a field, reached as
@@ -141,15 +141,15 @@ pub fn exported_window_destroyed() {
     window_step(WindowStage::ExportedWindowDestroy);
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 fn release_native_object(mt: &MainThread, epoch: u32) {
     let _ = release_native_object_timed(mt, epoch, &mut TeardownSpans::new());
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_play_feed::native_executor::TeardownSpans;
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 fn release_native_object_timed(mt: &MainThread, epoch: u32, sp: &mut TeardownSpans)
     -> plx_playback_contract::ReleaseStatus {
     plx_play_feed::native_executor::release_native_object_timed(
@@ -296,7 +296,7 @@ fn with_dolby_hdr_info(p: &str, video: &str, dv: plx_data::metadata::DvPresentat
 #[cfg(test)]
 use plx_play_feed::native_executor::{app_id_key, with_app_id};
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 fn with_window_id(mt: &MainThread, p: &str) -> String {
     plx_play_feed::native_executor::with_window_id(mt, p, &crate::player::test_physical::TEST_HOOKS.prepare)
 }
@@ -308,7 +308,7 @@ pub fn exported_window_created() {
 
 pub use super::route_start::{reload_at, reload_transcode, reload_transcode_tracked,
     stop_bufferfeed, suspend_bufferfeed, switch_audio_native, ReloadOutcome};
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 pub(super) use super::route_start::{RELOAD_AT_LOG, RELOAD_PREROLL_LOG};
 
 pub use super::route_start::{start_bufferfeed, start_bufferfeed_tracked, BufferfeedStartOutcome};
@@ -339,7 +339,7 @@ pub(crate) use plx_playback_contract::feed::MAX_FEED_AHEAD_NS;
 pub(crate) use plx_play_feed::feed_state::{AUDIO_LEAD_IN_NS, PRIME_VIDEO_MAX_NS};
 pub use plx_playback_contract::feed::PRES_NONE;
 pub(crate) use plx_playback_contract::feed::AUDIO_SLACK_NS;
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_play_feed::native_executor::{
     AUDIO_STALE_AHEAD_NS, FEED_LANE_SLICE_US, FEED_LOW_WATER_NS, PRIME_AUDIO_NS, PRIME_NS,
 };
@@ -352,19 +352,19 @@ fn audio_sink_pts(fp: i64, pcm_lead_ns: i64) -> i64 {
     plx_play_feed::native_executor::audio_sink_pts(fp, pcm_lead_ns, FEED_SHARED.applied_rate_permille.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_play_feed::native_executor::{settle_pcm_lead, hls_candidate_snapshot_stable};
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 use plx_play_feed::native_executor::arm_live_clock_prime;
 
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 pub(super) fn try_prime(mt: &MainThread, eng: &mut Engine) {
     plx_play_feed::native_executor::try_prime(mt, eng, &plx_play_feed::shared::FEED_TX, &crate::player::test_physical::TEST_HOOKS.feed);
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 pub(super) fn feed_both_lanes(mt: &MainThread, eng: &mut Engine) {
     plx_play_feed::native_executor::feed_both_lanes(mt, eng, &plx_play_feed::shared::FEED_TX, &crate::player::test_physical::TEST_HOOKS.feed);
 }
@@ -372,7 +372,7 @@ pub(super) fn feed_both_lanes(mt: &MainThread, eng: &mut Engine) {
 #[cfg(test)]
 use plx_play_feed::native_executor::audio_lead_in;
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod native_lifecycle_host_seam_tests {
     use super::*;
 
@@ -1224,7 +1224,7 @@ mod stream_open_log_line_tests {
 /// **This test drives the real [`feed_stream`] and [`feed_audio_lane`] against the real host feed
 /// seam** — it is not a restatement of the predicate, which is correct and would pass on the
 /// broken build. What it grades is WHERE the predicate is evaluated.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod prime_livelock_tests {
     use plx_play_feed::shared::{FEED_SHARED, FEED_TX};
     use super::*;
@@ -2262,7 +2262,7 @@ mod prime_livelock_tests {
     }
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod lifecycle_clock_tests {
     use super::*;
 
@@ -2294,10 +2294,10 @@ mod lifecycle_clock_tests {
 /// request path: `app.rs` re-arms `auto_tried`, the fixture entry calls `start_playback`, and
 /// `start_bufferfeed_tracked` asks the reducer for a start owner directly. So the phase a
 /// completed stop leaves behind is the whole contract between the two halves.
-/// Gated on `hostsim` for the same reason [`lifecycle_clock_tests`] is: `stop_bufferfeed` reaches
-/// the video sink, and only the simulator's (`ffi_host::HostSink`) keeps the state this asserts;
-/// the default build's `NoSink` answers every verb with nothing.
-#[cfg(all(test, feature = "hostsim"))]
+/// Runs over the host sink for the same reason [`lifecycle_clock_tests`] does: `stop_bufferfeed`
+/// reaches the video sink, and only the host stand-in (`ffi_host::HostSink`) keeps the state this
+/// asserts; a `NoSink` answers every verb with nothing.
+#[cfg(test)]
 mod replay_after_stop_tests {
     use super::*;
 
@@ -2342,7 +2342,7 @@ mod replay_after_stop_tests {
 
 /// Test-only: an Engine parked at `Stage::Streaming` on the host sink, for the pump-level rigs
 /// that live outside this module (`pump::flight_tests`).
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 pub(super) fn streaming_engine_for_test(native_epoch: u32) -> Engine {
     let mut eng = prime_livelock_tests::engine_after_reload();
     eng.native_epoch = native_epoch;
@@ -2357,7 +2357,7 @@ pub(super) fn streaming_engine_for_test(native_epoch: u32) -> Engine {
 /// session owns, no native session can begin while the object is still being released, and a start
 /// issued meanwhile is queued behind the release instead of racing it — and the release still ends in a
 /// D1 with complete evidence, not a quarantine.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod off_frame_release_tests {
     use super::*;
 
@@ -2953,7 +2953,7 @@ mod off_frame_release_tests {
 /// `sf_play`/`sf_feed`/etc. could dispatch into an object whose LoadCommon ctor path was still
 /// running on the load thread: investigation.md's run A (a null-arg SIGSEGV on the priming path)
 /// and run B (a Play-vs-LoadCommon mutex deadlock ending in an OMX_VideoComp abort).
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod load_in_flight_tests {
     use super::*;
 
@@ -4382,7 +4382,7 @@ mod pcm_info_tests {
 ///
 /// This test is that artifact, host-side, watched RED before the fix (2026-09-03): the red is the
 /// lab set's measured sequence, NOT a reproduction of issue #63, whose set nobody here has seen a
-/// log from. Under `hostsim` only because it borrows `prime_livelock_tests`' engine constructor.
+/// log from. It borrows `prime_livelock_tests`' engine constructor, so it runs over the host sink.
 /// The envelope rule, cell by cell. Every value here is either a measured declaration
 /// (`ENVELOPE_UHD60`, `ENVELOPE_FHD60`) or today's behaviour; the test exists so the narrow rule
 /// stays narrow — a "smarter" envelope that changes HEVC or the unknown-raster case fails here.
@@ -4823,7 +4823,7 @@ mod sink_envelope_tests {
     }
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod load_refusal_tests {
     use super::*;
     use std::sync::atomic::Ordering;
@@ -4914,7 +4914,7 @@ mod audio_lead_in_tests {
 /// [`AUDIO_STALE_AHEAD_NS`] past that video. These tests drive the real lanes through
 /// [`feed_both_lanes`] against the host feed seam, in the state a progressive start leaves:
 /// Play already issued, nothing presented (`pres_fed` 0, not [`PRES_NONE`]).
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod late_audio_start_tests {
     use super::*;
 
@@ -5013,7 +5013,7 @@ mod late_audio_start_tests {
 /// dropped every AU past 5 s of it, silently. The host sink never answers BufferFull, so the state
 /// a full sink leaves is built directly: the video lane parked at [`FED_VIDEO_NS`], the AUs the
 /// demuxer read past it queued for audio.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod audio_under_video_backpressure_tests {
     use super::*;
 
@@ -5136,7 +5136,7 @@ mod audio_under_video_backpressure_tests {
 /// These drive the real mode selection, the pump's reload-or-in-place decision and the real
 /// [`feed_stream`] re-anchor against the host sink with the clock sink armed, which reports
 /// `VP_EXPORTED` exactly as a webOS 5+ set does.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod native_seek_tests {
     use plx_play_feed::shared::{FEED_SHARED, FEED_TX};
     use super::*;
@@ -5627,7 +5627,7 @@ mod pcm_sink_lead_pure_tests {
 /// `start_bufferfeed_inner` reads `devcaps::audio_stack()` and hands it to `load_audio`. A start that
 /// stopped passing it on (or passed a fixed one) leaves every other test green, because they all
 /// build the plan or the Engine by hand.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod pcm_stack_wiring_tests {
     use super::*;
     use plx_os::devcaps::{audio_stack_on_this_thread_for_test, AudioStack};
@@ -5808,7 +5808,7 @@ mod pcm_stack_wiring_tests {
     }
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod pcm_sink_lead_tests {
     use super::*;
     use plx_play_feed::ffi_host;
@@ -6042,7 +6042,7 @@ mod pcm_sink_lead_tests {
 /// way the dev arm does (`route::clear_url`, then the start) and read what it answered. Every other
 /// start test in this file qualifies its recipe BY HAND (`qualify_resolved_feed_offer`) before it
 /// starts, which is why none of them could see the hole.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod explicit_source_start_tests {
     use super::*;
     use crate::route::backend_policy::OfferId;

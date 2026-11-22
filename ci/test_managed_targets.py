@@ -104,8 +104,8 @@ class TestHostsim(unittest.TestCase):
             self.assertIn("rust-modules/" + TDIR, out.stdout)
 
     def test_c_names_the_crate_under_test_and_changes_nothing_else(self):
-        # plx_media's own hostsim tests (player/engine.rs, pump.rs, route/decision.rs) are not in the
-        # application crate's test binary: C= is how they get the managed dir instead of a /tmp one.
+        # plx_media's tests are not in the application crate's test binary: C= is how they get the
+        # managed dir instead of a /tmp one.
         spellings = {
             "": "-p plxnative-modules",
             "C=app": "-p plxnative-modules",

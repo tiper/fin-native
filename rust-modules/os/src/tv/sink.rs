@@ -153,6 +153,14 @@ pub trait DisplaySink: Sync {
 /// `p`/`size` a readable buffer. Apart from `load` and `unload`, the verbs must be called on the
 /// main thread (which `&MainThread` witnesses), in the order the player's pump drives them.
 pub trait VideoSink: DisplaySink {
+    /// True when this sink has no video path at all, so a `Load` it refuses says nothing about what
+    /// the television's pipeline would have admitted: the preview's refused open is then counted as
+    /// "the seam is absent", not as an admitted Starfish failure that opens the breaker. The
+    /// television's own sink answers `false` (its refusal IS the firmware's), as does `NoSink`;
+    /// `RefusingSink` passes on the answer of the sink it wraps (it fences verbs, not facts). Only the
+    /// host's stand-in, which decodes nothing unless the clock sink is armed, says `true`. Required,
+    /// so every sink states it.
+    fn lacks_video_path(&self) -> bool;
     /// Positive proof that a joined Load never left a native object behind. A zero `ready()`
     /// answer is insufficient: firmware also reports zero after quarantining a live object.
     /// The default keeps real firmware conservative; a sink with its own object ledger may
@@ -199,7 +207,6 @@ pub trait VideoSink: DisplaySink {
 
 /// The installed sink: the only way out of `tv` for the Starfish verbs, and only `player/` may
 /// call it (`ci/check-deps.sh`, rule `sink`).
-#[cfg_attr(all(any(test, feature = "test-support"), feature = "hostsim"), allow(dead_code))]
 pub fn installed() -> &'static dyn VideoSink { super::services().legacy_webos_media.sink }
 
 /// Resolve the shared display interface in composition/IO code, then inject it into a driver.
@@ -296,6 +303,7 @@ impl DisplaySink for NoSink {
 }
 
 impl VideoSink for NoSink {
+    fn lacks_video_path(&self) -> bool { false }
     refuse_video_verbs!();
     fn feed_abi_is_cow(&self) -> bool { false }
 }
@@ -314,6 +322,8 @@ impl DisplaySink for RefusingSink {
 }
 
 impl VideoSink for RefusingSink {
+    /// A query about the wrapped sink, like `feed_abi_is_cow`: the fence refuses verbs, not facts.
+    fn lacks_video_path(&self) -> bool { (self.0)().lacks_video_path() }
     refuse_video_verbs!();
     fn feed_abi_is_cow(&self) -> bool { (self.0)().feed_abi_is_cow() }
 }
