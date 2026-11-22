@@ -171,7 +171,7 @@ impl RuntimePolicy {
     pub(crate) fn capture() -> Self {
         let lookahead = plx_base::devtrig::read("lookahead");
         #[cfg(feature = "devtriggers")]
-        let recorder = matches!(plx_ui::rec::mode_value(&plx_base::devtrig::path("rec")), Ok(Some(_)));
+        let recorder = matches!(crate::dev::scenarios::mode_trigger("rec"), Ok(Some(_)));
         #[cfg(not(feature = "devtriggers"))]
         let recorder = false;
         Self {

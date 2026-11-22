@@ -1112,15 +1112,13 @@ mod tests {
     /// watch-state promise as it applies to a seek (`route::note_user_seek_intent` and
     /// `report::note_seek_for` live behind that same one call). The `Started`/`StartFailed` arms of
     /// `seek` reach `engine::reload_at`, which needs a live native session this host test cannot
-    /// build without the `hostsim` feature — those remain proven by `ArmOpen`'s own body (it only
+    /// build over a refusing sink — those remain proven by `ArmOpen`'s own body (it only
     /// touches engine-level `FEED_SHARED` atomics) and by device verification, not by this test.
     ///
-    /// Gated on `hostsim`, like `player::engine`'s own `PlayerAdapter`-constructing tests
-    /// (`lifecycle_clock_tests`, `replay_after_stop_tests`): it needs the simulator's video sink
-    /// (`ffi_host::HostSink`) to hold a native session, which the default build's `NoSink` does
-    /// not — `make check` runs the full suite a second time with it on for exactly this class of test.
+    /// It builds its adapter over the host sink (`test_physical::sink`, `ffi_host::HostSink`) like
+    /// `player::engine`'s own `PlayerAdapter`-constructing tests (`lifecycle_clock_tests`,
+    /// `replay_after_stop_tests`), so it runs in every test pass.
     #[test]
-    #[cfg(feature = "hostsim")]
     fn seek_refuses_and_touches_no_user_seek_bookkeeping_with_no_live_preview() {
         let _serial = plx_base::testlock::serial();
         let mut ps = crate::route::PlaybackSession::IDLE;
@@ -1369,7 +1367,7 @@ mod tests {
 
 /// The retire path of a preview whose Load has not returned, against a real Engine and the real
 /// Feed: the join is deferred while the Load thread runs, and the abandoned-Load poll finishes it.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod abandoned_load_tests {
     use super::*;
     use plx_playback_contract::feed::Stage;

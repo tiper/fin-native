@@ -3,9 +3,9 @@
 //! the per-frame tick, draw orchestration, app lifecycle, the buffer-feed pump orchestration, and
 //! the dev triggers. The C boot shim
 //! (main.c) sets up the log and fallback crash tracer, calls the Rust image-marker and native-spool
-//! entries when required, then calls `plex_run` (port.rs), which hands over to `run_application`
+//! entries when required, then calls `plex_run` (the webOS platform crate's port.rs), which hands over to `run_application`
 //! and, when it returns its `Exit` (`exit.rs`), ends the process. The desktop executable
-//! (`src/bin/sim.rs`) enters through `platform_desktop::run` instead and ends the process itself.
+//! (`platform-desktop/src/bin/sim.rs`) enters through `plx_platform_desktop::run` instead and ends the process itself.
 //! The only application subsystems left in C are the starfish.c C++ Feed seam and the video_plane.c
 //! ACB / exported-window display binding (the engine itself is Rust: plx_media::player).
 #![allow(non_upper_case_globals)]
@@ -20,19 +20,6 @@ use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::sync::atomic::Ordering::Relaxed;
 
 // ---- constants (SDL 2.0.4 + GLES2 + app) ----
-/// Appended to every heartbeat on a simulator build, and empty on a television.
-///
-/// The heartbeat is the app's perf surface: `tests/run.py --fps` grades `loop=` and `fps=` from it,
-/// and the floors are calibrated to the SM9000's Mali. A Mac renders the same interface through a
-/// completely different GPU, driver and compositor, so those numbers are not merely optimistic —
-/// they are about a different machine. A log line is the unit that gets pasted into an issue or
-/// handed between agents, so the disclaimer has to travel ON the line rather than sit in a doc.
-const SIM_TAG: &str = if cfg!(feature = "hostsim") {
-    " sim=1"
-} else {
-    ""
-};
-
 const GL_COLOR_BUFFER_BIT: c_uint = 0x0000_4000;
 const GL_RENDERER: c_uint = 0x1F01;
 const GL_VERSION: c_uint = 0x1F02;
@@ -49,13 +36,6 @@ use plx_ui::consts::{
     classify, is_bound, is_ok, Key, SDLK_RETURN, WCODE_CH_DOWN_KEY, WCODE_CH_UP_KEY,
     WCODE_POINTER_HIDDEN,
 };
-// The window we ASK SDL for. `surface::probe` then reads back what we actually got.
-// Both are read only by the television's window request (`boot.rs`): the desktop's own sizing is
-// `plx_shell_sdl`'s, so a hostsim build has no reader of either and they share one gate.
-#[cfg(any(not(feature = "hostsim"), test))]
-const SCR_W: c_int = plx_base::surface::LOGICAL_W as c_int;
-#[cfg(any(not(feature = "hostsim"), test))]
-const SCR_H: c_int = plx_base::surface::LOGICAL_H as c_int;
 pub(crate) const COLS: c_int = 10;
 
 // Phase 1a of the UI restructure split this file: everything above `run_application` moved into
@@ -80,7 +60,7 @@ mod window_activity;
 mod exit;
 // `pub`, not `pub(crate)`, because `host` re-exports them: a `pub use` cannot re-export a binding the crate
 // only sees, and `app` itself is private, so this reaches no further than `host`.
-pub use exit::{Exit, Release};
+pub use exit::{Completion, Exit, HostGate, InFlight, Release, Stopped};
 pub(crate) mod events;
 pub(crate) mod lifecycle;
 pub(crate) mod playback;
@@ -246,11 +226,14 @@ pub(crate) struct App {
     /// The window and its GL context (`Shell::open`): the swap, the event poll, the raw handle the
     /// shell's per-window calls take, and the process's SDL quit. Thread-affine, like the loop.
     surface: Box<dyn platform::Surface>,
-    /// WSLg accepts swap interval 1 on X11/GLX without pacing the compositor. This boot-scoped
-    /// flag enables the host-only software frame budget while leaving native Linux and macOS on
-    /// their driver swap behavior.
-    #[cfg(all(feature = "hostsim", target_os = "linux"))]
-    wslg_frame_pacing: bool,
+    /// Whether the platform's software frame pacer is armed (`Shell::frame`'s `Pacer::armed`, asked
+    /// once at boot with whether vsync is on). The desktop arms it on WSLg, whose X11/GLX swap accepts
+    /// interval 1 without waiting; every other platform's swap paces the frame and this is `false`.
+    frame_pacing: bool,
+    /// The platform's frame seam (`Shell::frame`), asked once at boot so the per-frame path calls
+    /// its hooks directly instead of making a `dyn Shell` call to find them first: the pacer's
+    /// `begin`/`end` and the simulator's compose-under and pre-swap present hooks (all empty on a TV).
+    frame: &'static platform::FrameSeam,
     /// Boot time (`SDL_GetTicks` at the end of boot): the origin of every dev-script delay AND
     /// the clock a replay restores from controlled initial inputs — a field BOTH sides
     /// write, so it stays here rather than on `dev::scenarios::Scenarios`.
@@ -310,6 +293,12 @@ pub(crate) struct App {
 }
 
 impl App {
+    /// The layout SDL's events are in, as the platform states it (`Shell::sdl`): what every decode of a
+    /// polled event and every synthetic key this process pushes is read and written in.
+    pub(crate) fn sdl_flavor(&self) -> plx_shell_sdl::SdlFlavor {
+        self.platform.shell.sdl().flavor
+    }
+
     /// Application/runner mutations belong to the page, never an ambient damage queue.
     pub(crate) fn note_presentation_damage(&mut self, why: plx_machine::present::Provenance) {
         self.pages.present.note_in_scope(plx_machine::present::Scope::Page,
@@ -471,7 +460,7 @@ fn pre_boot_diagnostics() -> plx_telemetry::telemetry::native::Guard {
 /// the THREE real phases (pre-boot diagnostics, `boot`, this), never the steps inside any one of them.
 ///
 /// It RETURNS how the session ended; ending the process is the executable entry's (`port::plex_run` on
-/// the television, `src/bin/sim.rs` after `platform_desktop::run` on a desktop).
+/// the television, the simulator's `main` after `plx_platform_desktop::run` on a desktop).
 /// The `App` is leaked by the caller (`exit::entry`), so the last thing this does is the one `Drop`
 /// that persists something.
 unsafe fn run_and_shutdown(app: &mut App) -> Exit {
@@ -558,8 +547,8 @@ fn enter_application(platform: &'static platform::Platform, pms_host: *const c_c
 pub(crate) fn run_application(platform: &'static platform::Platform, pms_host: *const c_char, pms_port: c_int) -> Exit {
     // Returns how it ended and drops nothing: an early-boot refusal has live workers (diagnostics,
     // capability probe, telemetry) just as a played session does, so `exit::entry` leaks the `App`.
-    // Ending the process is the entry's (`port::plex_run` on the television, `src/bin/sim.rs` after
-    // `platform_desktop::run` on a desktop); a hosted entry never does.
+    // Ending the process is the entry's (`port::plex_run` on the television, the simulator's `main` after
+    // `plx_platform_desktop::run` on a desktop); a hosted entry never does.
     platform.install_services(); // once, before anything below reads `tv`
     exit::entry(|| enter_application(platform, pms_host, pms_port), |app| unsafe { run_and_shutdown(app) })
 }

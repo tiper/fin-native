@@ -6,6 +6,7 @@
 //! name `ui`. The application maps a [`Decoded`] onto its own `HostEvent`; the tape's format is the
 //! SDL code each [`Lifecycle`] edge arrived as ([`Lifecycle::sdl_code`]), so those pairs live here,
 //! where the decode table is.
+use crate::init::SdlFlavor;
 use crate::sys;
 use plx_base::surface::to_logical;
 use std::os::raw::c_void;
@@ -74,8 +75,8 @@ pub fn rd_f32(ev: &[u8], off: usize) -> f32 {
 /// Reading the fork's offsets out of a stock event yields the window id as a keystate and
 /// a scancode as a sym — plausible-looking garbage rather than a crash.
 ///
-/// `cfg!` rather than `#[cfg]` deliberately: both arms stay compiled on both platforms, so
-/// the one nobody is currently building cannot rot. This is the single site that knows the
+/// The flavour is a value the platform states, not a `cfg`, so both arms are compiled and graded in
+/// every build and the one nobody runs cannot rot. This is the single site that knows the
 /// layout — `rd_u32`'s callers elsewhere read pointer events, whose offsets already agree.
 ///
 /// **The `wcode` this returns is LG's SCANCODE**, which is worth saying because the name suggests
@@ -116,11 +117,11 @@ pub fn rd_f32(ev: &[u8], off: usize) -> f32 {
 /// asking the stand-in first turns the panel's delete key into a navigation. That priority is why
 /// this returns the injected wcode or `None` and never a stand-in of its own: the caller's
 /// `unwrap_or_else(host_wcode)` can only ever apply to a press that carried none.
-/// Clobbering `windowID` is safe here and nowhere else: this arm is `hostsim`-only, the simulator
-/// has one window, and nothing in the event loop reads that field.
+/// Clobbering `windowID` is safe here and nowhere else: this arm is [`SdlFlavor::Stock`]'s alone, a
+/// desktop has one window, and nothing in the event loop reads that field.
 #[inline]
-pub fn decode_key(ev: &[u8]) -> (u32, Option<u32>, u32) {
-    if cfg!(feature = "hostsim") {
+pub fn decode_key(flavor: SdlFlavor, ev: &[u8]) -> (u32, Option<u32>, u32) {
+    if flavor == SdlFlavor::Stock {
         let pressed = *ev.get(12).unwrap_or(&0) as u32;
         let repeat = *ev.get(13).unwrap_or(&0) as u32;
         let sym = rd_u32(ev, 20);
@@ -145,9 +146,8 @@ pub fn decode_key(ev: &[u8]) -> (u32, Option<u32>, u32) {
 /// for why the wcode needs a marker beside it rather than standing on its own. Any value no real
 /// window can have; SDL numbers windows from 1.
 ///
-/// Defined unconditionally, like both halves of [`decode_key`]: the arm that uses it is behind
-/// `cfg!` rather than `#[cfg]`, precisely so the configuration nobody is currently building cannot
-/// rot.
+/// Defined unconditionally, like both halves of [`decode_key`]: the flavour is a value and not a
+/// `#[cfg]`, so both arms compile in every build and the one nobody is running cannot rot.
 pub const SYNTH_WINDOW: u32 = 0x504c_584b; // "PLXK"
 
 /// What a pointer event did.
@@ -215,18 +215,18 @@ pub enum Decoded {
 /// everything else, which the loop reads raw (the IME's pre-edit, and the SDL events nothing acts
 /// on). Beside [`decode_key`], the other place that knows SDL's event bytes.
 #[inline]
-pub fn decode(ev: &[u8]) -> Option<Decoded> {
+pub fn decode(flavor: SdlFlavor, ev: &[u8]) -> Option<Decoded> {
     Some(match rd_u32(ev, 0) {
         SDL_QUIT => Decoded::Quit,
         SDL_KEYDOWN | SDL_KEYUP => {
-            let (state, wcode, sym) = decode_key(ev);
+            let (state, wcode, sym) = decode_key(flavor, ev);
             Decoded::Key { state, wcode, sym }
         }
-        SDL_TEXTINPUT => Decoded::Text(crate::text::decode(ev)),
+        SDL_TEXTINPUT => Decoded::Text(crate::text::decode(flavor, ev)),
         SDL_MOUSEMOTION => pointer_event(ev, PointerEdge::Move),
         SDL_MOUSEBUTTONDOWN => pointer_event(ev, PointerEdge::Down),
         SDL_MOUSEBUTTONUP => pointer_event(ev, PointerEdge::Up),
-        SDL_MOUSEWHEEL => Decoded::Wheel { dy: decode_wheel_dy(ev) },
+        SDL_MOUSEWHEEL => Decoded::Wheel { dy: decode_wheel_dy(flavor, ev) },
         SDL_APP_WILLENTERBACKGROUND => Decoded::Lifecycle(Lifecycle::WillBackground),
         SDL_APP_DIDENTERBACKGROUND => Decoded::Lifecycle(Lifecycle::DidBackground),
         SDL_APP_WILLENTERFOREGROUND => Decoded::Lifecycle(Lifecycle::WillForeground),
@@ -258,10 +258,10 @@ fn pointer_event(ev: &[u8], edge: PointerEdge) -> Decoded {
 /// integer field zeroed for both a genuine trackpad tick and anything
 /// `SDL_PushEvent`d in this shape (item 13's `wheel:<dy>` FIFO token hit
 /// this the first time anything synthesized a wheel event at all — nothing
-/// needed one before). `cfg!`, not `#[cfg]`, so both arms keep compiling.
+/// needed one before). The flavour is a value, so both arms keep compiling.
 #[inline]
-pub fn decode_wheel_dy(ev: &[u8]) -> i32 {
-    if cfg!(feature = "hostsim") {
+pub fn decode_wheel_dy(flavor: SdlFlavor, ev: &[u8]) -> i32 {
+    if flavor == SdlFlavor::Stock {
         rd_f32(ev, 32).round() as i32
     } else {
         rd_i32(ev, 20)
@@ -301,32 +301,37 @@ mod tests {
     use super::*;
     use crate::inject::{encode_key, encode_key_repeat, encode_pointer};
 
+    /// Both layouts, graded in every pass: the flavour is a value, so a default test run grades
+    /// the stock arm as much as the television's.
+    const BOTH: [SdlFlavor; 2] = [SdlFlavor::Lg, SdlFlavor::Stock];
+
     fn event_of(code: u32) -> [u8; 128] {
         let mut ev = [0u8; 128];
         ev[..4].copy_from_slice(&code.to_ne_bytes());
         ev
     }
 
-    /// The wcode a decode reports for an injected one: always on the television, and on the host
+    /// The wcode a decode reports for an injected one: always on the television, and on stock SDL
     /// only when the carrier is set (a wcode of 0 is "no injected wcode" there).
-    fn carried(wcode: u32) -> Option<u32> {
-        if cfg!(feature = "hostsim") && wcode == 0 {
+    fn carried(flavor: SdlFlavor, wcode: u32) -> Option<u32> {
+        if flavor == SdlFlavor::Stock && wcode == 0 {
             None
         } else {
             Some(wcode)
         }
     }
 
-    /// `encode_key` and `decode_key` must agree, in whichever layout this build compiled. The
+    /// `encode_key` and `decode_key` must agree, in both layouts. The
     /// regression test for a bug that shipped: the two ends disagreed about `SDL_KeyboardEvent`'s
     /// field offsets, so every remote-FIFO token was accepted, decoded into nonsense and silently
     /// dropped. Nothing in the compiler couples a reader and a writer of raw byte offsets, so this
-    /// does. `make check` builds the television layout; a hostsim run grades the stock one.
+    /// does, for each flavour.
     #[test]
     fn key_bytes_round_trip() {
         // `(8, 42)` is the backspace token and must survive as the pair it is: the application's
         // desktop stand-in claims sym 8, so a decode that consulted it first would turn the panel's
         // delete key into a navigation. Here that is: the injected wcode is reported as such.
+        for flavor in BOTH {
         for (sym, wcode) in [
             (0x4000_0051, 0),
             (13, 0),
@@ -338,24 +343,31 @@ mod tests {
             (115, 22),
         ] {
             for down in [true, false] {
-                let (state, got_wcode, got_sym) = decode_key(&encode_key(sym, wcode, down));
-                assert_eq!(got_sym, sym, "sym lost (wcode={wcode}, down={down})");
-                assert_eq!(got_wcode, carried(wcode), "wcode lost (sym={sym}, down={down})");
+                let (state, got_wcode, got_sym) = decode_key(flavor, &encode_key(flavor, sym, wcode, down));
+                assert_eq!(got_sym, sym, "sym lost ({flavor:?}, wcode={wcode}, down={down})");
+                assert_eq!(got_wcode, carried(flavor, wcode), "wcode lost ({flavor:?}, sym={sym}, down={down})");
                 assert_eq!(state & 0xff, u32::from(down), "press/release lost (sym={sym})");
                 assert_eq!(state & 0x100, 0, "a synthetic edge must never look like auto-repeat");
             }
-            let (state, got_wcode, got_sym) = decode_key(&encode_key_repeat(sym, wcode));
-            assert_eq!((got_sym, got_wcode), (sym, carried(wcode)));
+            let (state, got_wcode, got_sym) = decode_key(flavor, &encode_key_repeat(flavor, sym, wcode));
+            assert_eq!((got_sym, got_wcode), (sym, carried(flavor, wcode)));
             assert_eq!(state, 0x101, "a repeat is a DOWN edge with the repeat bit");
+        }
         }
     }
 
     /// The key layout, byte for byte and written out a second time rather than through
-    /// `encode_key`. LG's fork: `state` u32 at +16, wcode at +20, sym at +24. Stock SDL (the
-    /// simulator): `state` u8 at +12, `repeat` u8 at +13, sym at +20, and a synthetic press carries
+    /// `encode_key`. LG's fork: `state` u32 at +16, wcode at +20, sym at +24. Stock SDL (a
+    /// desktop): `state` u8 at +12, `repeat` u8 at +13, sym at +20, and a synthetic press carries
     /// its wcode in `mod` at +24 under the `SYNTH_WINDOW` marker at +8.
     #[test]
     fn the_key_layout_is_pinned_byte_for_byte() {
+        for flavor in BOTH {
+            the_key_layout_of(flavor);
+        }
+    }
+
+    fn the_key_layout_of(flavor: SdlFlavor) {
         // UP (0x40000052) with no wcode, and PLAY (wcode 450 = 0x1c2) with no sym.
         let (up_sym, play_wcode) = ([0x52, 0x00, 0x00, 0x40], [0xc2, 0x01, 0x00, 0x00]);
         let mut up = [0u8; 128];
@@ -364,7 +376,7 @@ mod tests {
         for ev in [&mut up, &mut play, &mut repeat] {
             ev[0..4].copy_from_slice(&0x300u32.to_ne_bytes());
         }
-        if cfg!(feature = "hostsim") {
+        if flavor == SdlFlavor::Stock {
             for ev in [&mut up, &mut play, &mut repeat] {
                 ev[12] = 1;
                 ev[8..12].copy_from_slice(&0x504c_584bu32.to_ne_bytes());
@@ -382,15 +394,15 @@ mod tests {
             repeat[24..28].copy_from_slice(&up_sym);
             repeat[17] = 1; // state 0x101
         }
-        assert_eq!(decode_key(&up), (1, carried(0), 0x4000_0052));
-        assert_eq!(decode_key(&play), (1, Some(450), 0));
-        assert_eq!(decode_key(&repeat), (0x101, carried(0), 0x4000_0052));
+        assert_eq!(decode_key(flavor, &up), (1, carried(flavor, 0), 0x4000_0052));
+        assert_eq!(decode_key(flavor, &play), (1, Some(450), 0));
+        assert_eq!(decode_key(flavor, &repeat), (0x101, carried(flavor, 0), 0x4000_0052));
         // a desktop press (no marker) never carries a wcode, whatever `mod` holds
-        if cfg!(feature = "hostsim") {
+        if flavor == SdlFlavor::Stock {
             let mut real = up;
             real[8..12].copy_from_slice(&1u32.to_ne_bytes());
             real[24..26].copy_from_slice(&0x1000u16.to_ne_bytes()); // a modifier bitmask
-            assert_eq!(decode_key(&real).1, None);
+            assert_eq!(decode_key(flavor, &real).1, None);
         }
     }
 
@@ -405,7 +417,9 @@ mod tests {
             (0x105, Decoded::Lifecycle(Lifecycle::WillForeground)),
             (0x106, Decoded::Lifecycle(Lifecycle::DidForeground)),
         ] {
-            assert_eq!(decode(&event_of(code)), Some(event.clone()), "{code:#x}");
+            for flavor in BOTH {
+                assert_eq!(decode(flavor, &event_of(code)), Some(event.clone()), "{flavor:?} {code:#x}");
+            }
             assert!(!is_input_event(code), "{code:#x}: a window event is never a modal's input");
             if let Decoded::Lifecycle(edge) = event {
                 assert_eq!(edge.sdl_code(), code, "the code a decoded edge is read back as");
@@ -418,7 +432,9 @@ mod tests {
     #[test]
     fn every_other_event_stays_on_the_raw_path() {
         for code in [0, 0x101, 0x102, 0x107, 0x200, 0x302, 0x3ff, 0x404, u32::MAX] {
-            assert_eq!(decode(&event_of(code)), None, "{code:#x}");
+            for flavor in BOTH {
+                assert_eq!(decode(flavor, &event_of(code)), None, "{flavor:?} {code:#x}");
+            }
         }
     }
 
@@ -477,11 +493,13 @@ mod tests {
         let _serial = plx_base::testlock::serial();
         for (code, edge) in POINTERS {
             for (x, y) in [(0, 0), (960, 540), (1919, 1079), (1400, 870), (-3, 1085), (2000, -1)] {
-                assert_eq!(
-                    decode(&pointer_bytes(code, 1, 1, x, y)),
-                    pointer(x as f32, y as f32, edge),
-                    "{code:#x} at ({x}, {y})"
-                );
+                for flavor in BOTH {
+                    assert_eq!(
+                        decode(flavor, &pointer_bytes(code, 1, 1, x, y)),
+                        pointer(x as f32, y as f32, edge),
+                        "{flavor:?} {code:#x} at ({x}, {y})"
+                    );
+                }
             }
         }
     }
@@ -497,7 +515,9 @@ mod tests {
                 for (code, edge) in POINTERS {
                     let mut ev = pointer_bytes(code, button, state, 640, 360);
                     ev[28..64].fill(0xa5);
-                    assert_eq!(decode(&ev), pointer(640.0, 360.0, edge), "{code:#x} button {button} state {state}");
+                    for flavor in BOTH {
+                        assert_eq!(decode(flavor, &ev), pointer(640.0, 360.0, edge), "{flavor:?} {code:#x} button {button} state {state}");
+                    }
                 }
             }
         }
@@ -511,9 +531,11 @@ mod tests {
         let _serial = plx_base::testlock::serial();
         for (code, edge) in POINTERS {
             for (x, y) in [(0, 0), (1400, 870), (1919, 1079), (-200, 400)] {
-                let ev = encode_pointer(code, x, y);
+                let ev = encode_pointer(code, x, y); // the layout both flavours read
                 assert_eq!(rd_u32(&ev, 0), code);
-                assert_eq!(decode(&ev), pointer(x as f32, y as f32, edge), "{code:#x}");
+                for flavor in BOTH {
+                    assert_eq!(decode(flavor, &ev), pointer(x as f32, y as f32, edge), "{flavor:?} {code:#x}");
+                }
                 if code != SDL_MOUSEMOTION {
                     assert_eq!(ev[16], 1, "the left button survives SDL's event queue");
                     assert_eq!(ev[17], u8::from(code == SDL_MOUSEBUTTONDOWN));
@@ -541,39 +563,40 @@ mod tests {
         Some(Decoded::Wheel { dy })
     }
 
-    /// **Each layout's wheel, and the one this build does not read.** The television's integer at
-    /// +20 is the count in the default build and is ignored in the simulator's; the simulator's
+    /// **Each layout's wheel, and the one the flavour does not read.** The television's integer at
+    /// +20 is the count under [`SdlFlavor::Lg`] and is ignored under [`SdlFlavor::Stock`]; the stock
     /// float at +32 is the count there (rounded to whole ticks) and is ignored on the television.
     #[test]
-    fn a_wheel_tick_is_read_from_the_offset_this_hosts_sdl_carries_it_at() {
+    fn a_wheel_tick_is_read_from_the_offset_the_flavours_sdl_carries_it_at() {
         for dy in [-40, -3, -1, 1, 2, 120] {
-            if cfg!(feature = "hostsim") {
-                assert_eq!(decode(&wheel_stock(dy as f32)), wheel(dy), "stock layout, {dy}");
-                assert_eq!(decode(&wheel_lg(dy)), wheel(0), "the television's field is not this host's: {dy}");
-            } else {
-                assert_eq!(decode(&wheel_lg(dy)), wheel(dy), "LG layout, {dy}");
-                assert_eq!(decode(&wheel_stock(dy as f32)), wheel(0), "the simulator's field is not read here: {dy}");
-            }
+            assert_eq!(decode(SdlFlavor::Stock, &wheel_stock(dy as f32)), wheel(dy), "stock layout, {dy}");
+            assert_eq!(decode(SdlFlavor::Stock, &wheel_lg(dy)), wheel(0), "the television's field is not stock's: {dy}");
+            assert_eq!(decode(SdlFlavor::Lg, &wheel_lg(dy)), wheel(dy), "LG layout, {dy}");
+            assert_eq!(decode(SdlFlavor::Lg, &wheel_stock(dy as f32)), wheel(0), "the stock field is not read here: {dy}");
         }
     }
 
     /// A fractional trackpad tick keeps the sign of what it rounds to, and a half tick or less is
-    /// no tick (the loop records a zero and ignores it). Only the simulator's layout carries one.
-    #[cfg(feature = "hostsim")]
+    /// no tick (the loop records a zero and ignores it). Only stock SDL's layout carries one.
     #[test]
     fn a_fractional_trackpad_tick_rounds_to_whole_ticks() {
         for (precise, dy) in [(-0.4, 0), (0.4, 0), (-0.6, -1), (0.6, 1), (-1.4, -1), (2.5, 3), (-40.0, -40)] {
-            assert_eq!(decode(&wheel_stock(precise)), wheel(dy), "{precise}");
+            assert_eq!(decode(SdlFlavor::Stock, &wheel_stock(precise)), wheel(dy), "{precise}");
         }
     }
 
-    /// A key edge decodes with its packed state and the carrier's wcode, a text commit with this
-    /// build's offset, and the events nothing reads stay `None`.
+    /// A key edge decodes with its packed state and the carrier's wcode, a text commit with the
+    /// flavour's offset, and the events nothing reads stay `None`.
     #[test]
     fn a_key_and_a_text_commit_decode_to_their_neutral_values() {
-        let key = decode(&encode_key(0x4000_0052, 0, true));
-        assert_eq!(key, Some(Decoded::Key { state: 1, wcode: carried(0), sym: 0x4000_0052 }));
-        assert_eq!(decode(&crate::text::encode_event("star wars")), Some(Decoded::Text("star wars".into())));
-        assert_eq!(decode(&event_of(SDL_TEXTEDITING)), None);
+        for flavor in BOTH {
+            let key = decode(flavor, &encode_key(flavor, 0x4000_0052, 0, true));
+            assert_eq!(key, Some(Decoded::Key { state: 1, wcode: carried(flavor, 0), sym: 0x4000_0052 }));
+            assert_eq!(
+                decode(flavor, &crate::text::encode_event(flavor, "star wars")),
+                Some(Decoded::Text("star wars".into()))
+            );
+            assert_eq!(decode(flavor, &event_of(SDL_TEXTEDITING)), None);
+        }
     }
 }

@@ -23,6 +23,7 @@
 //! `/proc` is `mount rw` in both, and read from inside the jail the link resolves jail-relative —
 //! exactly the path the app must use. Kodi's `CPlatformWebOS::GetHomePath()` does the same thing.
 
+use crate::choice::Choice;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -59,8 +60,14 @@ pub const ENV_STEERABLE: bool = cfg!(feature = "hostsim");
 /// app this process is depends on where it was installed, not on what it was compiled with.
 pub const STABLE_APP_ID: &str = "io.github.tiper.finnative";
 
-/// The Developer Mode install dir. Only a last-resort fallback now — it is what the app used to
-/// hardcode, so it keeps the historical behaviour if `/proc` is somehow unreadable.
+/// The webOS Developer Mode install directory of the SHIPPED app (`io.github.tiper.finnative`).
+///
+/// A webOS fact kept in `base` for one reason: [`session_candidates`] offers its `auth.json` as a
+/// MIGRATION source, a literal that names the shipped install's directory by design (the same family
+/// as the `/media/developer|internal` candidate lists below). It is NOT this module's last resort any
+/// more: the directory a process falls back to when its executable path cannot be read is the
+/// platform's to state ([`Layout::fallback_dir`]); the webOS platform spells the same directory in its
+/// own table, and a test there holds the two together through [`session_candidates`].
 const LEGACY_APP_DIR: &str = "/media/developer/apps/usr/palm/applications/io.github.tiper.finnative";
 
 /// **Which install this process is** — `io.github.tiper.finnative` for the app users get, or
@@ -150,11 +157,13 @@ pub fn install_kind() -> &'static str {
     }
 }
 
-/// The directory the running executable sits in — i.e. where the ipk's payload was installed.
+/// The directory the package's read-only payload was installed in.
 ///
-/// `std::env::current_exe` IS the `/proc/self/exe` read on Linux, so this is the same syscall the
-/// reasoning above is about — it just also answers on a host build, where the simulator's fonts sit
-/// next to the simulator binary rather than under a webOS install prefix.
+/// A platform that published a [`Layout`] ([`publish`]) names it. Otherwise it is derived: on webOS
+/// the executable's own directory (`std::env::current_exe` IS the `/proc/self/exe` read on Linux, the
+/// syscall the reasoning above is about), in a macOS application bundle `Contents/Resources`, and in
+/// the simulator `PLXNATIVE_APP_DIR`, which is why its fonts need not sit next to its binary. A hosted
+/// platform runs under its host's executable, so it states this directory in its `Layout`.
 pub fn app_dir() -> &'static Path {
     &app_dir_resolved().0
 }
@@ -166,6 +175,8 @@ enum AppDirSource {
     MacosBundle,
     CurrentExe,
     Fallback,
+    /// The platform's [`Layout`] named a directory the derivation would not have.
+    Platform,
 }
 
 /// The `appdir:` event-log line: the resolved directory and the rule that produced it.
@@ -175,48 +186,157 @@ enum AppDirSource {
 /// call here would make `paths` and `eventlog` name each other (docs/module-layers.md).
 pub fn app_dir_line() -> String {
     let (dir, source) = app_dir_resolved();
+    appdir_line(dir, *source)
+}
+
+fn appdir_line(dir: &Path, source: AppDirSource) -> String {
     match source {
         AppDirSource::Env => format!("appdir: {} (PLXNATIVE_APP_DIR)", dir.display()),
         AppDirSource::MacosBundle => format!("appdir: {} (macOS bundle)", dir.display()),
         AppDirSource::CurrentExe => format!("appdir: {} (from current_exe)", dir.display()),
+        AppDirSource::Platform => format!("appdir: {} (platform layout)", dir.display()),
         // Not expected on device — worth a line in the log if it ever happens, because everything
         // that reads the payload from here on is reading a guess.
-        AppDirSource::Fallback => format!("appdir: current_exe unreadable, falling back to {LEGACY_APP_DIR}"),
+        AppDirSource::Fallback => format!("appdir: current_exe unreadable, falling back to {}", dir.display()),
     }
 }
 
+/// The ONE choice between a platform's [`Layout`] and the derivation, made once: [`publish`] sets
+/// `Some(layout)`, and the first read of either directory sets `None` ([`choice`]). Whichever comes
+/// first stands, so a publish that loses changes nothing and a read never sees a layout that
+/// `publish` reported as refused.
+static CHOICE: Choice<Layout> = Choice::new();
+
+fn choice() -> Option<&'static Layout> {
+    CHOICE.get()
+}
+
+/// The last-resort directory `published` states, else [`NO_FALLBACK_DIR`].
+fn fallback_of(published: Option<&Layout>) -> &str {
+    published.map_or(NO_FALLBACK_DIR, |layout| layout.fallback_dir)
+}
+
+/// The payload directory, resolved once: the platform's published [`Layout`] first, then the
+/// derivation ([`derive_app_dir`]). It memoises the path; the choice itself is [`CHOICE`]'s.
+static APP_DIR: OnceLock<(PathBuf, AppDirSource)> = OnceLock::new();
+
 fn app_dir_resolved() -> &'static (PathBuf, AppDirSource) {
-    static DIR: OnceLock<(PathBuf, AppDirSource)> = OnceLock::new();
-    DIR.get_or_init(|| {
-        // The simulator's binary lives in `target/<profile>/`, which is not where `appfont.ttf`
-        // and the icons are — those ship in `pkg/`. Rather than copy assets around on every
-        // build, the simulator is told where the payload is. Compile-time gated, so a television
-        // build has no such override and resolves exactly as documented above.
-        if ENV_STEERABLE {
-            if let Some(d) = std::env::var_os("PLXNATIVE_APP_DIR") {
-                let p = PathBuf::from(d);
-                if !p.as_os_str().is_empty() {
-                    return (p, AppDirSource::Env);
-                }
+    APP_DIR.get_or_init(|| resolve_app_dir(choice()))
+}
+
+/// What [`app_dir`] answers for `published`. A layout whose directory IS the derived one reports the
+/// derivation's own provenance, so a platform that states [`Layout::DERIVED`] logs the `appdir:` line
+/// it always did; only a directory the derivation would not have named reads `platform layout`.
+fn resolve_app_dir(published: Option<&Layout>) -> (PathBuf, AppDirSource) {
+    let derived = derive_app_dir_with(fallback_of(published));
+    match published {
+        Some(layout) => {
+            let dir = (layout.payload_dir)();
+            if dir == derived.0 {
+                derived
+            } else {
+                (dir, AppDirSource::Platform)
             }
         }
-        if let Ok(exe) = std::env::current_exe() {
-            // A macOS **application bundle** puts the executable in `Contents/MacOS/` and its
-            // payload in `Contents/Resources/` — the layout every Mac tool, `codesign` included,
-            // expects. So on that one platform "next to the binary" is the wrong answer by one
-            // hop, and getting it wrong is the SILENT font failure this module's doc opens with:
-            // `text.rs` would fall through to a system face and still log `ok=1`.
-            if let Some(res) = macos_bundle_resources(&exe) {
-                return (res, AppDirSource::MacosBundle);
-            }
-            if let Some(parent) = exe.parent() {
-                if !parent.as_os_str().is_empty() {
-                    return (parent.to_path_buf(), AppDirSource::CurrentExe);
-                }
+        None => derived,
+    }
+}
+
+/// The derivation with the published layout's last resort: what a [`Layout::DERIVED`] payload hook answers.
+fn derive_app_dir() -> (PathBuf, AppDirSource) {
+    derive_app_dir_with(fallback_of(choice()))
+}
+
+/// The derivation: the environment (a hostsim build only), then the executable's own place, then
+/// `fallback` (the platform's [`Layout::fallback_dir`]).
+fn derive_app_dir_with(fallback: &str) -> (PathBuf, AppDirSource) {
+    // The simulator's binary lives in `target/<profile>/`, which is not where `appfont.ttf`
+    // and the icons are — those ship in `pkg/`. Rather than copy assets around on every
+    // build, the simulator is told where the payload is. Compile-time gated, so a television
+    // build has no such override and resolves exactly as documented above.
+    if ENV_STEERABLE {
+        if let Some(d) = std::env::var_os("PLXNATIVE_APP_DIR") {
+            let p = PathBuf::from(d);
+            if !p.as_os_str().is_empty() {
+                return (p, AppDirSource::Env);
             }
         }
-        (PathBuf::from(LEGACY_APP_DIR), AppDirSource::Fallback)
-    })
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        // A macOS **application bundle** puts the executable in `Contents/MacOS/` and its
+        // payload in `Contents/Resources/` — the layout every Mac tool, `codesign` included,
+        // expects. So on that one platform "next to the binary" is the wrong answer by one
+        // hop, and getting it wrong is the SILENT font failure this module's doc opens with:
+        // `text.rs` would fall through to a system face and still log `ok=1`.
+        if let Some(res) = macos_bundle_resources(&exe) {
+            return (res, AppDirSource::MacosBundle);
+        }
+        if let Some(parent) = exe.parent() {
+            if !parent.as_os_str().is_empty() {
+                return (parent.to_path_buf(), AppDirSource::CurrentExe);
+            }
+        }
+    }
+    (PathBuf::from(fallback), AppDirSource::Fallback)
+}
+
+/// Where a platform's files live, stated by the platform (`plx_os::tv::Services::layout`) and
+/// published once by the application's entry, before anything reads [`app_dir`] or
+/// [`persistent_state_root`] ([`publish`]).
+///
+/// Two directories, as hooks rather than values, and the last resort for the first as a value: a hosted platform learns its directories at run
+/// time, from its host, and answers from what it stored then. **Neither hook may log**: this module
+/// never logs, because the event log resolves its own path through it (see [`app_id`]).
+/// `payload_dir` must not call [`app_dir`]: it runs inside `app_dir`'s one-time initialiser and
+/// would re-enter it. `state_root` must not call [`persistent_state_root`], which calls it on every
+/// read; it may read [`app_dir`], as [`Layout::DERIVED`]'s does on a device build.
+///
+/// The runtime root and the app id are NOT here: the television's C shim freezes both before any
+/// Rust runs, so a platform's word on them would be ignored.
+#[derive(Clone, Copy)]
+pub struct Layout {
+    /// The directory the package's read-only payload (fonts, icons, certificates) was installed in.
+    pub payload_dir: fn() -> PathBuf,
+    /// The directory the app's own record files live under, where the app keeps its records in files.
+    pub state_root: fn() -> PathBuf,
+    /// The payload directory of last resort, for a process whose executable path cannot be read: the
+    /// derivation's final arm, and the directory its `appdir:` line names when it is taken. It is the
+    /// platform's own install prefix, so the platform states it (webOS names the Developer Mode one);
+    /// [`NO_FALLBACK_DIR`] is a platform with no install prefix to name. A [`Layout::DERIVED`] payload
+    /// hook applies it too, so a platform that states only this field gets the derivation with its
+    /// last resort.
+    pub fallback_dir: &'static str,
+}
+
+/// What [`Layout::fallback_dir`] holds for a platform with no install prefix of its own: the current
+/// directory. The desktop and Tizen state it (the desktop's executable path always reads, and the
+/// Tizen host names the payload in its launch string), and a process that published no layout (a host
+/// test) has it.
+pub const NO_FALLBACK_DIR: &str = ".";
+
+impl Layout {
+    /// Nothing stated: both directories derive from the executable and the environment, exactly as a
+    /// process that published no layout resolves them, and the last resort is [`NO_FALLBACK_DIR`]. The
+    /// desktop says this, as does the host-test value; webOS says it with its own `fallback_dir`.
+    pub const DERIVED: Self = Self {
+        payload_dir: || derive_app_dir().0,
+        state_root: derive_state_root,
+        fallback_dir: NO_FALLBACK_DIR,
+    };
+}
+
+/// Why [`publish`] refused: [`PublishError::AlreadyPublished`] (a layout was published already, the first
+/// one stands) or [`PublishError::AlreadyRead`] ([`app_dir`] or [`persistent_state_root`] was read before the
+/// layout arrived, so the derivation is what the process uses). The loser changes nothing; the caller logs
+/// it (this module cannot).
+pub use crate::choice::PublishError;
+
+/// Publish the platform's [`Layout`], once, before anything reads either directory. A second publish
+/// and a publish after the first read of either directory are refused and change nothing: the choice
+/// is one cell ([`CHOICE`]) that whoever arrives first fills. **Never logs**: this is the path the
+/// event log's own location resolves through (see [`app_id`]), so the caller reports a refusal.
+pub fn publish(layout: Layout) -> Result<(), PublishError> {
+    CHOICE.publish(layout)
 }
 
 /// A file shipped inside the ipk, addressed by name.
@@ -589,7 +709,9 @@ pub fn session_candidates() -> Vec<PathBuf> {
         in_app_dir("auth.json"),
     ]);
     // The legacy in-app-dir path is a MIGRATION source and it names the SHIPPED install's directory
-    // by literal, so only the shipped install may offer it. `session::load` takes the first
+    // by literal (a webOS migration fact, the one `LEGACY_APP_DIR` keeps in this module: it is NOT the
+    // platform's last resort, which `Layout::fallback_dir` states), so only the shipped install may
+    // offer it. `session::load` takes the first
     // candidate that EXISTS — so on a flavoured install, whose own three files are all absent on
     // first boot, this entry would hand a developer build the other install's account token, every
     // per-(user, server) PMS token and the Plex Home roster, which it would then write back under
@@ -809,6 +931,8 @@ pub fn obsolete_last_place_candidates() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     /// Only the candidate inside the world-writable `/media/developer/temp` is created owner-only.
     #[test]
     fn only_the_shared_temp_image_cache_directory_is_private() {
@@ -973,10 +1097,11 @@ mod tests {
 
     /// `app_dir` must hand back an ABSOLUTE directory and must not panic however it got there.
     ///
-    /// This used to say it exercised the LEGACY_APP_DIR fallback, because `read_link` of
+    /// This used to say it exercised the install-prefix fallback, because `read_link` of
     /// `/proc/self/exe` fails on the dev Mac. It no longer does: `current_exe` answers on both
     /// platforms, so the fallback is now a guard neither reaches and this asserts the property
-    /// rather than the arm.
+    /// rather than the arm. (The last arm answers the platform's `Layout::fallback_dir`, which is the
+    /// neutral relative `.` for a platform with no install prefix; no host reaches it.)
     #[test]
     fn app_dir_is_absolute_and_infallible() {
         let d = super::app_dir();
@@ -1346,6 +1471,105 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.is_dir(), "the scratch default must be created eagerly: {}", first.display());
     }
+
+    fn pkg_res() -> PathBuf {
+        PathBuf::from("/pkg/res")
+    }
+
+    fn pkg_data() -> PathBuf {
+        PathBuf::from("/pkg/data")
+    }
+
+    const STATED: super::Layout = super::Layout { payload_dir: pkg_res, state_root: pkg_data, ..super::Layout::DERIVED };
+
+    /// A published layout is what both directories answer: the payload directory names its source as
+    /// the platform's, and the state root is the hook's value.
+    #[test]
+    fn a_published_layout_is_what_the_directories_resolve_to() {
+        let (dir, source) = super::resolve_app_dir(Some(&STATED));
+        assert_eq!(dir, pkg_res());
+        assert_eq!(source, super::AppDirSource::Platform);
+        assert_eq!(super::state_root_of(Some(&STATED)), pkg_data());
+    }
+
+    /// `Layout::DERIVED` is today's derivation and nothing else: the same directory, the same
+    /// provenance (so the boot log's `appdir:` line does not change), the same state root.
+    #[test]
+    fn the_derived_layout_equals_todays_values() {
+        let _serial = crate::testlock::serial();
+        let derived = super::derive_app_dir();
+        assert_eq!((super::Layout::DERIVED.payload_dir)(), derived.0);
+        let (dir, source) = super::resolve_app_dir(Some(&super::Layout::DERIVED));
+        assert_eq!((dir, source), derived, "a layout that states the derived directory keeps its provenance");
+        assert_eq!(super::resolve_app_dir(None), super::derive_app_dir());
+        assert_eq!((super::Layout::DERIVED.state_root)(), super::derive_state_root());
+        assert_eq!(super::state_root_of(Some(&super::Layout::DERIVED)), super::state_root_of(None));
+        // No test publishes, so the process-wide answers ARE the derivation.
+        assert_eq!(super::app_dir(), super::derive_app_dir().0);
+        assert_eq!(super::persistent_state_root(), super::derive_state_root());
+    }
+
+    /// **The last resort is the platform's.** A process that published nothing has the neutral one; a
+    /// published layout's own is what the derivation's final arm answers and what the `appdir:` line names
+    /// (the webOS platform states [`LEGACY_APP_DIR`]); a `Layout::DERIVED` payload hook applies it too.
+    #[test]
+    fn the_last_resort_directory_is_the_published_layouts() {
+        let webos = super::Layout { fallback_dir: super::LEGACY_APP_DIR, ..super::Layout::DERIVED };
+        assert_eq!(super::fallback_of(None), super::NO_FALLBACK_DIR);
+        assert_eq!(super::fallback_of(Some(&super::Layout::DERIVED)), super::NO_FALLBACK_DIR);
+        assert_eq!(super::fallback_of(Some(&webos)), super::LEGACY_APP_DIR);
+        // A readable executable never reaches the final arm, whatever the layout says.
+        let _serial = crate::testlock::serial();
+        assert_eq!(super::derive_app_dir_with(super::LEGACY_APP_DIR), super::derive_app_dir_with("/elsewhere"));
+        assert_eq!(
+            super::appdir_line(std::path::Path::new(super::LEGACY_APP_DIR), super::AppDirSource::Fallback),
+            format!("appdir: current_exe unreadable, falling back to {}", super::LEGACY_APP_DIR),
+            "the line names the directory that WAS used, not a literal of this module"
+        );
+        assert_eq!(
+            super::appdir_line(std::path::Path::new("/x"), super::AppDirSource::Fallback),
+            "appdir: current_exe unreadable, falling back to /x"
+        );
+    }
+
+    /// A second publish is an error and the first layout stands; a publish after the first read of
+    /// EITHER directory is an error and leaves both directories derived (the state root is not
+    /// memoised, so only the choice cell can tell that it was read). Checked on private cells,
+    /// because a successful publish into the process-wide cell would steer every other test's
+    /// directories.
+    #[test]
+    fn a_late_or_second_publish_is_an_error_and_changes_nothing() {
+        let cell = super::Choice::new();
+        assert_eq!(cell.publish(STATED), Ok(()));
+        assert_eq!(
+            cell.publish(super::Layout::DERIVED),
+            Err(super::PublishError::AlreadyPublished)
+        );
+        assert_eq!(super::state_root_of(cell.get()), pkg_data(), "the first layout stands");
+
+        // A payload-directory read first.
+        let cell = super::Choice::new();
+        assert_eq!(super::resolve_app_dir(cell.get()), super::derive_app_dir());
+        assert_eq!(cell.publish(STATED), Err(super::PublishError::AlreadyRead));
+        assert!(cell.get().is_none(), "a late publish leaves no layout behind");
+
+        // The process-wide cell: once `app_dir()` has been read, the real `publish` refuses too.
+        let _ = super::app_dir();
+        assert_eq!(super::publish(STATED), Err(super::PublishError::AlreadyRead));
+        assert_eq!(super::app_dir(), super::derive_app_dir().0, "the refused layout changed nothing");
+    }
+
+    /// The state root is not memoised, so a read of it before `publish` freezes nothing by itself:
+    /// the choice cell must still make that publish `AlreadyRead` and leave BOTH directories derived.
+    #[test]
+    fn a_state_root_read_before_publish_refuses_it_and_leaves_both_directories_derived() {
+        let _serial = crate::testlock::serial();
+        let cell = super::Choice::new();
+        assert_eq!(super::state_root_of(cell.get()), super::derive_state_root());
+        assert_eq!(cell.publish(STATED), Err(super::PublishError::AlreadyRead));
+        assert_eq!(super::state_root_of(cell.get()), super::derive_state_root());
+        assert_eq!(super::resolve_app_dir(cell.get()), super::derive_app_dir());
+    }
 }
 
 /// Legacy JSON/host-simulator persistence root. Where the platform states the storage helper as the
@@ -1369,6 +1593,19 @@ mod tests {
 /// neither test, nor anything in this module, was wrong.
 #[allow(dead_code)] // Stage A storage root; connected by Session/Consent integration.
 pub fn persistent_state_root() -> PathBuf {
+    state_root_of(choice())
+}
+
+/// What [`persistent_state_root`] answers for `published`: the platform's state root, else the derivation.
+fn state_root_of(published: Option<&Layout>) -> PathBuf {
+    match published {
+        Some(layout) => (layout.state_root)(),
+        None => derive_state_root(),
+    }
+}
+
+/// The derivation of [`persistent_state_root`]: what it answered before a platform could state one.
+fn derive_state_root() -> PathBuf {
     #[cfg(any(test, feature = "test-support"))]
     {
         if let Some(root) = TEST_PERSISTENT_STATE_ROOT

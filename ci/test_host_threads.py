@@ -35,7 +35,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRUBBED = ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "RELEASE", "SYMBOLS", "LAB", "FLAVOR", "CI",
+SCRUBBED = ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "PLATFORM", "RELEASE", "SYMBOLS", "LAB", "FLAVOR", "CI",
             "GITHUB_ACTIONS", "ARM_PROFILE", "HOST_THREADS")
 FLAG = "CARGO_BUILD_RUSTFLAGS"
 HOST_RECIPES = (("check-cargo-unit-default",), ("check-cargo-unit-hostsim",), ("test-fast",),

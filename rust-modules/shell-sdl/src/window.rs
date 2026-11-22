@@ -5,10 +5,11 @@
 //! `SDL_Window*` and nothing else: it has no destructor, so it never frees or nulls itself when the
 //! compositor takes the screen away (the application is leaked at exit and a worker may still hold
 //! the handle), and `init::quit` is explicit. The handle is the single contract with the television's
-//! Wayland half, which lives in the application crate's `system.rs`: that code receives
+//! Wayland half, which lives in the webOS platform crate's `system.rs`: that code receives
 //! [`Window::raw`] and the order of calls on one thread, and nothing here ever names the Wayland or
 //! `SDL_SysWMinfo` calls (the television's SDL writes a larger info struct than the headers declare;
 //! `system.rs` has the buffer that survives that, and a pin in `lib.rs` keeps this crate off it).
+use crate::init::InitHooks;
 use crate::sys;
 #[cfg(feature = "hostsim")]
 use crate::sys::{SDL_GetDisplayUsableBounds, SDL_SetWindowPosition, SDL_SetWindowSize};
@@ -17,7 +18,9 @@ use plx_base::task::MainThread;
 use std::ffi::CStr;
 use std::os::raw::{c_int, c_void};
 
-/// OPENGL | FULLSCREEN on the television, which owns the whole panel.
+/// The window flags a [`Placement`] asks SDL for: OPENGL | FULLSCREEN for a [`Placement::Panel`],
+/// which owns the whole panel, and OPENGL | ALLOW_HIGHDPI for a [`Placement::Desktop`]. The flags
+/// follow from the placement the platform states, so there is no second fact to keep in step.
 ///
 /// The desktop asks for OPENGL | ALLOW_HIGHDPI — no fullscreen grab (hostile on a laptop) and
 /// **not RESIZABLE**: `surface::probe` reads the drawable once, at boot, so a dragged edge would
@@ -31,12 +34,14 @@ use std::os::raw::{c_int, c_void};
 /// `fit_window_to_density` measures the pixels per point once the window exists and sizes
 /// it in points for the drawable it should give: 960x540 points for a 1920x1080 drawable on a 2x
 /// display, so `surface::scale() == 1.0`, the same 1:1 texel contract the television gets.
-pub const SDL_WINDOW_FLAGS: u32 = if cfg!(feature = "hostsim") {
-    0x2 | 0x2000
-} else {
-    0x2 | 0x1
-};
-/// `SDL_WINDOW_ALLOW_HIGHDPI`, the one bit of [`SDL_WINDOW_FLAGS`] a frame dump clears.
+fn window_flags_of(placement: &Placement) -> u32 {
+    match placement {
+        Placement::Panel { .. } => 0x2 | 0x1,
+        #[cfg(feature = "hostsim")]
+        Placement::Desktop => 0x2 | SDL_WINDOW_ALLOW_HIGHDPI,
+    }
+}
+/// `SDL_WINDOW_ALLOW_HIGHDPI`, the one bit of a desktop's window flags a frame dump clears.
 const SDL_WINDOW_ALLOW_HIGHDPI: u32 = 0x2000;
 /// `SDL_WINDOW_INPUT_FOCUS`. Note it is NOT among the flags requested above — no window flag can
 /// ask for it; SDL sets it when the compositor gives this surface the keyboard. Read, never asked
@@ -104,8 +109,14 @@ impl Window {
     ///
     /// Called after [`crate::init::init`] and [`crate::init::request_gl`], and after the
     /// application has read the stored session, which the placement may depend on: that order is
-    /// the application's and is pinned there.
-    pub fn open(_mt: &MainThread, ask: &OpenAsk) -> Result<Window, OpenFailed> {
+    /// the application's and is pinned there. `hooks` is the platform's own, the one `init` ran:
+    /// its `after_context` step runs right behind the context's creation, before anything is drawn
+    /// or probed.
+    ///
+    /// # Safety
+    /// `hooks.steps.after_context` must be sound to call on the SDL main thread (`mt` is the proof of
+    /// the thread) once, with the new GL context current: it is the one step run here.
+    pub unsafe fn open(_mt: &MainThread, hooks: &InitHooks, ask: &OpenAsk) -> Result<Window, OpenFailed> {
         // The television is placed at 0,0 at exactly canvas size (unless a webOS 1-3 owner picked a
         // smaller Interface resolution) and takes the panel. A desktop window is centred
         // (`SDL_WINDOWPOS_CENTERED`) at whatever fits — see `plan_desktop_window`. The density is not
@@ -124,9 +135,16 @@ impl Window {
             }
         };
         let window_flags = if ask.high_dpi {
-            SDL_WINDOW_FLAGS
+            window_flags_of(&ask.placement)
         } else {
-            SDL_WINDOW_FLAGS & !SDL_WINDOW_ALLOW_HIGHDPI
+            window_flags_of(&ask.placement) & !SDL_WINDOW_ALLOW_HIGHDPI
+        };
+        // The one sentence the drawable probe says differently: a television's drawable that is not
+        // the canvas is a report-worthy surprise, a desktop's is the window's own divisor.
+        let note = match ask.placement {
+            Placement::Panel { .. } => plx_base::surface::DrawableNote::Television,
+            #[cfg(feature = "hostsim")]
+            Placement::Desktop => plx_base::surface::DrawableNote::Desktop,
         };
         let (mut ww_try, mut wh_try) = (ww_req, wh_req);
         let win = unsafe {
@@ -150,12 +168,16 @@ impl Window {
                 (ww_try, wh_try) = (w, h);
             }
         };
+        // The platform's step behind the context, before the density fit, the probe and the renderer's
+        // first call: a desktop core profile binds its vertex array object here.
+        // SAFETY: the caller's contract (see `# Safety`): the platform's step, on the main thread, behind the context.
+        unsafe { (hooks.steps.after_context)() };
         // Correct the size for the display's density now: `surface::probe` below reads the drawable once.
         #[cfg(feature = "hostsim")]
         if let Some(desktop_ask) = desktop_ask {
             unsafe { fit_window_to_density(win, desktop_ask) };
         }
-        plx_base::surface::probe(win);
+        plx_base::surface::probe(win, note);
         Ok(Window { win })
     }
 
@@ -464,7 +486,7 @@ mod open_order_tests {
     /// The body of `Window::open`, from its signature to the next method.
     fn open_body() -> &'static str {
         source()
-            .split_once(concat!("pub fn ", "open("))
+            .split_once(concat!("pub unsafe fn ", "open("))
             .expect("Window::open")
             .1
             .split_once(concat!("pub fn ", "raw("))
@@ -480,7 +502,7 @@ mod open_order_tests {
         let body = open_body();
         let create = body.find(concat!("sys::SDL_CreateWindow", "(")).expect("creates the window");
         let fit = body.find(concat!("fit_window_to_", "density(win")).expect("fits the window to the density");
-        let probe = body.find(concat!("surface::", "probe(win)")).expect("probes the drawable");
+        let probe = body.find(concat!("surface::", "probe(win, note)")).expect("probes the drawable");
         assert!(create < fit && fit < probe, "create the window, fit it to the density, then probe the drawable");
         assert_eq!(body.matches(concat!("surface::", "probe(")).count(), 1, "one probe");
     }
@@ -494,9 +516,32 @@ mod open_order_tests {
         let context = body.find(concat!("sys::SDL_GL_CreateContext", "(")).expect("creates the context");
         let destroy = body.find(concat!("sys::SDL_DestroyWindow", "(win)")).expect("destroys a half-made window");
         let retry = body.find(concat!("fallback.", "take()")).expect("takes the one fallback size");
-        let probe = body.find(concat!("surface::", "probe(win)")).expect("probes the drawable");
+        let probe = body.find(concat!("surface::", "probe(win, note)")).expect("probes the drawable");
         assert!(create < context && context < destroy && destroy < retry && retry < probe,
             "create, context, destroy the half-made window, retry at the fallback, then probe");
+    }
+
+    /// The platform's `after_context` step runs once, on the context that came back: after the
+    /// creation loop (a refused context is destroyed with its window and never reaches it), before the
+    /// density fit and the probe, which is the first thing to touch GL state afterwards.
+    #[test]
+    fn the_after_context_step_runs_behind_the_context_and_ahead_of_the_probe() {
+        let body = open_body();
+        let context = body.find(concat!("sys::SDL_GL_CreateContext", "(")).expect("creates the context");
+        let retry = body.find(concat!("fallback.", "take()")).expect("takes the one fallback size");
+        let step = body.find(concat!("(hooks.steps.", "after_context)()")).expect("runs the platform's step");
+        let probe = body.find(concat!("surface::", "probe(win, note)")).expect("probes the drawable");
+        assert!(context < step && retry < step && step < probe, "context, retry loop, the step, then probe");
+        assert_eq!(body.matches(concat!("after_context", ")()")).count(), 1, "one call");
+    }
+
+    /// The flags follow from the placement: a panel is fullscreen and never asks for the display's
+    /// pixel density, whatever the build.
+    #[test]
+    fn a_panel_asks_for_fullscreen_and_no_highdpi() {
+        let flags = super::window_flags_of(&super::Placement::Panel { size: (1920, 1080), fallback: None });
+        assert_eq!(flags, 0x2 | 0x1, "OPENGL | FULLSCREEN");
+        assert_eq!(flags & super::SDL_WINDOW_ALLOW_HIGHDPI, 0);
     }
 
     /// **`Window` has no destructor.** The application is leaked at exit and a worker may still hold

@@ -57,7 +57,13 @@ pub fn commit(previous: &Consent, next: &Consent) {
 fn persist_record_off_thread(next: Consent) {
     let submitted = plx_base::storage_worker::submit(move || {
         let outcome = crate::telemetry::persistence::record(&next);
-        if outcome.write != crate::telemetry::persistence::PersistResult::Durable {
+        // `NotAttempted` is a platform that persists no consent by design (`StoreMode::MemoryOnly`),
+        // not a failed write.
+        if !matches!(
+            outcome.write,
+            crate::telemetry::persistence::PersistResult::Durable
+                | crate::telemetry::persistence::PersistResult::NotAttempted
+        ) {
             plx_base::eventlog::log(&format!("telemetry: the decision is not durably persisted: {outcome:?}"));
         }
     });
@@ -99,6 +105,7 @@ fn persist_forget_off_thread() {
             outcome.write,
             crate::telemetry::persistence::PersistResult::Durable
                 | crate::telemetry::persistence::PersistResult::Delegated
+                | crate::telemetry::persistence::PersistResult::NotAttempted
         ) {
             plx_base::eventlog::log(&format!("telemetry: sign-out could not durably clear the decision: {outcome:?}"));
         }

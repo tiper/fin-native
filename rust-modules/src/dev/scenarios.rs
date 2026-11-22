@@ -1732,12 +1732,6 @@ fn autopause_arm(app: &mut App, fr: &mut Frame) {
         }
     }
     if let Some((pause_at, hold_ms, at_ms)) = app.scenarios.pause_script {
-        #[cfg(all(feature = "hostsim", not(feature = "play-feed")))]
-        if at_ms.is_some() {
-            plx_base::eventlog::log("autopause: exact at= unavailable without Feed simulator clock");
-            app.scenarios.pause_script = None;
-            return;
-        }
         // In the simulator the clock sink is also told to stop on `at` exactly, so the pause
         // (accepted a little after the gate opens) freezes that position rather than wherever
         // scheduling had got to: the same frame and clock every run (`HostSink::stop_clock_at`).
@@ -3131,7 +3125,18 @@ pub(crate) fn consent_override() -> Option<String> {
 /// names in the binary's bytes, where `ci/check-package.py` grades them.
 #[cfg(feature = "devtriggers")]
 pub(crate) fn rec_trigger() -> Result<Option<String>, &'static str> {
-    plx_ui::rec::mode_value(&plx_base::devtrig::path("rec")).map_err(|_| "invalid recorder trigger")
+    mode_trigger("rec").map_err(|_| "invalid recorder trigger")
+}
+
+/// A MODE trigger read by its path, because the recorder's reader is strict about the file (no symlink, bounded): the
+/// file first, exactly as before, and, when there is no file, the platform's preset (`devtrig::read` answers the preset
+/// when the file it would read is absent, which is the only case `mode_value` answers `None` for).
+#[cfg(feature = "devtriggers")]
+pub(crate) fn mode_trigger(name: &str) -> Result<Option<String>, plx_ui::rec::RecError> {
+    match plx_ui::rec::mode_value(&plx_base::devtrig::path(name))? {
+        Some(value) => Ok(Some(value)),
+        None => Ok(plx_base::devtrig::read(name)),
+    }
 }
 #[cfg(not(feature = "devtriggers"))]
 pub(crate) fn rec_trigger() -> Result<Option<String>, &'static str> {
@@ -3141,7 +3146,7 @@ pub(crate) fn rec_trigger() -> Result<Option<String>, &'static str> {
 /// `/tmp/plxnative-recplay` — see [`rec_trigger`].
 #[cfg(feature = "devtriggers")]
 pub(crate) fn recplay_trigger() -> Result<Option<String>, &'static str> {
-    plx_ui::rec::mode_value(&plx_base::devtrig::path("recplay")).map_err(|_| "invalid replay trigger")
+    mode_trigger("recplay").map_err(|_| "invalid replay trigger")
 }
 #[cfg(not(feature = "devtriggers"))]
 pub(crate) fn recplay_trigger() -> Result<Option<String>, &'static str> {
@@ -3154,8 +3159,14 @@ pub(crate) fn recplay_trigger() -> Result<Option<String>, &'static str> {
 #[cfg(feature = "devtriggers")]
 pub(crate) fn app_init_value() -> Option<Result<serde_json::Value, &'static str>> {
     plx_base::devtrig::flag("app-init").then(|| {
-        plx_ui::rec::initial_value(&plx_base::devtrig::path("app-init"))
-            .map_err(|_| "invalid explicit initial input")
+        let file = plx_base::devtrig::path("app-init");
+        // The file first, as before; with none, the platform's preset text through the same bound and decode.
+        let initial = if std::fs::symlink_metadata(&file).is_ok() {
+            plx_ui::rec::initial_value(&file)
+        } else {
+            plx_ui::rec::initial_from_bytes(plx_base::devtrig::read("app-init").unwrap_or_default().as_bytes())
+        };
+        initial.map_err(|_| "invalid explicit initial input")
     })
 }
 #[cfg(not(feature = "devtriggers"))]

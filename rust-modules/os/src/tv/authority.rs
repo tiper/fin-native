@@ -6,11 +6,11 @@
 //! state root ([`Authority::Files`]): the desktop simulator, a host test, and a platform with no
 //! helper at all (Tizen).
 //!
-//! The authority is not the whole answer for the session record: the platform's persistence mode
-//! ([`secure::mode()`](super::secure::mode)) decides it first. Under `StoreMode::MemoryOnly`, where
-//! Tizen starts (W9), the session lives in memory and no credential store is read or written,
-//! whatever the authority says; only the install's own preference file (client id, language and
-//! Interface resolution) persists.
+//! The authority is not the whole answer for the session record and the consent record: the
+//! platform's persistence mode ([`secure::mode()`](super::secure::mode)) decides them first. Under
+//! `StoreMode::MemoryOnly`, where Tizen starts (W9), the session lives in memory, no credential
+//! store is read or written and consent is neither read nor written, whatever the authority says;
+//! only the install's own preference file (client id, language and Interface resolution) persists.
 //!
 //! Under `Helper` the app's own files are not the store. Three kinds remain:
 //! - the legacy migration inputs an older build left;
@@ -26,15 +26,20 @@
 //! [`StorageHooks::NONE`], which is `Files`, like every other group's host-test answer. A shipping
 //! process has to install its services before anything persists, because an uninstalled television
 //! would be told it has no helper; `run_application` installs them as its first statement
-//! (`port::tests` pins the order).
+//! (`app::platform::tests::the_services_are_installed_first_and_only_there` pins the order).
 //!
 //! The value exists so that the layers that persist these records can choose their canonical store
 //! from what the platform states, not from the build's CPU and OS (a 32-bit ARM Linux binary is not
 //! necessarily a television).
 //!
-//! This group is the home of the platform's other storage statements as well. The helper's wake-up
-//! (`storage::client::install_activator`, which `port::plex_main` installs for webOS today) belongs
-//! here as a later member and moves with the os lane after W7b; it is not moved yet.
+//! The helper's wake-up is not a member of this group, and it stays where it is. Its type is the
+//! helper's own wire diagnostics (`storage::wire::failure::Detail`), `wire` is mounted under `storage`,
+//! and `tv` names no `storage` (`docs/module-layers.md`, L15: that edge was cut on purpose, and a
+//! `tv`-owned copy of the helper's `Stage` would be a second definition of a wire type). So the
+//! wake-up is `storage::client::install_activator`, an install point `storage` owns, which the webOS
+//! platform calls from `port::plex_main`; a platform that installs none (the desktop, a host test,
+//! Tizen) gets `Stage::Unsupported`, the right answer for a platform with no helper. Under
+//! `Authority::Files` the client, and so the wake-up, is never reached.
 
 /// Where the account's canonical state lives.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

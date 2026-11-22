@@ -1369,6 +1369,8 @@ derived_output() {
     ipkroot/*.tar.gz|ipkroot/debian-binary|ipkroot/data/usr|stub/*.so|*.o) ;;
     tools/node_modules|__pycache__|*/__pycache__|*.pyc|.DS_Store|*/.DS_Store) ;;
     fuzz/target|fuzz/Cargo.lock|fuzz/.lock-base|fuzz/seeds|fuzz/corpus|fuzz/coverage) ;;   # `make fuzz-hud`: a copied lock, generated seeds, a corpus that regrows. NOT fuzz/artifacts: a crash input is a finding
+    tizen/out|tizen/sdl-build|tizen/host/PlxHost/bin|tizen/host/PlxHost/obj|tizen/host/PlxHost/lib) ;;   # `make PLATFORM=tizen`: the library, the static SDL, the host's build and staged library
+    tizen/host/PlxHost/res/*|tizen/host/PlxHost/shared/res/*) ;;                                           # files `tizen/package.py` stages (fonts, icon, dev-boot, log host: addresses, never a credential)
     .tv-*.pid|.tv-*.log) ;;                                     # a session's scratch, not its address or password
     tests/fixtures/out|tests/fixtures/*.mkv|tests/fixtures/*.mp4|tests/fixtures/*.sup|tests/fixtures/fixtures.json) ;;
     *) return 1 ;;

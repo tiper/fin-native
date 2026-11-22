@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Prove the archive `make` is about to link is the one cargo just reported.
 
-usage: check-staticlib-artifact.py <cargo --message-format=json output> <archive path>
+usage: check-staticlib-artifact.py <cargo --message-format=json output> <archive path> [crate]
 
 make decides what to link by a timestamp on the archive path, and cargo does not always write it
 (a fresh unit only re-links the old file; a failed or skipped uplift leaves whatever was there).
 Since the crate declares `crate-type = ["rlib"]`, the `.a` exists only because the Makefile asks
 `cargo rustc --crate-type staticlib` for it, so a silent miss would link an OLD archive with no
 comment. cargo names every file it produced or vouches for in its `compiler-artifact` records;
-this requires exactly one `.a` for the app crate there and that the path make links is that file.
+this requires exactly one `.a` for the shipping crate (`plx_platform_webos`, which links the
+application crate and every layer into the one archive) there and that the path make links is that file.
+The optional third argument names another shipping crate (`plx_platform_tizen`, mk/platform-tizen.mk); the
+call without it is the television's and is unchanged.
 Timestamps cannot do this: a fresh build legitimately leaves the archive older than the recipe.
 """
 import filecmp
@@ -16,10 +19,10 @@ import json
 import os
 import sys
 
-CRATE = "plxnative_modules"
+CRATE = "plx_platform_webos"
 
 
-def artifacts(lines):
+def artifacts(lines, crate=CRATE):
     found = []
     for line in lines:
         line = line.strip()
@@ -31,21 +34,22 @@ def artifacts(lines):
             continue
         if not isinstance(record, dict) or record.get("reason") != "compiler-artifact":
             continue
-        if (record.get("target") or {}).get("name") != CRATE:
+        if (record.get("target") or {}).get("name") != crate:
             continue
         found += [f for f in record.get("filenames") or [] if f.endswith(".a")]
     return found
 
 
 def main(argv):
-    if len(argv) != 3:
+    if len(argv) not in (3, 4):
         print(__doc__, file=sys.stderr)
         return 2
+    crate = argv[3] if len(argv) == 4 else CRATE
     with open(argv[1], encoding="utf-8", errors="replace") as handle:
-        built = artifacts(handle)
+        built = artifacts(handle, crate)
     lib = argv[2]
     if len(built) != 1:
-        print(f"error: cargo reported {len(built)} {CRATE} archives (need exactly 1): {built}",
+        print(f"error: cargo reported {len(built)} {crate} archives (need exactly 1): {built}",
               file=sys.stderr)
         return 1
     if not os.path.isfile(built[0]):

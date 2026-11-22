@@ -13,6 +13,7 @@ use crate::event::{
     push, rd_u32, SDL_KEYDOWN, SDL_KEYUP, SDL_MOUSEBUTTONDOWN, SDL_MOUSEBUTTONUP, SDL_MOUSEMOTION,
     SDL_MOUSEWHEEL, SYNTH_WINDOW,
 };
+use crate::init::SdlFlavor;
 use std::os::raw::c_uint;
 
 /// The bytes a synthetic key event needs, in whichever layout [`crate::event::decode_key`] reads.
@@ -24,10 +25,10 @@ use std::os::raw::c_uint;
 ///
 /// Pure, and separate from the `SDL_PushEvent` that consumes it, so that test needs no queue and
 /// runs on any host.
-pub fn encode_key(sym: c_uint, wcode: c_uint, down: bool) -> [u8; 128] {
+pub fn encode_key(flavor: SdlFlavor, sym: c_uint, wcode: c_uint, down: bool) -> [u8; 128] {
     let mut ev = [0u8; 128];
     ev[0..4].copy_from_slice(&if down { SDL_KEYDOWN } else { SDL_KEYUP }.to_ne_bytes());
-    if cfg!(feature = "hostsim") {
+    if flavor == SdlFlavor::Stock {
         ev[12] = u8::from(down); // state
         ev[13] = 0; // repeat
         ev[20..24].copy_from_slice(&sym.to_ne_bytes());
@@ -53,10 +54,10 @@ pub fn encode_key(sym: c_uint, wcode: c_uint, down: bool) -> [u8; 128] {
 /// separate function rather than a third argument threaded through the first — item 13's
 /// `holdrep:<name>` FIFO token is the only caller, and it exists so a script can exercise the
 /// `Edge::Repeat` a screen receives without a real remote's own repeat cadence.
-pub fn encode_key_repeat(sym: c_uint, wcode: c_uint) -> [u8; 128] {
-    let mut ev = encode_key(sym, wcode, true);
-    if cfg!(feature = "hostsim") {
-        ev[13] = 1; // the `repeat` byte `decode_key`'s hostsim arm folds into `state & 0x100`
+pub fn encode_key_repeat(flavor: SdlFlavor, sym: c_uint, wcode: c_uint) -> [u8; 128] {
+    let mut ev = encode_key(flavor, sym, wcode, true);
+    if flavor == SdlFlavor::Stock {
+        ev[13] = 1; // the `repeat` byte `decode_key`'s stock arm folds into `state & 0x100`
     } else {
         let state = rd_u32(&ev, 16) | 0x100;
         ev[16..20].copy_from_slice(&state.to_ne_bytes());
@@ -137,17 +138,17 @@ pub fn synth_lifecycle(code: u32) {
 /// wcode@20 / sym@24 (native-endian; the TV is LE), and the handler reads press vs
 /// release from `state & 0xff` — so the down carries state=1, the up state=0. Both
 /// are required: a grid-card OK arms on down and *commits on release*.
-pub fn synth_key(sym: c_uint, wcode: c_uint) {
-    synth_key_edge(sym, wcode, true);
-    synth_key_edge(sym, wcode, false);
+pub fn synth_key(flavor: SdlFlavor, sym: c_uint, wcode: c_uint) {
+    synth_key_edge(flavor, sym, wcode, true);
+    synth_key_edge(flavor, sym, wcode, false);
 }
 
 /// ONE edge of a remote key press. Split out for the `okdown`/`okup` FIFO tokens, because a
 /// **press-and-hold** is only expressible as two tokens with real time between them: the item menu
 /// opens on `press::is_long`, which measures the interval between the down and the up. The paired
 /// [`synth_key`] above is this called twice back to back (a tap).
-pub fn synth_key_edge(sym: c_uint, wcode: c_uint, down: bool) {
-    push(&encode_key(sym, wcode, down));
+pub fn synth_key_edge(flavor: SdlFlavor, sym: c_uint, wcode: c_uint, down: bool) {
+    push(&encode_key(flavor, sym, wcode, down));
 }
 
 /// ONE hardware auto-repeat edge — item 13's `holdrep:<name>` FIFO token, which lets a script
@@ -156,8 +157,8 @@ pub fn synth_key_edge(sym: c_uint, wcode: c_uint, down: bool) {
 /// repeat by the loop's key arm when `App::down_sym` already equals `sym` — i.e. after a
 /// `holddown:<name>` and before its matching `holdup:<name>`, the same split `okdown`/`okup`
 /// already uses for a press-and-hold.
-pub fn synth_key_repeat(sym: c_uint, wcode: c_uint) {
-    push(&encode_key_repeat(sym, wcode));
+pub fn synth_key_repeat(flavor: SdlFlavor, sym: c_uint, wcode: c_uint) {
+    push(&encode_key_repeat(flavor, sym, wcode));
 }
 
 /// Synthesize one Magic-Remote scroll-wheel tick — item 13's `wheel:<dy>` FIFO token, so a script
@@ -173,20 +174,24 @@ mod tests {
 
     #[test]
     fn a_key_event_carries_its_type_and_a_repeat_is_never_a_plain_edge() {
-        assert_eq!(rd_u32(&encode_key(5, 6, true), 0), SDL_KEYDOWN);
-        assert_eq!(rd_u32(&encode_key(5, 6, false), 0), SDL_KEYUP);
-        assert_ne!(encode_key(5, 6, true), encode_key_repeat(5, 6));
-        assert_eq!(rd_u32(&encode_key_repeat(5, 6), 0), SDL_KEYDOWN);
+        for flavor in [SdlFlavor::Lg, SdlFlavor::Stock] {
+            assert_eq!(rd_u32(&encode_key(flavor, 5, 6, true), 0), SDL_KEYDOWN);
+            assert_eq!(rd_u32(&encode_key(flavor, 5, 6, false), 0), SDL_KEYUP);
+            assert_ne!(encode_key(flavor, 5, 6, true), encode_key_repeat(flavor, 5, 6));
+            assert_eq!(rd_u32(&encode_key_repeat(flavor, 5, 6), 0), SDL_KEYDOWN);
+        }
     }
 
     /// The `wheel:` token writes the television's shape unconditionally: the count at +20 and the
-    /// float the simulator's decoder reads left empty, which is why it decodes to zero there.
+    /// float stock SDL's decoder reads left empty, which is why it decodes to zero under
+    /// [`SdlFlavor::Stock`].
     #[test]
-    fn the_wheel_bytes_are_the_television_shape_whatever_the_build() {
+    fn the_wheel_bytes_are_the_television_shape_whatever_the_flavour() {
         let ev = encode_wheel(-3);
         assert_eq!(rd_u32(&ev, 0), SDL_MOUSEWHEEL);
         assert_eq!(rd_i32(&ev, 20), -3);
-        assert_eq!(decode_wheel_dy(&ev), if cfg!(feature = "hostsim") { 0 } else { -3 });
+        assert_eq!(decode_wheel_dy(SdlFlavor::Stock, &ev), 0);
+        assert_eq!(decode_wheel_dy(SdlFlavor::Lg, &ev), -3);
     }
 
     #[test]
@@ -211,7 +216,8 @@ mod tests {
         synth_ptr(1400, 870);
         let mut got = Vec::new();
         while poll(&mut ev) {
-            got.push(decode(&ev));
+            // A pointer event's layout is the same in both flavours (`event::ptr_xy`).
+            got.push(decode(SdlFlavor::Lg, &ev));
         }
         let edges: Vec<_> = got
             .iter()

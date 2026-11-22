@@ -226,5 +226,43 @@
       "repo": "phoboslab/jsmpeg"
     },
     "patches": []
+  },
+  {
+    "id": "sdl2",
+    "version": "2.32.10",
+    "license": "Zlib",
+    "upstream": "https://github.com/libsdl-org/SDL",
+    "archive": "SDL2-2.32.10.tar.gz",
+    "url": "https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz",
+    "mirrors": [
+      "https://www.libsdl.org/release/SDL2-2.32.10.tar.gz"
+    ],
+    "sha256": "5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165",
+    "update": {
+      "type": "github-release",
+      "repo": "libsdl-org/SDL",
+      "tag_pattern": "^release-(2\\.\\d+\\.\\d+)$",
+      "tag_format": "release-{version}"
+    },
+    "patches": []
+  },
+  {
+    "id": "sdl2-ttf",
+    "version": "2.24.0",
+    "license": "Zlib AND FTL AND MIT",
+    "upstream": "https://github.com/libsdl-org/SDL_ttf",
+    "archive": "SDL2_ttf-2.24.0.tar.gz",
+    "url": "https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.24.0/SDL2_ttf-2.24.0.tar.gz",
+    "mirrors": [
+      "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.24.0.tar.gz"
+    ],
+    "sha256": "0b2bf1e7b6568adbdbc9bb924643f79d9dedafe061fa1ed687d1d9ac4e453bfd",
+    "update": {
+      "type": "github-release",
+      "repo": "libsdl-org/SDL_ttf",
+      "tag_pattern": "^release-(2\\.\\d+\\.\\d+)$",
+      "tag_format": "release-{version}"
+    },
+    "patches": []
   }
 ]

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Package id plxntizen0: ten alphanumerics, and the application id is the same string (the host is the one application). A neutral name for
+     the emulator package; a retail package id is assigned by Samsung's seller process (tizen/package.py, PACKAGE_ID). The icon is
+     shared/res/plxntizen0.png, staged from pkg/dev/largeIcon.png.
+     Privileges: internet only. A partner privilege (drminfo and friends) makes the install fail on a set that is not the seller's. -->
+<manifest xmlns="http://tizen.org/ns/packages" api-version="6.0" package="plxntizen0" version="0.1.0">
+  <profile name="tv" />
+  <ui-application appid="plxntizen0" exec="PlxHost.dll" type="dotnet"
+                  multiple="false" taskmanage="true" nodisplay="false" launch_mode="single">
+    <label>PlxNative</label>
+    <icon>plxntizen0.png</icon>
+  </ui-application>
+  <privileges>
+    <privilege>http://tizen.org/privilege/internet</privilege>
+  </privileges>
+</manifest>

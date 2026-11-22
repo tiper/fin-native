@@ -2402,7 +2402,7 @@ mod audio_stale_ahead_tests {
     }
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod native_lifecycle_host_seam_tests {
     use super::*;
     use crate::native_release::ReleaseStep;

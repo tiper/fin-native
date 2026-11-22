@@ -842,12 +842,12 @@ impl Shared {
         self.native_session.native_load_elapsed(epoch)
     }
 
-    #[cfg(all(feature = "test-support", feature = "hostsim"))]
+    #[cfg(feature = "test-support")]
     pub fn test_backdate_native_load_issued(&self, epoch: u32, by: Duration) -> bool {
         self.native_session.test_backdate_native_load_issued(epoch, by)
     }
 
-    #[cfg(all(feature = "test-support", feature = "hostsim"))]
+    #[cfg(feature = "test-support")]
     pub fn test_backdate_native_load_returned(&self, epoch: u32, by: Duration) -> bool {
         self.native_session.test_backdate_native_load_returned(epoch, by)
     }
@@ -882,7 +882,7 @@ impl Shared {
         self.native_session.native_load_abandoned()
     }
 
-    #[cfg(all(any(test, feature = "test-support"), feature = "hostsim"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn test_force_native_idle(&self) {
         self.native_session.test_force_native_idle();
     }
@@ -1170,7 +1170,7 @@ impl Shared {
     }
 
     /// Start (or restart after a rung commit) the proof for the media that will release this hold.
-    #[cfg(all(any(test, feature = "test-support"), feature = "hostsim"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn begin_hls_recovery(&self) {
         let mut clock = self.hls_clock.lock().unwrap_or_else(|e| e.into_inner());
         clock.recovery.begin();
@@ -1205,7 +1205,7 @@ impl Shared {
             .recovery
     }
 
-    #[cfg(all(any(test, feature = "test-support"), feature = "hostsim"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn finish_hls_recovery(&self) {
         let mut clock = self.hls_clock.lock().unwrap_or_else(|e| e.into_inner());
         clock.recovery = HlsRecoveryEpoch::idle();
@@ -1267,7 +1267,7 @@ impl Shared {
         self.clock_user_held()
     }
 
-    #[cfg(all(any(test, feature = "test-support"), feature = "hostsim"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn ensure_initial_clock_hold_for_test(&self) {
         let mut clock = self.hls_clock.lock().unwrap_or_else(|e| e.into_inner());
         if clock.phase == HlsClockPhase::Running {

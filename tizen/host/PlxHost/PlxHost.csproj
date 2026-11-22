@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The .NET host of the Tizen package: a `type="dotnet"` application (a retail television refuses a native `capp` package) whose only job
+       is to load lib/libplx.so and drive its three C exports (plx_host_start / plx_host_post / plx_host_stop; the contract is
+       rust-modules/platform-tizen/include/plx_host.h). It draws nothing and has no UI of its own.
+
+       TFM `tizen80` (API 8, Tizen 6.0) through the Tizen.NET.Sdk NuGet route: the newer `net*-tizen` workload accepts only Tizen 8 and later, and
+       `tizen80` binaries are what this route runs on later images too. The emulator MVP does not depend on it either way (docs/tizen.md).
+
+       tizen/package.py (`make PLATFORM=tizen tizen-tpk`) stages lib/libplx.so, res/ and shared/res/ here first; the SDK packs those
+       directories as they are, and signs with the certificates the environment names (AuthorPath, AuthorPass, DistributorPath, DistributorPass
+       as MSBuild environment properties of that one build process: nothing of them is in this file or on a command line). Those staged files
+       are gitignored. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>tizen80</TargetFramework>
+    <AssemblyName>PlxHost</AssemblyName>
+    <RootNamespace>PlxHost</RootNamespace>
+    <LangVersion>8.0</LangVersion>
+  </PropertyGroup>
+  <!-- Exact versions, the ones every emulator run restored (obj/project.assets.json); Tizen.NET.API8 comes in transitively. Not sha256-pinned:
+       NuGet resolves them from nuget.org (docs/tizen.md, Toolchain). -->
+  <ItemGroup>
+    <PackageReference Include="Tizen.NET" Version="8.0.0.15631">
+      <ExcludeAssets>Runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Tizen.NET.Sdk" Version="1.1.9" />
+  </ItemGroup>
+</Project>

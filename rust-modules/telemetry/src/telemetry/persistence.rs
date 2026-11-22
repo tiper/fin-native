@@ -9,11 +9,20 @@
 //! television) or files under the persistent state root ([`Authority::Files`]). [`load`],
 //! [`record_at`] and [`forget_at`] read it once per operation and hand it, with the helper's
 //! transport, to their `*_with` form, which is what a test calls to grade either store.
+//!
+//! The platform's persistence mode ([`plx_os::tv::secure::mode`]) decides before the authority
+//! does. Under [`StoreMode::MemoryOnly`], a platform with no storage the app may use, only the
+//! install's client id, language and Interface resolution persist (`docs/platform-ports.md`,
+//! Decision 7 B), so consent is neither read nor written whatever the authority says: a load
+//! answers the default without touching a store or a legacy source, and a write or a clear does
+//! nothing and reports [`PersistResult::NotAttempted`], the "no write happened, by design" answer
+//! (a failure would be logged as one). Each launch asks the consent question again.
 
 use super::consent::Consent;
 use plx_os::storage::{Record, RecordKey, RecordState, RecordStore};
 use plx_os::storage::StoreError;
 use plx_os::tv::authority::Authority;
+use plx_os::tv::secure::StoreMode;
 use std::path::{Path, PathBuf};
 
 use plx_os::storage::{
@@ -79,6 +88,23 @@ pub fn last_call_thread() -> Option<std::thread::ThreadId> {
 #[cfg(any(test, feature = "test-support"))]
 fn note_call_thread() {
     *LAST_CALL_THREAD.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::thread::current().id());
+}
+
+/// This platform has no storage the app may use ([`StoreMode::MemoryOnly`]): consent is not
+/// persisted at all. Read per operation, like the authority.
+fn memory_only() -> bool {
+    plx_os::tv::secure::mode() == StoreMode::MemoryOnly
+}
+
+/// What a [`StoreMode::MemoryOnly`] load, write or clear reports, and publishes: nothing was
+/// attempted, by design.
+fn not_persisted() -> PersistOutcome {
+    let outcome = PersistOutcome {
+        write: PersistResult::NotAttempted,
+        cleanup: CleanupResult::NotAttempted,
+    };
+    publish(outcome);
+    outcome
 }
 
 fn root() -> PathBuf {
@@ -183,6 +209,10 @@ pub fn load(legacy: &[PathBuf]) -> Consent {
 
 /// [`load`] with the platform's authority and the helper's transport handed in.
 fn load_with(authority: Authority, transport: &mut dyn client::Transport, legacy: &[PathBuf]) -> Consent {
+    if memory_only() {
+        not_persisted();
+        return Consent::default();
+    }
     if authority == Authority::Helper {
         return load_helper(transport, legacy);
     }
@@ -705,6 +735,9 @@ fn record_with(
     legacy: &[PathBuf],
     canonical_root: PathBuf,
 ) -> PersistOutcome {
+    if memory_only() {
+        return not_persisted();
+    }
     if authority == Authority::Helper {
         let _ = canonical_root;
         return record_helper(transport, consent, legacy);
@@ -884,6 +917,9 @@ pub(super) fn forget_at(legacy: &[PathBuf], canonical_root: PathBuf) -> PersistO
 /// [`forget_at`] with the platform's authority handed in. The helper arm touches nothing itself, so
 /// it takes no transport.
 fn forget_with(authority: Authority, legacy: &[PathBuf], canonical_root: PathBuf) -> PersistOutcome {
+    if memory_only() {
+        return not_persisted();
+    }
     if authority == Authority::Helper {
         let _ = canonical_root;
         // Session's immediately-following ClearTenure is the one atomic DB8 revocation for both
@@ -1652,6 +1688,55 @@ mod upgrade_tests {
             assert_eq!(outcome.cleanup, CleanupResult::NotAttempted);
             assert!(source.exists(), "the legacy source waits for the confirmed ClearTenure");
             assert!(!dir.0.join("state/consent.json").exists(), "the helper arm never creates the state root's consent file");
+        }
+    }
+
+    /// A platform with no storage the app may use (`StoreMode::MemoryOnly`, Decision 7 B in
+    /// `docs/platform-ports.md`) persists the client id, the language and the resolution and nothing
+    /// else, so the consent record is NOT among the files: a load reads nothing (not the state
+    /// root's record, not a legacy source), a write and a sign-out's clear write nothing, and the
+    /// result is [`PersistResult::NotAttempted`], the answer a load already gives for "no write
+    /// happened". The mode decides before the authority does, so the helper arm is not reached
+    /// either. The control is the same calls under `Durable`.
+    #[test]
+    fn under_memory_only_consent_is_never_read_or_written() {
+        let _g = plx_base::testlock::serial();
+        let consent = super::super::consent::apply(&Consent::default(), true, true, || Some("f".repeat(32)));
+        let record = |dir: &Dir| dir.0.join("state/consent.json");
+        {
+            let dir = Dir::new("memory-only-control");
+            let source = dir.legacy(GENERATED_DECLINE_065);
+            let _mode = plx_os::tv::secure::set_mode_for_test(plx_os::tv::secure::StoreMode::Durable);
+            let asked = std::cell::Cell::new(0);
+            let mut transport = silent(&asked);
+            let outcome = record_with(Authority::Files, &mut transport, &consent, &[], dir.0.join("state"));
+            assert_eq!(outcome.write, PersistResult::Durable, "control: a Durable platform writes the record");
+            assert!(record(&dir).exists(), "control: the file is there");
+            assert!(source.exists());
+        }
+        for authority in [Authority::Files, Authority::Helper] {
+            let dir = Dir::new("memory-only");
+            let source = dir.legacy(GENERATED_DECLINE_065);
+            let _mode = plx_os::tv::secure::set_mode_for_test(plx_os::tv::secure::StoreMode::MemoryOnly);
+            let asked = std::cell::Cell::new(0);
+            let mut transport = silent(&asked);
+
+            let outcome = record_with(authority, &mut transport, &consent, std::slice::from_ref(&source), dir.0.join("state"));
+            assert_eq!(outcome.write, PersistResult::NotAttempted, "{authority:?}: a write is not attempted by design");
+            assert_eq!(outcome.cleanup, CleanupResult::NotAttempted, "{authority:?}");
+            assert_eq!(last_outcome(), outcome, "{authority:?}: the outcome is published like any other");
+            assert!(!record(&dir).exists(), "{authority:?}: no consent file is written");
+
+            let loaded = load_with(authority, &mut transport, std::slice::from_ref(&source));
+            assert_eq!(loaded, Consent::default(), "{authority:?}: a load answers the default");
+            assert!(!record(&dir).exists(), "{authority:?}: a load migrates nothing into a file");
+            assert!(source.exists(), "{authority:?}: a load does not read or retire a legacy source");
+
+            let cleared = forget_with(authority, std::slice::from_ref(&source), dir.0.join("state"));
+            assert_eq!(cleared.write, PersistResult::NotAttempted, "{authority:?}: a clear is not attempted either");
+            assert!(!record(&dir).exists(), "{authority:?}: no tombstone is written");
+            assert!(source.exists(), "{authority:?}: a legacy source is left where it was");
+            assert_eq!(asked.get(), 0, "{authority:?}: the storage helper is never reached");
         }
     }
 }

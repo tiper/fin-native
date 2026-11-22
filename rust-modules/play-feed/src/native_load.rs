@@ -133,8 +133,7 @@ mod load_timing_tests {
         assert_eq!(load_alone(ms(100), ms(300)), ms(0), "a clock that disagrees never goes negative");
     }
 
-    #[cfg(feature = "hostsim")]
-    mod hostsim {
+    mod host_seam {
         use super::*;
         fn test_sink() -> &'static dyn VideoSink { crate::ffi_host::test_sink::sink() }
 

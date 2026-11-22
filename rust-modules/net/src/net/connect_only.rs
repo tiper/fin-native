@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 plx_base::dynlib! {
-    raw: ["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"] {
+    raw: platform(curl) {
     fn curl_easy_send(handle: *mut CURL, buffer: *const c_void, length: usize, sent: *mut usize) -> c_int;
     fn curl_easy_recv(handle: *mut CURL, buffer: *mut c_void, length: usize, received: *mut usize) -> c_int;
     fn curl_easy_getinfo_socket = "curl_easy_getinfo"(handle: *mut CURL, info: c_int, ..., out: *mut c_int) -> c_int;

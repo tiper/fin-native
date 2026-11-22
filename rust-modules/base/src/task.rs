@@ -103,7 +103,8 @@ impl OffFrame {
     }
 }
 
-/// Proof that the holder runs on the SDL main thread.
+/// Proof that the holder runs on the thread that runs the application's loop: the SDL main thread on the television and
+/// the desktop, the loop thread a hosted platform starts (see [`MainThread::assume`]).
 ///
 /// A ZST whose only content is a `!Send + !Sync` marker, so neither it nor a `&` to it can be
 /// captured by anything handed to [`spawn`]. That is the whole mechanism: functions that must
@@ -130,11 +131,13 @@ pub struct MainThread(PhantomData<*const ()>);
 
 impl MainThread {
     /// Mint the token. In production `enter_application` (`app/mod.rs`) calls this once, for every entry
-    /// (`plex_run` on the television and `platform_desktop::run` on a desktop reach it through
+    /// (`plex_run` on the television and `plx_platform_desktop::run` on a desktop reach it through
     /// `run_application`), and nothing else should; a test rig assumes its own.
     ///
     /// # Safety
-    /// The caller asserts this is the SDL main thread. It is not a memory-safety obligation in
+    /// The caller asserts this is the thread that runs the application's loop: the SDL main thread on the
+    /// television and the desktop, and, for a hosted platform that starts its own loop thread (its
+    /// host's main thread belongs to the host), that thread. It is not a memory-safety obligation in
     /// itself — it is the premise every `&MainThread` downstream is trusted on, including the
     /// one the Player adapter holds, so a false one reintroduces exactly the races this prevents.
     pub unsafe fn assume() -> Self {
@@ -187,6 +190,14 @@ fn try_spawn(what: &str, stack: Option<usize>, f: impl FnOnce() + Send + 'static
         let _counted = counted;
         f()
     })
+}
+
+/// [`spawn`] on a stack of `stack` bytes, for the one long-lived thread that stands in for the process's
+/// main thread: a hosted platform's loop thread runs the application, which was written for the 8 MiB
+/// main thread of a television and not for the platform's 2 MiB default (`MainThread::assume`'s doc).
+/// `None` means the OS refused the thread; see [`spawn`].
+pub fn spawn_sized(what: &str, stack: usize, f: impl FnOnce() + Send + 'static) -> Option<JoinHandle<()>> {
+    spawn_with(what, Some(stack), f)
 }
 
 /// How many small-stack network workers (`spawn_small*`) are alive. A host test that returns while
@@ -580,6 +591,20 @@ mod tests {
             h.is_none(),
             "a spawn that cannot succeed must report, not hand back a handle"
         );
+    }
+
+    /// `spawn_sized` gives the thread the stack asked for: a 6 MiB frame overflows the platform default
+    /// (2 MiB) and fits the 16 MiB asked for here, so the closure returning is the proof.
+    #[test]
+    fn a_sized_spawn_gets_the_stack_it_asked_for() {
+        let (tx, rx) = mpsc::channel();
+        let h = super::spawn_sized("sized-stack", 16 << 20, move || {
+            let frame = [1u8; 6 << 20];
+            tx.send(std::hint::black_box(&frame).iter().map(|&b| usize::from(b)).sum::<usize>()).unwrap();
+        })
+        .expect("spawn");
+        h.join().unwrap();
+        assert_eq!(rx.recv().unwrap(), 6 << 20);
     }
 
     /// Workers carry their label as the thread name (what a scheduler trace and

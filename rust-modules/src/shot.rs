@@ -219,7 +219,7 @@ pub(crate) fn read_flipped(vx: c_int, vy: c_int, vw: c_int, vh: c_int, ch: usize
     // **A frame over the BOUND video plane is the one exception, and it arrives already flattened.**
     // The straighten pass (`gfx/straighten.rs`) has turned its buffer into STRAIGHT colour for the
     // television's compositor, which multiplies it by alpha; the simulator stands in for that
-    // compositor (`run.rs`'s `composite_plane_under`, the decoded picture or black) before this
+    // compositor (`Present::compose_under`, `adapters::sim_present`'s: the decoded picture or black) before this
     // read, so the RGB here is the panel and the alpha is 1. Reading the straight buffer itself
     // would give a picture brighter than any panel shows.
     //
@@ -255,7 +255,7 @@ pub(crate) fn read_flipped(vx: c_int, vy: c_int, vw: c_int, vh: c_int, ch: usize
 /// the sign-in worker (`auth::mint_pin` -> libcurl) is still mid-handshake on another thread,
 /// loading the CA bundle — SIGSEGV inside libcrypto, captured by `tools/sim-smoke.py --core-dir`.
 /// Ending the run here lets the app's own shutdown run, and the simulator's `main` then leaves
-/// without `atexit` teardown (`src/bin/sim.rs`).
+/// without `atexit` teardown (`platform-desktop/src/bin/sim.rs`).
 
 #[must_use = "a headless one-shot capture asks the caller to end the run"]
 pub(crate) fn maybe_capture(now: u32, busy: bool, last_change_ms: u32, vx: c_int, vy: c_int, vw: c_int, vh: c_int) -> bool {

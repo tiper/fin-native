@@ -15,6 +15,13 @@ implies, what it must not change, and that its script is not named after the sta
   so it is read from a dry run (`make -n`, which prints the recipe line `echo 'desktop'` instead of running
   it) in a scratch tree: a dry run beside a goal that builds is not a pure query, so its parse-time reset
   of `pkg/` (see ci/test_arm_profile.py) must not reach this checkout.
+* The goals that build the webOS television package (`WEBOS_TV_GOALS` in the Makefile: `all`, `ipk`, `deploy`, `install`, the
+  storage helper, the C units, `libass`...) are REFUSED under an explicit `PLATFORM=desktop` or `PLATFORM=tizen`, at parse time
+  above the stamp reset (so a refusal deletes nothing), with a message naming the goal and the platform. The same goals under
+  the default `webos` print the recipe text they printed before the refusal existed (the Makefile with the guard cut out is
+  the control). The simulators keep their implied `desktop`; `make sim all` mixes a desktop goal with a webOS one and is
+  refused (one PLATFORM per invocation), `PLATFORM=webos make sim all` is not; the queries answer under every value, and a
+  bare `make PLATFORM=tizen` still defaults to `tizen-check`.
 * The compatibility axis is not the platform axis: `print-rust-target` answers the same under every
   `PLATFORM`.
 * Both new query goals are in the Makefile's side-effect-free set: asking resets nothing under `pkg/`. A
@@ -56,6 +63,11 @@ DESKTOP_GOALS = ("sim", "sim-macos", "sim-linux", "sim-wsl", "sim-run", "sim-mac
 # Goals that build the television package: they stay on the default. (Not `check` or `install`, whose
 # recipes run `$(MAKE)` even under `-n`.)
 WEBOS_GOALS = ("all", "ipk")
+# What the Makefile refuses under another platform: one per kind of recipe (the package, the helper, a C unit, the deploy and
+# install, the symbol and library builds). The Makefile's own `WEBOS_TV_GOALS` list is read and compared below.
+REFUSED_GOALS = ("all", "ipk", "deploy", "install", "test", "symbols", "symbols-libs", "sentry-symbols", "libass",
+                 "sentry-native", "pkg/plxnative", "pkg/plxnative-storage", "src/main.o", "src/starfish.o")
+REFUSAL = "builds the webOS television package"
 STAMP = "pkg/.build-config"
 BINARY = "pkg/plxnative"
 SEEDED_STAMP = "seeded by test_platform_axis"
@@ -209,7 +221,7 @@ class ImpliedPlatform(ScratchTree):
         self.assertEqual(self.platform_of("sim-macos", "PLATFORM=webos"), "webos")
         self.assertEqual(self.platform_of("macapp", "PLATFORM=tizen"), "tizen")
         self.assertEqual(self.platform_of("sim-macos", env={"PLATFORM": "webos"}), "webos")
-        self.assertEqual(self.platform_of("all", "PLATFORM=desktop"), "desktop")
+        self.assertEqual(self.platform_of("print-appid", "PLATFORM=desktop"), "desktop")
 
     def test_asking_never_resets_a_built_tree_and_a_building_goal_does(self):
         """Seed a tree the way a finished build leaves it, then ask the two new questions: nothing moves. The
@@ -232,6 +244,118 @@ class ImpliedPlatform(ScratchTree):
             with self.subTest(goal=goal):
                 self.assertRegex(text, rf"(?m)^QUERY_GOALS\s*=[^\n]*\b{goal}\b")
                 self.assertRegex(text, rf"(?m)^{goal}:")
+
+
+class TizenConfiguration(unittest.TestCase):
+    """`mk/platform-tizen.mk`'s own variables, read with `print-tizen-config` (a query: it touches nothing)."""
+
+    def config(self, *args: str) -> dict[str, str]:
+        proc = make("PLATFORM=tizen", *args, "print-tizen-config")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+
+    def test_a_release_library_carries_no_dev_trigger_seam(self):
+        """The webOS rule (`RELEASE=1` builds without `devtriggers`): a library that ships must not arm the dev boot."""
+        self.assertEqual(self.config()["TIZEN_FEATURES"], "tizen,devtriggers")
+        self.assertEqual(self.config("RELEASE=1")["TIZEN_FEATURES"], "tizen")
+        self.assertEqual(self.config("RELEASE=1")["TIZEN_PROFILE"], "release")
+        self.assertEqual(self.config("RELEASE=")["TIZEN_FEATURES"], "tizen,devtriggers")
+
+
+    def test_the_verification_comes_after_the_link(self):
+        """Under -j a verify that is a sibling of the link reads the OLD library. In a dry run the recipes print in the order they would
+        run, and `-j` with a serial dry run still shows the dependency order make enforces."""
+        for goals in (("tizen-tpk",), ("tizen-so", "tizen-verify"), ("tizen-verify", "tizen-so")):
+            with self.subTest(goals=goals):
+                proc = make("PLATFORM=tizen", "-j8", *goals, dry=True)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                lines = proc.stdout.splitlines()
+                link = max(i for i, l in enumerate(lines) if l.startswith("mv -f tizen/out/x86_64/libplx.so.part"))
+                verify = min(i for i, l in enumerate(lines) if "ci/check-tizen-so.py verify" in l)
+                self.assertGreater(verify, link, "tizen-verify would run before the link finished")
+
+
+class WebosGoalsRefused(ScratchTree):
+    def refused(self, *args: str, env: dict[str, str] | None = None) -> str:
+        """Dry-run the goals on a SEEDED tree and return the refusal text; the tree must be untouched."""
+        self.seed()
+        proc = make(*args, cwd=self.tree, dry=True, env=env)
+        self.assertNotEqual(proc.returncode, 0, (args, proc.stdout[-200:]))
+        self.assertEqual(proc.stdout, "", args)
+        self.assert_untouched(f"make {' '.join(args)}")
+        return proc.stderr
+
+    def test_the_television_goals_are_refused_under_desktop_and_tizen(self):
+        for platform in ("desktop", "tizen"):
+            for goal in REFUSED_GOALS:
+                with self.subTest(platform=platform, goal=goal):
+                    err = self.refused(f"PLATFORM={platform}", goal)
+                    self.assertIn(f"`{goal}` {REFUSAL}", err)
+                    self.assertIn(f"refused under PLATFORM={platform}", err)
+                    self.assertIn("Use PLATFORM=webos", err)
+
+    def test_the_environment_value_is_refused_too_and_a_bare_make_asks_for_all(self):
+        self.assertIn(f"`all` {REFUSAL}", self.refused(env={"PLATFORM": "desktop"}))
+        self.assertIn(f"`ipk` {REFUSAL}", self.refused("ipk", env={"PLATFORM": "tizen"}))
+        self.assertIn(f"`all` {REFUSAL}", self.refused("PLATFORM=desktop"))
+
+    def test_the_message_names_every_television_goal_asked_for(self):
+        err = self.refused("PLATFORM=desktop", "print-appid", "ipk", "deploy")
+        self.assertIn("`ipk deploy`", err)
+
+    def test_the_makefiles_list_is_the_one_tested(self):
+        text = (ROOT / "Makefile").read_text().replace("\\\n", " ")
+        listed = re.search(r"(?m)^WEBOS_TV_GOALS\s*:=\s*([^\n]+)$", text)
+        self.assertIsNotNone(listed)
+        names = set(listed.group(1).split())
+        self.assertEqual(names, {g for g in REFUSED_GOALS if not g.endswith(".o")} | {"src/%.o"})
+
+    def test_the_simulators_the_queries_and_the_tizen_goals_are_not_refused(self):
+        for platform in ("desktop", "tizen"):
+            with self.subTest(platform=platform):
+                self.dry(f"PLATFORM={platform}", "print-appid", "print-platform")
+                proc = make(f"PLATFORM={platform}", "print-playback-config")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertTrue(proc.stdout.startswith("backends="), proc.stdout[:80])
+        for goal in DESKTOP_GOALS:
+            with self.subTest(goal=goal):
+                self.dry(goal)
+        self.dry("PLATFORM=tizen", "tizen-abi")
+        self.dry("PLATFORM=desktop", "sim-macos")
+
+    def test_a_bare_make_on_tizen_still_defaults_to_the_tizen_check(self):
+        lines = self.dry("PLATFORM=tizen")
+        self.assertTrue(any("-p plx_platform_tizen" in l for l in lines), lines[-3:])
+        self.assertFalse(any("pkg/plxnative" in l or "src/main" in l for l in lines))
+
+    def test_a_simulator_beside_a_television_goal_is_refused_and_the_explicit_webos_is_not(self):
+        """One PLATFORM per invocation: `sim` implies desktop, so `all` beside it is refused and the message says why.
+        An explicit value wins over the implication (as it always has), so `PLATFORM=webos` takes both."""
+        for goals in (("sim", "all"), ("sim-macos", "ipk"), ("macapp", "deploy")):
+            with self.subTest(goals=goals):
+                err = self.refused(*goals)
+                self.assertIn(REFUSAL, err)
+                self.assertIn("refused under PLATFORM=desktop (implied by the simulator goal beside it", err)
+        self.dry("PLATFORM=webos", "sim", "all")
+
+    def test_the_webos_recipe_text_does_not_move(self):
+        """The refusal is parse-time text: cut it out of the Makefile and the webOS goals print the same recipes."""
+        text = (ROOT / "Makefile").read_text()
+        guard = re.search(r"(?ms)^ifneq \(\$\(PLATFORM\),webos\)\n.*?^endif\nendif\n", text)
+        self.assertIsNotNone(guard, "the refusal block is gone or reshaped")
+        self.assertIn("$(error", guard.group(0))
+        for goals in (("all",), ("ipk",), ("symbols",), ("pkg/plxnative-storage",), ("src/main.o",)):
+            with self.subTest(goals=goals):
+                with_guard = self.dry(*goals)
+                (self.tree / "Makefile").unlink()
+                (self.tree / "Makefile").write_text(text.replace(guard.group(0), ""))
+                try:
+                    without = self.dry(*goals)
+                finally:
+                    (self.tree / "Makefile").unlink()
+                    (self.tree / "Makefile").symlink_to(ROOT / "Makefile")
+                self.assertGreaterEqual(len(with_guard), 1, goals)
+                self.assertEqual(with_guard, without)
 
 
 class RefusedPlatform(ScratchTree):

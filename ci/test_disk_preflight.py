@@ -125,7 +125,7 @@ def entry_names(make_out):
 
 def run_make(*args, env=None):
     full = dict(os.environ)
-    for name in ("MAKEFLAGS", "MFLAGS", "PLX_DISK_BUDGET_DONE"):
+    for name in ("MAKEFLAGS", "MFLAGS", "PLATFORM", "PLX_DISK_BUDGET_DONE"):
         full.pop(name, None)
     full.update(env or {})
     return subprocess.run(["make", *args], cwd=ROOT, env=full, capture_output=True, text=True)
@@ -269,7 +269,7 @@ class Preflight(Repo):
     TOOLS = ("disk-budget.py", "build-gc.sh", "cargo-seed.py", "check-lock.py")
     SCRUBBED = ("PLX_DISK_BUDGET_DONE", "PLX_MIN_FREE_MB", "PLX_GC_MIN_FREE_GIB", "PLX_GC_TEST_FREE_KIB",
                 "PLX_GC_TEST_NOW", "PLX_DISK_NEED_GIB", "PLX_GC_LOCK_STALE_MIN", "CARGO_TARGET_DIR", "SIM_TDIR",
-                "MAKEFLAGS", "MFLAGS")
+                "MAKEFLAGS", "MFLAGS", "PLATFORM")
 
     def setUp(self):
         super().setUp()

@@ -1,0 +1,60 @@
+[package]
+name = "plx_platform_tizen"
+version = "0.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "PlxNative's Tizen platform (Samsung TVs): a hosted .so entry, an Ecore window and EGL context, the remote's keys and the UDP log channel. Emulator only; compiled only under tizen."
+repository = "https://github.com/GLinnik21/plx-native"
+publish = false
+build = "build.rs"
+
+# ci/module_graph.py reads this crate as part of the same module tree as the application (see
+# `plx_platform_webos`): the root of module `platform_tizen`, the member of `[platform tizen]`
+# in ci/module-layers.ini.
+[package.metadata.plx]
+mount = "platform_tizen"
+
+[lib]
+name = "plx_platform_tizen"
+# An rlib, never an archive (ci/test_no_host_staticlib.py).
+crate-type = ["rlib"]
+
+# `tizen` is this crate's OWN feature and is in NO default set. The whole library is
+# `#![cfg(feature = "tizen")]`, so a default-feature pass that lists this package (`make check`'s unit
+# pass) compiles an empty library, and it must enable nothing on the application and compile nothing of
+# its dependencies. The same two things make that so as for `plx_platform_desktop`: every dependency
+# below is `optional = true` and only `tizen` pulls it in (`dep:`), and the application's own features are
+# forwarded WEAKLY (`plxnative-modules?/<feature>`), which adds the optional edge in no build. The
+# dependency names no feature (a dependency feature is unified over the whole build), so nothing here
+# turns a default-feature pass into a Tizen pass. The features are the application's, under the same names
+# with the same defaults (rust-modules/Cargo.toml `[features]`); `hostsim`, the desktop simulator's, is not
+# forwarded. `ci/test_platform_features.py` holds all of this.
+[features]
+default = ["play-uri", "play-feed", "devtools", "devtriggers", "threadcheck"]
+play-uri = ["plxnative-modules?/play-uri"]
+play-feed = ["plxnative-modules?/play-feed"]
+devtools = ["plxnative-modules?/devtools"]
+devtriggers = ["plxnative-modules?/devtriggers"]
+threadcheck = ["plxnative-modules?/threadcheck"]
+lab-diagnostics = ["plxnative-modules?/lab-diagnostics"]
+placeholder-sentinel = ["plxnative-modules?/placeholder-sentinel"]
+tizen = ["dep:plxnative-modules", "dep:plx_base", "dep:plx_os", "dep:serde_json"]
+
+[dependencies]
+# The application, through its `host` module: the one crate a platform names. Optional, so the empty
+# default-feature library carries no unused dependency; `tizen` is the one feature that enables it.
+plxnative-modules = { path = "..", default-features = false, optional = true }
+# The lower layers this platform's tables are written from, and the one third-party package its launch
+# string needs (already in the lock: the application parses JSON with it). `plx_base` carries the event
+# log's tap, the dev-trigger preset, the layout, `dynlib!` and the task and watchdog seams; `plx_os` the
+# `tv` services and the published platform. All optional, enabled only by `tizen`.
+plx_base = { path = "../base", optional = true }
+plx_os = { path = "../os", optional = true }
+serde_json = { version = "1", default-features = false, features = ["alloc", "std"], optional = true }
+
+[dev-dependencies]
+# The host tests' process-global test lock and private event log (`test-support`).
+plx_base = { path = "../base", features = ["test-support"] }
+
+[lints]
+workspace = true

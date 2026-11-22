@@ -1200,7 +1200,7 @@ pub fn exit_native_with(
 }
 
 /// Test helper: finish the pending release the way the exit does, with no deadline concerns.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 pub(crate) fn finish_release_for_test(pa: &mut super::adapter::PlayerAdapter) {
     let mut ps = crate::route::PlaybackSession::IDLE;
     while pa.release_busy() {

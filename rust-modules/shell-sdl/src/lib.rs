@@ -4,11 +4,13 @@
 //!
 //! This is the half of the platform that is SDL2 and nothing else. The television's LG half (its
 //! Wayland handles, the opaque region, the pointer hide, the cursor-sleep hint) is webOS code and
-//! stays in the application crate's `system.rs`, reached only through the webOS platform; this
+//! stays in the webOS platform crate's `system.rs`, reached only through that platform; this
 //! crate names none of it, and none of `ui`, `machine`, `os` or any application type. The contract
 //! between the two halves is one raw `SDL_Window*` ([`window::Window::raw`]) and the order of calls
-//! on one thread. [`init::InitHooks`] is the one place the platform reaches INTO SDL's bring-up,
-//! as two plain function pointers the television fills and a desktop leaves empty.
+//! on one thread. [`init::InitHooks`] is the one place the platform states its SDL: the steps it runs
+//! around the bring-up (plain function pointers: the television fills `before` and `after`, a desktop leaves those two
+//! empty and fills `after_context` with the vertex array a core profile needs), the
+//! [`init::SdlFlavor`] its events are laid out in and the [`init::GlProfile`] it asks for.
 //!
 //! The crate is a mounted module of the `shell_sdl` layer (`ci/module-layers.ini`), which may use
 //! `base`, `machine` and `os`; the crate names `base` alone. The application's `HostEvent` stays app-private, and its `Shell` and `Surface` traits are reachable only through
@@ -19,10 +21,9 @@
 //! ## One crate, both SDLs
 //!
 //! The television's SDL is a fork (LG's fork of SDL2) that lays its keyboard, text and wheel events
-//! out differently from the stock SDL2 a desktop links. The choice is `cfg!(feature = "hostsim")`
-//! and never `#[cfg]`, so both arms of every layout compile in every build and the one nobody is
-//! building cannot rot; the `hostsim` feature is forwarded from the application crate, which is the
-//! only one that sets it.
+//! out differently from the stock SDL2 a desktop links. The choice is the platform's own
+//! [`init::SdlFlavor`], a value every decode and encode takes as an argument and never a `#[cfg]`, so
+//! both arms of every layout compile in every build and the tests grade both in every pass.
 //!
 //! ## Tests
 //!
@@ -37,7 +38,7 @@ pub mod text;
 pub mod testing;
 pub mod window;
 
-pub use init::{set_hint, InitFailed, InitHooks};
+pub use init::{set_hint, GlProfile, InitFailed, InitHooks, InitSteps, SdlFlavor};
 pub use window::{OpenAsk, OpenFailed, Placement, Window};
 
 #[cfg(test)]
@@ -72,7 +73,7 @@ mod pins {
 
     /// **The television's SDL writes a LARGER `SDL_SysWMinfo` than the headers declare**, so a bare
     /// struct on the stack is the "modular-split crash" and the over-allocated buffer with its
-    /// version handshake lives in the application crate's `system.rs`, beside the rest of the LG
+    /// version handshake lives in the webOS platform crate's `system.rs`, beside the rest of the LG
     /// half. Nothing in this crate may call it: not for the window, not for a size, not "just to
     /// read the display". The SDL version query that handshake is built on belongs to the same
     /// half and is pinned with it.

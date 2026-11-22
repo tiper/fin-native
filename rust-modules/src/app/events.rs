@@ -33,6 +33,7 @@ pub(crate) fn text_inputs(text: &str, panel: bool, at: plx_machine::machine::Tic
 // key stand-in, and the token parser. Re-exported here so the `remote_synth_*` names every call site
 // (the loop, the FIFO, the replay driver, the cursor-swap click) already uses stay what they are.
 pub(crate) use plx_shell_sdl::event::{is_input_event, rd_u32, Decoded, Lifecycle, PointerEdge};
+pub(crate) use plx_shell_sdl::SdlFlavor;
 pub(crate) use plx_shell_sdl::inject::{
     synth_key as remote_synth_key, synth_key_edge as remote_synth_key_edge,
     synth_key_repeat as remote_synth_key_repeat, synth_lifecycle as remote_synth_lifecycle,
@@ -44,6 +45,18 @@ pub(crate) use plx_shell_sdl::inject::{
 pub(crate) use plx_shell_sdl::event::{rd_f32, rd_i32};
 #[cfg(test)]
 pub(crate) use plx_shell_sdl::inject::{encode_key, encode_key_repeat, encode_pointer};
+
+/// Both layouts, for the tests that grade the byte layouts: every pass runs both, because the flavour is
+/// the platform's value and not a build flag.
+#[cfg(test)]
+pub(crate) const BOTH_FLAVORS: [SdlFlavor; 2] = [SdlFlavor::Lg, SdlFlavor::Stock];
+
+/// The layout the host-test platform states (`Shell::sdl` of `Platform::HOST_TEST`), for the tests whose
+/// subject is not the layout: they encode and decode in it, and the layout tests above grade the rest.
+#[cfg(test)]
+pub(crate) fn host_flavor() -> SdlFlavor {
+    super::platform::HOST_TEST_SDL.flavor
+}
 
 /// The wcode a key press is read as: the one its bytes carried, else the desktop's stand-in for it.
 ///
@@ -227,8 +240,8 @@ impl KeyPress {
 /// everything the shell leaves raw (the IME's pre-edit, and the SDL events nothing acts on), which the
 /// loop reads raw.
 #[inline]
-pub(crate) fn decode_host_event(ev: &[u8]) -> Option<HostEvent> {
-    host_event(plx_shell_sdl::event::decode(ev)?)
+pub(crate) fn decode_host_event(flavor: SdlFlavor, ev: &[u8]) -> Option<HostEvent> {
+    host_event(plx_shell_sdl::event::decode(flavor, ev)?)
 }
 
 /// One decoded SDL event as a [`HostEvent`]. The only place a [`Decoded`] becomes the application's own
@@ -291,7 +304,7 @@ impl super::platform::EventSink for HostQueue {
 #[cfg(test)]
 pub(crate) fn native_key_input(sym: c_uint, wcode: c_uint, down: bool, at: plx_machine::machine::Tick)
     -> (KeyPress, plx_machine::machine::InputEvent<u32>) {
-    let Some(HostEvent::Key(press)) = decode_host_event(&encode_key(sym, wcode, down)) else {
+    let Some(HostEvent::Key(press)) = decode_host_event(host_flavor(), &encode_key(host_flavor(), sym, wcode, down)) else {
         panic!("SDL key bytes decode to a key press");
     };
     let RawKey { sym, wcode } = press.pair();
@@ -506,7 +519,7 @@ mod input_event_tests {
 ///
 /// `true` means the token was accepted and injected/requested, not that the screen necessarily
 /// changed — pressing DOWN at the bottom of a list is still a successfully delivered command.
-pub(crate) fn dispatch_remote_token(tok: &str, ps: &plx_media::route::PlaybackSession,
+pub(crate) fn dispatch_remote_token(flavor: SdlFlavor, tok: &str, ps: &plx_media::route::PlaybackSession,
     pa: &plx_media::player::adapter::PlayerAdapter, present: &mut plx_machine::present::Present,
     scope: plx_machine::present::Scope) -> bool {
     let scope = if tok.starts_with("pat:") { plx_machine::present::Scope::Page } else { scope };
@@ -537,7 +550,7 @@ pub(crate) fn dispatch_remote_token(tok: &str, ps: &plx_media::route::PlaybackSe
         true
     } else if tok == "okdown" || tok == "okup" {
         // The two halves of OK let a driver hold it past press::LONG_MS and reach the item menu.
-        remote_synth_key_edge(SDLK_RETURN, 0, tok == "okdown");
+        remote_synth_key_edge(flavor, SDLK_RETURN, 0, tok == "okdown");
         true
     } else if let Some(spec) = tok.strip_prefix("wheel:") {
         // Item 13: `wheel:<dy>` drives Settings/Consent/Legal's wheel arm (and every other route's)
@@ -556,7 +569,7 @@ pub(crate) fn dispatch_remote_token(tok: &str, ps: &plx_media::route::PlaybackSe
         // 0x101 repeat edge, as many times as the script wants), `holdup:<name>` (release).
         match remote_token_key(name) {
             Some((sym, wcode)) => {
-                remote_synth_key_edge(sym, wcode, true);
+                remote_synth_key_edge(flavor, sym, wcode, true);
                 true
             }
             None => false,
@@ -564,7 +577,7 @@ pub(crate) fn dispatch_remote_token(tok: &str, ps: &plx_media::route::PlaybackSe
     } else if let Some(name) = tok.strip_prefix("holdrep:") {
         match remote_token_key(name) {
             Some((sym, wcode)) => {
-                remote_synth_key_repeat(sym, wcode);
+                remote_synth_key_repeat(flavor, sym, wcode);
                 true
             }
             None => false,
@@ -572,7 +585,7 @@ pub(crate) fn dispatch_remote_token(tok: &str, ps: &plx_media::route::PlaybackSe
     } else if let Some(name) = tok.strip_prefix("holdup:") {
         match remote_token_key(name) {
             Some((sym, wcode)) => {
-                remote_synth_key_edge(sym, wcode, false);
+                remote_synth_key_edge(flavor, sym, wcode, false);
                 true
             }
             None => false,
@@ -597,16 +610,16 @@ pub(crate) fn dispatch_remote_token(tok: &str, ps: &plx_media::route::PlaybackSe
         // pushing a synthetic SDL_TEXTINPUT crashes sdl2-compat because SDL2 and SDL3 disagree
         // about whether that payload is inline bytes or a pointer (the full measurement is in the
         // original FIFO call-site history and `textinput.rs`).
-        let ev = crate::textinput::encode_event(&text.replace('+', " "));
-        crate::textinput::on_event(&ev);
+        let ev = crate::textinput::encode_event(flavor, &text.replace('+', " "));
+        crate::textinput::on_event(flavor, &ev);
         log(&format!(
             "txt: decoded {:?} pending={}",
-            crate::textinput::decode(&ev),
+            crate::textinput::decode(flavor, &ev),
             crate::textinput::pending()
         ));
         true
     } else if let Some((sym, wcode)) = remote_token_key(tok) {
-        remote_synth_key(sym, wcode);
+        remote_synth_key(flavor, sym, wcode);
         true
     } else {
         log(&format!("remote: unknown token {tok:?}"));
@@ -616,6 +629,8 @@ pub(crate) fn dispatch_remote_token(tok: &str, ps: &plx_media::route::PlaybackSe
 
 #[cfg(test)]
 mod key_layout_tests {
+    #[allow(unused_imports)]
+    use super::{host_flavor, SdlFlavor, BOTH_FLAVORS};
     use super::{encode_key, encode_key_repeat, wcode_of};
     use plx_ui::consts::{SDLK_DOWN, SDLK_RETURN, WCODE_BACK, WCODE_PAUSE};
 
@@ -623,23 +638,27 @@ mod key_layout_tests {
     /// stand-in applied where the bytes carry no wcode, the way `KeyPress::from_decoded` reads it.
     /// The shell's own tests grade the byte layout; these grade the pair that reaches the loop,
     /// stand-in priority included.
-    fn decode_key(ev: &[u8]) -> (u32, u32, u32) {
-        let (state, wcode, sym) = plx_shell_sdl::event::decode_key(ev);
+    fn decode_key(flavor: SdlFlavor, ev: &[u8]) -> (u32, u32, u32) {
+        let (state, wcode, sym) = plx_shell_sdl::event::decode_key(flavor, ev);
         (state, wcode_of(wcode, sym), sym)
     }
 
-    /// `encode_key` and `decode_key` must agree, in whichever layout this build compiled.
+    /// `encode_key` and `decode_key` must agree, in both layouts.
     ///
     /// This is the regression test for a bug that shipped: the two ends disagreed about
     /// `SDL_KeyboardEvent`'s field offsets, so every remote-FIFO token was accepted, decoded into
     /// nonsense, and silently dropped — no error on either side. Nothing in the compiler couples a
     /// reader and a writer of raw byte offsets, so this does.
     ///
-    /// `make check` builds the television layout, so that is the one graded by default; a
-    /// `--features hostsim` test run grades the stock-SDL2 one. Both arms are compiled either way
-    /// (they are `cfg!`, not `#[cfg]`), so neither can rot.
+    /// The flavour is the platform's value and not a `#[cfg]`, so both layouts are graded in every pass.
     #[test]
     fn key_bytes_round_trip() {
+        for flavor in BOTH_FLAVORS {
+            key_bytes_round_trip_in(flavor);
+        }
+    }
+
+    fn key_bytes_round_trip_in(flavor: SdlFlavor) {
         // The wcode-only case is the one that breaks a sym-derived mapping, and the one a naive
         // host layout loses: `pause` carries no sym at all.
         //
@@ -660,8 +679,8 @@ mod key_layout_tests {
             (115, 22),
         ] {
             for down in [true, false] {
-                let ev = encode_key(sym, wcode, down);
-                let (state, got_wcode, got_sym) = decode_key(&ev);
+                let ev = encode_key(flavor, sym, wcode, down);
+                let (state, got_wcode, got_sym) = decode_key(flavor, &ev);
                 assert_eq!(got_sym, sym, "sym lost (wcode={wcode}, down={down})");
                 assert_eq!(got_wcode, wcode, "wcode lost (sym={sym}, down={down})");
                 assert_eq!(
@@ -684,9 +703,9 @@ mod key_layout_tests {
     /// `key_bytes_round_trip` just pinned an ordinary edge must NEVER produce.
     #[test]
     fn encode_key_repeat_round_trips_as_a_hardware_repeat() {
-        for (sym, wcode) in [(SDLK_DOWN, 0), (0, WCODE_PAUSE), (8, 42)] {
-            let ev = encode_key_repeat(sym, wcode);
-            let (state, got_wcode, got_sym) = decode_key(&ev);
+        for (flavor, (sym, wcode)) in BOTH_FLAVORS.into_iter().flat_map(|f| [(SDLK_DOWN, 0), (0, WCODE_PAUSE), (8, 42)].map(move |p| (f, p))) {
+            let ev = encode_key_repeat(flavor, sym, wcode);
+            let (state, got_wcode, got_sym) = decode_key(flavor, &ev);
             assert_eq!(got_sym, sym, "sym lost (wcode={wcode})");
             assert_eq!(got_wcode, wcode, "wcode lost (sym={sym})");
             assert_eq!(state & 0xff, 1, "a repeat is a DOWN edge, not a release");
@@ -746,6 +765,8 @@ mod key_layout_tests {
 /// from the mapping it grades.
 #[cfg(test)]
 mod host_event_tests {
+    #[allow(unused_imports)]
+    use super::{host_flavor, SdlFlavor, BOTH_FLAVORS};
     use super::{decode_host_event, is_input_event, HostEvent, Lifecycle};
 
     fn event_of(code: u32) -> [u8; 128] {
@@ -763,7 +784,7 @@ mod host_event_tests {
             (0x105, HostEvent::Lifecycle(Lifecycle::WillForeground)),
             (0x106, HostEvent::Lifecycle(Lifecycle::DidForeground)),
         ] {
-            assert_eq!(decode_host_event(&event_of(code)), Some(event.clone()), "{code:#x}");
+            assert_eq!(decode_host_event(host_flavor(), &event_of(code)), Some(event.clone()), "{code:#x}");
             assert!(!is_input_event(code), "{code:#x}: a host event is the app's, never a modal's input");
             if let HostEvent::Lifecycle(edge) = event {
                 assert_eq!(edge.sdl_code(), code, "the code a decoded edge is read back as");
@@ -781,7 +802,7 @@ mod host_event_tests {
         for code in [
             0, 0x101, 0x102, 0x107, 0x200, 0x302, 0x3ff, 0x404, u32::MAX,
         ] {
-            assert_eq!(decode_host_event(&event_of(code)), None, "{code:#x}");
+            assert_eq!(decode_host_event(host_flavor(), &event_of(code)), None, "{code:#x}");
         }
     }
 
@@ -801,9 +822,9 @@ mod host_event_tests {
         ] {
             let mut ev = event_of(code);
             if code == 0x300 || code == 0x301 {
-                ev = super::encode_key(plx_ui::consts::SDLK_UP, 0, code == 0x300);
+                ev = super::encode_key(host_flavor(), plx_ui::consts::SDLK_UP, 0, code == 0x300);
             }
-            let event = decode_host_event(&ev).unwrap_or_else(|| panic!("{code:#x} decodes"));
+            let event = decode_host_event(host_flavor(), &ev).unwrap_or_else(|| panic!("{code:#x} decodes"));
             assert_eq!(event.is_input(), input, "{code:#x} as a HostEvent");
             assert_eq!(is_input_event(code), input, "{code:#x} as a type");
         }
@@ -816,6 +837,8 @@ mod host_event_tests {
 /// `offsetof` assertions).
 #[cfg(test)]
 mod pointer_event_tests {
+    #[allow(unused_imports)]
+    use super::{host_flavor, SdlFlavor, BOTH_FLAVORS};
     use super::{decode_host_event, encode_pointer, HostEvent, PointerEdge};
 
     const MOTION: u32 = 0x400;
@@ -851,7 +874,7 @@ mod pointer_event_tests {
         let _serial = plx_base::testlock::serial();
         for (code, edge) in [(MOTION, PointerEdge::Move), (DOWN, PointerEdge::Down), (UP, PointerEdge::Up)] {
             for (x, y) in [(0, 0), (960, 540), (1919, 1079), (1400, 870), (-3, 1085), (2000, -1)] {
-                assert_eq!(decode_host_event(&bytes(code, 1, 1, x, y)), pointer(x as f32, y as f32, edge),
+                assert_eq!(decode_host_event(host_flavor(), &bytes(code, 1, 1, x, y)), pointer(x as f32, y as f32, edge),
                     "{code:#x} at ({x}, {y})");
             }
         }
@@ -869,7 +892,7 @@ mod pointer_event_tests {
                 for (code, edge) in [(MOTION, PointerEdge::Move), (DOWN, PointerEdge::Down), (UP, PointerEdge::Up)] {
                     let mut ev = bytes(code, button, state, 640, 360);
                     ev[28..64].fill(0xa5);
-                    assert_eq!(decode_host_event(&ev), pointer(640.0, 360.0, edge), "{code:#x} button {button} state {state}");
+                    assert_eq!(decode_host_event(host_flavor(), &ev), pointer(640.0, 360.0, edge), "{code:#x} button {button} state {state}");
                 }
             }
         }
@@ -883,7 +906,7 @@ mod pointer_event_tests {
         let _serial = plx_base::testlock::serial();
         for (code, edge) in [(MOTION, PointerEdge::Move), (DOWN, PointerEdge::Down), (UP, PointerEdge::Up)] {
             for (x, y) in [(0, 0), (1400, 870), (1919, 1079)] {
-                assert_eq!(decode_host_event(&encode_pointer(code, x, y)), pointer(x as f32, y as f32, edge), "{code:#x}");
+                assert_eq!(decode_host_event(host_flavor(), &encode_pointer(code, x, y)), pointer(x as f32, y as f32, edge), "{code:#x}");
             }
         }
     }
@@ -909,20 +932,17 @@ mod pointer_event_tests {
         Some(HostEvent::Wheel { dy })
     }
 
-    /// **Each layout's wheel, and the one this build does not read.** The television's integer at +20
-    /// is the count in the default build and is ignored in the simulator's; the simulator's float at +32
-    /// is the count there (rounded to whole ticks) and is ignored on the television. A decoder that
-    /// read both, or the wrong one, fails one of the two assertions in each build.
+    /// **Each layout's wheel, and the one the flavour does not read.** The television's integer at +20
+    /// is the count under `Lg` and is ignored under `Stock`; the stock float at +32 is the count there
+    /// (rounded to whole ticks) and is ignored on the television. A decoder that read both, or the
+    /// wrong one, fails one of the assertions, in every pass.
     #[test]
-    fn a_wheel_tick_is_read_from_the_offset_this_hosts_sdl_carries_it_at() {
+    fn a_wheel_tick_is_read_from_the_offset_the_flavours_sdl_carries_it_at() {
         for dy in [-40, -3, -1, 1, 2, 120] {
-            if cfg!(feature = "hostsim") {
-                assert_eq!(decode_host_event(&wheel_stock(dy as f32)), wheel(dy), "stock layout, {dy}");
-                assert_eq!(decode_host_event(&wheel_lg(dy)), wheel(0), "the television's field is not this host's: {dy}");
-            } else {
-                assert_eq!(decode_host_event(&wheel_lg(dy)), wheel(dy), "LG layout, {dy}");
-                assert_eq!(decode_host_event(&wheel_stock(dy as f32)), wheel(0), "the simulator's field is not read here: {dy}");
-            }
+            assert_eq!(decode_host_event(SdlFlavor::Stock, &wheel_stock(dy as f32)), wheel(dy), "stock layout, {dy}");
+            assert_eq!(decode_host_event(SdlFlavor::Stock, &wheel_lg(dy)), wheel(0), "the television's field is not stock's: {dy}");
+            assert_eq!(decode_host_event(SdlFlavor::Lg, &wheel_lg(dy)), wheel(dy), "LG layout, {dy}");
+            assert_eq!(decode_host_event(SdlFlavor::Lg, &wheel_stock(dy as f32)), wheel(0), "the stock field is not read here: {dy}");
         }
     }
 
@@ -933,21 +953,20 @@ mod pointer_event_tests {
     /// offset there. It is pinned so a "fix" that reads `+20` everywhere shows up here, in the simulator
     /// run, as a count that is no longer zero.
     #[test]
-    fn the_television_shaped_wheel_the_fifo_token_builds_decodes_to_zero_in_the_simulator() {
+    fn the_television_shaped_wheel_the_fifo_token_builds_decodes_to_zero_under_the_stock_flavour() {
         let mut token_shape = [0u8; 128];
         token_shape[0..4].copy_from_slice(&WHEEL.to_ne_bytes());
         token_shape[20..24].copy_from_slice(&(-2i32).to_ne_bytes());
-        let expected = if cfg!(feature = "hostsim") { 0 } else { -2 };
-        assert_eq!(decode_host_event(&token_shape), wheel(expected));
+        assert_eq!(decode_host_event(SdlFlavor::Stock, &token_shape), wheel(0));
+        assert_eq!(decode_host_event(SdlFlavor::Lg, &token_shape), wheel(-2));
     }
 
     /// A fractional trackpad tick keeps the sign of what it rounds to, and a half tick or less is no
     /// tick (the loop records a zero and ignores it). Only the simulator's layout carries a fraction.
-    #[cfg(feature = "hostsim")]
     #[test]
     fn a_fractional_trackpad_tick_rounds_to_whole_ticks() {
         for (precise, dy) in [(-0.4, 0), (0.4, 0), (-0.6, -1), (0.6, 1), (-1.4, -1), (2.5, 3), (-40.0, -40)] {
-            assert_eq!(decode_host_event(&wheel_stock(precise)), wheel(dy), "{precise}");
+            assert_eq!(decode_host_event(SdlFlavor::Stock, &wheel_stock(precise)), wheel(dy), "{precise}");
         }
     }
 }
@@ -956,6 +975,8 @@ mod pointer_event_tests {
 /// the pairs the FIFO's named tokens press, and the one guarantee the constructor gives.
 #[cfg(test)]
 mod key_event_tests {
+    #[allow(unused_imports)]
+    use super::{host_flavor, SdlFlavor, BOTH_FLAVORS};
     use super::{
         decode_host_event, encode_key, encode_key_repeat, remote_token_key, Action, Edge, HostEvent,
         KeyPress, RawKey,
@@ -984,9 +1005,9 @@ mod key_event_tests {
             (0, 0, None),
         ];
         for (sym, wcode, action) in table {
-            assert_eq!(decode_host_event(&encode_key(sym, wcode, true)), Some(press(action, Edge::Down, sym, wcode)), "({sym},{wcode}) down");
-            assert_eq!(decode_host_event(&encode_key(sym, wcode, false)), Some(press(action, Edge::Up, sym, wcode)), "({sym},{wcode}) up");
-            assert_eq!(decode_host_event(&encode_key_repeat(sym, wcode)), Some(press(action, Edge::Repeat, sym, wcode)), "({sym},{wcode}) repeat");
+            assert_eq!(decode_host_event(host_flavor(), &encode_key(host_flavor(), sym, wcode, true)), Some(press(action, Edge::Down, sym, wcode)), "({sym},{wcode}) down");
+            assert_eq!(decode_host_event(host_flavor(), &encode_key(host_flavor(), sym, wcode, false)), Some(press(action, Edge::Up, sym, wcode)), "({sym},{wcode}) up");
+            assert_eq!(decode_host_event(host_flavor(), &encode_key_repeat(host_flavor(), sym, wcode)), Some(press(action, Edge::Repeat, sym, wcode)), "({sym},{wcode}) repeat");
         }
     }
 
@@ -996,6 +1017,12 @@ mod key_event_tests {
     /// +24 under the `SYNTH_WINDOW` marker at +8 (`decode_key`'s doc has the measurement).
     #[test]
     fn the_key_layout_is_pinned_byte_for_byte() {
+        for flavor in BOTH_FLAVORS {
+            the_key_layout_of(flavor);
+        }
+    }
+
+    fn the_key_layout_of(flavor: SdlFlavor) {
         // UP (0x40000052) with no wcode, and PLAY (wcode 450 = 0x1c2) with no sym.
         let (up_sym, play_wcode) = ([0x52, 0x00, 0x00, 0x40], [0xc2, 0x01, 0x00, 0x00]);
         let mut up = [0u8; 128];
@@ -1004,7 +1031,7 @@ mod key_event_tests {
         for ev in [&mut up, &mut play, &mut repeat] {
             ev[0..4].copy_from_slice(&0x300u32.to_ne_bytes());
         }
-        if cfg!(feature = "hostsim") {
+        if flavor == SdlFlavor::Stock {
             for ev in [&mut up, &mut play, &mut repeat] {
                 ev[12] = 1;
                 ev[8..12].copy_from_slice(&0x504c_584bu32.to_ne_bytes());
@@ -1022,24 +1049,26 @@ mod key_event_tests {
             repeat[24..28].copy_from_slice(&up_sym);
             repeat[17] = 1; // state 0x101
         }
-        assert_eq!(decode_host_event(&up), Some(press(Some(Action::Up), Edge::Down, SDLK_UP, 0)));
-        assert_eq!(decode_host_event(&play), Some(press(Some(Action::Play), Edge::Down, 0, 450)));
-        assert_eq!(decode_host_event(&repeat), Some(press(Some(Action::Up), Edge::Repeat, SDLK_UP, 0)));
+        assert_eq!(decode_host_event(flavor, &up), Some(press(Some(Action::Up), Edge::Down, SDLK_UP, 0)));
+        assert_eq!(decode_host_event(flavor, &play), Some(press(Some(Action::Play), Edge::Down, 0, 450)));
+        assert_eq!(decode_host_event(flavor, &repeat), Some(press(Some(Action::Up), Edge::Repeat, SDLK_UP, 0)));
     }
 
     /// A release never carries the auto-repeat bit into the event: `Edge::Up` is `Edge::Up`, and the
     /// tape's `repeat` for it is false (the SDL drivers only stamp 0x100 on a press).
     #[test]
     fn a_release_is_an_up_edge_whatever_else_is_stamped() {
-        let mut ev = encode_key(SDLK_DOWN, 0, false);
-        if cfg!(feature = "hostsim") {
-            ev[13] = 1;
-        } else {
-            ev[17] = 1;
+        for flavor in BOTH_FLAVORS {
+            let mut ev = encode_key(flavor, SDLK_DOWN, 0, false);
+            if flavor == SdlFlavor::Stock {
+                ev[13] = 1;
+            } else {
+                ev[17] = 1;
+            }
+            let Some(HostEvent::Key(key)) = decode_host_event(flavor, &ev) else { panic!("a key event") };
+            assert_eq!(key.state(), 0);
+            assert_eq!(key, KeyPress::new(Some(Action::Down), Edge::Up, Some(RawKey { sym: SDLK_DOWN, wcode: 0 })).unwrap());
         }
-        let Some(HostEvent::Key(key)) = decode_host_event(&ev) else { panic!("a key event") };
-        assert_eq!(key.state(), 0);
-        assert_eq!(key, KeyPress::new(Some(Action::Down), Edge::Up, Some(RawKey { sym: SDLK_DOWN, wcode: 0 })).unwrap());
     }
 
     /// The constructor's guarantee: a press names an action or a raw pair, and an action-only press
@@ -1174,7 +1203,7 @@ mod key_event_tests {
             (0x4000_004c, 0, None),
         ];
         for &(sym, wcode, action) in table {
-            let Some(HostEvent::Key(press)) = decode_host_event(&encode_key(sym, wcode, true)) else {
+            let Some(HostEvent::Key(press)) = decode_host_event(host_flavor(), &encode_key(host_flavor(), sym, wcode, true)) else {
                 panic!("({sym}, {wcode}) decodes to a key press");
             };
             assert_eq!(press.action(), action, "({sym}, {wcode}) means {action:?}");
@@ -1225,23 +1254,24 @@ mod key_event_tests {
         assert_eq!(remote_token_key("k:1"), None, "`k:` needs both fields");
     }
 
-    /// `SDL_TEXTINPUT` decodes to its string at THIS build's offset (LG's fork, +16; stock SDL, +12),
+    /// `SDL_TEXTINPUT` decodes to its string at the flavour's offset (LG's fork, +16; stock SDL, +12),
     /// written out as literals: ASCII, a CJK commit (3 bytes a character), a full unterminated
     /// 32-byte array, and the empty commit SDL sends for the IME's bookkeeping, which is still a
     /// `Text` (the loop ignores it).
     #[test]
-    fn a_text_commit_decodes_at_this_builds_offset() {
-        let off = if cfg!(feature = "hostsim") { 12 } else { 16 };
-        let text = |bytes: &[u8]| {
-            let mut ev = [0u8; 128];
-            ev[0..4].copy_from_slice(&0x303u32.to_ne_bytes());
-            ev[off..off + bytes.len()].copy_from_slice(bytes);
-            decode_host_event(&ev)
-        };
-        assert_eq!(text(b"wal"), Some(HostEvent::Text("wal".into())));
-        assert_eq!(text("星球".as_bytes()), Some(HostEvent::Text("星球".into())));
-        assert_eq!(text(&[b'a'; 32]), Some(HostEvent::Text("a".repeat(32))));
-        assert_eq!(text(b""), Some(HostEvent::Text(String::new())));
+    fn a_text_commit_decodes_at_the_flavours_offset() {
+        for (flavor, off) in [(SdlFlavor::Lg, 16), (SdlFlavor::Stock, 12)] {
+            let text = |bytes: &[u8]| {
+                let mut ev = [0u8; 128];
+                ev[0..4].copy_from_slice(&0x303u32.to_ne_bytes());
+                ev[off..off + bytes.len()].copy_from_slice(bytes);
+                decode_host_event(flavor, &ev)
+            };
+            assert_eq!(text(b"wal"), Some(HostEvent::Text("wal".into())));
+            assert_eq!(text("星球".as_bytes()), Some(HostEvent::Text("星球".into())));
+            assert_eq!(text(&[b'a'; 32]), Some(HostEvent::Text("a".repeat(32))));
+            assert_eq!(text(b""), Some(HostEvent::Text(String::new())));
+        }
     }
 }
 
@@ -1250,6 +1280,8 @@ mod key_event_tests {
 /// the application cannot name is refused, not queued.
 #[cfg(test)]
 mod host_queue_tests {
+    #[allow(unused_imports)]
+    use super::{host_flavor, SdlFlavor, BOTH_FLAVORS};
     use super::super::platform::EventSink;
     use super::{decode_host_event, encode_key, Action, Edge, HostEvent, HostQueue, KeyPress, Lifecycle, PointerEdge, RawKey};
     use plx_ui::consts::raw_pair;
@@ -1269,7 +1301,7 @@ mod host_queue_tests {
         queue.lifecycle(Lifecycle::WillForeground);
         queue.lifecycle(Lifecycle::DidForeground);
         let decoded: Vec<HostEvent> =
-            [0x100, 0x103, 0x104, 0x105, 0x106].iter().map(|&code| decode_host_event(&event_of(code)).expect("decoded")).collect();
+            [0x100, 0x103, 0x104, 0x105, 0x106].iter().map(|&code| decode_host_event(host_flavor(), &event_of(code)).expect("decoded")).collect();
         assert_eq!(queue.into_events(), decoded);
     }
 
@@ -1277,7 +1309,7 @@ mod host_queue_tests {
     fn a_raw_pair_with_or_without_its_action_queues_the_press_the_sdl_decode_makes_of_those_bytes() {
         let (sym, wcode) = raw_pair(Action::Ok);
         let pair = RawKey { sym, wcode };
-        let Some(decoded) = decode_host_event(&encode_key(sym, wcode, true)) else { panic!("a key event") };
+        let Some(decoded) = decode_host_event(host_flavor(), &encode_key(host_flavor(), sym, wcode, true)) else { panic!("a key event") };
         let mut queue = HostQueue::default();
         assert!(queue.key(None, Some(pair), Edge::Down), "a pair alone is a press");
         assert!(queue.key(Some(Action::Ok), Some(pair), Edge::Down), "and so is the pair with the action it names");

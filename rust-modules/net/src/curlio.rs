@@ -168,15 +168,15 @@ pub type CURLM = c_void;
 
 // ---- the SECOND libcurl table: curl_multi_*, and nothing else --------------------------------
 //
-// Same candidate list as `net.rs`, in the same order, so a set carrying both SONAMEs binds both
-// tables against the same library. The macOS name is last for the same reason it is there: the
-// host simulator and `PlxNative.app` run this code, and the host suite below drives real libcurl
-// over plain loopback HTTP.
+// Same candidate list as `net.rs` (the platform's `libraries.curl`, read at load), in the same order, so
+// a set carrying both SONAMEs binds both tables against the same library. The host suite below drives
+// real libcurl over plain loopback HTTP, through whatever names the process's platform (or, in a test,
+// the union) states.
 plx_base::dynlib! {
     /// The seven multi-interface symbols, frozen to webOS's oldest libcurl (7.53.1). See this
     /// module's doc before adding an eighth — `curl_multi_poll`/`curl_multi_wakeup` are absent on
     /// the dev television and present on the Mac.
-    curlmulti: ["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"] {
+    curlmulti: platform(curl) {
     fn curl_multi_init() -> *mut CURLM;
     fn curl_multi_add_handle(multi: *mut CURLM, easy: *mut CURL) -> c_int;
     fn curl_multi_perform(multi: *mut CURLM, running: *mut c_int) -> c_int;

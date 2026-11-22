@@ -131,12 +131,17 @@ $(if $(filter $(FLAVOR),$(FLAVORS)),,$(error unknown FLAVOR "$(FLAVOR)" — one 
 # --- WHICH OS: the PLATFORM axis -----------------------------------------------------------
 #
 # `webos` (the television this file has always built for, and the default), `desktop` (the macOS and
-# Windows/WSLg simulators and the macOS app) or `tizen` (a name only: no goal builds it yet). It is the
-# TARGET OS and nothing else. FLAVOR stays the install identity, and the compatibility axis — the Rust
+# Windows/WSLg simulators and the macOS app) or `tizen` (the Samsung television: `mk/platform-tizen.mk`,
+# included at the END of this file only under `PLATFORM=tizen`, builds its library and package; docs/tizen.md).
+# It is the TARGET OS and nothing else. FLAVOR stays the install identity, and the compatibility axis — the Rust
 # target (`RUST_TARGET`), the sysroot (`SYSROOT`) and, once a platform needs them, a managed TFM, a
 # firmware floor and the signing path — stays a set of separate variables that PLATFORM does not choose:
-# `make -s print-rust-target` answers the same under every PLATFORM. Today the axis labels and validates;
-# no recipe reads it, so the default `PLATFORM=webos` builds exactly what it built before the axis existed.
+# `make -s print-rust-target` answers the same under every PLATFORM. Apart from `tizen`'s own file, which
+# nothing reads under another platform, no recipe reads it: it labels and validates, and it REFUSES the goals
+# that build the webOS television package (`WEBOS_TV_GOALS` below) under any other value, so the default
+# `PLATFORM=webos` builds exactly what it built before the axis existed and `src/main.c`, `src/starfish.c`,
+# `src/video_plane.c`, `src/access.c`, `src/exit.c` and the storage helper are never built or packaged for
+# another platform (docs/platform-ports.md, W8b).
 #
 # The simulators and the macOS app are desktop builds, so `sim`, `sim-*`, `macapp` and `macapp-zip` imply
 # PLATFORM=desktop when it was not given: `$(origin PLATFORM)` is `undefined` (not on the command line,
@@ -154,10 +159,29 @@ $(if $(strip $(PLATFORMS)),,$(error ci/platform_axis.py --list produced no platf
 ifeq ($(origin PLATFORM),undefined)
 ifneq ($(filter sim sim-% macapp macapp-zip,$(MAKECMDGOALS)),)
 PLATFORM    := desktop
+PLATFORM_IMPLIED := yes
 endif
 endif
 PLATFORM    ?= webos
 $(if $(and $(filter 1,$(words $(PLATFORM))),$(filter $(PLATFORMS),$(PLATFORM))),,$(error unknown PLATFORM "$(PLATFORM)" — one of: $(PLATFORMS)))
+
+# The webOS television goals: what packages or compiles the television's C files (`main.c`, `starfish.c`, `video_plane.c`,
+# `access.c`, `exit.c`, `compat/getauxval.c`, the crash recorder), the storage helper and the ARM libraries the package
+# stages (`src/%.o` is the C unit pattern, `libass` and `sentry-native` the ARM libraries they link or stage). `SRCS` stays
+# one list and no file moves: the keying is HERE, at the goals, not in the source list, because the only C unit another
+# platform compiles is `src/svg.c`, which Tizen builds by its own rule. They are refused under any `PLATFORM` but `webos`,
+# at parse time and above the stamp reset below (so a refusal deletes nothing), and the queries (`print-*`), the simulators,
+# `macapp` and the `tizen-*` goals are not in it. A bare `make` asks for its default goal, `all`, except under `tizen`,
+# whose file makes the default `tizen-check`. PLATFORM is one value per invocation: `make sim all` implies `desktop` from
+# `sim` and so refuses `all`; run the two as separate invocations (or give `PLATFORM=webos` to take both, as before the axis).
+WEBOS_TV_GOALS := all pkg/plxnative pkg/plxnative-storage ipk install deploy test symbols symbols-libs sentry-symbols \
+                  libass sentry-native src/%.o
+WEBOS_TV_ASKED := $(if $(MAKECMDGOALS),$(filter $(WEBOS_TV_GOALS),$(MAKECMDGOALS)),$(if $(filter tizen,$(PLATFORM)),,all))
+ifneq ($(PLATFORM),webos)
+ifneq ($(strip $(WEBOS_TV_ASKED)),)
+$(error `$(strip $(WEBOS_TV_ASKED))` builds the webOS television package (the storage helper, `main.c`, `starfish.c` and the webOS C files) and is refused under PLATFORM=$(PLATFORM)$(if $(PLATFORM_IMPLIED), (implied by the simulator goal beside it: run the two as separate invocations)). Use PLATFORM=webos, the default. The Tizen goals are the `tizen-*` ones (docs/tizen.md))
+endif
+endif
 
 # The id users get. Also `paths::STABLE_APP_ID` in the Rust half and `STABLE_ID` in ci/flavor.py —
 # three copies of one string, each in a language that cannot see the others, and ci/flavor.py's
@@ -218,7 +242,7 @@ QUERY_GOALS = print-flavor print-appid print-appdir print-rundir print-eventlog 
               print-simbin print-app-files print-deploy-files print-sentry-handler print-ffmpeg-staged \
               print-sentry-project print-bench-config print-disk-entries \
               print-subs-font-files print-rust-toolchain print-rust-codegen print-cargo-env \
-              print-platform print-rust-target
+              print-platform print-rust-target print-tizen-config
 print-flavor:   ; @echo '$(FLAVOR)'
 print-appid:    ; @echo '$(APPID)'
 print-appdir:   ; @echo '$(APPDIR)'
@@ -482,7 +506,7 @@ LIBS_REAL = -lSDL2 -lSDL2_ttf -lGLESv2 -lluna-service2 -lglib-2.0 \
 # See rust-modules/Cargo.toml's [features].
 #
 # Each feature set gets its OWN target dir, and that is load-bearing rather than tidy. Cargo names
-# the staticlib by crate, so both builds would otherwise write the SAME libplxnative_modules.a —
+# the staticlib by crate, so both builds would otherwise write the SAME libplx_platform_webos.a —
 # and cargo fingerprints the build without hashing its output, so after a RELEASE=1 build it
 # reports the dev build "Finished in 0.04s" and leaves the release .a sitting there. `make` then
 # links it with no comment: a release binary shipped as if it were the tested dev one. Measured,
@@ -864,6 +888,9 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 #     deleted `pkg/plxnative` and rewrote the stamp to `+profile:tvdev` (2026-10-24): it had been missed
 #     when `test-hostsim` and `check-nodef` were listed. Each such goal builds a cargo tree under
 #     `rust-modules/` or runs a script, and none of them reads what the stamp guards.
+#   * The TIZEN goals (`tizen-*`, `print-tizen-config`; mk/platform-tizen.mk, read only under PLATFORM=tizen) build a host library under
+#     `tizen/` and `rust-modules/target-tizen` and read `pkg/` fonts only. `make PLATFORM=tizen tizen-abi` after a
+#     `make ARM_PROFILE=release deploy` deleted the release-built binary (a reviewer's find on the Tizen PR): ci/test_arm_profile.py pins them.
 #   * TV-CONTROL goals: `kill`, `run`, `run-stream`, `verify-deploy`, `uninstall`, `fetch-profile` and
 #     `softfloat-probe` each have `tv-lock-require` as their one prerequisite and an ssh/scp recipe, and
 #     `tv-lock-require` itself is a shell call, so they build and ship nothing. `tools/tv-session.sh`
@@ -881,8 +908,10 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 # goal in the two kinds above resets nothing under a dry run, and every goal named as NOT here stays out
 # of the list. The list is ONE line on purpose (`grep '^SIDE_EFFECT_FREE' Makefile` is the exact set,
 # and several tests read it that way).
-SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim test-host-interface check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require
-PURE_QUERY := $(if $(MAKECMDGOALS),$(if $(filter-out $(SIDE_EFFECT_FREE),$(MAKECMDGOALS)),,yes),)
+SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim test-host-interface check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require tizen-abi tizen-check tizen-sdl tizen-so tizen-verify tizen-stage tizen-signing tizen-tpk
+# A BARE `make PLATFORM=tizen` has no goal either, and its default goal is `tizen-check` (mk/platform-tizen.mk), which is side-effect free;
+# a bare webOS or desktop `make` builds the package and stays a reset.
+PURE_QUERY := $(if $(MAKECMDGOALS),$(if $(filter-out $(SIDE_EFFECT_FREE),$(MAKECMDGOALS)),,yes),$(if $(filter tizen,$(PLATFORM)),yes,))
 # `PLAYBACK_BACKENDS=none` builds no television package. It is refused HERE, at parse time and before
 # the stamp reset below: a recipe-level refusal ran after that reset, so a mistyped
 # `make PLAYBACK_BACKENDS=none [ipk|deploy]` first deleted the last real build's binary and staged
@@ -917,7 +946,7 @@ endif
 endif
 
 RUST_TARGET = armv7-unknown-linux-gnueabi
-RUST_LIB    = rust-modules/$(RUST_TDIR)/$(RUST_TARGET)/$(ARM_PROFILE)/libplxnative_modules.a
+RUST_LIB    = rust-modules/$(RUST_TDIR)/$(RUST_TARGET)/$(ARM_PROFILE)/libplx_platform_webos.a
 
 # Every ordinary C translation unit ships except `src/gpdebug.c` (an opt-in allocator guard) and, when
 # no Feed backend is built (`PLAYBACK_HAS_FEED` empty: `PLAYBACK_BACKENDS=uri|none`), `src/starfish.c`,
@@ -1053,7 +1082,7 @@ $(FFABI_STAMP): ci/ffabi-assert.c $(FFMPEG_INC)/libavformat/avformat.h Makefile
 # rule would leave every later `make` linking a library built by the OLD one. Cargo's own
 # `rerun-if-changed` cannot save that — it is only consulted when make decides to invoke cargo at
 # all, and this target is an ordinary timestamp comparison.
-RUST_INPUTS := $(shell find rust-modules/src rust-modules/base rust-modules/machine rust-modules/net rust-modules/os rust-modules/gfx rust-modules/ui rust-modules/plex rust-modules/jellyfin rust-modules/telemetry rust-modules/data rust-modules/session rust-modules/media rust-modules/playback-contract rust-modules/play-uri rust-modules/play-feed rust-modules/media-codecs rust-modules/appkit rust-modules/screens rust-modules/shell-sdl rust-modules/build_support locales locales-finnative assets -type f 2>/dev/null)
+RUST_INPUTS := $(shell find rust-modules/src rust-modules/base rust-modules/machine rust-modules/net rust-modules/os rust-modules/gfx rust-modules/ui rust-modules/plex rust-modules/jellyfin rust-modules/telemetry rust-modules/data rust-modules/session rust-modules/media rust-modules/playback-contract rust-modules/play-uri rust-modules/play-feed rust-modules/media-codecs rust-modules/appkit rust-modules/screens rust-modules/shell-sdl rust-modules/platform-webos rust-modules/build_support locales assets -type f 2>/dev/null)
 $(RUST_LIB): LICENSE $(RUST_INPUTS) rust-modules/Cargo.toml rust-modules/Cargo.lock rust-modules/build.rs ci/install-identities.json rust-modules/.cargo/config.toml Makefile ci/check-staticlib-artifact.py $(FFABI_STAMP)
 	@# BEFORE the mkdir: the seed is only ever cloned into a target dir that does not exist yet.
 	$(CARGO_SEED) restore $(RUST_TDIR) rust-modules/$(RUST_TDIR)
@@ -1061,7 +1090,7 @@ $(RUST_LIB): LICENSE $(RUST_INPUTS) rust-modules/Cargo.toml rust-modules/Cargo.l
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" $(RUST_ENV) \
 	  $(TELEMETRY_ENV) \
 	  cargo +$(RUST_TOOLCHAIN) rustc $(ARM_PROFILE_FLAG) --target $(RUST_TARGET) \
-	    --lib --crate-type staticlib --target-dir $(RUST_TDIR) $(RUST_FEATFLAGS) \
+	    -p plx_platform_webos --lib --crate-type staticlib --target-dir $(RUST_TDIR) $(RUST_FEATFLAGS) \
 	    --message-format=json-render-diagnostics > $(RUST_TDIR)/.lib-artifacts.json
 	@# The crate declares `crate-type = ["rlib"]`, so this `.a` exists only because the line above
 	@# asked for it. Checked AFTER cargo returns (never as a prerequisite, which would make a no-op
@@ -1721,7 +1750,7 @@ check-cargo-lint: lint
 	@# gate has nothing to reuse a cache for. No `pkg/lab.json` is involved — that file is `make
 	@# LAB=1`'s requirement (a live session secret), not the compiler's.
 	@set -e; cd rust-modules && CARGO_INCREMENTAL=0 PATH="$$HOME/.cargo/bin:$$PATH" \
-	  cargo +$(RUST_TOOLCHAIN) check --lib --tests -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_owp --features lab-diagnostics
+	  cargo +$(RUST_TOOLCHAIN) check --lib --tests -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp --features lab-diagnostics
 	@# And the demo-video dump build's pixel oracle, `placeholder-sentinel`: in no default set and
 	@# built only by `make site-video-sim`, which no gate runs and which compiles no `plx_ui` tests, so
 	@# this line is what keeps it compiling (its code AND its tests, `--tests`). `plx_ui` is the only
@@ -1740,11 +1769,11 @@ check-cargo-lint: lint
 # `-p` lists in the recipes below (those stay literal because ci/test_ci_split.py greps for them);
 # ci/test_test_crate.py pins the two equal.
 UNIT_RUN = python3 ../tools/cargo-test-parallel.py
-UNIT_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_net plx_ui plx_plex plx_telemetry plx_data plx_session plx_media plx_playback_contract plx_play_uri plx_play_feed plx_media_codecs plx_appkit plx_screens plx_shell_sdl plx_owp
+UNIT_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_net plx_ui plx_plex plx_telemetry plx_data plx_session plx_media plx_playback_contract plx_play_uri plx_play_feed plx_media_codecs plx_appkit plx_screens plx_shell_sdl plx_platform_webos plx_platform_desktop plx_platform_tizen plx_owp
 # The `hostsim` pass runs only the crates that DECLARE a `hostsim` feature (HOSTSIM_SUITE, a subset of
-# UNIT_SUITE in the same order; ci/test_test_crate.py pins both the subset and the recipe). The eight that
+# UNIT_SUITE in the same order; ci/test_test_crate.py pins both the subset and the recipe). The nine that
 # do not (plx_net, plx_ui, plx_appkit, plx_screens, plx_media_codecs, plx_play_uri, plx_playback_contract,
-# plx_owp) have no `feature = "hostsim"` in their source and the same test names in both passes (14 crates did in
+# plx_platform_tizen, plx_owp) have no `feature = "hostsim"` in their source and the same test names in both passes (14 crates did in
 # CI run 43528579834; the three that differ are `plxnative-modules`, `plx_media` and `plx_play_feed`,
 # all kept). Their own test set is therefore identical in the two passes. The old second run did link
 # their test binaries against hostsim-built `plx_base`, `plx_gfx`, `plx_os`, `plx_media` and
@@ -1752,7 +1781,7 @@ UNIT_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_net plx_u
 # none of their tests observes those dependency-side differences; the guard does not check that, it
 # checks that the crate declares no `hostsim` feature and has no `feature = "hostsim"` in its src, and
 # fails when one gains either, which is the moment it must join the list.
-HOSTSIM_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_plex plx_telemetry plx_data plx_session plx_media plx_play_feed plx_shell_sdl
+HOSTSIM_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_plex plx_telemetry plx_data plx_session plx_media plx_play_feed plx_shell_sdl plx_platform_webos plx_platform_desktop
 
 # The default-feature unit suite and everything that drives cargo through ci/ self-tests.
 check-cargo-unit-default:
@@ -1781,7 +1810,7 @@ check-cargo-unit-default:
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
-	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_owp
+	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp
 	RUST_TOOLCHAIN=$(RUST_TOOLCHAIN) python3 ci/test_storage_service_package.py
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" cargo +$(RUST_TOOLCHAIN) test -p plxnative-storage --bin plxnative-storage
 	@# The helper is its own package, so building it compiles no copy of the app library; this reads
@@ -1819,7 +1848,7 @@ check-cargo-unit-hostsim:
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
-	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_play_feed -p plx_shell_sdl --features hostsim; \
+	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_play_feed -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop --features hostsim; \
 	PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
@@ -1847,7 +1876,7 @@ test-fast:
 	  PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
-	  $(UNIT_RUN) $(if $(T),--filter '$(T)') -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_owp
+	  $(UNIT_RUN) $(if $(T),--filter '$(T)') -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp
 
 # `make test-crate C=plx_ui [T=filter] [DEPS=1]` -- build and run ONLY the named crate's lib tests, in
 # the same incremental `$(TEST_FAST_TDIR)` tree and with the same flags as `test-fast`, so the two
@@ -1995,6 +2024,13 @@ check-nodef:
 	$(CARGO_SEED) restore target rust-modules/target --env-var CARGO_TARGET_DIR --env-base rust-modules
 	@set -e; cd rust-modules && CARGO_INCREMENTAL=0 PATH="$$HOME/.cargo/bin:$$PATH" \
 	  cargo +$(RUST_TOOLCHAIN) check --lib --no-default-features $(if $(RUST_BACKEND_FEATURES),--features $(RUST_BACKEND_FEATURES),)
+	@# The SHIPPING crate, too: the ARM staticlib is built from `plx_platform_webos` (`$(RUST_LIB)`), which carries the
+	@# `uri-transport` / `feed-sink` code the backend features switch on and forwards the same words to the
+	@# application. The line above checks the application alone and would pass a break only this crate has, so a
+	@# change that touches the platform crate is checked in the feature set the release ships (the application, a
+	@# dependency here, is a reuse of the unit the line above built).
+	@set -e; cd rust-modules && CARGO_INCREMENTAL=0 PATH="$$HOME/.cargo/bin:$$PATH" \
+	  cargo +$(RUST_TOOLCHAIN) check --lib -p plx_platform_webos --no-default-features $(if $(RUST_BACKEND_FEATURES),--features $(RUST_BACKEND_FEATURES),)
 
 # `make build-bench [ARGS='--runs 5 --json out.json']` -- the repeatable local build benchmark
 # (tools/build-bench.py; docs/agent-reference.md says what it measures and when a PR must paste its
@@ -2593,7 +2629,7 @@ sim: sim-macos
 
 sim-macos: $(FFMPEG_HOST_STAGED) $(LIBASS_HOST_STAGED) pkg/.ffabi-host-ok
 	$(TELEMETRY_ENV) \
-	  cargo +$(RUST_TOOLCHAIN) build --manifest-path rust-modules/Cargo.toml --target-dir $(SIM_TDIR)$(if $(LAB),-lab,) --features hostsim$(if $(LAB), --features lab-diagnostics,) --bin plxnative-sim
+	  cargo +$(RUST_TOOLCHAIN) build --manifest-path rust-modules/Cargo.toml --target-dir $(SIM_TDIR)$(if $(LAB),-lab,) --features hostsim$(if $(LAB), --features lab-diagnostics,) -p plx_platform_desktop --bin plxnative-sim
 
 # Full product replay is a renderer-backed host gate. Keep the fast unit suite usable without
 # a window system; Simulator CI runs this same driver against the simulator it just built.
@@ -2629,7 +2665,7 @@ SHOT_HERO   ?=
 SHOT_HERO_VARIANTS ?=
 screenshots-sim: $(FFMPEG_HOST_STAGED) $(LIBASS_HOST_STAGED) pkg/.ffabi-host-ok
 	CARGO_INCREMENTAL=0 cargo +$(RUST_TOOLCHAIN) build --manifest-path rust-modules/Cargo.toml --target-dir $(SHOT_TDIR) \
-	  --no-default-features --features hostsim,play-feed,devtriggers --bin plxnative-sim
+	  --no-default-features --features hostsim,play-feed,devtriggers -p plx_platform_desktop --bin plxnative-sim
 
 demo-library:
 	python3 tools/demo_library.py derive
@@ -2646,7 +2682,7 @@ screenshots: screenshots-sim demo-library
 sim-linux: $(LIBASS_HOST_STAGED)
 	$(TELEMETRY_ENV) \
 	  cargo +$(RUST_TOOLCHAIN) build --release --manifest-path rust-modules/Cargo.toml --target-dir "$$SIM_LINUX_TDIR_ENV" \
-	  --features hostsim --bin plxnative-sim
+	  --features hostsim -p plx_platform_desktop --bin plxnative-sim
 
 # The demo video's frame-dump simulator (`rust-modules/src/dev/framedump.rs`; `tools/site_video.py render`
 # drives it). Release, because a dump is a render of thousands of 1080p frames; its own target dir,
@@ -2662,7 +2698,7 @@ SITE_VIDEO_BIN   = $(SITE_VIDEO_TDIR)/release/plxnative-sim
 site-video-sim: $(LIBASS_HOST_STAGED)
 	CARGO_INCREMENTAL=0 cargo +$(RUST_TOOLCHAIN) build --release --manifest-path rust-modules/Cargo.toml \
 	  --target-dir $(SITE_VIDEO_TDIR) --no-default-features \
-	  --features hostsim,play-feed,devtriggers,placeholder-sentinel --bin plxnative-sim
+	  --features hostsim,play-feed,devtriggers,placeholder-sentinel -p plx_platform_desktop --bin plxnative-sim
 
 # Compatibility spelling used by the Windows launcher and existing documentation.
 sim-wsl: sim-linux
@@ -2806,3 +2842,12 @@ fetch-profile:
 
 .PHONY: setup-rust libass libass-host screenshots screenshots-sim demo-library disk symbols symbols-libs sentry-symbols sentry-native all setup-env telemetry-local deploy verify-deploy run run-stream kill check check-unlocked check-ffmpeg lint test ipk clean tv-lock-require threadprobe sockprobe logmprobe mali-hwcnt-probe tv-capture-bench mali-irq-sample plxnative-stackwalk sim sim-macos sim-linux site-video-sim sim-wsl sim-run sim-macos-run sim-shot sim-macos-shot sim-token sim-macos-token sim-play sim-macos-play sim-clean sim-macos-clean macapp macapp-zip fixtures fixtures-quick fixtures-pipeline fetch-profile \
         release-guard lab-guard install uninstall $(QUERY_GOALS)
+
+# --- the Tizen platform (W9, docs/tizen.md) ------------------------------------------------------------
+#
+# Last in the file, so its recipes see every variable above and its `.DEFAULT_GOAL` cannot become this file's: under
+# `PLATFORM=tizen` a bare `make` is `tizen-check` instead of the television package. Only `PLATFORM=tizen` reads it, so a
+# default `make` and `make -n` are the same text they were before the file existed (the dry-run diff in docs/tizen.md).
+ifeq ($(PLATFORM),tizen)
+include mk/platform-tizen.mk
+endif

@@ -104,11 +104,17 @@ that mixes async content with a live cursor:
   first seat, before the item lands, is the watched toggle, which writes to the account once the
   item is there. The page owns that seat the way the Library owns its grid's
   (`DetailScreen::provisional`, set by a fresh open's `Enter`): every frame's `reconcile` answers
-  `DetailScreen::default_elem` until the viewer moves focus (a key that moves it, the pointer) or
-  presses OK on a landed page. The item's landing, a later Also available landing and a restore that
-  waits on a season or retires all move the seat by that one rule, so account safety never depends on
-  a restore firing in the landing frame. A key that moves nothing, and an OK before the item lands,
-  leave it the page's.
+  `DetailScreen::default_elem` until the viewer acts at it: a key that moves focus, the pointer
+  moving it, an activation (`activate`: OK or a click) on a landed page, a hold that opens the item
+  menu, or, once the item has landed and the page has placed its seat (focus is on `default_elem`),
+  any key-down, pointer, click, drag or wheel (the Library's rule, since a wheel or a hover on the
+  focused control moves no focus for a `FocusMoved` to report). The item's
+  landing, a later Also available landing and a restore that waits on a season or retires all move the
+  seat by that one rule, so account safety never depends on a restore firing in the landing frame.
+  Before the item lands, and in the landing frame before `reconcile` has moved focus off the toggle,
+  only a focus move ends it: an OK there would let its press commit on the watched toggle, so an OK,
+  a key that moves nothing, a wheel, a drag and a hover on the control already focused leave it the
+  page's.
 - **The grid absorbs an index landing, the page shifts its scroll.** The Library's grid is a
   `cards::Grid` in `ScrollMode::External`: when the focused element's index changes with no
   `FocusMoved` (an insert or reorder before it) the grid moves its pop with the element and

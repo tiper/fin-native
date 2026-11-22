@@ -11,12 +11,14 @@
 //!     never plays through it never has a second ACB core (#1394), while a normal boot still
 //!     composes the URI driver `Acb` with no `ptype` trigger.
 //!   - [`compose_feed`] and [`compose_native`] install what a platform's drivers are: the Feed (or, with
-//!     none, the platform's display sink) for every platform, and on webOS the product URI driver
-//!     too. They publish nothing: they return what they composed, and the application's one
+//!     none, the platform's display sink) for a platform that has one, and on webOS the product URI driver
+//!     too; [`compose_none`] (`host::NO_MEDIA`) installs nothing, for a platform with no playback yet. They publish nothing: they return what they composed, and the application's one
 //!     publisher (`app::platform::publish_composition`) tells the route session the set the
 //!     installed drivers form, so policy offers what is physically there instead of what Cargo
-//!     features happened to be on. `port.rs` and `platform_desktop.rs` name these two through
-//!     `Platform::media`; the bodies stay here until the webOS platform owns this file.
+//!     features happened to be on. the platform crates name these two through
+//!     `Platform::media`, as the ready `MediaBoot`s `host` publishes
+//!     (`host::WEBOS_MEDIA`, `host::FEED_MEDIA`, `host::NO_MEDIA`); the bodies stay here until W11a moves the composition into
+//!     the webOS platform.
 //!   - [`install_uri_product`] builds the product URI driver (`plx_play_uri::backend::UriBackend`)
 //!     from the installed display and URI bus and hands it to the player adapter, which holds it
 //!     only as a `UriDriver`. The player crate names neither the driver nor its settings.
@@ -145,8 +147,8 @@ fn acb_init_acb(mt: &MainThread, display: &dyn DisplaySink, owner: &PlaneOwner) 
 }
 
 /// Compose the Feed into the adapter, or, in a build with no Feed, hand the adapter the platform's
-/// own display sink: the part of a composition every platform shares (the television's and the
-/// desktop's alike). Installs no URI driver and tells no session anything.
+/// own display sink: the part of a composition the television and the desktop share (a platform with no
+/// playback composes [`compose_none`] instead, which installs nothing). Installs no URI driver and tells no session anything.
 pub(crate) fn compose_feed(adapter: &mut PlayerAdapter) {
     #[cfg(feature = "play-feed")]
     if !adapter.composed_backends().feed && !install_feed(adapter, &TV_HOOKS) {
@@ -158,6 +160,30 @@ pub(crate) fn compose_feed(adapter: &mut PlayerAdapter) {
     if !adapter.install_display_sink(sink::installed) {
         log("player: display sink installation refused");
     }
+}
+
+/// The desktop's `early_init`: nothing to initialize before the first adapter. The plane owner's default facts are
+/// the absent ones the host sink's `VP_EXPORTED`/`VP_NONE` boot would state. `host::FEED_MEDIA` states it.
+#[cfg(feature = "hostsim")]
+pub(crate) fn feed_early_init(_mt: &MainThread) {}
+
+/// The desktop's `compose`: [`compose_feed`] over the host sink alone. It composes no URI driver (that is the
+/// television's ACB driver), so it returns no resolver and the session is published the Feed alone.
+/// `host::FEED_MEDIA` states it.
+#[cfg(feature = "hostsim")]
+pub(crate) fn compose_feed_alone(adapter: &mut PlayerAdapter, _controlled: bool) -> Composition {
+    compose_feed(adapter);
+    Composition::default()
+}
+
+/// The `early_init` of a platform that has no playback plane to boot: nothing to initialize. `host::NO_MEDIA` states it.
+pub(crate) fn no_early_init(_mt: &MainThread) {}
+
+/// The `compose` of a platform that has no playback driver: it installs nothing, so the adapter composes
+/// `BackendSet::NONE` and there is no resolver, and [`publish_composition`](crate::app::platform::publish_composition)
+/// logs that as `compose: backends=none resolver=no`. `host::NO_MEDIA` states it.
+pub(crate) fn compose_none(_adapter: &mut PlayerAdapter, _controlled: bool) -> Composition {
+    Composition::default()
 }
 
 /// The webOS composition, [`Platform::media`](crate::app::platform::Platform)'s `compose` for the
@@ -756,26 +782,25 @@ mod tests {
 
     /// The exported window follows the firmware major through the composition: production's table
     /// binds majors 5 (webOS 5.6.2) and 10 (the LG C2 on webOS 25), each admitted on a tester's run,
-    /// and majors 6, 7 and 9, each bracketed by those two with no tester run of its own, every one
-    /// with its `docs/uri-mode.md` Results row, and no other (major 8 has no image read, so it and
-    /// every webOS 5+ release without an entry plays Standard), and a table that lists a major binds
-    /// it, on a display in the exported-window mode only. The URI engine's own handle is not asked
-    /// for: a 5+ set has none.
+    /// and majors 6, 7, 8 and 9, each bracketed by those two with no tester run of its own, every
+    /// one with its `docs/uri-mode.md` Results row, and no other (every webOS 5+ release without an
+    /// entry, 11 included, plays Standard), and a table that lists a major binds it, on a display in
+    /// the exported-window mode only. The URI engine's own handle is not asked for: a 5+ set has none.
     #[cfg(feature = "play-uri")]
     #[test]
     fn the_exported_window_is_composed_only_for_a_major_the_table_lists() {
         use plx_play_uri::backend::{EXPORTED_CANVAS, EXPORTED_STRATA};
         let exported = UriBinding::Exported { canvas: EXPORTED_CANVAS };
         let sink = BootSink::answering(VP_EXPORTED, vec![7, 8]);
-        // Production's table admits majors 5, 6, 7, 9 and 10 and nothing else: every other release,
-        // known or not (8, which has no image read, and 11 included), composes Unbound on this
-        // display. An entry lands with its Results row and the change to this test.
+        // Production's table admits majors 5, 6, 7, 8, 9 and 10 and nothing else: every other release,
+        // known or not (11 included), composes Unbound on this display. An entry lands with its
+        // Results row and the change to this test.
         for major in 0..=30 {
-            let want = if matches!(major, 5 | 6 | 7 | 9 | 10) { exported } else { UriBinding::Unbound };
+            let want = if matches!(major, 5..=10) { exported } else { UriBinding::Unbound };
             assert_eq!(uri_product_binding(&sink, major, EXPORTED_STRATA), want, "major {major}");
         }
         // The same display on a set whose mode is not the exported window: an admitted major binds nothing there.
-        for major in [5, 6, 7, 9, 10] {
+        for major in 5..=10 {
             for mode in [VP_NONE, plx_os::tv::sink::VP_ACB] {
                 let sink = BootSink::answering(mode, vec![7, 8]);
                 assert_ne!(uri_product_binding(&sink, major, EXPORTED_STRATA), exported, "major {major} mode {mode}");
@@ -808,17 +833,17 @@ mod tests {
         assert!(unlisted.contains("uri: product binding=Unbound mode=2 "), "{unlisted}");
         assert!(unlisted.contains(" major=11 evidence=none\n"), "{unlisted}");
         // Production's own table: a webOS 5.6.2 television's boot line reads `major=5 evidence=table`,
-        // the LG C2 on webOS 25's `major=10 evidence=table`, and a bracketed major's (6, 7, 9) the
-        // same `evidence=table`: the line does not say whether a tester ran it. Major 8 has no
-        // image read and reads `major=8 evidence=none` on the same display.
-        for major in [5, 6, 7, 9, 10] {
+        // the LG C2 on webOS 25's `major=10 evidence=table`, and a bracketed major's (6, 7, 8, 9) the
+        // same `evidence=table`: the line does not say whether a tester ran it. Major 11 has no
+        // entry and reads `major=11 evidence=none` on the same display.
+        for major in 5..=10 {
             let shipped = line(VP_EXPORTED, major, plx_play_uri::backend::EXPORTED_STRATA);
             assert!(shipped.contains("uri: product binding=Exported { canvas: (1920, 1080) } mode=2 "), "{shipped}");
             assert!(shipped.contains(&format!(" major={major} evidence=table\n")), "{shipped}");
         }
-        let eight = line(VP_EXPORTED, 8, plx_play_uri::backend::EXPORTED_STRATA);
-        assert!(eight.contains("uri: product binding=Unbound mode=2 "), "{eight}");
-        assert!(eight.contains(" major=8 evidence=none\n"), "{eight}");
+        let eleven = line(VP_EXPORTED, 11, plx_play_uri::backend::EXPORTED_STRATA);
+        assert!(eleven.contains("uri: product binding=Unbound mode=2 "), "{eleven}");
+        assert!(eleven.contains(" major=11 evidence=none\n"), "{eleven}");
         let acb = line(plx_os::tv::sink::VP_ACB, 4, &[]);
         assert!(acb.contains("uri: product binding=Acb mode=1 handle=deferred ptype=0 "), "{acb}");
         assert!(acb.contains(" major=4 evidence=none\n"), "{acb}");
@@ -929,7 +954,8 @@ mod tests {
             server_origin: plx_plex::plex::Origin::http("192.0.2.5", 32499),
             source_url: "https://example.invalid/part.mkv".to_owned(), duration_ms: Some(60_000),
             video_codec: "h264".to_owned(), dolby_vision: plx_data::metadata::Dovi::NONE,
-            dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto, uri_opt_in,
+            dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto,
+            dolby_vision_base_layer_only: false, uri_opt_in,
             standard: plx_media::route::uri_preflight::StandardDirectPlay { video: true,
                 dolby_vision: true, audio: true, container: true },
             audio_codec: "aac".to_owned(), audio_ordinal: Some(1), has_multiple_audio_tracks: false,

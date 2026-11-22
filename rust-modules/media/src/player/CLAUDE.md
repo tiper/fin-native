@@ -65,7 +65,10 @@ that original: the plan carries its own verdicts in `OriginalRequest::standard` 
 certifies a DV record only where the frozen decision admitted it. So a codec or raster the caps refuse, a
 Profile 5 file on a set without Dolby Vision, an audio track only the app decodes or the set cannot decode,
 and a container Standard hands the server to remux (anything but .mkv/.mp4/.m4v) play exactly as in Standard.
-The gate is Standard's own verdicts for the video, Dolby Vision, audio and container, and nothing more: it is
+The gate is Standard's own verdicts for the video, Dolby Vision, audio and container, plus one check of the
+TV's pipeline: an original Standard plays as Dolby Vision is declined where the TV's own demuxer would show
+only its base layer (`pipeline_carries_dolby_vision`: a Profile 7 Feed converts, or an MKV before webOS 10.3).
+It is
 NOT the server's decision, which the URI offer is made before (no Media Decision Engine round trip), so a
 file that clears these checks but that the server would still convert is offered all the same. A converted PMS output
 (`qualify_pms`) and any file whose Part carries a subtitle stream, whether or not a subtitle is on (the
@@ -199,10 +202,10 @@ and seeks by time via `av_seek_frame` (libavformat's own Cues index).
   `AttemptFacts::load_abandoned`.
 
 **The main-thread rule is compiler-enforced.** The seam is the `VideoSink` trait in `plx_os::tv::sink` (`rust-modules/os/src/tv/sink.rs`)
-(Starfish-shaped: one method per verb, reached through `PlayerAdapter::display_sink`). `os/src/webos/video_sink.rs`'s `extern "C"`
+(Starfish-shaped: one method per verb, reached through `PlayerAdapter::display_sink`). `platform-webos/src/webos/video_sink.rs`'s `extern "C"`
 declarations are private to that module and only `StarfishSink` there implements the trait on the
 television; `HostSink` (`play-feed/src/ffi_host.rs`, `plx_play_feed::ffi_host`) is the simulator's. Every verb but `load` and `unload`
-takes a `task::MainThread` (the constant queries `feed_abi_is_cow`, `window_mode` and `window_id`
+takes a `task::MainThread` (the constant queries `feed_abi_is_cow`, `lacks_video_path`, `window_mode` and `window_id`
 take nothing); `unload` takes an `UnloadTicket`, which only a `&MainThread` can issue and which is
 `Send`, so the main thread decides when an Unload happens and a worker may carry it out.
 `MainThread` is a `!Send` ZST the application mints once. Since phase 9 it mints exactly one

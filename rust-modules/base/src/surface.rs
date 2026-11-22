@@ -12,7 +12,7 @@
 //! 4K panel that composites the result up to 3840x2160 in hardware, for free. That is the right
 //! arrangement and this module exists to keep it working, not to replace it. On webOS 1-3 the owner can opt in
 //! to a smaller window (Settings > System > Interface resolution, applied at the next launch:
-//! 1600x900, 1280x720 or 960x540, webOS 1-3 only; `app::boot::requested_drawable` has what was measured), and the
+//! 1600x900, 1280x720 or 960x540, webOS 1-3 only; `plx_platform_webos`'s `port.rs::requested_drawable` has what was measured), and the
 //! same compositor upscale fills the panel. A smaller window trades text sharpness for smoother
 //! frames; only 1/2 (960x540) is a clean texel scale, while 2/3 (1280x720) and 5/6 (1600x900) resample
 //! and may shimmer while scrolling. The Home underlay field also needs a width that is a
@@ -407,11 +407,22 @@ pub fn window_and_drawable_size(win: *mut c_void) -> ((i32, i32), (i32, i32)) {
     }
 }
 
+/// Whose drawable [`probe`] is reading, which decides the one sentence its log says about a drawable that
+/// is not the canvas. The window's placement states it (a panel is a television's, a desktop window is a
+/// desktop's), so the wording is a value the platform supplies and not a build flag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawableNote {
+    /// A television: a smaller drawable is the owner's Interface resolution, or a firmware surprise to report.
+    Television,
+    /// A desktop: the window is a whole fraction of the canvas by design.
+    Desktop,
+}
+
 /// Read back what we were actually given, once, after the GL context exists.
 ///
 /// See [`window_and_drawable_size`] for which number is the authority. Both are logged because the
 /// pair is what tells you which situation you are in.
-pub fn probe(win: *mut c_void) {
+pub fn probe(win: *mut c_void, note: DrawableNote) {
     let ((ww, wh), (dw, dh)) = window_and_drawable_size(win);
     // Only the supersampled simulator replaces the drawable it was given.
     #[cfg(feature = "hostsim")]
@@ -468,11 +479,12 @@ pub fn probe(win: *mut c_void) {
         // it is the ordinary case — the window is an exact divisor of the canvas by design
         // (`plx_shell_sdl::window::plan_desktop_window`) — and asking a Mac user for their webOS version
         // reads as a malfunction. Same measurement either way; only the sentence differs.
-        let tail = if cfg!(feature = "hostsim") {
-            "This is expected on a desktop: the window is a whole fraction of the canvas."
-        } else {
-            "Expected when Settings > System > Interface resolution asked for a smaller window; \
-             otherwise please report this with your webOS version."
+        let tail = match note {
+            DrawableNote::Desktop => "This is expected on a desktop: the window is a whole fraction of the canvas.",
+            DrawableNote::Television => {
+                "Expected when Settings > System > Interface resolution asked for a smaller window; \
+                 otherwise please report this with your webOS version."
+            }
         };
         log(&format!(
             "surface: drawable is NOT the {}x{} the UI is authored at — scaling the whole \
