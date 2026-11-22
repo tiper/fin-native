@@ -1890,7 +1890,9 @@ mod tests {
         ] {
             let mut event = [0u8; 128];
             event[..4].copy_from_slice(&code.to_ne_bytes());
-            assert_eq!(decode_host_event(&event), Some(HostEvent::Lifecycle(edge)), "{code:#x}");
+            for flavor in super::super::events::BOTH_FLAVORS {
+                assert_eq!(decode_host_event(flavor, &event), Some(HostEvent::Lifecycle(edge)), "{flavor:?} {code:#x}");
+            }
             let recorded = enc_lifecycle(edge.sdl_code());
             let legacy: Value = serde_json::from_str(&format!(r#"{{"kind":"lifecycle","code":{code}}}"#)).unwrap();
             assert_eq!(recorded, legacy, "{code:#x}");

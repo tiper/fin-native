@@ -27,12 +27,13 @@
 #![cfg_attr(not(feature = "hostsim"), allow(dead_code))]
 
 use plxnative_modules::host::{
-    Action, Composition, Edge, EventSink, Exit, FrameProbe, Lifecycle, MainThread, MediaBoot, OpenAsk, Placement,
-    Platform, PointerEdge, RawKey, Services, Shell, Surface,
+    Action, Composition, Edge, EventSink, Exit, FrameProbe, GlProfile, InitHooks, InitSteps, Lifecycle, MainThread,
+    MediaBoot, OpenAsk, Placement, Platform, PointerEdge, RawKey, SdlFlavor, Services, Shell, Surface, WindowPlan,
 };
 #[cfg(feature = "hostsim")]
 use plxnative_modules::host::Release;
 use std::ffi::c_void;
+use std::os::raw::c_int;
 #[cfg(feature = "hostsim")]
 use std::ffi::CString;
 use std::sync::Mutex;
@@ -70,6 +71,20 @@ impl FakeShell {
 }
 
 impl Shell for FakeShell {
+    /// A desktop's: the stock layout and a core profile, no step.
+    fn sdl(&self) -> InitHooks {
+        InitHooks { steps: InitSteps::NONE, flavor: SdlFlavor::Stock, gl: GlProfile::Core41 }
+    }
+    /// A desktop's window (the fake stands in for the simulator's platform), which the boot test asserts
+    /// the application hands to `open` unchanged.
+    #[cfg(feature = "hostsim")]
+    fn window(&self, _stored: Option<(c_int, c_int)>) -> WindowPlan {
+        WindowPlan { title: c"PlxNative", placement: Placement::Desktop }
+    }
+    #[cfg(not(feature = "hostsim"))]
+    fn window(&self, _stored: Option<(c_int, c_int)>) -> WindowPlan {
+        WindowPlan { title: c"PlxNative", placement: Placement::Panel { size: (1920, 1080), fallback: None } }
+    }
     fn init(&self, _mt: &MainThread) -> Result<(), Exit> {
         self.note("init");
         Ok(())
@@ -169,8 +184,8 @@ fn assert_sync<T: Sync>(_: &T) {}
 /// sees it (W7b): the SDL helpers, and the ready media values with the simulator's sink. Nothing runs; a name that stopped
 /// being `pub`, or changed its shape, or lost its `cfg`, is a compile error.
 const _: fn() = || {
-    let _: unsafe fn(&MainThread, plxnative_modules::host::InitHooks) -> Result<(), Exit> = plxnative_modules::host::sdl_init;
-    let _: fn(&MainThread, &OpenAsk) -> Result<Box<dyn Surface>, Exit> = plxnative_modules::host::sdl_open;
+    let _: unsafe fn(&MainThread, &plxnative_modules::host::InitHooks) -> Result<(), Exit> = plxnative_modules::host::sdl_init;
+    let _: unsafe fn(&MainThread, &plxnative_modules::host::InitHooks, &OpenAsk) -> Result<Box<dyn Surface>, Exit> = plxnative_modules::host::sdl_open;
     let _: MediaBoot = plxnative_modules::host::WEBOS_MEDIA;
     let _: MediaBoot = plxnative_modules::host::NO_MEDIA;
     #[cfg(feature = "hostsim")]
@@ -326,8 +341,8 @@ fn run_boots_the_fake_platform_through_init_then_open_and_returns_the_refusal() 
     assert_eq!(exit, Exit { code: REFUSAL, release: Release::Retained }, "the fake's refusal is the entry's Exit");
     assert_eq!(*SHELL.log.lock().unwrap(), ["init", "open"], "init, then open, and nothing after the refusal");
     let (title, placement, high_dpi) = SHELL.asked.lock().unwrap().clone().expect("open was asked for a window");
-    assert_eq!(title, "PlxNative", "the title a hostsim build asks for");
-    assert_eq!(placement, Placement::Desktop, "a hostsim build asks for the desktop placement");
+    assert_eq!(title, "PlxNative", "the title the platform stated, handed to `open` unchanged");
+    assert_eq!(placement, Placement::Desktop, "the placement the platform stated, handed to `open` unchanged");
     eprintln!("open was asked for: title {title:?}, {placement:?}, high_dpi {high_dpi}");
     assert!(
         matches!(plx_os::tv::system_locale(), plx_os::tv::LocaleReply::Reply(ref l) if l == "fake-host-locale"),

@@ -49,13 +49,6 @@ use plx_ui::consts::{
     classify, is_bound, is_ok, Key, SDLK_RETURN, WCODE_CH_DOWN_KEY, WCODE_CH_UP_KEY,
     WCODE_POINTER_HIDDEN,
 };
-// The window we ASK SDL for. `surface::probe` then reads back what we actually got.
-// Both are read only by the television's window request (`boot.rs`): the desktop's own sizing is
-// `plx_shell_sdl`'s, so a hostsim build has no reader of either and they share one gate.
-#[cfg(any(not(feature = "hostsim"), test))]
-const SCR_W: c_int = plx_base::surface::LOGICAL_W as c_int;
-#[cfg(any(not(feature = "hostsim"), test))]
-const SCR_H: c_int = plx_base::surface::LOGICAL_H as c_int;
 pub(crate) const COLS: c_int = 10;
 
 // Phase 1a of the UI restructure split this file: everything above `run_application` moved into
@@ -310,6 +303,12 @@ pub(crate) struct App {
 }
 
 impl App {
+    /// The layout SDL's events are in, as the platform states it (`Shell::sdl`): what every decode of a
+    /// polled event and every synthetic key this process pushes is read and written in.
+    pub(crate) fn sdl_flavor(&self) -> plx_shell_sdl::SdlFlavor {
+        self.platform.shell.sdl().flavor
+    }
+
     /// Application/runner mutations belong to the page, never an ambient damage queue.
     pub(crate) fn note_presentation_damage(&mut self, why: plx_machine::present::Provenance) {
         self.pages.present.note_in_scope(plx_machine::present::Scope::Page,

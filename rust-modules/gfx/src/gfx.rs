@@ -1181,10 +1181,11 @@ impl ScrimLoc {
 /// desktop-GL webOS, a Mesa GLES2 box, or anything else — there is one arm, so nothing can rot.
 /// Is this context an OpenGL **ES** driver, asked of the driver once?
 ///
-/// Hoisted out of `glsl_preamble` so the two GL-flavour adaptations cannot disagree. They very
-/// nearly did: the preamble probes, while `bind_core_profile_vao` trusted `cfg!(hostsim)` — so a
+/// Hoisted out of `glsl_preamble` so the GL-flavour adaptations cannot disagree. They very
+/// nearly did: the preamble probes, while the desktop's vertex-array bind trusted a build flag — so a
 /// host build against a Mesa GLES2 driver (a Pi, a Linux VM) would have bound a VAO into a context
-/// that has none *while* compiling ES shaders. A nonsense state that compiles clean.
+/// that has none *while* compiling ES shaders. A nonsense state that compiles clean. (The desktop
+/// platform's bind now asks the driver the same question itself.)
 fn gl_is_es() -> bool {
     use std::sync::OnceLock;
     static ES: OnceLock<bool> = OnceLock::new();
@@ -1467,47 +1468,14 @@ fn field_mesh() -> Vec<f32> {
     v
 }
 
-/// Bind the one vertex array object a desktop core profile requires.
-///
-/// **GLES2 has no VAOs and a core profile has no DEFAULT one**, and the difference is silent: with
-/// VAO 0 bound, `glVertexAttribPointer` and `glDrawArrays` raise `GL_INVALID_OPERATION` and draw
-/// nothing at all. `glClear` is unaffected, so the symptom is a window painted the clear colour and
-/// a completely empty interface — which is exactly what the first simulator screenshots were, at
-/// every frame sampled.
-///
-/// One VAO for the process is enough and is not a simplification: this renderer has a single
-/// attribute layout — attribute 0, the shared unit quad in one static VBO, set up immediately
-/// below and never rebound. There is nothing for a second VAO to describe.
-///
-/// `#[cfg]` rather than a runtime check because these two entry points do not EXIST in GLES2; the
-/// television's libGLESv2 exports neither, so merely naming them in the shared `extern` block
-/// would be a link-time undefined symbol on the device.
-#[cfg(feature = "hostsim")]
-fn bind_core_profile_vao() {
-    extern "C" {
-        fn glGenVertexArrays(n: c_int, arrays: *mut c_uint);
-        fn glBindVertexArray(array: c_uint);
-    }
-    // A hostsim build is not necessarily a core profile — Mesa GLES2 exists on desktops too, and
-    // there VAO 0 is legal and these entry points are absent. Ask the driver, like the preamble.
-    if gl_is_es() {
-        return;
-    }
-    unsafe {
-        let mut vao: c_uint = 0;
-        glGenVertexArrays(1, &mut vao);
-        glBindVertexArray(vao);
-    }
-}
-
 pub fn init_gl() -> Result<(), GfxFault> {
     unsafe {
         WARM_TARGET = None;
-        // Before any buffer or attribute state is touched — in a core profile the calls below are
-        // errors without it.
-        #[cfg(feature = "hostsim")]
-        bind_core_profile_vao();
-
+        // A desktop core profile needs a vertex array object bound before any buffer or attribute state
+        // is touched, and the platform that links desktop GL binds it: the shell crate ran the platform's
+        // `after_context` step right behind the context's creation, which is before this call. The two entry
+        // points it needs do not exist in GLES2, so they are not named here (the television's libGLESv2
+        // exports neither).
         PROG = link_program(VS_SRC.as_ptr(), FS_SRC.as_ptr()).map_err(|fault| {
             // A compile rejection logged itself in `try_compile`. A link failure is logged here,
             // for the same reason: stderr is not the event log and a clean exit is not a crash, so
@@ -1545,7 +1513,7 @@ pub fn init_gl() -> Result<(), GfxFault> {
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         // ONE buffer, one attribute layout: the unit quad at vertex 0 and the field mesh right
         // after it at vertex 4, so a field draw is `glDrawArrays(GL_TRIANGLES, 4, ..)` against the
-        // same pointer and nothing is ever rebound (see `bind_core_profile_vao`).
+        // same pointer and nothing is ever rebound (the desktop's one vertex array is the platform's, `after_context`).
         let mut verts: Vec<f32> = QUAD.to_vec();
         verts.extend(field_mesh());
         glBufferData(

@@ -314,7 +314,7 @@ class VerifyRules(unittest.TestCase):
             self.assertTrue(any(name in p and "allowlist" in p for p in problems), (name, problems))
 
     def test_every_gl_function_the_renderer_calls_on_the_tizen_build_is_es2_core(self):
-        # the application declares its GL externs in gfx.rs and surface.rs; the ones behind `hostsim` are the simulator's (VAOs, the blit)
+        # the application declares its GL externs in gfx.rs and surface.rs; the ones behind `hostsim` are the simulator's (the blit; the VAO externs are the desktop platform's own and are not in these files)
         root = Path(__file__).resolve().parent.parent / "rust-modules"
         declared = set()
         for path in list(root.glob("gfx/src/*.rs")) + [root / "base/src/surface.rs"]:

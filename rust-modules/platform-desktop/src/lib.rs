@@ -34,7 +34,10 @@
 //! no other platform (`docs/platform-ports.md`, W7). The `plxnative-sim` binary beside it
 //! (`src/bin/sim.rs`) is its executable.
 #![cfg(feature = "hostsim")]
-use plxnative_modules::host::{self, sdl_init, sdl_open, Exit, FrameProbe, InitHooks, MediaBoot, OpenAsk, Platform, Shell, Surface};
+use plxnative_modules::host::{
+    self, sdl_init, sdl_open, Exit, FrameProbe, GlProfile, InitHooks, InitSteps, MediaBoot, OpenAsk, Placement, Platform,
+    SdlFlavor, Shell, Surface, WindowPlan,
+};
 use plx_os::devcaps::dv::{self, DvCapability, DvProbe, ProbeSource};
 use plx_os::tv::toast::{Identity, Outcome, Sent};
 use plx_os::tv::{IdentityHooks, Layout, Libraries, LegacyWebosMedia, SecureHooks, Services, StorageHooks, SystemHooks};
@@ -112,6 +115,59 @@ fn deliver_toast(_message: &str, identity: Identity) -> Sent {
     Sent { reply: None, outcome: Outcome::NoBus }
 }
 
+/// What the desktop platform states about its SDL: the stock SDL2 a desktop links ([`SdlFlavor::Stock`]'s event
+/// layout), a core 4.1 context (macOS has no GLES at all), no step around `SDL_Init`, and the one step behind the
+/// GL context a core profile needs: the vertex array object it has no default for.
+const SDL: InitHooks = InitHooks {
+    steps: InitSteps { before: InitSteps::NONE.before, after: InitSteps::NONE.after, after_context: bind_core_profile_vao },
+    flavor: SdlFlavor::Stock,
+    gl: GlProfile::Core41,
+};
+
+/// The window a desktop asks for: centred at whatever fits the display, sized for its pixel density once a
+/// window exists (the shell crate's `Placement::Desktop`), titled as a desktop shows it. The request is the
+/// desktop's own size, not a setting, so the stored Interface resolution is not read and there is no retry.
+const WINDOW: WindowPlan = WindowPlan { title: c"PlxNative", placement: Placement::Desktop };
+
+/// Bind the one vertex array object a desktop core profile requires.
+///
+/// **GLES2 has no VAOs and a core profile has no DEFAULT one**, and the difference is silent: with
+/// VAO 0 bound, `glVertexAttribPointer` and `glDrawArrays` raise `GL_INVALID_OPERATION` and draw
+/// nothing at all. `glClear` is unaffected, so the symptom is a window painted the clear colour and
+/// a completely empty interface — which is exactly what the first simulator screenshots were, at
+/// every frame sampled.
+///
+/// One VAO for the process is enough and is not a simplification: the renderer has a single
+/// attribute layout — attribute 0, the shared unit quad in one static VBO, set up by `init_gl` and
+/// never rebound. There is nothing for a second VAO to describe.
+///
+/// **This is the desktop platform's, and only its**, because these two entry points do not EXIST in GLES2:
+/// the television's libGLESv2 exports neither, so naming them in a crate the television links would be a
+/// link-time undefined symbol on the device. The shell crate runs it right behind the context's creation
+/// (`InitSteps::after_context`), before the renderer's first call.
+///
+/// # Safety
+/// On the thread whose GL context was just made current, which is where the shell crate calls it.
+unsafe fn bind_core_profile_vao() {
+    extern "C" {
+        fn glGetString(name: u32) -> *const u8;
+        fn glGenVertexArrays(n: c_int, arrays: *mut u32);
+        fn glBindVertexArray(array: u32);
+    }
+    /// `GL_VERSION`.
+    const GL_VERSION: u32 = 0x1F02;
+    // This platform is not necessarily a core profile — Mesa GLES2 exists on desktops too, and there VAO 0
+    // is legal and these entry points are absent. Ask the driver, as the renderer's shader preamble does.
+    let version = glGetString(GL_VERSION);
+    let es = version.is_null() || std::ffi::CStr::from_ptr(version.cast()).to_bytes().starts_with(b"OpenGL ES");
+    if es {
+        return;
+    }
+    let mut vao: u32 = 0;
+    glGenVertexArrays(1, &mut vao);
+    glBindVertexArray(vao);
+}
+
 /// The desktop shell: SDL owns the window and its event loop (`init` and `open` are the shell crate's,
 /// with no hook around `SDL_Init`), so nothing is bound, grabbed, hinted or pumped, and no surface is
 /// ever held. The pointer is a mouse the application does not hide, so hiding and showing it do
@@ -119,12 +175,21 @@ fn deliver_toast(_message: &str, identity: Identity) -> Sent {
 struct DesktopShell;
 
 impl Shell for DesktopShell {
+    fn sdl(&self) -> InitHooks {
+        SDL
+    }
+    fn window(&self, _stored: Option<(c_int, c_int)>) -> WindowPlan {
+        WINDOW
+    }
     fn init(&self, mt: &host::MainThread) -> Result<(), Exit> {
-        // SAFETY: `InitHooks::NONE` calls nothing.
-        unsafe { sdl_init(mt, InitHooks::NONE) }
+        // SAFETY: the desktop states no step around `SDL_Init`, and its one other step (the vertex array)
+        // is run by the shell crate behind the context, not here.
+        unsafe { sdl_init(mt, &SDL) }
     }
     fn open(&self, mt: &host::MainThread, ask: &OpenAsk) -> Result<Box<dyn Surface>, Exit> {
-        sdl_open(mt, ask)
+        // SAFETY: `SDL` is this platform's own table (its `after_context` is `bind_core_profile_vao`, sound with the new
+        // context current), called on the main thread `mt` proves.
+        unsafe { sdl_open(mt, &SDL, ask) }
     }
     fn bind_window(&self, _win: *mut c_void) {}
     fn grab_surface(&self, _win: *mut c_void) {}

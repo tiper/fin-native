@@ -39,11 +39,27 @@ use plx_media::route::PlaybackSession;
 use plx_os::tv::Services;
 use std::os::raw::c_void;
 
-/// What a platform's boot asks of SDL, as plain data: [`InitHooks`] (the two steps a platform runs
-/// around `SDL_Init`), and [`OpenAsk`] with its [`Placement`] (the window's title, place and size). The
-/// shell crate's own types, re-exported rather than copied: they hold no SDL type. `host` re-exports all three,
+/// What a platform's boot asks of SDL, as plain data: [`InitHooks`] (the steps a platform runs around
+/// `SDL_Init` and behind the GL context, the [`SdlFlavor`] its SDL's events are laid out in and the
+/// [`GlProfile`] it asks for), and [`OpenAsk`] with its [`Placement`] (the window's title, place and size). The
+/// shell crate's own types, re-exported rather than copied: they hold no SDL type. `host` re-exports them all,
 /// beside the SDL helpers below that take them, for a platform crate.
 pub(crate) use plx_shell_sdl::{InitHooks, OpenAsk, Placement};
+#[cfg(test)]
+use plx_shell_sdl::{GlProfile, InitSteps, SdlFlavor};
+
+/// The window a platform asks for, stated by the platform: its title and where, and how big. The
+/// application adds the one thing that is not the platform's (`OpenAsk::high_dpi`, which a frame dump
+/// clears) and hands the pair to [`Shell::open`].
+///
+/// The title is furniture a television never draws (no window manager, no decoration) and the first
+/// thing a desktop shows, so the platforms spell it differently: the television keeps the
+/// process-shaped name every log, `pidof` recipe and skill already uses.
+#[derive(Clone, Copy, Debug)]
+pub struct WindowPlan {
+    pub title: &'static std::ffi::CStr,
+    pub placement: Placement,
+}
 
 /// The platform's window, bus and pointer, as the application drives them: the SDL window and its
 /// surface, the opaque-region hint, the platform bus pump, and the visibility of the Magic Remote's
@@ -56,6 +72,16 @@ pub(crate) use plx_shell_sdl::{InitHooks, OpenAsk, Placement};
 /// `app::boot` pins it. A platform whose surface is not SDL's states its own pair; every SDL one is the
 /// shell crate's (`plx_shell_sdl`), reached through [`sdl_init`] and [`sdl_open`].
 pub trait Shell: Sync {
+    /// What the platform states about its SDL: the [`InitHooks`] its `init` and `open` hand to
+    /// [`sdl_init`] and [`sdl_open`], read back by the application for the [`SdlFlavor`] its SDL's
+    /// events are laid out in (every decode and every synthetic key is in that layout). A platform
+    /// that is not SDL's states the flavour it is built against all the same, and says so: it has
+    /// no SDL window, and no event of its own is in that layout.
+    fn sdl(&self) -> InitHooks;
+    /// The window the platform asks for. `stored` is the size the stored Interface resolution setting
+    /// asks for, `None` for Automatic (the canvas): a platform that offers no such setting ignores it.
+    /// Read after the stored session and before [`open`](Shell::open), whose `OpenAsk` is built from it.
+    fn window(&self, stored: Option<(std::os::raw::c_int, std::os::raw::c_int)>) -> WindowPlan;
     /// Bring the platform's windowing up and ask for the GL context, once, FIRST: before the stored
     /// session is read and before [`open`](Shell::open). A refusal ends the boot with that `Exit`.
     fn init(&self, mt: &MainThread) -> Result<(), Exit>;
@@ -186,11 +212,11 @@ pub trait EventSink {
 /// `pub` for `host`, which re-exports it for the two real platform crates.
 ///
 /// # Safety
-/// `hooks` must be sound to call on the SDL main thread (`mt` is the proof of the thread) at the two
-/// points `plx_shell_sdl::init::init` calls them.
-pub unsafe fn sdl_init(mt: &MainThread, hooks: InitHooks) -> Result<(), Exit> {
+/// `hooks.steps.before` and `after` must be sound to call on the SDL main thread (`mt` is the proof of
+/// the thread) at the two points `plx_shell_sdl::init::init` calls them.
+pub unsafe fn sdl_init(mt: &MainThread, hooks: &InitHooks) -> Result<(), Exit> {
     plx_shell_sdl::init::init(mt, hooks).map_err(|_| Exit::refused(1))?;
-    plx_shell_sdl::init::request_gl(mt);
+    plx_shell_sdl::init::request_gl(mt, hooks.gl);
     Ok(())
 }
 
@@ -199,8 +225,13 @@ pub unsafe fn sdl_init(mt: &MainThread, hooks: InitHooks) -> Result<(), Exit> {
 ///
 /// `pub` for `host`. It stays in the application crate: the `Surface` it returns is implemented for
 /// `plx_shell_sdl::Window` here (the orphan rule), so a platform crate cannot rebuild it.
-pub fn sdl_open(mt: &MainThread, ask: &OpenAsk) -> Result<Box<dyn Surface>, Exit> {
-    plx_shell_sdl::Window::open(mt, ask)
+///
+/// # Safety
+/// `hooks.steps.after_context` must be sound to call on the SDL main thread (`mt` is the proof of the
+/// thread), once, with the new GL context current (see `plx_shell_sdl::Window::open`).
+pub unsafe fn sdl_open(mt: &MainThread, hooks: &InitHooks, ask: &OpenAsk) -> Result<Box<dyn Surface>, Exit> {
+    // SAFETY: the caller's contract above.
+    unsafe { plx_shell_sdl::Window::open(mt, hooks, ask) }
         .map(|window| Box::new(window) as Box<dyn Surface>)
         .map_err(|_| Exit::refused(1))
 }
@@ -328,8 +359,30 @@ impl Platform {
 #[cfg(test)]
 struct HostShell;
 
+/// What the test-only shells state about their SDL: the stock layout and a core profile, as a
+/// desktop's, because the rig's tests that reach SDL's real queue run on a desktop's SDL. Test builds only.
+#[cfg(test)]
+pub(crate) const HOST_TEST_SDL: InitHooks =
+    InitHooks { steps: InitSteps::NONE, flavor: SdlFlavor::Stock, gl: GlProfile::Core41 };
+
+/// The window the test-only shells ask for: the canvas, no retry. Test builds only.
+#[cfg(test)]
+const HOST_TEST_WINDOW: WindowPlan = WindowPlan {
+    title: c"host-test",
+    placement: Placement::Panel {
+        size: (plx_base::surface::LOGICAL_W as std::os::raw::c_int, plx_base::surface::LOGICAL_H as std::os::raw::c_int),
+        fallback: None,
+    },
+};
+
 #[cfg(test)]
 impl Shell for HostShell {
+    fn sdl(&self) -> InitHooks {
+        HOST_TEST_SDL
+    }
+    fn window(&self, _stored: Option<(std::os::raw::c_int, std::os::raw::c_int)>) -> WindowPlan {
+        HOST_TEST_WINDOW
+    }
     fn init(&self, _mt: &MainThread) -> Result<(), Exit> {
         Ok(())
     }
@@ -379,6 +432,12 @@ pub(crate) struct SwapShell {
 
 #[cfg(test)]
 impl Shell for SwapShell {
+    fn sdl(&self) -> InitHooks {
+        HOST_TEST_SDL
+    }
+    fn window(&self, _stored: Option<(std::os::raw::c_int, std::os::raw::c_int)>) -> WindowPlan {
+        HOST_TEST_WINDOW
+    }
     fn init(&self, _mt: &MainThread) -> Result<(), Exit> {
         Ok(())
     }
@@ -567,14 +626,14 @@ mod tests {
         let surface = detached_surface();
         let mut ev = [0u8; 128];
         while surface.poll(&mut ev) {}
-        plx_shell_sdl::inject::synth_key(plx_ui::consts::SDLK_UP, 0);
+        plx_shell_sdl::inject::synth_key(HOST_TEST_SDL.flavor, plx_ui::consts::SDLK_UP, 0);
         let mut count = Count::default();
         surface.deliver(&mut count);
         assert_eq!(count.0, 0, "an SDL surface delivers nothing through the sink");
         // `synth_key` pushes the two edges of a tap, down then up: both are still the queue's.
         for edge in ["down", "up"] {
             assert!(surface.poll(&mut ev), "the pushed key's {edge} edge is still the queue's, through `poll`");
-            assert!(plx_shell_sdl::event::decode(&ev).is_some(), "and it decodes as before ({edge})");
+            assert!(plx_shell_sdl::event::decode(HOST_TEST_SDL.flavor, &ev).is_some(), "and it decodes as before ({edge})");
         }
         assert!(!surface.poll(&mut ev), "and the queue is empty after them");
     }

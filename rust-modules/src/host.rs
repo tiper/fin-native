@@ -48,19 +48,21 @@
 //!
 //! Beside the platform's own types, the vocabulary their signatures name is re-exported from the lower
 //! layers it lives in ([`MainThread`], [`Action`], [`Edge`], [`RawKey`], [`Lifecycle`], [`PointerEdge`],
-//! [`OpenAsk`], [`Placement`], [`InitHooks`]), so a platform crate names the application crate's types, and the vocabulary they use, through `host` alone.
+//! [`OpenAsk`], [`Placement`], [`InitHooks`], [`InitSteps`], [`SdlFlavor`], [`GlProfile`], [`WindowPlan`]), so a platform crate names the application crate's types, and the vocabulary they use, through `host` alone.
 //! [`sdl_open`] stays in the application, not in a platform crate: the `Surface` it returns is implemented for
 //! `plx_shell_sdl::Window` there, which the orphan rule allows nowhere else.
 use std::ffi::CStr;
 use std::os::raw::c_int;
 
-pub use crate::app::platform::{sdl_init, sdl_open, Composition, EventSink, FrameProbe, MediaBoot, Platform, Shell, Surface};
+pub use crate::app::platform::{
+    sdl_init, sdl_open, Composition, EventSink, FrameProbe, MediaBoot, Platform, Shell, Surface, WindowPlan,
+};
 pub use crate::app::{Completion, Exit, HostGate, InFlight, Release, Stopped};
 pub use plx_base::task::MainThread;
 pub use plx_machine::machine::Edge;
 pub use plx_os::tv::Services;
 pub use plx_shell_sdl::event::{Lifecycle, PointerEdge};
-pub use plx_shell_sdl::{InitHooks, OpenAsk, Placement};
+pub use plx_shell_sdl::{GlProfile, InitHooks, InitSteps, OpenAsk, Placement, SdlFlavor};
 pub use plx_ui::consts::{Action, RawKey};
 /// The simulator's video sink, the Feed backend's host sink built with the simulator's decoded picture: what the desktop
 /// platform's `Services` hold as their video sink and display binding. Under the cfg of the module it lives in, so a
@@ -369,10 +371,11 @@ mod surface_pin_tests {
     /// removed; empty for none). The first groups are the interface of a platform's own types and entry; the media values
     /// and the simulator's sink are there because the application keeps the playback composition until W11a, which retires
     /// each of them (`docs/platform-ports.md`, Target shape 8 and W7).
-    const HOST_ITEMS: [(&str, &str); 30] = [
+    const HOST_ITEMS: [(&str, &str); 34] = [
         // What a platform builds, implements and reports input through, and the entry that boots it.
         ("Platform", ""),
         ("Shell", ""),
+        ("WindowPlan", ""),
         ("Surface", ""),
         ("FrameProbe", ""),
         ("EventSink", ""),
@@ -401,6 +404,9 @@ mod surface_pin_tests {
         ("sdl_init", ""),
         ("sdl_open", ""),
         ("InitHooks", ""),
+        ("InitSteps", ""),
+        ("SdlFlavor", ""),
+        ("GlProfile", ""),
         // The media values: each retires at W11a.
         ("WEBOS_MEDIA", ""),
         ("NO_MEDIA", ""),

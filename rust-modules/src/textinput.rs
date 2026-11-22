@@ -25,11 +25,12 @@
 //! 1. **The event is shifted.** webOS inserts a `Uint32 inputSource` at `+12`, so the UTF-8 text
 //!    starts at **+16**, not the `+12` that stock SDL 2.0.4's `SDL_events.h` declares. That
 //!    header lies about this build; the NDK sysroot's fork copy is the proof.
-//!    Under `hostsim` the offset really is `+12` — desktop SDL2 is stock — so this is a `cfg`, and
-//!    a single hard-coded number ships garbage on one of the two platforms. `plx_shell_sdl::text::TEXT_OFF`
-//!    is that `cfg`, and the decoder next to it takes the offset as an argument so `make check` grades
-//!    both: the byte layout is the shell crate's, and [`decode`] and [`encode_event`] are re-exported
-//!    from it.
+//!    A stock desktop SDL2 really puts it at `+12`, so the offset is a property of the platform's
+//!    SDL, and a single hard-coded number ships garbage on one of the two. The platform states it:
+//!    `Shell::sdl()` carries a `plx_shell_sdl::SdlFlavor` (`Lg` or `Stock`) and
+//!    `plx_shell_sdl::text::text_off` maps it to the offset. The decoder next to it takes the
+//!    offset as an argument so `make check` grades both: the byte layout is the shell crate's, and
+//!    [`decode`] and [`encode_event`] are re-exported from it.
 //! 2. **`SDL_WINDOW_INPUT_FOCUS` is a precondition.** `SDL_StartTextInput` shows the panel only
 //!    `if (SDL_GetKeyboardFocus())` — the window carrying `0x200` — and our window is created
 //!    `OPENGL | FULLSCREEN` with neither `SHOWN` nor a focus flag. If it is clear, SDL still
@@ -286,8 +287,8 @@ pub(crate) fn pending() -> usize {
 /// One `SDL_TEXTINPUT` event, straight off the wire: [`decode`], then [`queue`]. Called by the
 /// `txt:` remote token (`app/events.rs`), which has the bytes [`encode_event`] built. The event
 /// loop gets its text already decoded (`HostEvent::Text`) and calls [`queue`] itself.
-pub(crate) fn on_event(ev: &[u8]) {
-    queue(decode(ev));
+pub(crate) fn on_event(flavor: plx_shell_sdl::SdlFlavor, ev: &[u8]) {
+    queue(decode(flavor, ev));
 }
 
 /// One committed string, queued for [`drain`] and bounded by [`MAX_PENDING`]. The loop's route for a
@@ -312,8 +313,12 @@ pub(crate) fn queue(s: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plx_shell_sdl::text::TEXT_OFF;
+    use plx_shell_sdl::text::text_off;
+    use plx_shell_sdl::SdlFlavor;
     use std::sync::Mutex;
+
+    /// Both layouts: a commit decodes and queues the same in either.
+    const FLAVORS: [SdlFlavor; 2] = [SdlFlavor::Lg, SdlFlavor::Stock];
 
     /// `STARTED` is a module singleton (and `PENDING` is per thread, but these tests drive both
     /// together), so the tests that drive them must not overlap.
@@ -335,14 +340,16 @@ mod tests {
     #[test]
     fn commits_queue_in_order_and_drain_takes_them_once() {
         let _g = BUF.lock().unwrap_or_else(|e| e.into_inner());
-        PENDING.with(|pending| pending.borrow_mut().clear());
-        on_event(&ev_with(TEXT_OFF, b"wal"));
-        on_event(&ev_with(TEXT_OFF, b"l"));
-        assert_eq!(drain(), ["wal", "l"]);
-        assert!(
-            drain().is_empty(),
-            "a second drain must not re-deliver what the first took"
-        );
+        for flavor in FLAVORS {
+            PENDING.with(|pending| pending.borrow_mut().clear());
+            on_event(flavor, &ev_with(text_off(flavor), b"wal"));
+            on_event(flavor, &ev_with(text_off(flavor), b"l"));
+            assert_eq!(drain(), ["wal", "l"], "{flavor:?}");
+            assert!(
+                drain().is_empty(),
+                "a second drain must not re-deliver what the first took ({flavor:?})"
+            );
+        }
     }
 
     /// An empty commit is dropped rather than queued: see `on_event`.
@@ -350,8 +357,10 @@ mod tests {
     fn an_empty_commit_is_not_queued() {
         let _g = BUF.lock().unwrap_or_else(|e| e.into_inner());
         PENDING.with(|pending| pending.borrow_mut().clear());
-        on_event(&ev_with(TEXT_OFF, b"\0"));
-        on_event(&[0u8; 128]);
+        for flavor in FLAVORS {
+            on_event(flavor, &ev_with(text_off(flavor), b"\0"));
+            on_event(flavor, &[0u8; 128]);
+        }
         assert!(drain().is_empty());
     }
 
@@ -364,9 +373,11 @@ mod tests {
     #[test]
     fn every_thread_drains_only_the_commits_it_queued() {
         plx_base::testrace::race(4, |t| {
+            // Half the threads commit in each layout: the queue is the same either way.
+            let flavor = FLAVORS[t % 2];
             for round in 0..40 {
                 for i in 0..MAX_PENDING + 20 {
-                    on_event(&ev_with(TEXT_OFF, format!("t{t}r{round}i{i}").as_bytes()));
+                    on_event(flavor, &ev_with(text_off(flavor), format!("t{t}r{round}i{i}").as_bytes()));
                 }
                 let got = drain();
                 assert_eq!(got.len(), MAX_PENDING, "round {round}");
@@ -385,13 +396,15 @@ mod tests {
     #[test]
     fn the_pending_buffer_is_bounded() {
         let _g = BUF.lock().unwrap_or_else(|e| e.into_inner());
-        PENDING.with(|pending| pending.borrow_mut().clear());
-        for i in 0..MAX_PENDING + 10 {
-            on_event(&ev_with(TEXT_OFF, format!("{i}").as_bytes()));
+        for flavor in FLAVORS {
+            PENDING.with(|pending| pending.borrow_mut().clear());
+            for i in 0..MAX_PENDING + 10 {
+                on_event(flavor, &ev_with(text_off(flavor), format!("{i}").as_bytes()));
+            }
+            let got = drain();
+            assert_eq!(got.len(), MAX_PENDING, "{flavor:?}");
+            assert_eq!(got.last().unwrap(), &format!("{}", MAX_PENDING + 9), "{flavor:?}");
         }
-        let got = drain();
-        assert_eq!(got.len(), MAX_PENDING);
-        assert_eq!(got.last().unwrap(), &format!("{}", MAX_PENDING + 9));
     }
 
     /// **A platform whose surface has no SDL window binds NULL and never reads SDL's focus flag.** The

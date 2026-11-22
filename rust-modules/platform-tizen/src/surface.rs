@@ -28,7 +28,10 @@ use crate::ecore::Window;
 use crate::egl::Egl;
 use crate::hosted::Hosted;
 use plx_base::eventlog::log;
-use plxnative_modules::host::{EventSink, Exit, FrameProbe, MainThread, OpenAsk, Shell, Surface};
+use plxnative_modules::host::{
+    EventSink, Exit, FrameProbe, GlProfile, InitHooks, InitSteps, MainThread, OpenAsk, Placement, SdlFlavor, Shell, Surface,
+    WindowPlan,
+};
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -69,6 +72,27 @@ impl TizenShell {
 }
 
 impl Shell for TizenShell {
+    /// What Tizen states about its SDL, which it does not use: no SDL window, no SDL event and no step. The
+    /// values are the ones a Tizen build compiled before the platform stated them (the television's
+    /// layout, an ES 2.0 context and the nothing-to-do steps: the `not(hostsim)` arms every build without
+    /// the simulator took), and the ES2 context is the one [`crate::egl::Egl`] makes.
+    fn sdl(&self) -> InitHooks {
+        InitHooks { steps: InitSteps::NONE, flavor: SdlFlavor::Lg, gl: GlProfile::Es2 }
+    }
+
+    /// What Tizen asks for, which [`open`](Shell::open) ignores (the window is the host's, and the screen's
+    /// size): the title and the canvas-sized panel a Tizen build computed before the platform stated them (the
+    /// webOS Interface resolution setting does not exist here, so it is the canvas, with no retry).
+    fn window(&self, _stored: Option<(std::os::raw::c_int, std::os::raw::c_int)>) -> WindowPlan {
+        WindowPlan {
+            title: c"plxnative",
+            placement: Placement::Panel {
+                size: (plx_base::surface::LOGICAL_W as std::os::raw::c_int, plx_base::surface::LOGICAL_H as std::os::raw::c_int),
+                fallback: None,
+            },
+        }
+    }
+
     /// Windowing is up already (the host thread made the window): nothing to initialise, and no SDL.
     fn init(&self, _mt: &MainThread) -> Result<(), Exit> {
         Ok(())

@@ -7,19 +7,54 @@ use plx_base::task::MainThread;
 use std::ffi::CStr;
 use std::os::raw::c_int;
 
-/// The two steps a platform runs around `SDL_Init` (`before`: it reads hints SDL consults while it
-/// initialises; `after`: it uses what `SDL_Init` set up). Plain function pointers, so the crate
-/// names nothing of the platform that supplies them: the television's are LG-fork code, and a
-/// desktop's are no-ops ([`InitHooks::NONE`]).
-#[derive(Clone, Copy)]
-pub struct InitHooks {
-    pub before: unsafe fn(),
-    pub after: unsafe fn(),
+/// Which SDL2 the platform links, as the one fact the byte layouts of SDL's events depend on. The
+/// television's SDL is LG's fork, which lays its keyboard, text and wheel events out differently from
+/// the stock SDL2 a desktop links ([`crate::event::decode_key`] has the measurements). A platform
+/// states it once, in its [`InitHooks`], and every decode and encode in this crate takes it as an
+/// argument, so both layouts are compiled and graded in every build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SdlFlavor {
+    /// LG's fork of SDL2, on the television.
+    Lg,
+    /// Stock SDL2 (sdl2-compat over SDL3 on a Mac), on a desktop.
+    Stock,
 }
 
-impl InitHooks {
-    /// A platform with nothing to do around `SDL_Init`.
-    pub const NONE: InitHooks = InitHooks { before: noop, after: noop };
+/// The GL context the platform's driver can give, which [`request_gl`] asks SDL for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlProfile {
+    /// OpenGL ES 2.0: the television's driver (a shim over libmali).
+    Es2,
+    /// OpenGL 4.1 core: the closest thing macOS has to ES 2.0, which it does not ship at all.
+    Core41,
+}
+
+/// The steps a platform runs around SDL's bring-up: two around `SDL_Init` (`before`: it reads hints
+/// SDL consults while it initialises; `after`: it uses what `SDL_Init` set up) and one behind the
+/// GL context (`after_context`: it sets up what its driver needs bound before the renderer's first
+/// call, which a desktop core profile does with a vertex array object). Plain function pointers, so
+/// the crate names nothing of the platform that supplies them: the television's are LG-fork code,
+/// and a platform with nothing to do states [`InitSteps::NONE`].
+#[derive(Clone, Copy)]
+pub struct InitSteps {
+    pub before: unsafe fn(),
+    pub after: unsafe fn(),
+    pub after_context: unsafe fn(),
+}
+
+impl InitSteps {
+    /// A platform with nothing to do around `SDL_Init` or behind the GL context.
+    pub const NONE: InitSteps = InitSteps { before: noop, after: noop, after_context: noop };
+}
+
+/// Everything a platform states about its SDL: the [`InitSteps`] it runs, the [`SdlFlavor`] its
+/// events are laid out in and the [`GlProfile`] it asks for. Every field is required, so a platform
+/// states each one and no default hides in this crate.
+#[derive(Clone, Copy)]
+pub struct InitHooks {
+    pub steps: InitSteps,
+    pub flavor: SdlFlavor,
+    pub gl: GlProfile,
 }
 
 unsafe fn noop() {}
@@ -42,16 +77,17 @@ const A_CTX_MAJOR: c_int = 17;
 const A_CTX_MINOR: c_int = 18;
 const A_CTX_PROFILE_MASK: c_int = 21;
 const CTX_PROFILE_ES: c_int = 0x0004;
-/// `SDL_GL_CONTEXT_PROFILE_CORE` — the simulator's only option on macOS. See [`request_gl`].
+/// `SDL_GL_CONTEXT_PROFILE_CORE` — a desktop's only option on macOS ([`GlProfile::Core41`]). See [`request_gl`].
 const CTX_PROFILE_CORE: c_int = 0x0001;
 
 /// Bring SDL's video subsystem up: tell SDL the entry point is ours, state the screensaver intent,
-/// run `hooks.before`, `SDL_Init(VIDEO)`, run `hooks.after`, and log the driver it picked.
+/// run `hooks.steps.before`, `SDL_Init(VIDEO)`, run `hooks.steps.after`, and log the driver it picked.
 ///
 /// # Safety
 /// Once, before any other SDL call (the `&MainThread` is the proof of the thread); and `hooks`
-/// must be sound to call on that thread at those two points.
-pub unsafe fn init(_mt: &MainThread, hooks: InitHooks) -> Result<(), InitFailed> {
+/// must be sound to call on that thread at those two points (the third step, `after_context`, is
+/// [`crate::window::Window::open`]'s).
+pub unsafe fn init(_mt: &MainThread, hooks: &InitHooks) -> Result<(), InitFailed> {
     sys::SDL_SetMainReady();
     // DEAD END, measured 2026-07-31 — do not re-try this. The obvious answer to "a parked TV
     // should blank itself" is to stop inhibiting the platform screensaver here (and re-allow it
@@ -66,12 +102,12 @@ pub unsafe fn init(_mt: &MainThread, hooks: InitHooks) -> Result<(), InitFailed>
     // app, and nothing reachable from SDL changes that. The line stays because it costs
     // nothing and states the intent; it is not what keeps the screensaver away.
     sys::SDL_SetHint(c"SDL_VIDEO_ALLOW_SCREENSAVER".as_ptr(), c"0".as_ptr());
-    (hooks.before)();
+    (hooks.steps.before)();
     if sys::SDL_Init(SDL_INIT_VIDEO) != 0 {
         log("SDL_Init failed");
         return Err(InitFailed);
     }
-    (hooks.after)();
+    (hooks.steps.after)();
     {
         let d = sys::SDL_GetCurrentVideoDriver();
         if !d.is_null() {
@@ -88,25 +124,28 @@ pub unsafe fn init(_mt: &MainThread, hooks: InitHooks) -> Result<(), InitFailed>
 /// because the application reads the stored session between the request and the window (the
 /// window size is a setting), and that order is pinned.
 ///
-pub fn request_gl(_mt: &MainThread) {
-    unsafe { request_gl_attributes() }
+pub fn request_gl(_mt: &MainThread, gl: GlProfile) {
+    unsafe { request_gl_attributes(gl) }
 }
 
-unsafe fn request_gl_attributes() {
+unsafe fn request_gl_attributes(gl: GlProfile) {
     // The television has a real GLES2 driver (a shim over libmali). macOS has none at all —
     // Apple ships desktop GL only, capped at 4.1 core — so asking for ES here fails context
     // creation outright. 4.1 core is the closest thing that exists, and it is a superset for
     // everything this renderer does: a real VBO (never client arrays) and RGBA/UNSIGNED_BYTE
     // textures, both core-profile-legal. The shader sources are adapted at compile time by
     // `gfx::glsl_preamble`, which reads the driver's GLSL version rather than assuming.
-    if cfg!(feature = "hostsim") {
-        sys::SDL_GL_SetAttribute(A_CTX_PROFILE_MASK, CTX_PROFILE_CORE);
-        sys::SDL_GL_SetAttribute(A_CTX_MAJOR, 4);
-        sys::SDL_GL_SetAttribute(A_CTX_MINOR, 1);
-    } else {
-        sys::SDL_GL_SetAttribute(A_CTX_PROFILE_MASK, CTX_PROFILE_ES);
-        sys::SDL_GL_SetAttribute(A_CTX_MAJOR, 2);
-        sys::SDL_GL_SetAttribute(A_CTX_MINOR, 0);
+    match gl {
+        GlProfile::Core41 => {
+            sys::SDL_GL_SetAttribute(A_CTX_PROFILE_MASK, CTX_PROFILE_CORE);
+            sys::SDL_GL_SetAttribute(A_CTX_MAJOR, 4);
+            sys::SDL_GL_SetAttribute(A_CTX_MINOR, 1);
+        }
+        GlProfile::Es2 => {
+            sys::SDL_GL_SetAttribute(A_CTX_PROFILE_MASK, CTX_PROFILE_ES);
+            sys::SDL_GL_SetAttribute(A_CTX_MAJOR, 2);
+            sys::SDL_GL_SetAttribute(A_CTX_MINOR, 0);
+        }
     }
     // full 32-bit RGBA so the video plane shows through
     sys::SDL_GL_SetAttribute(A_RED, 8);
@@ -165,9 +204,9 @@ mod tests {
             .split_once(concat!("pub fn ", "request_gl("))
             .expect("the end of init")
             .0;
-        let before = body.find(concat!("(hooks.", "before)()")).expect("init runs the before hook");
+        let before = body.find(concat!("(hooks.steps.", "before)()")).expect("init runs the before hook");
         let call = body.find(concat!("sys::SDL_Init(", "SDL_INIT_VIDEO)")).expect("init calls SDL_Init");
-        let after = body.find(concat!("(hooks.", "after)()")).expect("init runs the after hook");
+        let after = body.find(concat!("(hooks.steps.", "after)()")).expect("init runs the after hook");
         assert!(before < call && call < after, "before < SDL_Init < after");
         assert_eq!(body.matches(concat!("sys::SDL_Init(", "SDL_INIT_VIDEO)")).count(), 1);
     }

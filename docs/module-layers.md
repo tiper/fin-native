@@ -203,9 +203,8 @@ gates as every other layer, and as machine code.
 
 `shell_sdl` is a twentieth layer, declared the same way. Its crate is `plx_shell_sdl` (`rust-modules/shell-sdl/`);
 its layer may use `base`, `machine` and `os` and the crate names `plx_base` alone. It is the SDL half of the shell that the
-television and the simulator share: `SDL_Init` and the GL request, the window (the panel's size and its smaller
-fallback, and under `hostsim` the desktop fit), the swap and its interval, the event poll and decode (LG's fork layout
-on the device, stock SDL2 under `hostsim`), the synthetic key, pointer, wheel and lifecycle events the remote FIFO, Lab Control, replay and the cursor-swap OK push back
+television and the simulator share: `SDL_Init` and the GL request, the window (the placement the platform asks for: the panel's size and its smaller
+fallback, or the desktop fit), the swap and its interval, the event poll and decode (the layout the platform states as its `SdlFlavor`: LG's fork on the device, stock SDL2 on the desktop), the synthetic key, pointer, wheel and lifecycle events the remote FIFO, Lab Control, replay and the cursor-swap OK push back
 into the queue (a text event is built as bytes and handed to the decode, never pushed: pushing one crashes the Mac's SDL), and the text-input calls. The LG half does not move: the `SDL_SysWMinfo` buffer, the `wl_proxy_marshal`
 opaque region and the LS2 pump stay in `system.rs` (now `platform-webos/src/system.rs`), a member of `[platform webos]`, and a pin in the crate's `lib.rs` fails
 if the crate names the query that overruns it. The application reaches it through `app/platform.rs`, whose `Shell` opens a
