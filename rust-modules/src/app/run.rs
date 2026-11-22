@@ -2329,6 +2329,10 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
         // pump to do it, and the landing's replacement encoder runs on the server until it is.
         plx_media::route::discard_stale_flight_landing();
         if app.window_activity.allow_present(true) && app.player.lifecycle.flight_pending() {
+            // A parked URI original's restore is a re-resolve the lifecycle (which has no metadata store) owes and
+            // this frame performs and drains (`player::begin_resume`'s URI branch).
+            plx_media::player::pump_uri_restore(&mut app.player.session, &mut app.adapters.player,
+                app.runtime.metadata_mut());
             // The foreground restore waits on a flight (its resume's rebuild or an Original
             // rollback): the lifecycle machine drains it, not the pump (there is no Engine) and not
             // the cold-resume drain (`playback_may_run` is false while the restore is parked).
@@ -2395,6 +2399,11 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
             crate::dev::scenarios::maybe_replay_after_eos(app, handed_off_to_up_next);
         } else if playback_may_run(app)
             && plx_media::player::ended(&app.player.session) == Some(true)
+            // **Once.** A URI attempt's stop is a CLOSE the host confirms a few frames later, and the attempt stays
+            // "needing teardown" until its `PLAYER_CLOSED`: without this, every frame of that wait asked for the same
+            // stop again and logged the line below (5 times at the Tizen emulator's EOS). A stop already underway is
+            // the release machine's to finish.
+            && app.adapters.player.backend_snapshot().phase != plx_playback_contract::Phase::Releasing
             && super::content::off_route_orphan(
                 app.adapters.player.playback_needs_teardown(&app.player.session),
                 plx_media::route::is_preview(&app.player.session),
@@ -2908,7 +2917,9 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
         // Tell the machine at this transaction boundary (`Superseded(Playback)`): it retires the
         // parked owner and leaves a pending Load to its own settlement. A same-session Prepared
         // retry does not set play_pending and remains owned by drive_foreground.
-        if app.window_activity.allow_present(true) && plx_media::route::play_pending() {
+        // The re-resolve a parked URI original's restore started is the restore's own, not a successor.
+        if app.window_activity.allow_present(true) && plx_media::route::play_pending()
+            && !app.adapters.player.uri_restore_outstanding() {
             let _ = drive_foreground(
                 &mut app.player.lifecycle,
                 &mut app.player.session,
@@ -3791,6 +3802,22 @@ pub(crate) fn quits_sdl(native_exit: plx_media::player::NativeExit) -> bool {
     release_of(native_exit) == Release::Complete
 }
 
+/// The playback half of [`shutdown`]: abandon the pending report and stop what the server was told is playing. That includes a
+/// URI attempt a Suspend parked (the host's terminate is one): its native session is already closed, so nothing reads as live,
+/// but its `stopped` timeline and transcode stop were never sent, and a restore that will never come is the only thing that
+/// would have sent them (`PlayerAdapter::parked_uri_owes_stop`).
+pub(crate) fn end_playback_for_exit(
+    ps: &mut plx_media::route::PlaybackSession,
+    pa: &mut plx_media::player::adapter::PlayerAdapter,
+) {
+    ps.finish_metric_request(plx_media::player::attempt_metrics::RequestOutcome::Cancelled);
+    pa.sync_request_metrics(ps);
+    plx_media::player::report::abandon_pending(ps);
+    if pa.playback_needs_teardown(ps) || pa.parked_uri_owes_stop(ps) {
+        plx_media::player::stop_playback(ps, pa);
+    }
+}
+
 /// Teardown after the loop: abandon the pending report, stop the active backend, wait for the stop
 /// scrobble, close the capture stream and the poster workers, quit SDL (unless a worker is still
 /// in firmware: `surface.quit()` is the platform's, and WHETHER it runs is this function's). Answers
@@ -3801,12 +3828,7 @@ pub(crate) unsafe fn shutdown(
     pa: &mut plx_media::player::adapter::PlayerAdapter,
     surface: &dyn super::platform::Surface,
 ) -> Release {
-    ps.finish_metric_request(plx_media::player::attempt_metrics::RequestOutcome::Cancelled);
-    pa.sync_request_metrics(ps);
-    plx_media::player::report::abandon_pending(ps);
-    if pa.playback_needs_teardown(ps) {
-        plx_media::player::stop_playback(ps, pa);
-    }
+    end_playback_for_exit(ps, pa);
     // The stop's `Unload` runs off-frame; the process must not exit inside it, nor with the
     // object it is releasing left undestroyed. The wait is bounded, and a worker still inside
     // firmware (an overdue `Unload`, or a timed-out Load's media thread) means the display must not

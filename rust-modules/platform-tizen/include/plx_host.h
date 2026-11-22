@@ -69,6 +69,14 @@
  *   is not part of that promise: after a host-initiated stop the library does not release it (it lives until
  *   the process ends, see run_on_host); it is released only when the application ended by itself and the
  *   host ran the teardown the library queued.
+ *   **A player that is open at a stop belongs to the host.** plx_host_stop closes the library's gate to the host AT ONCE, so the
+ *   library can no longer send the player CLOSE verb (it answers the request itself, the host is not asked), and no PLAYER_CLOSED
+ *   can come back for a CLOSE that was not sent. The library therefore treats a CLOSE refused that way as a release the host makes: its
+ *   stop is not held for a confirmation that cannot come, and on_stopped can be clean = 1 with a player open. A CLOSE the host had
+ *   ALREADY accepted before the stop is another case: its PLAYER_CLOSED is still heard while the loop runs (it is the only player
+ *   event heard after a stop, and only for a live epoch), because the library's stop waits for it. The host MUST close its native player itself
+ *   in OnTerminate, before it waits for on_stopped (PlxPlayer.Shutdown, bounded), so that the native player is released on every
+ *   terminate path, including a wait that ends in the platform's own kill.
  *   After on_stopped no callback is made again. on_stopped may be called on the loop thread, the deadline
  *   thread, the host thread (a refused start, or inside plx_host_stop as above); it must return promptly
  *   and make no call into the library. A host must therefore not hold, across plx_host_stop, a lock that
@@ -102,7 +110,7 @@
  * POST
  *   plx_host_post copies the event and queues it: a bounded push that never blocks. PLX_HOST_E_FULL means
  *   the queue was full and the event was dropped; PLX_HOST_E_STATE, that the library is not running (not
- *   started, or a stop was requested); PLX_HOST_E_ARGS, a NULL event, a size below PLX_HOST_EVENT_V1_SIZE
+ *   started, or a stop was requested, except for a PLAYER_CLOSED of a live epoch, which is still heard while the loop runs: see STOP); PLX_HOST_E_ARGS, a NULL event, a size below PLX_HOST_EVENT_V1_SIZE
  *   (below PLX_HOST_EVENT_V2_SIZE for a player kind) or an unknown kind; PLX_HOST_E_STALE, a player event whose
  *   epoch is not live (see PLAYER).
  *   A pause or a resume is one transition: the application is told once per change of state. A pause while
@@ -156,12 +164,14 @@
  *       b = -2   expired: no completion within 10 s. Expiry is not refusal: the seek MAY STILL LAND, so PLAYER_POSITION is the
  *                authority on where the player is. The next held seek is then sent while the expired one may still be pending, and a late
  *                completion is credited to the next seek's command ids (the player's callback carries no token).
- *   - HOME: the host forwards OnPause and OnResume as PLX_HOST_EVENT_PAUSE and _RESUME and also acts on the player itself, because the
- *     native player raises nothing of its own when the app goes to the background (emulator, 2026-11-22). At OnPause a player that is
- *     PLAYING is paused and PLAYER_PAUSED is posted; one asked to play before PREPARED has that start held back. At OnResume exactly
- *     that player is started again (PLAYER_STARTED, or at PREPARED for the held start). A player the library paused, closed or replaced
- *     in between is not touched, and a host pause is not a library decision: the library sees an ordinary PLAYER_PAUSED and then
- *     PLAYER_STARTED.
+ *   - HOME: ONE OWNER, the library. The host forwards OnPause and OnResume as PLX_HOST_EVENT_PAUSE and _RESUME, and pauses a PLAYING
+ *     player at OnPause (PLAYER_PAUSED is posted) so the picture and the sound stop at once, because the native player raises nothing
+ *     of its own when the app goes to the background (emulator, 2026-11-22). The host NEVER starts a player at OnResume. A start that
+ *     was asked before PREPARED is held back at OnPause (PauseForHome) and OnResume never restarts it; that is safe because the
+ *     library's park (its CLOSE at the background) ends that epoch and its restore is a NEW one. The library
+ *     parks its attempt at the background (it sends CLOSE, and the host answers CLOSED) and, at the foreground, re-opens the same source
+ *     at the saved position as a NEW epoch (a PLAYER_OPEN, then the usual PREPARED, seek and PLAY). A host start of the old epoch would
+ *     race that restore, so OnResume only logs why it resumed nothing.
  *   - THREADS: the requests come from the library's loop thread; the host runs them on its own video thread,
  *     never on the loop thread, and never on the Ecore main thread EXCEPT one step: finding the Ecore window and
  *     binding the player to it run there (Ecore belongs to that thread) while the video thread waits, for at most 3 s. plx_host_post may be called from any thread,

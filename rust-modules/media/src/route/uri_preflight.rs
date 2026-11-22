@@ -498,6 +498,25 @@ pub enum PmsDecline {
     UnexecutableSelection,
 }
 
+impl PmsDecline {
+    /// The reason as a short phrase for the refused-play log line. No parentheses: the line wraps it in one.
+    pub fn log_name(self) -> &'static str {
+        match self {
+            Self::UnsupportedIntent => "the requested output is not one a URI player carries",
+            Self::MissingSourceFacts => "the source's facts are missing",
+            Self::UnavailableCapability => "no composed backend can play a server-converted output",
+            Self::MissingOutputEvidence => "no certificate for a server-converted output",
+            Self::UnknownCertificate => "the converted output's certificate is unknown",
+            Self::ProviderRefused => "the URI provider refused the converted output",
+            Self::AppFixedControllerUnavailable => "the app-fixed controller is unavailable",
+            Self::UnmappedClock => "the converted output's clock is not mapped to the source",
+            Self::NoReleaseProof => "no proof the converted output can be released",
+            Self::StaleOrMismatched => "the prepared offer went stale or no longer matched",
+            Self::UnexecutableSelection => "the track selection cannot be executed on the converted output",
+        }
+    }
+}
+
 /// The caller supplies the actual Part URL and selected source tracks. An implementation may
 /// perform bounded IO only with the worker's OffFrame proof; it must not infer a URI certificate
 /// from Feed's codec table, MDE answer or native ACK. [`OriginalRequest::standard`] is no certificate
@@ -509,6 +528,20 @@ pub trait OriginalQualifier: Send + Sync + std::panic::RefUnwindSafe {
     /// until firmware, source time mapping, controls and release have all been established.
     fn qualify_pms(&self, _off: &OffFrame, _request: PmsRequest) -> PmsVerdict {
         PmsVerdict::Unknown
+    }
+
+    /// Whether this provider can ever certify a URI output that plays a source track the viewer picks while a
+    /// title is playing and the native driver cannot switch to (`UriDriver::maps_track` is false): the
+    /// re-resolve a pick like that asks for ends in a replacement play, which retires the playing title first.
+    /// A provider that certifies only the source's default stream and no converted output says `false`, so the
+    /// session refuses the pick instead of replacing the playing title with a failure
+    /// ([`PlaybackSession::source_track_change_carriable`](super::PlaybackSession::source_track_change_carriable)).
+    /// A Quality rung picked while a title plays is the same kind of request (a converted output only a converting backend can
+    /// carry), so the same answer withholds the ladder and refuses the pick
+    /// ([`PlaybackSession::quality_pick_carriable`](super::PlaybackSession::quality_pick_carriable)).
+    /// The default is the behaviour before the question existed: carriable.
+    fn carries_source_track_change(&self) -> bool {
+        true
     }
 }
 
@@ -524,6 +557,9 @@ impl ResolvePort {
     }
 
     pub fn evidence(&self) -> ProductEvidence { self.evidence }
+
+    /// See [`OriginalQualifier::carries_source_track_change`].
+    pub fn carries_source_track_change(&self) -> bool { self.qualifier.carries_source_track_change() }
 
     /// Whether even attempting a PMS candidate could produce a URI offer. This is only a
     /// preflight cost gate; it never qualifies a source or promises release.

@@ -3246,6 +3246,9 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
         if let Some(line) = uri_decline_line(env.uri_engine, &plan) {
             crate::player::log(&line);
         }
+        if let Some(line) = no_backend_line(&plan) {
+            crate::player::log(&line);
+        }
         if let Some(queue) = queue {
             land_queue(&mut plan, queue.finish());
         }
@@ -3262,6 +3265,23 @@ pub(super) fn uri_decline_line(engine: plx_plex::plex::session::UriEngine, plan:
         return None;
     }
     plan.uri_decline.map(|why| format!("uri: original declined ({})", why.log_name()))
+}
+
+/// `play: no backend can carry this play (uri original: <reason>; pms: <reason>)`: the refusal a composition with no Feed ends a
+/// resolve in (`NoQualifiedBackend`), with the plan's own typed reasons. Unlike [`uri_decline_line`] it is for every viewer: the
+/// viewer-facing sentence is the generic open failure, and without this line nothing in the log named why the play was refused.
+/// A reason the resolve never reached reads `not reached`. No title, host, URL or token.
+pub(super) fn no_backend_line(plan: &Plan) -> Option<String> {
+    matches!(plan.verdict, Some(PlayVerdict::NoQualifiedBackend))
+        .then(|| no_backend_text(plan.uri_decline, plan.pms_decline))
+}
+
+/// The text of [`no_backend_line`], for the landing that refuses a play after the plan was made (a prepared offer gone stale).
+pub(super) fn no_backend_text(uri: Option<super::uri_preflight::UriDecline>,
+    pms: Option<super::uri_preflight::PmsDecline>) -> String {
+    format!("play: no backend can carry this play (uri original: {}; pms: {})",
+        uri.map_or("not reached", super::uri_preflight::UriDecline::log_name),
+        pms.map_or("not reached", super::uri_preflight::PmsDecline::log_name))
 }
 
 /// The play queue's answer joins the plan. Destructured whole, so a field `QueueInfo` gains cannot

@@ -1,9 +1,10 @@
 //! What the Tizen build says it is: the platform the Plex server sees, and the locale the host stored.
 //!
-//! **Emulator only, and it says so.** The Tizen build has no playback and has run on no retail set, so the
-//! name and version the server reads (`X-Plex-Platform` / `X-Plex-Platform-Version`, built by
-//! `plex::identity` from the published `Platform`) are `Tizen` and `<version> (emulator)`, and the boot logs
-//! one line, `platform: Tizen <version> (emulator only; no playback)`. The only seam is
+//! **Emulator only, and it says so.** The Tizen build has run on no retail set, so the name and version the
+//! server reads (`X-Plex-Platform` / `X-Plex-Platform-Version`, built by `plex::identity` from the published
+//! `Platform`) are `Tizen` and `<version> (emulator)`, and the boot logs one line, `platform: Tizen <version>
+//! (` + [`BUILD`] + `)`: `emulator only; no playback` without the `uri` feature, `emulator only; direct play
+//! through the host's native player, not run on a retail set` with it. The only seam is
 //! `plx_os::tv::device::publish_platform`; nothing here builds a header.
 //!
 //! No `Info` or `Hardware` is published: their `major` is the webOS firmware major (the capability tables, the
@@ -18,11 +19,17 @@ pub fn pms_version(version: &str) -> String {
     format!("{version} (emulator)")
 }
 
+/// What the boot's identity line says this build can do, in the words of `docs/tizen.md`.
+#[cfg(not(feature = "uri"))]
+pub const BUILD: &str = "emulator only; no playback";
+#[cfg(feature = "uri")]
+pub const BUILD: &str = "emulator only; direct play through the host's native player, not run on a retail set";
+
 /// The boot-time device probe: publish the platform and say, once, what this build is.
 pub fn probe_device() {
     let version = layout::stored().map_or("unknown", |l| l.platform_version.as_str());
     publish_platform(Platform { name: "Tizen", version: pms_version(version) });
-    plx_base::eventlog::log(&format!("platform: Tizen {version} (emulator only; no playback)"));
+    plx_base::eventlog::log(&format!("platform: Tizen {version} ({BUILD})"));
 }
 
 /// The settings reply the i18n layer parses, built from the host's locale tag: the shape the television's
@@ -74,7 +81,7 @@ mod tests {
         assert_eq!(published.version, "unknown (emulator)", "no launch values stored in this test: the default");
         assert_eq!(
             log.lines().filter(|l| l.contains("platform: Tizen")).collect::<Vec<_>>(),
-            ["platform: Tizen unknown (emulator only; no playback)"]
+            [format!("platform: Tizen unknown ({BUILD})")]
         );
     }
 }

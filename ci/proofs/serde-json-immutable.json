@@ -371,7 +371,7 @@
       ".cargo/config": null,
       ".cargo/config.toml": "82f061c716740e16cfee63a74d87159e0e0dc253e1092b87c54190c603515b14"
     },
-    "lock_sha256": "a263b1a2f8635d5f8b3fe6d446054632eb8cc8e90684203356a56214e40a3cd1",
+    "lock_sha256": "990b73bf432b8a55cc60ff87cb911a7d770ae44d7004519ceefadee40d49cde2",
     "manifests": {
       "Cargo.toml": "ceeca8181aa752d708e40593d60617a6fe09113187cc77057c44bc6d3ea4892c",
       "appkit/Cargo.toml": "5cc1214cba7746fe0f2d4cfa5047b599e0d5124abe7bdaebe210381021b88c4a",
@@ -385,7 +385,7 @@
       "os/Cargo.toml": "38d59148bbf6a9814c27411f3310db5d690ac5583050a6e68a39141356fa2000",
       "owp/Cargo.toml": "2c1354bce16b34f0d006fc04cd4c8eb22ef91f00063b53a1113e32f475ecae33",
       "platform-desktop/Cargo.toml": "d8b6237952dda5e052d16f10215cacb2ea6b581e094a9db2eada59b92aea4c58",
-      "platform-tizen/Cargo.toml": "15bb4ca07cd3b3b096757499a090ca9f0b4083fc9daec1cbdac90f152b75eb01",
+      "platform-tizen/Cargo.toml": "59902baade4c25fb03e51490626815c6112aaa62c7870f7ec516c94360278737",
       "platform-webos/Cargo.toml": "d5a7ec2c5e0db66cdf8c9944eef5c86161c82798d0c767772ba42e0a590d354e",
       "play-feed/Cargo.toml": "5bd2b67820914b578fcb371b80ed9274eae4b57078391c38161a67fc22df760d",
       "play-uri/Cargo.toml": "48528dd164a910a32f5396ab8f5bc4c6c13f6fd5f1136ee080f8424fe663280b",
@@ -515,7 +515,7 @@
         ],
         "edition": "2021",
         "lib": "platform-tizen/src/lib.rs",
-        "lib_sha256": "53222448155080de40ccdf1ffd9c58d02c041d9ba6946ae9910efdc8c79c1984"
+        "lib_sha256": "7e635c5bbcaf2caf8d98c0130f3c82097a5b4442373fda5f5c8352aeb16612de"
       },
       "platform-webos/Cargo.toml": {
         "dependency": [

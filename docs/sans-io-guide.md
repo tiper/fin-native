@@ -67,7 +67,9 @@ seal, not a broad `Copy` bound. See "Machine shape" in `docs/sans-io.md`.
 - `rust-modules/playback-contract/src` and the extracted pure
   `play-uri/src/{uriprobe,uri_protocol,uri_lifecycle,register_ladder,acb_bind,picture_gate}.rs` modules;
 - `rust-modules/os/src/tv/plane.rs`, the ACB plane's pure `Plane` (its runner `PlaneOwner` is in
-  the same file, so the scan covers it too).
+  the same file, so the scan covers it too);
+- `rust-modules/platform-tizen/src/player/machine.rs`, the Tizen URI driver's pure step (events and `now_ms` in,
+  host requests out as typed effects); its executor `driver.rs` holds the `HostPlayer` and is not scanned.
 
 `forks` reads every machine crate whole (`FORK_SCOPE`): all of `data/`, `plex/`, `media/`,
 `session/`, `screens/`, `ui/`, `appkit/`, `machine/`, `playback-contract/`, `play-uri/`,

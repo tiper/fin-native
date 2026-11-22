@@ -900,7 +900,11 @@ name = "plx_platform_tizen"
 version = "0.0.0"
 dependencies = [
  "plx_base",
+ "plx_data",
+ "plx_media",
  "plx_os",
+ "plx_playback_contract",
+ "plx_plex",
  "plxnative-modules",
  "serde_json",
 ]

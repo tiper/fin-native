@@ -203,7 +203,9 @@ class ForwardedFeatures(unittest.TestCase):
         # Tizen's `serde_json` is the launch string's parser: already in the lock for the application, not a new package.
         expected = {
             "platform-desktop": ["plx_base", "plx_os", APP_NAME],
-            "platform-tizen": ["plx_base", "plx_os", APP_NAME, "serde_json"],
+            # `plx_media` and `plx_playback_contract` are the Tizen URI driver's (the `uri` feature's code), already in the
+            # application's graph; like the rest they are `tizen`'s, so that `uri` itself is only a cfg gate.
+            "platform-tizen": ["plx_base", "plx_os", APP_NAME, "serde_json", "plx_media", "plx_playback_contract"],
         }
         for directory, own in OPTIONAL_EDGE.items():
             with self.subTest(directory):
@@ -221,6 +223,18 @@ class ForwardedFeatures(unittest.TestCase):
                 for feature, words in features.items():
                     if feature != own:
                         self.assertFalse([w for w in words if w.startswith("dep:") or w.startswith(f"{APP_NAME}/")], feature)
+
+    def test_the_tizen_uri_feature_is_a_cfg_gate_that_no_default_set_reaches(self):
+        # `uri` (W10 part B) selects the Tizen URI driver and its composition; it enables no dependency, forwards none of the
+        # application's features (the application's `play-uri` is the webOS driver and must never be what turns Tizen playback on),
+        # and is in no default set, so a default build of the crate stays the empty library and a `tizen` build without it composes
+        # no driver (`host::NO_MEDIA`).
+        features = load(MODULES / "platform-tizen" / "Cargo.toml")["features"]
+        self.assertEqual(features["uri"], [])
+        self.assertNotIn("uri", reachable(features, "default"))
+        for name, words in features.items():
+            self.assertNotIn("uri", words, f"`{name}` turns the Tizen driver on behind the Makefile's back")
+        self.assertNotIn("uri", load(MODULES / "Cargo.toml")["features"], "the application has no `uri` feature of its own")
 
     def test_the_tizen_crate_is_not_the_simulator(self):
         # `hostsim` is the desktop's: the Tizen crate neither declares it nor holds a binary, and the weak forwards

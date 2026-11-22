@@ -13,9 +13,11 @@
 # THE ONE CONFIGURATION TODAY is x86_64: the Tizen TV 10.0 emulator's image. An armv7 (retail) configuration is recorded in
 # docs/platform-ports.md and not built; TIZEN_ARCH names it and is refused until it is.
 #
-# NO PLAYBACK BACKEND is selected here and `PLAYBACK_BACKENDS` is NOT touched (`PLAYBACK_BACKENDS=none` is a parse-time error for any
-# goal outside the Makefile's side-effect-free list): "no backends" is this file's own feature list below, which names `tizen` and
-# the dev-boot seam and neither playback backend.
+# THE PLAYBACK FEATURE is this crate's own `uri` (W10 part B: the Tizen URI driver over the host's native media player), NOT the
+# application's `play-uri` (the webOS ACB/LS2 driver, never on a Tizen build) or `play-feed`, and `PLAYBACK_BACKENDS` is NOT touched
+# (`PLAYBACK_BACKENDS=none` is a parse-time error for any goal outside the Makefile's side-effect-free list). The shipped Tizen
+# build plays, so `TIZEN_URI` is 1 and the feature list below names `uri`; `TIZEN_URI=0` builds the library WITHOUT it, which composes no
+# driver (`compose: backends=none resolver=no`, the Play control's no-driver path), for the checks that want that boot.
 #
 # WHAT RUNS WHERE. `tizen-so`/`tizen-sdl` need a Linux x86_64 host (the host `cc` links the library the emulator loads) and say so in
 # a recipe line, so `make -n` resolves anywhere. `tizen-abi` and `tizen-check` run on any host (text comparison and `cargo check`).
@@ -42,10 +44,13 @@ TIZEN_TFM          = tizen80
 TIZEN_PROFILE     ?= $(if $(RELEASE),release,tvdev)
 $(if $(filter release tvdev,$(TIZEN_PROFILE)),,$(error unknown TIZEN_PROFILE "$(TIZEN_PROFILE)" -- one of: release tvdev))
 TIZEN_PROFILE_FLAG = $(if $(filter release,$(TIZEN_PROFILE)),--release,--profile $(TIZEN_PROFILE))
-# The crate's feature set. `tizen` is the crate's own gate (its library is empty without it); `devtriggers` is the compile-time seam the dev
-# boot's preset reads, and a `RELEASE=1` library does not carry it (the webOS rule: a shipped build cannot arm a dev boot). Neither playback backend (`play-uri`, `play-feed`): the platform composes no media.
+# The crate's feature set. `tizen` is the crate's own gate (its library is empty without it); `uri` is its playback (the driver and its
+# composition: `TIZEN_URI=0` leaves it out); `devtriggers` is the compile-time seam the dev boot's preset reads, and a `RELEASE=1` library does
+# not carry it (the webOS rule: a shipped build cannot arm a dev boot). Neither application backend (`play-uri`, `play-feed`) is named.
 TIZEN_COMMA        = ,
-TIZEN_FEATURES    ?= $(if $(RELEASE),tizen,tizen$(TIZEN_COMMA)devtriggers)
+TIZEN_URI         ?= 1
+$(if $(filter 0 1,$(TIZEN_URI)),,$(error TIZEN_URI "$(TIZEN_URI)" is not 0 or 1))
+TIZEN_FEATURES    ?= tizen$(if $(filter 1,$(TIZEN_URI)),$(TIZEN_COMMA)uri)$(if $(RELEASE),,$(TIZEN_COMMA)devtriggers)
 
 # Derived output. The cargo tree has its own directory (the `target*` glob of tools/build-gc.sh sweeps it); everything else this file
 # writes is under tizen/out and tizen/sdl-build (.gitignore).

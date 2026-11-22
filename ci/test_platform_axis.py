@@ -256,10 +256,20 @@ class TizenConfiguration(unittest.TestCase):
 
     def test_a_release_library_carries_no_dev_trigger_seam(self):
         """The webOS rule (`RELEASE=1` builds without `devtriggers`): a library that ships must not arm the dev boot."""
-        self.assertEqual(self.config()["TIZEN_FEATURES"], "tizen,devtriggers")
-        self.assertEqual(self.config("RELEASE=1")["TIZEN_FEATURES"], "tizen")
+        self.assertEqual(self.config()["TIZEN_FEATURES"], "tizen,uri,devtriggers")
+        self.assertEqual(self.config("RELEASE=1")["TIZEN_FEATURES"], "tizen,uri")
         self.assertEqual(self.config("RELEASE=1")["TIZEN_PROFILE"], "release")
-        self.assertEqual(self.config("RELEASE=")["TIZEN_FEATURES"], "tizen,devtriggers")
+        self.assertEqual(self.config("RELEASE=")["TIZEN_FEATURES"], "tizen,uri,devtriggers")
+
+    def test_the_shipped_tizen_build_plays_and_a_no_driver_build_stays_possible(self):
+        """The Tizen library is built WITH its own `uri` feature (the URI driver over the host's media player), never with the
+        application's `play-uri` or `play-feed`; `TIZEN_URI=0` is the way to build without it."""
+        for args in ((), ("RELEASE=1",)):
+            features = self.config(*args)["TIZEN_FEATURES"].split(",")
+            self.assertIn("uri", features)
+            self.assertFalse({"play-uri", "play-feed"} & set(features), features)
+        self.assertEqual(self.config("TIZEN_URI=0")["TIZEN_FEATURES"], "tizen,devtriggers")
+        self.assertEqual(self.config("TIZEN_URI=0", "RELEASE=1")["TIZEN_FEATURES"], "tizen")
 
 
     def test_the_verification_comes_after_the_link(self):

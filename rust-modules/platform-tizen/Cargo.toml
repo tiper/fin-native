@@ -38,7 +38,14 @@ devtriggers = ["plxnative-modules?/devtriggers"]
 threadcheck = ["plxnative-modules?/threadcheck"]
 lab-diagnostics = ["plxnative-modules?/lab-diagnostics"]
 placeholder-sentinel = ["plxnative-modules?/placeholder-sentinel"]
-tizen = ["dep:plxnative-modules", "dep:plx_base", "dep:plx_os", "dep:serde_json"]
+tizen = ["dep:plxnative-modules", "dep:plx_base", "dep:plx_os", "dep:serde_json", "dep:plx_media", "dep:plx_playback_contract"]
+# `uri` is this crate's OWN second feature (W10 part B): the Tizen URI driver over the host's native media player and the
+# composition that installs it (`player`). Without it the platform keeps `host::NO_MEDIA` (`BackendSet::NONE`, no resolver, the
+# Play control's no-driver path) and the driver is not compiled. It enables no dependency (`plx_media` and
+# `plx_playback_contract` are `tizen`'s, and already in every build that has the application), so a `tizen` pass with no `uri`
+# links exactly what it did before. It is NOT the application's `play-uri`, which is the webOS ACB/LS2 driver and which a Tizen
+# build never turns on; the plan names it (`docs/platform-ports.md`, "Tizen: its own `uri` feature; `play-uri` never").
+uri = []
 
 [dependencies]
 # The application, through its `host` module: the one crate a platform names. Optional, so the empty
@@ -51,10 +58,18 @@ plxnative-modules = { path = "..", default-features = false, optional = true }
 plx_base = { path = "../base", optional = true }
 plx_os = { path = "../os", optional = true }
 serde_json = { version = "1", default-features = false, features = ["alloc", "std"], optional = true }
+# The Tizen URI driver names the contract's traits (`plx_playback_contract`) and the planner's resolver and the player adapter it
+# installs onto (`plx_media`); both are layers `[platform tizen]` may use and both are already in the application's graph.
+plx_media = { path = "../media", default-features = false, optional = true }
+plx_playback_contract = { path = "../playback-contract", optional = true }
 
 [dev-dependencies]
 # The host tests' process-global test lock and private event log (`test-support`).
 plx_base = { path = "../base", features = ["test-support"] }
+# The contract's scriptable fake and its shared conformance suite, and the types the resolver-level test builds a request from.
+plx_playback_contract = { path = "../playback-contract", features = ["test-support"] }
+plx_plex = { path = "../plex" }
+plx_data = { path = "../data" }
 
 [lints]
 workspace = true

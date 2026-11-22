@@ -1246,7 +1246,7 @@ Ecore names to `remote_token_key` pairs".
     compiled in every build of the application because it carries no `cfg` (the application cannot know which platform crate names it);
   - `FEED_MEDIA` (`hostsim` builds only), the desktop's `MediaBoot`: a no-op `early_init` and `compose` over
     `backends::compose_feed` alone, so no URI driver and no resolver;
-  - `NO_MEDIA` (W9; no `cfg`, like `WEBOS_MEDIA`), the `MediaBoot` of a platform with no playback yet (Tizen): a no-op
+  - `NO_MEDIA` (W9; no `cfg`, like `WEBOS_MEDIA`), the `MediaBoot` of a platform with no playback (a Tizen build without its `uri` feature): a no-op
     `early_init` and a `compose` that installs nothing, so `BackendSet::NONE` and no resolver, which the one
     `publish_composition` path logs as `compose: backends=none resolver=no`;
   - `HostGate`, `InFlight`, `Completion` and `Stopped` (W9; no `cfg`), the exit half of the hosted contract (Target shape 7):
@@ -1998,6 +1998,24 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   (`ecore_wl2_display_window_find(display, 1)`), not passed in the table (measured on the emulator 2026-11-22: it is the
   pointer the library logs). `tizen-abi` also checks the delegates' widths. Not in PR A: the Rust `TizenUriDriver`
   and the composition (PR B), the window's alpha and the video hole (PR B), anything on a retail set.
+- As landed (PR B, the driver and its composition; it has run on the Windows emulator against the mock server (below) and has NOT been run on a retail set, H6 OPEN):
+  `TizenUriDriver` (`rust-modules/platform-tizen/src/player/`, the platform crate's own `uri` feature) is a Sans-IO
+  `DriverSet` + `UriDriver` over a `HostPlayer` port that `hosted` implements; every request and event carries the epoch
+  and a completion after a stop is dropped. Capabilities: progressive URI, pause, seek, and `audio_track` (a deviation
+  from D4's "progressive, pause, seek only": the planner issues `SelectTrack` for any title whose audio stream the server
+  states, so the offer of a title fails without it; the driver settles that request for the source's one audio stream by
+  construction, not on native evidence, and `TizenQualifier` certifies ONLY a source with a single audio stream until the
+  retail default stream is measured). `TizenQualifier` certifies a source only where Standard would direct-play it
+  and never a converted PMS output; **the planner refuses most real titles before the qualifier is asked**: `subtitle_choice = Off`
+  (any subtitle stream, none selected) is `SubtitleOff`, a selected embedded subtitle fails `subtitle_track`, a sidecar is
+  `requires_client_subtitle`, Boost Dialog, Auto on a non-local link and a relay are refused the same way, and with no Feed
+  and `qualify_pms` Unknown each ends as `NoQualifiedBackend` (a resolver test pins `SubtitleOff`); whether the native player
+  renders an embedded subtitle when none is set is an OPEN measurement, and `SubtitleOff` is not allowed until it is; a track pick
+  the driver cannot carry is refused by the shared reconfigure door instead of replacing the playing title (and a Quality rung, which only a Feed or a converting provider can carry, is neither offered nor applied: `PlaybackSession::quality_pick_carriable`); a stall or failure of the original is not re-resolved on a composition with no Feed and no converting provider (`can_retry_uri_after_release`), so the viewer reads the stall and not a refusal; the parked attempt's `stopped` timeline goes out at the restore's retire and at an exit, at its own position; the codec table stays `Caps::assumed()` (D8). `player::MEDIA` replaces `NO_MEDIA`
+  behind `uri`; `mk/platform-tizen.mk` builds with it (`TIZEN_URI=0` builds without), and the identity line says which build it is.
+  The shared conformance suite (`plx_playback_contract::uri_conformance`, D7) runs over `FakeUriDriver` and this driver, and
+  the mock's `--extra-media-video-only` serves a local video-only file for the audio-less emulator. Still open: an emulator run of it with the video-only mock; H6 on a
+  retail set (decode, sound, armv7, the TV-menu round trip); a picture through this driver (the window's alpha and the straighten pass are PR B2's; this driver emits no `Presented`); the retail player's default audio stream; and how a real PMS answers `X-Plex-Platform: Tizen`.
 - As landed (PR B2, the video plane under our UI and Home): measured on the TV 10.0 x86_64 emulator 2026-11-22 (scratch
   probe; emulator only): (a) with the window alpha ON the native player's OVERLAY video shows only through pixels the frame
   clears to (0, 0, 0, 0), the UI around it intact (the player route clears that way whether or not a plane is bound, `app/run.rs`
@@ -2010,14 +2028,21 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   plane; a window flag, so `Shell::opaque_route` stays a stated no-op); the straighten COPY program is its own source,
   `fs_straighten_copy.frag`, with no preprocessor directive (the suspect above: the shared file's `#extension` lines in branches not
   taken), the fetch file keeps the two fetch variants, a test pins the arithmetic equal; `PlxPlayer.PauseForHome` / `ResumeAfterHome`
-  (C#, video thread) pause what is playing at OnPause and start exactly that at OnResume; an accepted CLOSE retires its epoch at the
+  (C#, video thread) pause what is playing at OnPause (the OnResume start was dropped in the PR B1 review round: the library owns the resume); an accepted CLOSE retires its epoch at the
   door (`E_STALE` after). The shader file is shared with webOS: its fetch programs' preprocessed text is token-identical to before, and
   a `glGetProgramBinaryOES` before/after identity check on the LG set is OWED (not run here). Emulator run at `3d56d35b2`
   (2026-11-22, the Windows session): the `.tpk` built with MSBuild 0 warnings, 0 errors and `check-tizen-so` passed; no shader compile
   failure and the log reads `straighten: no framebuffer fetch - the pass copies the frame`; the UI is opaque and correct at alpha 1
   (Home, detail, back); a clean stop and 0 log gaps; a Home round trip resumes the same pid and comes back drawn; the unbound player route
-  as above. Still UNVERIFIED: Home with a player open (`PauseForHome` / `ResumeAfterHome` never exercised, no player existed), a picture
-  through the real URI driver (PR B1), anything on a retail set (H6 OPEN).
+  as above. At that run no player was bound yet, so Home with a player open (`PauseForHome` / `ResumeAfterHome`) had not been exercised; the first run of PR B1's driver did (below). Still UNVERIFIED: a picture
+  through the real URI driver (PR B1; the later emulator runs drove it against the mock and no reading of the picture was taken), anything on a retail set (H6 OPEN).
+- As landed (PR B1 review round; the first Windows-emulator run of the driver at `126d1f04c` found these; emulator and mock data only, nothing here is "verified" on a set): the driver is split into a pure
+  `player/machine.rs` (a Sans-IO machine in `MACHINES`, no ledger line) and a thin executor `driver.rs`; a Busy-refused CLOSE is retried, a pause suspends the stall grace, SEEK_DONE
+  `b = -2` (expired) is not a refusal (the seek may still land; POSITION is the authority); a position that stops advancing while Playing is a stall; a CLOSE the library cannot send after
+  `plx_host_stop` (`Refusal::Stopping`) releases the attempt and `OnTerminate` closes the player before waiting for `on_stopped` (the C# is NOT compiled here); one library log line per player ABI event (positions and buffering
+  rate-limited); the EOS "off-route engine" line is guarded while a URI attempt is releasing. **Home with a player open never resumed: fixed in code, emulator re-run pending** (the library parks a URI attempt with
+  `Stop(Suspend)` at the background, then the restore's `begin_resume` answered `NoRoute` because a URI original plan installs no `url`; a parked URI original is now re-resolved at the saved position through the foreground flight, `player::pump_uri_restore`, shared with webOS `play-uri`; the library owns the resume and the host never starts a player at OnResume; see `docs/tizen.md`).
+- As landed (PR B1 review rounds 4 and 5; the emulator runs at `126d1f04c`, `fc5d28594` and `b62e1276e` against the mock found these; emulator and mock data only, nothing here is "verified" on a set, and each fix is "fixed in code, emulator re-run pending"): round 4 sent the parked attempt's `stopped` at its own position when the restore retires it and at an exit, stopped re-resolving a stalled URI title into a refusal no composed backend can answer, and withheld the Quality ladder on a composition that converts nothing. Round 5: a restore whose request door refused no longer leaves the parked attempt owing a stop it already sent (`route::restore_uri_original` answers `UriRestoreStart`, the attempt is finalized when its report went out); a `PLAYER_CLOSED` of a live epoch is still heard after `plx_host_stop` (the confirmation of a CLOSE the host had already accepted, so the stop is not held for `STOP_DEADLINE` and reported unclean); `PlxPlayer.Shutdown` sets `shuttingDown` under the start gate and `EnsureThreads` and `DoOpen` honour it (C#, NOT compiled); the failure read-out offers no *Change quality* where `quality_pick_carriable()` is false (`FailureContext::quality_carriable`). A stall leaves the PMS session open under the read-out exactly as the webOS Feed does (`release_failed_engine`: "nothing is reported as stopped", Back ends it): no change. **Open measurement:** two main-thread hangs of about 300 to 400 ms around the host's `Buffering` and `SeekDone epoch=2` lines during the URI restore have no cause established from the code (see `docs/tizen.md`, "Review round 5"); to diagnose with spans, per the `profile-tv` skill's method.
 - Verify: `DriverSet` contract tests against the fake host table, and a late completion after stop; a
   device run on mock media. Risk: UNVERIFIED how PMS's decision answers `X-Plex-Platform: Tizen`: measured
   on the mock, then on a household-owned test server only with the owner's consent.

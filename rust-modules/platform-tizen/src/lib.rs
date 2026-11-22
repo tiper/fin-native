@@ -3,9 +3,10 @@
 //! **What this is, and is not.** A hosted `.so`: the .NET host (a Tizen `.tpk`, built by the `tizen`
 //! packaging recipe, not here) `dlopen`s it, calls [`plx_host_start`](exports), and the application runs on
 //! a loop thread this crate starts while the host's main thread stays the Ecore main loop. It has run on the
-//! Tizen TV emulator and on no retail set, it does not play (its media boot is `host::NO_MEDIA`), and it says
-//! so: the platform the Plex server reads is `Tizen` with a version ending `(emulator)`
-//! ([`identity`]). The x86_64 build is not an `all(target_os = "linux", target_arch = "arm")` one, so the
+//! Tizen TV emulator and on no retail set, and it says so: the platform the Plex server reads is `Tizen` with a
+//! version ending `(emulator)` ([`identity`]). **Playback is the `uri` feature's** (W10 part B): built with it, the
+//! media boot is [`player::MEDIA`], the URI driver over the host's native player, which the planner offers a narrow set of titles to (host-tested only: nothing has been run on a device, and no title is claimed to play);
+//! built without it, the media boot is `host::NO_MEDIA` and nothing plays (`compose: backends=none`). The x86_64 build is not an `all(target_os = "linux", target_arch = "arm")` one, so the
 //! crash-capture branches the television build has are not selected here: a fault on the emulator leaves no
 //! crash file.
 //!
@@ -24,7 +25,9 @@
 //! - [`keys`], the remote's key names to the application's `Action`s, and the dump that shows an unbound
 //!   name; [`log_udp`], the event log's tap onto a UDP socket (the emulator has no file access);
 //! - [`devboot`], the dev-token boot armed from the launch string instead of trigger files;
-//! - [`identity`], the platform name and the locale.
+//! - [`identity`], the platform name and the locale;
+//! - `player` (the `uri` feature), the Sans-IO URI driver over the host's media player, what the platform certifies
+//!   for the planner, and the composition that installs both.
 //!
 //! Like the other platform crates it reaches the application through `plxnative_modules::host` alone,
 //! names no other platform, and is named by nothing. The library is compiled only under `tizen` (its
@@ -43,6 +46,8 @@ mod keys;
 mod launch;
 mod layout;
 mod log_udp;
+#[cfg(feature = "uri")]
+mod player;
 mod surface;
 
 use plx_os::tv::authority::Authority;
@@ -95,15 +100,22 @@ static SHELL: surface::TizenShell = surface::TizenShell { hosted: &HOSTED };
 
 static PROBE: surface::NoProbe = surface::NoProbe;
 
-/// The Tizen platform: what [`exports`]' loop thread hands `host::run`. No playback: `host::NO_MEDIA`.
-pub(crate) static PLATFORM: Platform = Platform::new(&SERVICES, &SHELL, &PROBE, host::NO_MEDIA);
+/// What the platform composes for playback. With the `uri` feature: the Tizen URI driver over the host's native
+/// player ([`player::MEDIA`]). Without it: `host::NO_MEDIA`, no driver and no resolver.
+#[cfg(feature = "uri")]
+const MEDIA: host::MediaBoot = player::MEDIA;
+#[cfg(not(feature = "uri"))]
+const MEDIA: host::MediaBoot = host::NO_MEDIA;
+
+/// The Tizen platform: what [`exports`]' loop thread hands `host::run`.
+pub(crate) static PLATFORM: Platform = Platform::new(&SERVICES, &SHELL, &PROBE, MEDIA);
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// **The table says what the module note says.** Nothing is persisted (`MemoryOnly`), the records are
-    /// files, and the playback pieces are the refusing ones.
+    /// files, and the legacy webOS playback pieces are the refusing ones.
     #[test]
     fn the_table_states_a_memory_only_files_platform_with_no_playback() {
         assert_eq!(SERVICES.secure.mode, StoreMode::MemoryOnly);

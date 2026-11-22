@@ -98,3 +98,9 @@ jobs:
         # (`#[cfg(feature = "tizen")]`), which no other job compiles. It is a separate cargo invocation from the staticlib build above: that is
         # `cargo rustc --crate-type staticlib` into target-tizen, this is an ordinary test build into target/.
         run: cd rust-modules && cargo "+$RUST_TOOLCHAIN" test --lib -p plx_platform_tizen --features tizen
+
+      - name: The platform crate's host tests with the Tizen URI driver
+        # The `uri` feature (W10 part B: `player/`, the driver, the qualifier and the composition) adds code and tests the pass above does not
+        # compile, and the shipped library is built WITH it (`TIZEN_URI` defaults to 1), so its host tests run here too. The pass above stays as it is: it
+        # is the build without the driver, which `TIZEN_URI=0` still makes.
+        run: cd rust-modules && cargo "+$RUST_TOOLCHAIN" test --lib -p plx_platform_tizen --features tizen,uri

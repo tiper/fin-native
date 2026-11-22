@@ -292,7 +292,7 @@ pub use engine::{
 /// ticks a scripted clock past the release deadline (`dev::uriprobe`'s tests).
 #[cfg(any(test, feature = "test-support"))]
 pub use route_start::exit_native_with;
-pub use route_start::{begin_resume, exit_native, land_resume, retire_if_server_stopped, stop_bufferfeed,
+pub use route_start::{begin_resume, exit_native, land_resume, pump_uri_restore, retire_if_server_stopped, stop_bufferfeed,
     stop_for_replacement, suspend_bufferfeed, BufferfeedStartOutcome, NativeExit, ResumeOutcome, ResumeStart,
     start_playback, start_playback_tracked, suspend_playback_if_attempt};
 pub use route_start::suspend_bufferfeed as suspend_playback;
@@ -1084,6 +1084,10 @@ pub struct FailureContext {
     /// The failed attempt has a Plex request that can be resolved again. A URL/dev-trigger
     /// playback has none, so nothing that retries can do anything.
     pub can_retry: bool,
+    /// Some composed backend could carry a Quality rung the viewer picks ([`crate::route::PlaybackSession::quality_pick_carriable`]:
+    /// a Feed, or a URI provider that certifies a converted output). Without one the ladder is withheld from the More menu and a rung
+    /// is refused, so the read-out's *Change quality* would open an empty ladder: it is not offered (the rule above).
+    pub quality_carriable: bool,
     /// The sandbox repair can still be started (nothing is running or finished).
     pub repair_idle: bool,
 }
@@ -1103,6 +1107,9 @@ pub struct FailureContext {
 ///   no [`TryAgain`](FailureAction::TryAgain): the same request gets the same answer. A different
 ///   rung is a different request, so the ladder stays where a transcode or a direct play could
 ///   succeed instead.
+/// * On a composition no backend can carry a rung for (no Feed, a URI provider that certifies no converted output;
+///   [`FailureContext::quality_carriable`]) [`ChangeQuality`](FailureAction::ChangeQuality) is not offered either: the More menu
+///   withholds the ladder there, so the button would open onto nothing.
 /// * A file with no video track and an unrepairable sandbox get nothing but *Back*.
 pub fn failure_actions(kind: FailureKind, cx: FailureContext) -> Vec<FailureAction> {
     use FailureAction as A;
@@ -1139,7 +1146,11 @@ pub fn failure_actions(kind: FailureKind, cx: FailureContext) -> Vec<FailureActi
                 if transient {
                     v.push(A::TryAgain);
                 }
-                v.push(A::ChangeQuality);
+                // A rung is a request for the server to convert: on a composition nothing can convert for, the ladder is
+                // withheld from the More menu and a pick is refused, so the button would open onto nothing.
+                if cx.quality_carriable {
+                    v.push(A::ChangeQuality);
+                }
             }
         }
     }
@@ -1157,6 +1168,7 @@ pub fn failure_context_captured(ps: &crate::route::PlaybackSession, diagnostic_f
     FailureContext {
         forced: crate::route::forced_direct_play(ps) || diagnostic_forced,
         can_retry: crate::route::can_retry_current_play(ps),
+        quality_carriable: ps.quality_pick_carriable(),
         repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle,
     }
 }
@@ -2840,9 +2852,11 @@ pub fn every_failure_row() -> Vec<(FailureKind, FailureContext, Vec<FailureActio
     for kind in kinds {
         for forced in [false, true] {
             for can_retry in [false, true] {
-                for repair_idle in [false, true] {
-                    let cx = FailureContext { forced, can_retry, repair_idle };
-                    out.push((kind, cx, failure_actions(kind, cx)));
+                for quality_carriable in [false, true] {
+                    for repair_idle in [false, true] {
+                        let cx = FailureContext { forced, can_retry, quality_carriable, repair_idle };
+                        out.push((kind, cx, failure_actions(kind, cx)));
+                    }
                 }
             }
         }
@@ -3253,7 +3267,7 @@ mod tests {
     /// every rung Force overrides. The fix is the one change that re-enables the fallback.
     #[test]
     fn forced_direct_play_offers_the_fix_and_never_the_quality_ladder() {
-        let cx = FailureContext { forced: true, can_retry: true, repair_idle: true };
+        let cx = FailureContext { forced: true, can_retry: true, quality_carriable: true, repair_idle: true };
         let row = failure_actions(FailureKind::PlaybackPolicy, cx);
         assert_eq!(row.first(), Some(&FailureAction::PlayAutomatically));
         assert!(!row.contains(&FailureAction::ChangeQuality), "{row:?}");
@@ -3295,9 +3309,32 @@ mod tests {
             assert_eq!(row.contains(&A::Repair), kind == K::JailMissingRtkmem && cx.repair_idle, "{at}");
         }
         // and a transient failure without Force keeps both of its recoveries
-        let cx = FailureContext { forced: false, can_retry: true, repair_idle: true };
+        let cx = FailureContext { forced: false, can_retry: true, quality_carriable: true, repair_idle: true };
         let row = failure_actions(K::PlaybackInterrupted, cx);
         assert_eq!(&row[..2], &[A::TryAgain, A::ChangeQuality]);
+    }
+
+    /// **The read-out offers no *Change quality* when no composed backend can carry a rung.** The ladder is withheld from the
+    /// More menu on such a composition (`quality_pick_carriable`, round 4's R5) and `set_quality` refuses a rung, so the failure
+    /// read-out's button opened `More { page: Quality }` onto nothing: the emulator's stall read-out offered it on a URI-only
+    /// composition. The rule (`failure_actions`): an action is offered only if it can change the outcome. Everything else in the
+    /// row is as before: a transient failure keeps *Try again*, and a Feed composition keeps the rung.
+    #[test]
+    fn a_composition_that_can_carry_no_quality_rung_is_not_offered_change_quality_on_a_failure() {
+        use FailureAction as A;
+        use FailureKind as K;
+        for (kind, cx, row) in every_failure_row() {
+            if !cx.quality_carriable {
+                assert!(!row.contains(&A::ChangeQuality), "{kind:?} {cx:?}: the ladder leads nowhere — {row:?}");
+            }
+        }
+        let uri_only = FailureContext { forced: false, can_retry: true, quality_carriable: false, repair_idle: true };
+        assert_eq!(failure_actions(K::PlaybackInterrupted, uri_only), [A::TryAgain, A::Back]);
+        let feed = FailureContext { quality_carriable: true, ..uri_only };
+        assert_eq!(failure_actions(K::PlaybackInterrupted, feed), [A::TryAgain, A::ChangeQuality, A::Back]);
+        // Force still offers its own recovery, the one change that re-enables the fallback.
+        let forced = FailureContext { forced: true, ..uri_only };
+        assert_eq!(failure_actions(K::PlaybackInterrupted, forced), [A::PlayAutomatically, A::TryAgain, A::Back]);
     }
 
     #[test]
@@ -4060,7 +4097,7 @@ mod tests {
         assert_eq!(e.kind.code(), "preview_not_direct", "{:?}", e.kind);
         assert_ne!(e.kind, FailureKind::Unspecified);
         assert!(e.detail.is_empty(), "no server sentence rides a refusal that is ours");
-        let cx = FailureContext { forced: false, can_retry: true, repair_idle: false };
+        let cx = FailureContext { forced: false, can_retry: true, quality_carriable: true, repair_idle: false };
         assert_eq!(failure_actions(e.kind, cx), vec![FailureAction::Back], "same item, same refusal: no Try Again");
     }
 

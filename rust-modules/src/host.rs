@@ -27,7 +27,7 @@
 //! is that sink itself (also `play-feed`, the module it lives in). A television build never has the desktop pair.
 //! `SIM_PRESENT` is the one other `hostsim` value: the simulator's [`Present`] hooks, which draw and so stay in the
 //! application, for the desktop's [`FrameSeam`] to state beside the pacer it owns (a television states `FrameSeam::NONE`).
-//! [`NO_MEDIA`] is the one for a platform with no playback yet (the Tizen build): no early init, no driver and no resolver,
+//! [`NO_MEDIA`] is the one for a platform with no playback (a Tizen build without its `uri` feature, which composes its own driver): no early init, no driver and no resolver,
 //! so the boot publishes `BackendSet::NONE` and logs `compose: backends=none resolver=no`; it carries no `cfg` either.
 //! Each retires at W11a, when the composition moves into the platform that owns it
 //! (`docs/platform-ports.md`, Target shape 8 and W7). The names this module publishes are a known list that a
@@ -95,9 +95,9 @@ pub const FEED_MEDIA: MediaBoot = MediaBoot {
     compose: crate::app::adapters::backends::compose_feed_alone,
 };
 
-/// The [`MediaBoot`] of a platform with no playback yet: no early init, a composition that installs no driver
+/// The [`MediaBoot`] of a platform with no playback: no early init, a composition that installs no driver
 /// (`BackendSet::NONE`, no resolver). Compiled in every build, like [`WEBOS_MEDIA`], because it carries no `cfg`:
-/// a hosted platform that is neither the television nor the simulator (the Tizen build) states it. The boot
+/// a hosted platform that is neither the television nor the simulator (the Tizen build without its `uri` feature) states it. The boot
 /// still publishes the composition through the one path, so the log reads `compose: backends=none resolver=no`.
 /// Retires at W11a with [`WEBOS_MEDIA`], when each platform composes its own drivers.
 pub const NO_MEDIA: MediaBoot = MediaBoot {

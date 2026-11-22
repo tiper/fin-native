@@ -12,7 +12,7 @@
 //!     composes the URI driver `Acb` with no `ptype` trigger.
 //!   - [`compose_feed`] and [`compose_native`] install what a platform's drivers are: the Feed (or, with
 //!     none, the platform's display sink) for a platform that has one, and on webOS the product URI driver
-//!     too; [`compose_none`] (`host::NO_MEDIA`) installs nothing, for a platform with no playback yet. They publish nothing: they return what they composed, and the application's one
+//!     too; [`compose_none`] (`host::NO_MEDIA`) installs nothing, for a platform with no playback (a Tizen build without its `uri` feature). They publish nothing: they return what they composed, and the application's one
 //!     publisher (`app::platform::publish_composition`) tells the route session the set the
 //!     installed drivers form, so policy offers what is physically there instead of what Cargo
 //!     features happened to be on. the platform crates name these two through

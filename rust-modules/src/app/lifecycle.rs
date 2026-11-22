@@ -83,7 +83,7 @@ impl ForegroundActuator for PlayerForegroundActuator<'_> {
             Some(outcome) => FlightLanding::Landed(outcome),
             // `land_resume` reaped a stale landing first: nothing outstanding means the flight
             // ended (a Back, a newer request) and its ender owns what comes next.
-            None if plx_media::route::resume_flight_outstanding() => FlightLanding::Waiting,
+            None if plx_media::route::resume_flight_outstanding() || self.pa.uri_restore_outstanding() => FlightLanding::Waiting,
             None => FlightLanding::Stale,
         }
     }
