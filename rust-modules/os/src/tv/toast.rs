@@ -20,8 +20,6 @@ pub enum Identity {
 
 /// What came of one attempt. Three distinct stories, because each is a different bug.
 #[derive(Debug, PartialEq, Eq)]
-// The simulator has no bus, so only `NoBus` is ever constructed there.
-#[cfg_attr(feature = "hostsim", allow(dead_code))]
 pub enum Outcome {
     /// The service said `returnValue: true`.
     Accepted,

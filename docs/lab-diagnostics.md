@@ -174,7 +174,7 @@ by forgetting a flag.
 | `lab/control.rs` | one persistent pinned HTTPS long-poll worker, ordered command parsing, the main-thread mailbox, dispatch acknowledgement and bounded reconnect backoff |
 | `base/src/eventlog/ring.rs` | the bounded buffer: `VecDeque<(u32 t_ms, String)>`, capped by **both** 4000 records and 768 KB of text, evicting oldest, counting evictions. One `Mutex`. |
 | `lab/snapshot.rs` | envelope construction from `Diag` + `webos` + `devcaps` + `paths` + uptime. Pure and host-testable. |
-| `base/src/eventlog/scrub.rs` | the **redaction pass** (§6), moved out of `lab/snapshot.rs` on 2026-08-29 when the event log (then `crate::log`) became a second caller. Ungated, so its assertions finally run in the default `make check` — under `lab/` they were skipped by every build that did not set the feature. Two exits: `scrub` may refuse a line, `scrub_local` may only rewrite one. |
+| `base/src/eventlog/scrub.rs` | the **redaction pass** (§6), moved out of `lab/snapshot.rs` on 2026-08-29 when the event log (then `crate::log`) became a second caller. Ungated, so its assertions finally run in the default `make check` — under `lab/` they were skipped by every build that did not set the feature. Two exits: `scrub` may refuse a line, `scrub_local` may only rewrite one; the refuse half is ungated too, because the platform's log tap (`eventlog::set_tap`) applies its decision (`still_looks_secret`) to the local line. |
 | `base/src/diag/zlib.rs` | the one-symbol `compress2` table and the gzip envelope (§5) |
 | `lab/upload.rs` | gzip (optional, §5) then one `net::post_pinned`, on a `task::spawn_small` worker. Single-flight: a second BLUE while one is in flight is refused, not queued. |
 
@@ -193,7 +193,7 @@ system and no call site to update.
 the ring sees has already had credentials, hosts, bare addresses, viewing identity and household
 names rewritten, so the upload's own `scrub` pass is now genuinely defence in depth rather than the
 first line of defence. `scrub_local` never DROPS a record — the drop belongs to the network exit —
-so the ring's contents still correspond one-to-one with the file on disk.
+so the ring's contents still correspond one-to-one with the file on disk. (The platform's log tap, `eventlog::set_tap`, sits at the same point but is a network exit: it is handed a line only when the full pass would keep it, so it is a subset of the file, and the ring is not.)
 
 **Sizing.** 4000 records / 768 KB is minutes, not seconds: a settled screen writes a line a second
 (the heartbeat), and the noisiest thing this app does — a playback join — writes on the order of
@@ -441,7 +441,7 @@ not pretending the old filesystem contract exists.
 
 * `make check` is green in both configurations. **Take the counts yourself** — this repository has
   rotted four written test counts already and the fifth is not going to be this one:
-  `cd rust-modules && cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_owp -- --list | grep -c ': test'`, with and without
+  `cd rust-modules && cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp -- --list | grep -c ': test'`, with and without
   `--features lab-diagnostics`. What the feature's own tests cover: the ring's two caps and its
   `dropped` delta, the `lab.json` parse and each refusal it names, the five scrub rewrites and the
   outright refusal (including the bare address and the household name the device test found), the

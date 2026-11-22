@@ -1,0 +1,100 @@
+name: Tizen library CI
+
+# The Tizen platform's hosted library (docs/tizen.md; mk/platform-tizen.mk): links `libplx.so` (the `plx_platform_tizen` staticlib, a
+# STATIC SDL2 + SDL2_ttf and nanosvg's rasterizer) and checks what the link produced, on the build host's own x86_64 Linux. COMPILE-ONLY:
+# no emulator, no .NET SDK, no certificate, no Samsung tool. It proves that the library still LINKS against exactly the system libraries
+# a Tizen television has (`-z defs`), that its DT_NEEDED set, undefined symbols, exports and glibc ceiling are the allowlist's
+# (`ci/check-tizen-so.py verify`), and that the C header and the .NET host agree on the three exports (`ci/check-tizen-so.py abi`).
+# Nothing here proves that the library RUNS on a television: that is the emulator's, run by hand (docs/tizen.md, "Build, install, launch").
+#
+# NOT A REQUIRED CHECK. `ci.yml`'s two required status names are untouched and do not wait for this workflow, and branch protection is not
+# edited; it starts only for the paths below, which is also why it is its own workflow: `ci.yml`'s job set is pinned by ci/test_ci_split.py
+# and its `changes` job gates every job behind one path filter. The cold-run cost is unmeasured (see the `timeout-minutes` note on the job).
+#
+# THE PATH FILTER names the files whose change can alter the link or the checks: `rust-modules/**` is in it because the library is the WHOLE
+# application behind one platform crate (a new `extern` symbol anywhere in it is this link's undefined symbol), as simulators.yml's is for the
+# same reason. Markdown under rust-modules is not.
+#
+# THE RUNNER IS PINNED to ubuntu-24.04 (glibc 2.39), not `-latest`: the library's glibc symbol floor is the build host's, and a runner image
+# that moved on past the ceiling (`PLX_MAX_GLIBC`, default 2.40, the Tizen TV 10.0 emulator image's glibc) would stop the check, loudly. The
+# pin keeps the link reproducible; the ceiling is what refuses a library the television's glibc could not load.
+
+on:
+  push:
+    branches: [main, 'release/v*']
+    paths: &tizen_paths
+      - '.github/workflows/tizen.yml'
+      - '.github/actions/apt-install/**'
+      - '.github/actions/deps-cache/**'
+      - '.github/actions/host-rust/**'
+      - '.github/actions/rust-toolchain/**'
+      - 'Makefile'
+      - 'mk/platform-tizen.mk'
+      - 'tizen/**'
+      - 'rust-modules/**'
+      - '!rust-modules/**/*.md'
+      - 'src/svg.c'
+      - 'ci/check-tizen-so.py'
+      - 'ci/check-staticlib-artifact.py'
+      - 'ci/test_tizen_so_check.py'
+      - 'ci/test_tizen_package.py'
+      - 'ci/dependencies.json'
+      - 'ci/deps.py'
+      - 'tools/tizen-log-receiver.py'
+  pull_request:
+    paths: *tizen_paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tizen-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tizen-so:
+    name: Tizen library (link and verify, no emulator)
+    runs-on: ubuntu-24.04
+    # A cold run builds the application crate for x86_64 Linux (the dependency tree has no cache the first time), the two SDL archives
+    # (~2 min) and links; the apt step is bounded by its own timeout-minutes below. Unmeasured on CI at the time of writing (no run existed):
+    # the limit is a generous cold-cache bound, and the first runs' wall times replace it.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install the GLES2 development library the link names
+        # `-lGLESv2` resolves against libGLESv2.so (the .so symlink is in -dev only). The television has no such package: the library
+        # needs `libGLESv2.so.2` at run time and the Tizen image provides it (inventory D3). Bounded apt path, as every job here.
+        timeout-minutes: 15
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libgles-dev binutils
+
+      # The pinned Rust toolchain, the cargo cache, and (sdl: "true") the desktop SDL/GL development packages that LINK the crate's own host
+      # test binary (build.rs links them for every host test binary). The library itself links NONE of them: its SDL is built from the
+      # pinned archives by `make tizen-sdl` into tizen/sdl-build, and `tizen-verify` fails the job if a libSDL2 shows up in DT_NEEDED.
+      - uses: ./.github/actions/host-rust
+        with:
+          sdl: "true"
+
+      - name: The configuration
+        run: make PLATFORM=tizen print-tizen-config
+
+      - name: The header and the .NET host agree on the exports
+        run: make PLATFORM=tizen tizen-abi
+
+      - name: Build the library (static SDL2 + SDL2_ttf, the platform staticlib, the link)
+        run: make PLATFORM=tizen tizen-so
+
+      - name: Verify the library (DT_NEEDED allowlist, undefined symbols, exports, glibc ceiling)
+        run: make PLATFORM=tizen tizen-verify
+
+      - name: The platform crate's own host tests with the Tizen feature
+        # The pattern followed is `ci.yml`'s host unit job: `cargo test --lib -p <crates>` from rust-modules, on the pinned toolchain. That job
+        # already runs `plx_platform_tizen` with its DEFAULT features, where the crate's library is empty; this pass adds the crate's own tests
+        # (`#[cfg(feature = "tizen")]`), which no other job compiles. It is a separate cargo invocation from the staticlib build above: that is
+        # `cargo rustc --crate-type staticlib` into target-tizen, this is an ordinary test build into target/.
+        run: cd rust-modules && cargo "+$RUST_TOOLCHAIN" test --lib -p plx_platform_tizen --features tizen

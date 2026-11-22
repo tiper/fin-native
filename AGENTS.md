@@ -202,10 +202,12 @@ the macOS simulator are valuable, but they cannot prove every device behavior.
 - While iterating on one crate, `make test-crate C=plx_ui [T=filter] [DEPS=1]` builds and runs only
   that crate's lib tests in `make test-fast`'s incremental tree. It is a loop, not a gate.
 - `make test-crate` does NOT enable `hostsim`: tests under `#[cfg(all(test, feature = "hostsim"))]`
-  (the application crate's `app/run.rs` `lifecycle_regression_tests`, the player-return rig;
-  `plx_media`'s `player/engine.rs`, `pump.rs`, `route/decision.rs`) run as `make test-hostsim
-  [C=<crate>] [T=filter]`. `C` defaults to the application crate; `C=plx_media` (or `C=media`)
-  runs that crate's `hostsim` tests, the same ones `make check`'s hostsim pass runs for it. It runs
+  (the application crate's `app/run.rs` `lifecycle_regression_tests`, the player-return rig)
+  run as `make test-hostsim
+  [C=<crate>] [T=filter]`. `plx_media`'s player and route tests (the engine, pump and
+  `route/decision.rs` ones that drive the host sink) are plain `cfg(test)` since W8c-1 and run in `make test-crate`.
+  `C` defaults to the application crate; `C=plx_media` (or `C=media`)
+  runs that crate's tests with `hostsim` on, the same ones `make check`'s hostsim pass runs for it. It runs
   `cargo test --lib -p <crate> --features hostsim` on the pinned
   toolchain with a throwaway `PLXNATIVE_RUNTIME_DIR` (removed afterwards), incrementally in its own
   gitignored `rust-modules/target-hostsim`: inside the checkout, so `make disk` and

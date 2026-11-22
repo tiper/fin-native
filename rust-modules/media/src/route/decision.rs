@@ -14302,11 +14302,11 @@ pub(crate) fn resolve_refused_preview_for_test(ps: &mut PlaybackSession) {
     plx_plex::plex::reset_servers_for_test();
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 #[path = "decision_flight_rig.rs"]
 pub(crate) mod flight_rig;
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 #[path = "decision_trial_flight_tests.rs"]
 mod trial_flight_tests;
 

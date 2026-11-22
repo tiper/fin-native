@@ -36,7 +36,6 @@
 //!   PLXNATIVE_RUNTIME_DIR                     this instance's trigger/FIFO/log root
 //!   PLXNATIVE_APP_DIR                         where appfont*.ttf and the icons live (repo `pkg/`)
 
-use plxnative_modules::platform_desktop;
 use std::ffi::CString;
 
 /// Defaults chosen to fail loudly rather than silently talk to the wrong thing.
@@ -125,7 +124,7 @@ fn main() {
     let events = plxnative_modules::sim_events_log();
     // The banner is the FIRST line of the log, so a log read from the middle, tailed, or pasted
     // into an issue still declares what produced it. Every heartbeat additionally carries `sim=1`
-    // (see `app.rs`'s SIM_TAG) — one marker at the top is easy to scroll past.
+    // (`DesktopProbe::heartbeat_tag`) — one marker at the top is easy to scroll past.
     let banner = "sim: THIS IS THE DESKTOP SIMULATOR, not a television. No video pipeline; \
                   frame rates here describe this Mac's GPU and must never be read as an fps gate.\n";
     if let Err(e) = std::fs::write(&events, banner) {
@@ -147,6 +146,6 @@ fn main() {
     // The desktop platform's entry returns the status the application ended with; ending the
     // process is this executable's, through `plx_base::process::exit_now` (no `atexit` handlers
     // under live workers, #1115).
-    let rc = platform_desktop::run(&c_host, port);
+    let rc = plx_platform_desktop::run(&c_host, port);
     plx_base::process::exit_now(rc)
 }

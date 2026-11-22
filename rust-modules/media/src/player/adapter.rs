@@ -1139,6 +1139,10 @@ impl PlayerAdapter {
     /// inside (PLX-NATIVE-1Q). Every media-side verb that is not a hook goes through here.
     pub fn display_sink(&self) -> &'static dyn VideoSink { (self.sink)() }
 
+    /// Whether a Load on the composed sink has no video path behind it (the simulator with its clock sink
+    /// off): the application's preview admission asks it without naming the sink.
+    pub fn lacks_video_path(&self) -> bool { self.display_sink().lacks_video_path() }
+
     /// Escrow an exact resolved URL and its source-specific native track map. The route owner
     /// still has to supply a qualified offer and send an addressed Start through the runner.
     pub fn stage_uri_source(&mut self, attempt: AttemptId, source: UriSource)
@@ -1780,7 +1784,7 @@ impl PlayerAdapter {
         changed
     }
 
-    /// Test-only access to the physical session for the existing hostsim rigs.
+    /// Test-only access to the physical session for the existing host-sink rigs.
     #[cfg(test)]
     #[inline]
     pub fn engine(&mut self) -> Option<std::cell::RefMut<'_, Engine>> {
@@ -2049,7 +2053,7 @@ impl PlayerAdapter {
     }
 
     /// Address one Load verdict without handing route state to the native worker.
-    #[cfg(all(test, feature = "hostsim"))]
+    #[cfg(test)]
     pub(super) fn load_receipt(&mut self, attempt: crate::route::RouteStartAttempt, native_epoch: u32,
         _trace_generation: u32) -> plx_play_feed::feed_resources::LoadReceipt {
         self.probe().resources(|resources|
@@ -2057,7 +2061,7 @@ impl PlayerAdapter {
     }
 
     /// A refused thread spawn cannot return a receipt; retire its mapping immediately.
-    #[cfg(all(test, feature = "hostsim"))]
+    #[cfg(test)]
     pub(super) fn cancel_load_receipt(&mut self, token: u64) {
         self.probe().resources(|resources| resources.cancel_load_receipt(token));
     }
@@ -2399,7 +2403,7 @@ mod uri_stop_refusal_tests {
     }
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(test)]
 mod load_outcome_tests {
     use plx_play_feed::shared::FEED_TX;
     use super::*;

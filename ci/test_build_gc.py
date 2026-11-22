@@ -1515,7 +1515,7 @@ def copy_tree(src, dst):
                          "sysroot/", "rust-poc/", ".abi-cache/", ".webos-ndk/", ".tv-mac", ".tv-host",
                          ".tv-dpad-pass", ".tv-remote-url", "pkg/diagnostics/", "pkg/auth.json", "pkg/lab.json",
                          "pkg/telemetry.local.json", "tests/fixtures/softfloat/arm.tbl", "**/plxnative-recordings/",
-                         "fuzz/artifacts/", "/.empryo/"}
+                         "fuzz/artifacts/", "/.empryo/", "*.p12", "*.pfx"}   # a Samsung certificate is a credential: kept, never "build output"
         derived, kept = {}, {rel: rel for rel in guard.PRIVATE_FILES}      # listed form -> file to create
         for line in (ROOT / ".gitignore").read_text().splitlines():
             pat = line.strip()

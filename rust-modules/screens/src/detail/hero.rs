@@ -199,8 +199,8 @@ impl HeroCtl {
     /// page that has just appeared must not change the record. Travel still reaches them, and focus
     /// the viewer put on one stays. Before the item lands, the one seat on a write control (the
     /// watched toggle of a page with no driver) presses nothing (`activate_hero`) and is the page's
-    /// own seat, which every frame moves to `DetailScreen::default_elem` until the viewer moves focus
-    /// (`DetailScreen::provisional`).
+    /// own seat, which every frame moves to `DetailScreen::default_elem` until the viewer acts at it
+    /// (`DetailScreen::provisional` lists the acts).
     pub const fn writes_account(self) -> bool {
         matches!(
             self,

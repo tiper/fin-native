@@ -37,6 +37,7 @@
 //! the two, on a device where diagnosis means reading a log over ssh.
 #![allow(dead_code)]
 
+use crate::choice::Choice;
 use libc::{dlerror, dlopen, dlsym, RTLD_GLOBAL, RTLD_NOW};
 use std::ffi::CString;
 use std::os::raw::c_void;
@@ -155,6 +156,57 @@ impl Handle {
     }
 }
 
+/// The OS-owned library names that differ from one platform to the next: what the platform states in
+/// `plx_os::tv::Services::libraries` and [`publish`] hands to this module, once, before the first table is
+/// read.
+///
+/// Two lists, each in the order worth trying (see [`Handle::open`]): `curl` for the three libcurl tables
+/// (`plx_net`'s `curl`, `curlmulti` and `raw`), `egl` for the EGL probe (`plx_gfx::egl`). Nothing else
+/// is here on purpose: the bundled `-plx` FFmpeg and libass, zlib and the gst libraries are the same
+/// everywhere, and a platform crate's OWN tables (Tizen's Ecore and EGL window chain load before the
+/// install, on the host thread) stay literals inside that crate. A table reads its list through
+/// [`dynlib!`]'s `platform(..)` form, which calls [`libraries`] when it loads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Libraries {
+    pub curl: &'static [&'static str],
+    pub egl: &'static [&'static str],
+}
+
+impl Libraries {
+    /// A platform with no libcurl and no EGL to name: a table loaded from it reports `NoLibrary` with its
+    /// own log line (see [`load_into`]), never a panic. No shipped platform states it.
+    pub const NONE: Self = Self { curl: &[], egl: &[] };
+
+    /// What a read sees when NOTHING was published (a host unit test, a tool that never runs a platform's
+    /// entry): the union of every name any platform of this project opens, so such a process still finds
+    /// libcurl and EGL wherever it runs. `libcurl.4.dylib` is the Mac's, in the dyld shared cache
+    /// (`dlopen("libcurl.4.dylib")` resolves it with no install), and is what lets the desktop simulator
+    /// sign in at all; a television never reaches it. `libEGLfk.so.2` is first: webOS 2.2.3-5.3.1, which
+    /// is every release this app ran on before 6.
+    pub const HOST: Self = Self {
+        curl: &["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"],
+        egl: &["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"],
+    };
+}
+
+static LIBRARIES: Choice<Libraries> = Choice::new();
+
+/// The platform's [`Libraries`], once: published by the application's entry before the first read
+/// (`Platform::install_services`), and refused like [`paths::publish`](crate::paths::publish) is when a
+/// second one arrives or a table was read first. **Never logs**; the caller reports a refusal.
+pub fn publish(libraries: Libraries) -> Result<(), crate::choice::PublishError> {
+    LIBRARIES.publish(libraries)
+}
+
+/// The names to try. The first read with nothing published freezes the answer to [`Libraries::HOST`].
+pub fn libraries() -> Libraries {
+    libraries_of(&LIBRARIES)
+}
+
+fn libraries_of(cell: &Choice<Libraries>) -> Libraries {
+    cell.get().copied().unwrap_or(Libraries::HOST)
+}
+
 /// What a `load()` did. `Ok` means every symbol resolved and the table is live.
 pub enum Loaded {
     Ok(&'static str),
@@ -175,7 +227,8 @@ impl Loaded {
 /// because the whole value of failing here is that the log says which one.
 #[cold]
 #[inline(never)]
-pub fn missing_symbol(lib: &str, sym: &str) -> ! {
+pub fn missing_symbol(candidates: &[&str], sym: &str) -> ! {
+    let lib = candidates.first().copied().unwrap_or("(no library named)");
     crate::eventlog::log(&format!(
         "dynlib: FATAL — {sym} was called but never resolved from {lib}; the load gate was skipped"
     ));
@@ -191,6 +244,14 @@ pub fn load_into(
     candidates: &'static [&'static str],
     required: &[(&'static str, &AtomicPtr<c_void>)],
 ) -> Loaded {
+    if candidates.is_empty() {
+        // A platform that states no library for this table (`Libraries::NONE`): missing, like any other.
+        crate::eventlog::log(&format!(
+            "dynlib: the platform names no library for the table that binds {}; treated as missing",
+            required.first().map_or("(nothing)", |(name, _)| name)
+        ));
+        return Loaded::NoLibrary;
+    }
     let Some((h, soname)) = Handle::open_in(dir, candidates) else {
         return Loaded::NoLibrary;
     };
@@ -244,8 +305,16 @@ macro_rules! dynlib_sym {
 ///     }
 /// }
 /// ```
-/// emits `mod avformat { pub fn load() -> Loaded; }` plus a module-level
-/// `unsafe fn av_read_frame(...) -> c_int` that dispatches through the resolved pointer.
+/// emits `mod avformat { pub fn load() -> Loaded; pub fn candidates() -> &'static [&'static str]; }` plus a
+/// module-level `unsafe fn av_read_frame(...) -> c_int` that dispatches through the resolved pointer.
+///
+/// # A list the PLATFORM states
+///
+/// `curl: platform(curl) { .. }` in place of the literal list names a [`Libraries`] field instead: the
+/// candidates are read from [`libraries`] when `load()` runs (and when `candidates()` is asked), so the
+/// names a table opens are the platform's own statement and not a literal in a layer. Use it only for an
+/// OS-owned library whose name differs per platform; a bundled or same-everywhere library keeps its
+/// literal list.
 ///
 /// # A VARIADIC C function: put `...` where C puts it, and spell the rest
 ///
@@ -284,7 +353,7 @@ macro_rules! dynlib {
         $crate::dynlib! {
             @emit [pub(crate)]
             $(#[$meta])*
-            $modname : [ $($cand),+ ] {
+            $modname : [ &[$($cand),+] ] {
                 $( $(#[$fmeta])* fn $fname $(= $sym)? ( $($params)* ) $(-> $ret)? ; )*
             }
         }
@@ -304,7 +373,42 @@ macro_rules! dynlib {
         $crate::dynlib! {
             @emit [pub]
             $(#[$meta])*
-            $modname : [ $($cand),+ ] {
+            $modname : [ &[$($cand),+] ] {
+                $( $(#[$fmeta])* fn $fname $(= $sym)? ( $($params)* ) $(-> $ret)? ; )*
+            }
+        }
+    };
+    // The platform's list: `[`...`]` above is a literal, `platform(curl)` names a `Libraries` field.
+    (
+        $(#[$meta:meta])*
+        $modname:ident : platform( $field:ident ) {
+            $(
+                $(#[$fmeta:meta])*
+                fn $fname:ident $(= $sym:literal)? ( $($params:tt)* ) $(-> $ret:ty)? ;
+            )*
+        }
+    ) => {
+        $crate::dynlib! {
+            @emit [pub(crate)]
+            $(#[$meta])*
+            $modname : [ $crate::dynlib::libraries().$field ] {
+                $( $(#[$fmeta])* fn $fname $(= $sym)? ( $($params)* ) $(-> $ret)? ; )*
+            }
+        }
+    };
+    (
+        $(#[$meta:meta])*
+        pub $modname:ident : platform( $field:ident ) {
+            $(
+                $(#[$fmeta:meta])*
+                fn $fname:ident $(= $sym:literal)? ( $($params:tt)* ) $(-> $ret:ty)? ;
+            )*
+        }
+    ) => {
+        $crate::dynlib! {
+            @emit [pub]
+            $(#[$meta])*
+            $modname : [ $crate::dynlib::libraries().$field ] {
                 $( $(#[$fmeta])* fn $fname $(= $sym)? ( $($params)* ) $(-> $ret)? ; )*
             }
         }
@@ -312,7 +416,9 @@ macro_rules! dynlib {
     (
         @emit [$vis:vis]
         $(#[$meta:meta])*
-        $modname:ident : [ $($cand:literal),+ $(,)? ] {
+        // The candidate list as one EXPRESSION of type `&'static [&'static str]`: a literal slice, or
+        // the platform's field.
+        $modname:ident : [ $cands:expr ] {
             $(
                 $(#[$fmeta:meta])*
                 // The parameter list is captured as raw tokens and re-parsed by `dynlib_wrapper!`,
@@ -329,7 +435,10 @@ macro_rules! dynlib {
             use std::os::raw::c_void;
             use std::sync::atomic::AtomicPtr;
 
-            $vis const CANDIDATES: &[&str] = &[$($cand),+];
+            /// The SONAMEs this table tries, in order: its literal list, or the platform's.
+            $vis fn candidates() -> &'static [&'static str] {
+                $cands
+            }
             $( $vis static $fname: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut()); )*
 
             /// Open the first candidate SONAME that exists and resolve every required symbol.
@@ -337,7 +446,7 @@ macro_rules! dynlib {
             $vis fn load(dir: Option<&std::path::Path>) -> $crate::dynlib::Loaded {
                 $crate::dynlib::load_into(
                     dir,
-                    CANDIDATES,
+                    candidates(),
                     &[$(($crate::dynlib_sym!($fname $(, $sym)?), &$fname)),*],
                 )
             }
@@ -375,7 +484,7 @@ macro_rules! dynlib_wrapper {
         $vis unsafe fn $fname ( $($arg : $argty,)* $($varg : $vargty),+ ) $(-> $ret)? {
             let p = $modname::$fname.load(std::sync::atomic::Ordering::Relaxed);
             if p.is_null() {
-                $crate::dynlib::missing_symbol($modname::CANDIDATES[0], $sym);
+                $crate::dynlib::missing_symbol($modname::candidates(), $sym);
             }
             let f: unsafe extern "C" fn( $($argty,)* ... ) $(-> $ret)? = std::mem::transmute(p);
             f($($arg,)* $($varg),+)
@@ -400,7 +509,7 @@ macro_rules! dynlib_wrapper {
             // synchronising edge for the workers.
             let p = $modname::$fname.load(std::sync::atomic::Ordering::Relaxed);
             if p.is_null() {
-                $crate::dynlib::missing_symbol($modname::CANDIDATES[0], $sym);
+                $crate::dynlib::missing_symbol($modname::candidates(), $sym);
             }
             let f: unsafe extern "C" fn($($argty),*) $(-> $ret)? = std::mem::transmute(p);
             f($($arg),*)
@@ -558,5 +667,56 @@ mod tests {
             return;
         }
         panic!("no candidate library is present and unmapped on this host: {tried:?}");
+    }
+    crate::dynlib! {
+        /// A table whose list is the platform's, as `plx_net`'s curl tables are.
+        platform_probe: platform(curl) {
+            fn plxnative_no_such_symbol() -> i32;
+        }
+    }
+
+    /// **The lists, pinned.** `NONE` is empty (a platform with no curl and no EGL); `HOST` is the union of
+    /// today's names, in today's order, so a process that published nothing opens what it always did.
+    #[test]
+    fn the_none_group_is_empty_and_the_unset_group_is_the_union_of_todays_names() {
+        assert!(Libraries::NONE.curl.is_empty() && Libraries::NONE.egl.is_empty());
+        assert_eq!(Libraries::HOST.curl, ["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"]);
+        assert_eq!(Libraries::HOST.egl, ["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"]);
+    }
+
+    /// Nothing is published in a test process, so a read sees the union, a table built with
+    /// `platform(..)` answers it, and a publish after that read is refused like `paths::publish`'s is. On
+    /// private cells for the successes, because a publish into the process-wide cell would steer every
+    /// other test's libcurl.
+    #[test]
+    fn an_unpublished_read_is_the_union_and_a_late_or_second_publish_is_refused() {
+        assert_eq!(libraries(), Libraries::HOST, "no test publishes");
+        assert_eq!(platform_probe::candidates(), Libraries::HOST.curl);
+        assert_eq!(publish(Libraries::NONE), Err(crate::choice::PublishError::AlreadyRead));
+        assert_eq!(libraries(), Libraries::HOST, "the refused group changed nothing");
+
+        let cell = Choice::new();
+        let stated = Libraries { curl: &["libcurl.so.4"], egl: &["libEGL.so.1"] };
+        assert_eq!(libraries_of(&cell), Libraries::HOST, "an empty cell reads the union");
+        assert_eq!(cell.publish(stated), Err(crate::choice::PublishError::AlreadyRead));
+
+        let cell = Choice::new();
+        assert_eq!(cell.publish(stated), Ok(()));
+        assert_eq!(libraries_of(&cell), stated);
+        assert_eq!(cell.publish(Libraries::NONE), Err(crate::choice::PublishError::AlreadyPublished));
+        assert_eq!(libraries_of(&cell), stated, "the first group stands");
+    }
+
+    /// A table loaded with an empty list fails like a missing library, with its own log line, and
+    /// publishes nothing; the wrapper path that names the library never indexes an empty list.
+    #[test]
+    fn an_empty_list_is_a_missing_library_not_a_panic() {
+        static A: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+        let v = load_into(None, &[], &[("x", &A)]);
+        assert!(matches!(v, Loaded::NoLibrary));
+        assert!(A.load(Ordering::Acquire).is_null());
+        let lost = std::panic::catch_unwind(|| missing_symbol(&[], "x")).expect_err("a refused call panics");
+        let text = lost.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(text.contains("(no library named):x"), "{text}");
     }
 }

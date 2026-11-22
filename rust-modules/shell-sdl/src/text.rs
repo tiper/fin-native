@@ -1,4 +1,4 @@
-//! The text-input half that is SDL: the bytes of an `SDL_TEXTINPUT` event in this build's layout,
+//! The text-input half that is SDL: the bytes of an `SDL_TEXTINPUT` event in the platform's layout,
 //! and the calls that raise and dismiss the system keyboard. The state a field's editing leaves
 //! behind (what the application has asked for, the queue of commits, the focus handshake) is the
 //! application's own `textinput` module; this file is only what knows SDL.
@@ -6,8 +6,9 @@
 //! **Trap 1, the offset.** webOS inserts a `Uint32 inputSource` at `+12` of `SDL_TextInputEvent`,
 //! so the UTF-8 text starts at **+16** on the television, not the `+12` that stock SDL 2.0.4's
 //! `SDL_events.h` declares and that a desktop's SDL2 really uses. That header lies about the LG
-//! build; the NDK sysroot's fork copy is the proof. [`TEXT_OFF`] is that choice, `cfg!` and not
-//! `#[cfg]` so both arms stay compiled and the one nobody is building cannot rot, and
+//! build; the NDK sysroot's fork copy is the proof. [`text_off`] is that choice, a value of the
+//! platform's [`SdlFlavor`] and not a `#[cfg]`, so both arms are compiled and graded in every build
+//! and the one nobody is running cannot rot, and
 //! `decode_text_at` takes the offset as an argument so `make check` grades both layouts. A single
 //! hard-coded number ships garbage on one of the two platforms and fails nothing.
 //!
@@ -25,6 +26,7 @@
 //! Under `cfg(test)` and the `test-support` feature the four calls a host test could reach are
 //! replaced by [`host_test_sdl`]'s stubs: a host test has no window and no panel.
 use crate::event::SDL_TEXTINPUT;
+use crate::init::SdlFlavor;
 use crate::sys;
 #[cfg(not(any(test, feature = "test-support")))]
 use crate::sys::{
@@ -71,9 +73,15 @@ pub const TEXT_CAP: usize = 32;
 /// Where that array begins in the raw event bytes. **Trap 1**, and the only number in this file
 /// that is wrong on the platform you are not currently building.
 ///
-/// `cfg!` and not `#[cfg]`, matching [`crate::event::decode_key`]: both arms stay compiled on both
-/// platforms, so the one nobody is building cannot rot into a compile error nobody sees for a month.
-pub const TEXT_OFF: usize = if cfg!(feature = "hostsim") { 12 } else { 16 };
+/// A value of the platform's [`SdlFlavor`], matching [`crate::event::decode_key`]: both arms are
+/// compiled and tested in every build, so the one nobody is running cannot rot into a fault nobody
+/// sees for a month.
+pub const fn text_off(flavor: SdlFlavor) -> usize {
+    match flavor {
+        SdlFlavor::Lg => 16,
+        SdlFlavor::Stock => 12,
+    }
+}
 
 /// `SDL_LOG_CATEGORY_INPUT` / `SDL_LOG_PRIORITY_DEBUG`, from `SDL_log.h`.
 #[cfg(not(any(test, feature = "test-support")))]
@@ -140,11 +148,11 @@ pub fn keyboard_probe(win: *mut c_void) -> KeyboardProbe {
     }
 }
 
-/// What [`encode_event`]'s inverse reads out of these bytes, at THIS platform's offset. Exposed so a
+/// What [`encode_event`]'s inverse reads out of these bytes, at the flavour's offset. Exposed so a
 /// caller can log the decode without duplicating the choice of offset, which is the one thing in
 /// this file that must never be written down twice.
-pub fn decode(ev: &[u8]) -> String {
-    decode_text_at(ev, TEXT_OFF)
+pub fn decode(flavor: SdlFlavor, ev: &[u8]) -> String {
+    decode_text_at(ev, text_off(flavor))
 }
 
 /// The bytes an `SDL_TEXTINPUT` event carries for `text`, in whichever layout [`decode_text_at`]
@@ -157,10 +165,10 @@ pub fn decode(ev: &[u8]) -> String {
 /// simulator means somebody physically typing — so without it nothing automated could ever put a
 /// character in the search field, on either platform.
 ///
-/// The bytes are a faithful event in THIS platform's layout, and `txt:` hands them to the decode
+/// The bytes are a faithful event in the flavour's layout, and `txt:` hands them to the decode
 /// rather than to `SDL_PushEvent`: pushing a synthetic `SDL_TEXTINPUT` segfaults inside the Mac's
 /// SDL, for the reason in the module doc.
-pub fn encode_event(text: &str) -> [u8; 128] {
+pub fn encode_event(flavor: SdlFlavor, text: &str) -> [u8; 128] {
     let mut ev = [0u8; 128];
     ev[0..4].copy_from_slice(&SDL_TEXTINPUT.to_ne_bytes());
     // `text[32]` holds at most 31 bytes plus its terminator — and the cut must land on a CHAR
@@ -170,13 +178,14 @@ pub fn encode_event(text: &str) -> [u8; 128] {
     while n > 0 && !text.is_char_boundary(n) {
         n -= 1;
     }
-    ev[TEXT_OFF..TEXT_OFF + n].copy_from_slice(&text.as_bytes()[..n]);
+    let off = text_off(flavor);
+    ev[off..off + n].copy_from_slice(&text.as_bytes()[..n]);
     ev
 }
 
 /// The committed text in a raw `SDL_TEXTINPUT` event whose `text[]` begins at `off`.
 ///
-/// Pure, and offset-parameterised rather than reading [`TEXT_OFF`] itself, so `make check` can
+/// Pure, and offset-parameterised rather than reading [`text_off`] itself, so `make check` can
 /// grade BOTH platforms' layouts on a host that only ever builds one of them — the same reason
 /// `event::decode_key` and `inject::encode_key` are pure and tested as a pair.
 ///
@@ -271,6 +280,14 @@ fn drop_orphan_head(b: &[u8]) -> &[u8] {
 mod tests {
     use super::*;
 
+    /// The text through both flavours' encode and decode; the two must agree on it.
+    fn round_trip(s: &str) -> String {
+        let lg = decode(SdlFlavor::Lg, &encode_event(SdlFlavor::Lg, s));
+        let stock = decode(SdlFlavor::Stock, &encode_event(SdlFlavor::Stock, s));
+        assert_eq!(lg, stock, "both layouts carry the same text");
+        lg
+    }
+
     /// A synthetic event in one platform's layout: type at +0, the text at `off`, NUL-terminated
     /// if it fits. `[u8; 128]` because that is what `event::poll` reads into.
     fn ev_with(off: usize, text: &[u8]) -> [u8; 128] {
@@ -293,6 +310,7 @@ mod tests {
         // `inputSource`, which is zero — an empty commit.
         assert_eq!(decode_text_at(&ev_with(12, b"desktop"), 16), "top");
         assert_eq!(decode_text_at(&ev_with(16, b"webos"), 12), "");
+        assert_eq!((text_off(SdlFlavor::Lg), text_off(SdlFlavor::Stock)), (16, 12));
     }
 
     /// The ordinary case: a short string in a fixed 32-byte array, terminated by NUL. Everything
@@ -433,7 +451,7 @@ mod tests {
             "A", "a", "Wallace", "WALLACE", "wallace", "WaLlAcE", "Ç", "ç", "Ä", "ä",
         ] {
             assert_eq!(decode_text_at(&ev_with(16, s.as_bytes()), 16), s);
-            assert_eq!(decode_text_at(&encode_event(s), TEXT_OFF), s);
+            assert_eq!(round_trip(s), s);
         }
     }
 
@@ -463,7 +481,7 @@ mod tests {
                 got, typed,
                 "the character pressed must be the character that arrives"
             );
-            assert_eq!(decode_text_at(&encode_event(typed), TEXT_OFF), typed);
+            assert_eq!(round_trip(typed), typed);
         }
         // The ASCII originals still arrive as themselves — nothing here rewrites in either
         // direction. `\` is the one the row calls out, and the rest are what a URL layer or a
@@ -507,7 +525,7 @@ mod tests {
     #[test]
     fn encode_decode_round_trips() {
         for s in ["a", "wallace", "Amélie", "千と千尋", "star wars"] {
-            assert_eq!(decode_text_at(&encode_event(s), TEXT_OFF), s);
+            assert_eq!(round_trip(s), s);
         }
     }
 
@@ -517,17 +535,46 @@ mod tests {
     fn an_over_long_commit_is_cut_on_a_char_boundary() {
         let long = "x".repeat(100);
         assert_eq!(
-            decode_text_at(&encode_event(&long), TEXT_OFF),
+            round_trip(&long),
             "x".repeat(TEXT_CAP - 1)
         );
         // 16 CJK codepoints = 48 bytes: the 31-byte limit falls mid-codepoint, so the cut must
         // back up to 30 bytes (10 characters) rather than emit a replacement character.
         let cjk = "千".repeat(16);
-        let got = decode_text_at(&encode_event(&cjk), TEXT_OFF);
+        let got = round_trip(&cjk);
         assert_eq!(got, "千".repeat(10));
         assert!(
             !got.contains('\u{fffd}'),
             "the cut must not split a codepoint"
         );
+    }
+
+    /// **A surface with no SDL window is safe to ask the SDL-shaped questions** (the Tizen platform's
+    /// `Surface::window()` is null and it never initialises SDL: `docs/platform-ports.md`, W9, D1).
+    /// This calls the REAL externs `keyboard_probe` and `textinput::available` reach, not
+    /// [`host_test_sdl`]'s stubs, which `cfg(test)` swaps in for the wrappers above: the declarations
+    /// in `sys.rs` resolve against the host's SDL2, whose video subsystem no host test initialises, so
+    /// this is exactly the state of a process that never called `SDL_Init`. SDL answers a NULL window with
+    /// "no flags" and an uninitialised video with "no screen keyboard", and sets an error string; it
+    /// does not fault. If this ever fails, `Surface::window` cannot be null and the SDL-shaped calls
+    /// have to move into the trait (the fold the plan keeps as the alternative).
+    #[test]
+    fn the_real_sdl_answers_a_null_window_with_video_uninitialised() {
+        // The event queue's tests bring SDL's events up and down; none initialises video.
+        let _serial = plx_base::testlock::serial();
+        // SAFETY: stock SDL2 calls with a NULL window and no subsystem running, the case under test.
+        let (flags, support, active) = unsafe {
+            (
+                sys::SDL_GetWindowFlags(std::ptr::null_mut()),
+                sys::SDL_HasScreenKeyboardSupport(),
+                sys::SDL_IsTextInputActive(),
+            )
+        };
+        assert_eq!(flags, 0, "a NULL window has no flags, so no input focus bit");
+        assert_eq!(support, 0, "no video driver, so no screen keyboard");
+        // Only a report: it is a number the boot log prints and it is whatever this SDL says (a desktop's
+        // answers 1 here; see `textinput`'s `STARTED`, which is why nothing decides on it). The property is
+        // that the call returned.
+        let _ = active;
     }
 }

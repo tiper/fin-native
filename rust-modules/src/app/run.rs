@@ -119,9 +119,7 @@ pub(crate) unsafe fn run(app: &mut App) {
         watchdog.advance();
         let fr = Frame::begin(&app.player.session, app.runtime.metadata_view());
         let mut runtime = ProductFrameRuntime { app, fr, clock_notice: &mut clock_notice,
-            hint_taught: &mut hint_taught,
-            #[cfg(all(feature = "hostsim", target_os = "linux"))]
-            wslg_frame_budget: None };
+            hint_taught: &mut hint_taught, pace: None };
         plx_ui::dispatch::Dispatcher::product_frame(&mut runtime);
         if runtime.fr.present { watchdog.presented(); }
     }
@@ -134,8 +132,8 @@ struct ProductFrameRuntime<'a> {
     fr: Frame,
     clock_notice: &'a mut super::clock_notice::ClockNotice,
     hint_taught: &'a mut super::hint_taught::HintTaught,
-    #[cfg(all(feature = "hostsim", target_os = "linux"))]
-    wslg_frame_budget: Option<super::window_activity::WslgFrameBudget>,
+    /// The platform pacer's stamp for this frame (`Pacer::begin`), `None` unless the pacer is armed.
+    pace: Option<u64>,
 }
 
 impl plx_ui::dispatch::FrameRuntime<AppHost> for ProductFrameRuntime<'_> {
@@ -143,8 +141,7 @@ impl plx_ui::dispatch::FrameRuntime<AppHost> for ProductFrameRuntime<'_> {
     fn pump(&mut self) {
         let app = &mut *self.app;
         plx_telemetry::telemetry::session::tick(matches!(app.route(), AppArg::Player));
-        #[cfg(all(feature = "hostsim", target_os = "linux"))]
-        { self.wslg_frame_budget = app.wslg_frame_pacing.then(super::window_activity::WslgFrameBudget::begin); }
+        self.pace = app.frame_pacing.then(app.frame.pacer.begin);
         self.fr = begin_product_frame(app);
         let fr = &mut self.fr;
         app.instr.mark(plx_base::diag::heartbeat::Phase::Top); // also starts the visit's hang interval
@@ -351,17 +348,13 @@ impl plx_ui::dispatch::FrameRuntime<AppHost> for ProductFrameRuntime<'_> {
     fn draw_and_swap(&mut self) -> bool {
         finish_prepare(self.app);
         self.app.platform.diag.prepare_end();
-        unsafe { present_and_swap(self.app, &mut self.fr,
-            #[cfg(all(feature = "hostsim", target_os = "linux"))]
-            self.wslg_frame_budget.take()); }
+        unsafe { present_and_swap(self.app, &mut self.fr, self.pace.take()); }
         true
     }
     fn skipped(&mut self) {
         finish_prepare(self.app);
         self.app.platform.diag.prepare_end();
-        unsafe { present_and_swap(self.app, &mut self.fr,
-            #[cfg(all(feature = "hostsim", target_os = "linux"))]
-            self.wslg_frame_budget.take()); }
+        unsafe { present_and_swap(self.app, &mut self.fr, self.pace.take()); }
     }
     fn end(&mut self) {
         unsafe {
@@ -872,32 +865,13 @@ pub(crate) fn rig_clear_opaque_region(shell: &dyn Shell) {
 #[cfg(feature = "devtools")]
 const PAINT_FPS_COUNTER: bool = false;
 
-/// **Simulator only: the television's compositor, over the frame the straighten pass just made.** The
-/// decoded picture under the UI when `plxnative-simvideo` holds one, black otherwise
-/// ([`plx_gfx::gfx::draw_under`]'s straight-alpha mix either way). The pass has no simulator switch, so
-/// this is not optional on a bound frame: a shot of the straight buffer would be the pass's own
-/// intermediate picture.
-#[cfg(feature = "hostsim")]
-fn composite_plane_under() {
-    #[cfg(feature = "play-feed")]
-    if crate::app::adapters::hostsim::composite_under() {
-        return;
-    }
-    plx_gfx::gfx::draw_under_black();
-}
-
 /// One idle iteration's font-warming slice: a key pressed during it waits at most this long more
 /// than the idle poll already makes it wait.
 const FONT_WARM_SLICE_US: u64 = 2_000;
 
 /// **Draw, capture, swap — or sleep one frame period** (spec §3.3 step 10). Everything in here is
 /// inside the present gate's decision, which `prepare_window` has already taken into `fr.present`.
-unsafe fn present_and_swap(
-    app: &mut App,
-    fr: &mut Frame,
-    #[cfg(all(feature = "hostsim", target_os = "linux"))]
-    wslg_frame_budget: Option<super::window_activity::WslgFrameBudget>,
-) {
+unsafe fn present_and_swap(app: &mut App, fr: &mut Frame, pace: Option<u64>) {
     if fr.present {
         // The dump's full prewarm drain and pre-draw debt sample, after the takes and before the draw.
         #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
@@ -942,10 +916,10 @@ unsafe fn present_and_swap(
         // `plxnative-simvideo`, and the simulator's stand-in for the compositor the pass feeds: a
         // bound frame goes through the television's straight-alpha mix over the decoded picture, or
         // over black with none, so a shot is the panel and not the straight buffer. Before the
-        // screenshot seam below, so shots include it.
-        #[cfg(feature = "hostsim")]
+        // screenshot seam below, so shots include it. The television's own compositor is the real one:
+        // its platform states nothing here (`Present::NONE`).
         if app.player.video_plane_bound {
-            composite_plane_under();
+            (app.frame.present.compose_under)();
         }
         // Before the swap, never after: the back buffer is undefined once presented.
         // A dump decides here whether this frame is written (`dev::framedump`); otherwise the
@@ -971,14 +945,9 @@ unsafe fn present_and_swap(
         {
             #[cfg(feature = "threadcheck")]
             let _present_scope = plx_base::task::watchdog::present_scope();
-            #[cfg(feature = "hostsim")]
-            {
-                // `present_supersampled` disables the scissor test itself (a clip left armed would
-                // crop the window copy) - below gfx's `LIVE_SCISSOR`, which it cannot name. Clearing
-                // the clip through gfx first leaves the two in step for the next frame.
-                plx_gfx::gfx::clip_clear();
-                plx_base::surface::present_supersampled();
-            }
+            // The simulator copies its supersampled offscreen frame to the window here
+            // (`host::SIM_PRESENT`); the television states nothing.
+            (app.frame.present.before_swap)();
             // dev (`/tmp/plxnative-framecb`): this frame's compositor callback, requested before
             // the swap that commits it. One latched bool unarmed.
             app.platform.diag.request();
@@ -1023,9 +992,8 @@ unsafe fn present_and_swap(
         // no longer names `ui`'s metrics.
         #[cfg(feature = "devtriggers")]
         plx_ui::card_motion_metrics::presented(fr.now);
-        #[cfg(all(feature = "hostsim", target_os = "linux"))]
-        if let Some(budget) = wslg_frame_budget {
-            budget.finish();
+        if let Some(started) = pace {
+            (app.frame.pacer.end)(started);
         }
     } else {
         if fr.deferred {
@@ -1083,7 +1051,7 @@ unsafe fn drain_sdl(app: &mut App, fr: &mut Frame) {
     // The second path: what the platform's surface delivers through its sink. An SDL surface delivers
     // nothing here (every SDL event came through `poll` above), so on the television and a desktop this
     // is an empty queue; a surface that is not SDL's has no `poll` and only this. `poll` is retired once
-    // the SDL shells deliver through the sink (W9 at the latest, `docs/platform-ports.md`).
+    // the SDL shells deliver through the sink (not scheduled, `docs/platform-ports.md`).
     deliver_events(app, fr);
 }
 
@@ -1153,7 +1121,7 @@ unsafe fn ingress_token(app: &mut App, fr: &mut Frame, token: &str) -> bool {
     #[cfg(feature = "devtriggers")]
     if let Some(accepted) = app.a11y_pending.intercept(token) { return accepted; }
     let scope = app.pages.input_scope();
-    let accepted = dispatch_remote_token(token, &app.player.session, &app.adapters.player, &mut app.pages.present, scope);
+    let accepted = dispatch_remote_token(app.sdl_flavor(), token, &app.player.session, &app.adapters.player, &mut app.pages.present, scope);
     if accepted && token_is_direct(token) { app.rec.input(super::recorder::enc_token(token)); }
     accepted
 }
@@ -1821,7 +1789,7 @@ unsafe fn ingest_sdl_event(app: &mut App, fr: &mut Frame) {
 /// the SDL events nothing acts on (the window events and the rest), which are page damage.
 unsafe fn ingest_sdl_event_with_window(app: &mut App, fr: &mut Frame,
     restore_window: impl FnOnce(*mut c_void)) {
-    if let Some(event) = decode_host_event(&app.ev) {
+    if let Some(event) = decode_host_event(app.sdl_flavor(), &app.ev) {
         // A key or text event's raw bytes are logged before anything acts on them. A controlled
         // replay owns logical ingress and logs nothing for a real event.
         if matches!(event, HostEvent::Key(_) | HostEvent::Text(_)) && !controlled_replay(app) {
@@ -1936,7 +1904,7 @@ unsafe fn ingest_pointer_down(app: &mut App, cx: f32, cy: f32) {
     let as_ok = app.ptr.click_is_ok(on_control, app.platform.shell.hide_is_cursor_swap());
     if as_ok {
         app.ptr.ok_from_click = true;
-        super::events::remote_synth_key_edge(SDLK_RETURN, 0, true);
+        super::events::remote_synth_key_edge(app.sdl_flavor(), SDLK_RETURN, 0, true);
         return;
     }
     app.last_input = clock::now();
@@ -1997,7 +1965,7 @@ unsafe fn ingest_pointer_down(app: &mut App, cx: f32, cy: f32) {
 /// A pointer button came up at `(cx, cy)`.
 unsafe fn ingest_pointer_up(app: &mut App, cx: f32, cy: f32) {
     if std::mem::take(&mut app.ptr.ok_from_click) {
-        super::events::remote_synth_key_edge(SDLK_RETURN, 0, false);
+        super::events::remote_synth_key_edge(app.sdl_flavor(), SDLK_RETURN, 0, false);
         return;
     }
     app.last_input = clock::now();
@@ -3198,7 +3166,7 @@ fn finish_landed_play(app: &mut App, resume_prepared: bool) {
             // A host Load of 0 with the clock sink off is "no video path", not an
             // admitted slot. Counting it spends the cycle and the later failure
             // opens the breaker, so every later title is skipped.
-            let seam_absent = cfg!(feature = "hostsim") && !plx_base::devtrig::flag("clocksink");
+            let seam_absent = app.adapters.player.lacks_video_path();
             if deferred {
                 // Admission is taken when the queued start launches (or refused if the deadline
                 // refuses it), by the runner that starts it.
@@ -3844,8 +3812,8 @@ pub(crate) unsafe fn heartbeat(app: &mut App, fr: &mut Frame) {
                 app.rec.take_spent_us(),
             );
             log(&format!(
-                "loop={} route={rn}{ov}{pos}{vp} fps={pres}{ld}{tail}{SIM_TAG}",
-                app.loop_shown
+                "loop={} route={rn}{ov}{pos}{vp} fps={pres}{ld}{tail}{}",
+                app.loop_shown, app.platform.diag.heartbeat_tag()
             ));
         }
 }
@@ -3965,9 +3933,9 @@ unsafe fn replay_inject(app: &mut App, fr: &mut Frame, v: &serde_json::Value) {
         }
         "key" => {
             if v["repeat"].as_bool().unwrap_or(false) {
-                remote_synth_key_repeat(u("sym"), u("wcode"));
+                remote_synth_key_repeat(app.sdl_flavor(), u("sym"), u("wcode"));
             } else {
-                remote_synth_key_edge(u("sym"), u("wcode"), v["down"].as_bool().unwrap_or(true));
+                remote_synth_key_edge(app.sdl_flavor(), u("sym"), u("wcode"), v["down"].as_bool().unwrap_or(true));
             }
         }
         "pointer" => remote_synth_pointer(SDL_MOUSEMOTION, i("x"), i("y")),
@@ -4169,8 +4137,8 @@ pub(in crate::app) mod lifecycle_regression_tests {
             ev: [0; 128],
             remote: Default::default(),
             surface: crate::app::platform::detached_surface(),
-            #[cfg(target_os = "linux")]
-            wslg_frame_pacing: false,
+            frame_pacing: false,
+            frame: platform.shell.frame(),
             t0: Default::default(),
             instr: plx_base::diag::heartbeat::Instruments::new(false, 22.0),
             scenarios: crate::dev::scenarios::Scenarios {
@@ -4955,9 +4923,9 @@ pub(in crate::app) mod lifecycle_regression_tests {
         } else {
             let (sym, wcode) = plx_ui::consts::raw_pair(action);
             app.ev = match edge {
-                Edge::Down => encode_key(sym, wcode, true),
-                Edge::Repeat => encode_key_repeat(sym, wcode),
-                Edge::Up => encode_key(sym, wcode, false),
+                Edge::Down => encode_key(crate::app::events::host_flavor(), sym, wcode, true),
+                Edge::Repeat => encode_key_repeat(crate::app::events::host_flavor(), sym, wcode),
+                Edge::Up => encode_key(crate::app::events::host_flavor(), sym, wcode, false),
             };
             event(app, fr, if edge == Edge::Up { SDL_KEYUP } else { SDL_KEYDOWN });
         }
@@ -5024,8 +4992,8 @@ pub(in crate::app) mod lifecycle_regression_tests {
                     let press = KeyPress::new(None, edge, Some(RawKey { sym: 0, wcode: 504 })).unwrap();
                     unsafe { ingest_host_event(&mut app, &mut fr, HostEvent::Key(press), |_| {}) };
                 } else {
-                    app.ev = if edge == Edge::Repeat { encode_key_repeat(0, 504) }
-                        else { encode_key(0, 504, down) };
+                    app.ev = if edge == Edge::Repeat { encode_key_repeat(crate::app::events::host_flavor(), 0, 504) }
+                        else { encode_key(crate::app::events::host_flavor(), 0, 504, down) };
                     event(&mut app, &mut fr, if down { SDL_KEYDOWN } else { SDL_KEYUP });
                 }
                 steps.push(key_aftermath(&mut app));
@@ -5599,7 +5567,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
                 let press = KeyPress::new(None, Edge::Down, Some(RawKey { sym: 0, wcode: 504 })).unwrap();
                 unsafe { ingest_host_event(&mut app, &mut fr, HostEvent::Key(press), |_| {}) };
             } else {
-                app.ev = encode_key(0, 504, true);
+                app.ev = encode_key(crate::app::events::host_flavor(), 0, 504, true);
                 event(&mut app, &mut fr, SDL_KEYDOWN);
             }
             deliver_inputs(&mut app, 136);
@@ -5676,8 +5644,8 @@ pub(in crate::app) mod lifecycle_regression_tests {
     //     `action_of` turns red, with `input.rs`'s decode literals and the hosted door's round
     //     trip. No production reader of the loop reads the action before W5d (the screens move onto
     //     it there), so no native effect test can see that one yet.
-    // The hostsim build feeds the STOCK SDL byte layout; LG's fork layout is graded in the default-feature
-    // run (`events::key_event_tests::the_key_layout_is_pinned_byte_for_byte`).
+    // These tests encode and decode in the host-test platform's flavour (`host_flavor()`, stock); both layouts are
+    // graded in every pass by `events::key_event_tests::the_key_layout_is_pinned_byte_for_byte`.
 
     /// How a key is delivered to a guard test: as the native SDL bytes (the pair, as literals) or as
     /// the hosted press that names only the action.
@@ -5698,7 +5666,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
         use plx_machine::machine::Edge;
         match door {
             Door::Native(sym, wcode) => {
-                app.ev = encode_key(*sym, *wcode, down);
+                app.ev = encode_key(crate::app::events::host_flavor(), *sym, *wcode, down);
                 event(app, fr, if down { SDL_KEYDOWN } else { SDL_KEYUP });
             }
             Door::Hosted(action) => {
@@ -6386,7 +6354,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
                 } else if hosted {
                     unsafe { ingest_host_event(&mut app, &mut fr, HostEvent::Text(chunk.to_owned()), |_| {}) };
                 } else {
-                    app.ev = crate::textinput::encode_event(chunk);
+                    app.ev = crate::textinput::encode_event(crate::app::events::host_flavor(), chunk);
                     event(&mut app, &mut fr, SDL_TEXTINPUT);
                 }
                 assert!(matches!(app.inputs.last().map(|input| &input.kind),
@@ -7276,8 +7244,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
             let fr = Frame::begin(&app.player.session, app.runtime.metadata_view());
             let mut rig = TracedProductFrame { native: ProductFrameRuntime {
                 app: &mut app, fr, clock_notice: &mut notice, hint_taught: &mut hint,
-                #[cfg(all(feature = "hostsim", target_os = "linux"))]
-                wslg_frame_budget: None }, trace: vec![], remaining: 0,
+                pace: None }, trace: vec![], remaining: 0,
                 resource_arrived: false, swap_returns };
             assert!(plx_ui::dispatch::Dispatcher::product_frame(&mut rig));
             let mut expected = vec!["pump", "ingest", "results", "tickdrain", "navcommit", "publish", "admit"];
@@ -7799,7 +7766,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
 
     fn queue_back(app: &mut App, fr: &mut Frame) {
         for pressed in [true, false] {
-            app.ev = encode_key(0, plx_ui::consts::WCODE_BACK, pressed);
+            app.ev = encode_key(crate::app::events::host_flavor(), 0, plx_ui::consts::WCODE_BACK, pressed);
             event(app, fr, if pressed { SDL_KEYDOWN } else { SDL_KEYUP });
         }
     }
@@ -7816,7 +7783,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
         let (mut app, mut fr) = back_pointer_test_app();
         queue_back(&mut app, &mut fr);
         back_pointer_event(&mut app, &mut fr, SDL_MOUSEMOTION, 501);
-        app.ev = encode_key(0, WCODE_POINTER_HIDDEN, true);
+        app.ev = encode_key(crate::app::events::host_flavor(), 0, WCODE_POINTER_HIDDEN, true);
         event(&mut app, &mut fr, SDL_KEYDOWN);
         queue_back(&mut app, &mut fr);
 
@@ -7837,7 +7804,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
         assert!(super::super::bridge::player(&app.pages).unwrap().hud.dismissed);
 
         queue_back(&mut app, &mut fr);
-        app.ev = encode_key(0, plx_ui::consts::WCODE_PLAY, true);
+        app.ev = encode_key(crate::app::events::host_flavor(), 0, plx_ui::consts::WCODE_PLAY, true);
         event(&mut app, &mut fr, SDL_KEYDOWN);
         dispatch_back_pointer_inputs(&mut app, &fr);
         content_requests(&mut app, &mut fr);
@@ -7851,7 +7818,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
         plx_media::player::swap_state_for_test(&mut app.player.session, plx_media::player::PlaybackState::Buffering);
         publish_product_frame(&mut app, true);
         queue_back(&mut app, &mut fr);
-        app.ev = encode_key(b'1' as u32, 0, true);
+        app.ev = encode_key(crate::app::events::host_flavor(), b'1' as u32, 0, true);
         event(&mut app, &mut fr, SDL_KEYDOWN);
         queue_back(&mut app, &mut fr);
 
@@ -7872,7 +7839,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
         assert!(app.ptr.click_is_ok(true, true), "a click while legacy transparency is installed is OK");
         let focus = app.pages.focus();
         for x in [502, 498, 502] {
-            app.ev = encode_key(0, WCODE_POINTER_HIDDEN, true);
+            app.ev = encode_key(crate::app::events::host_flavor(), 0, WCODE_POINTER_HIDDEN, true);
             event(&mut app, &mut fr, SDL_KEYDOWN);
             back_pointer_event(&mut app, &mut fr, SDL_MOUSEMOTION, x);
             dispatch_back_pointer_inputs(&mut app, &fr);
@@ -7999,7 +7966,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
                     app.ptr.button_down,app.ptr.prev_mx.to_bits(),app.ptr.mot_accum.to_bits()));
                 app.inputs.clear();
             }
-            app.ev=encode_key(plx_ui::consts::SDLK_DOWN,0,true);
+            app.ev=encode_key(crate::app::events::host_flavor(), plx_ui::consts::SDLK_DOWN,0,true);
             event(&mut app,&mut fr,SDL_KEYDOWN);
             assert!(app.ptr.dpad_mode);
             assert_eq!(app.ptr.mot_accum,0.0);
@@ -8709,12 +8676,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
             }
             finish_prepare(app);
             if !fr.present {
-                present_and_swap(
-                    app,
-                    &mut fr,
-                    #[cfg(all(feature = "hostsim", target_os = "linux"))]
-                    None,
-                );
+                present_and_swap(app, &mut fr, None);
             }
         }
         fr.present
@@ -9090,7 +9052,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
         unsafe { playback_tick(&mut rig.app, &mut fr); }
         assert_eq!(rig.app.player.lifecycle.state(), parked, "nothing rebuilds it before a press");
 
-        rig.app.ev = encode_key(plx_ui::consts::SDLK_DOWN, 0, true);
+        rig.app.ev = encode_key(crate::app::events::host_flavor(), plx_ui::consts::SDLK_DOWN, 0, true);
         event(&mut rig.app, &mut fr, SDL_KEYDOWN);
         assert!(!rig.app.player.lifecycle.awaiting_load(), "the press claimed the restore");
         assert!(rig.app.inputs.is_empty(), "…and was spent on it, not handed to the page");
@@ -9145,7 +9107,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
 
         match press {
             WakeWith::Key { sym, wcode } => {
-                rig.app.ev = encode_key(sym, wcode, true);
+                rig.app.ev = encode_key(crate::app::events::host_flavor(), sym, wcode, true);
                 event(&mut rig.app, &mut fr, SDL_KEYDOWN);
             }
             WakeWith::Click | WakeWith::ClickOnControl => {
@@ -9508,7 +9470,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
         frame(&mut rig.app, fr.now);
         assert!(rig.app.pages.surface_up(), "Settings must mount as a ModalStack surface");
 
-        rig.app.ev = encode_key(plx_ui::consts::SDLK_DOWN, 0, true);
+        rig.app.ev = encode_key(crate::app::events::host_flavor(), plx_ui::consts::SDLK_DOWN, 0, true);
         event(&mut rig.app, &mut fr, SDL_KEYDOWN);
         assert!(!rig.app.inputs.is_empty(), "the open surface must get this press");
         assert!(rig.app.player.lifecycle.awaiting_load(), "…and the restore must stay pending");
@@ -12903,7 +12865,7 @@ mod straighten_wiring_tests {
         let draw = at("let (_vx, _vy, _vw, _vh) = draw(app, fr);");
         let capture = at("crate::capture::tick(fr.now);");
         let pass = at(PASS.trim_start());
-        let compositor = at("composite_plane_under();\n        }");
+        let compositor = at("(app.frame.present.compose_under)();\n        }");
         let dump = at("crate::dev::framedump::after_draw(");
         let shot = at("crate::shot::maybe_capture(");
         let swap = at("app.surface.swap();");
@@ -12914,7 +12876,7 @@ mod straighten_wiring_tests {
         assert!(compositor < dump && compositor < shot, "no reader sees a straight, uncomposited frame");
         assert!(shot < swap && dump < swap, "…and the pass is done before the swap");
         // The compositor stand-in sits behind the same bit the pass is handed.
-        let guard = "        #[cfg(feature = \"hostsim\")]\n        if app.player.video_plane_bound {\n            composite_plane_under();";
+        let guard = "        if app.player.video_plane_bound {\n            (app.frame.present.compose_under)();";
         assert!(src.contains(guard), "the simulator composites on exactly the frames the pass straightened");
     }
 }

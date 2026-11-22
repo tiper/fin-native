@@ -1,7 +1,8 @@
 //! **The event log** — `/tmp/plxnative-events.log` on the television, the app's one support channel.
 //!
 //! [`log`] is the ONE sink every module writes through; [`redact_tokens`] and [`scrub`] are the
-//! guards every line passes on the way, and [`ring`] is the lab's tap. It lives in the base layer
+//! guards every line passes on the way, and [`ring`] is the lab's tap; [`set_tap`] is the platform's (a network exit, so it takes only the lines the full
+//! [`scrub::scrub`] pass keeps). It lives in the base layer
 //! (docs/module-layers.md) and names nothing outside itself but `paths`, so any module may log
 //! without naming the application, and the log closes no module cycle. It
 //! used to be `log` in `lib.rs`, and reaching the lab ring through `lab` from there put every
@@ -150,6 +151,61 @@ mod private_log_tests {
     }
 }
 
+/// The platform's tap. It is a once-set process global, so ONE test sets it, in the order that proves each claim: no
+/// tap, nothing changes; the tap, the scrubbed text; a second set, refused. Every other test in the process logs
+/// freely afterwards, and the tap ignores any line that does not carry this test's marker.
+#[cfg(test)]
+mod tap_tests {
+    use super::{events_log, log, set_tap, tap_refused, with_private_log};
+    use std::sync::Mutex;
+
+    static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static LATE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn collect(line: &str) {
+        if line.contains("tap-test:") {
+            SEEN.lock().unwrap().push(line.to_string());
+        }
+    }
+
+    fn collect_late(line: &str) {
+        LATE.lock().unwrap().push(line.to_string());
+    }
+
+    #[test]
+    fn the_tap_sees_the_scrubbed_line_and_a_second_set_is_refused() {
+        with_private_log(|| {
+            log("tap-test: before the tap X-Plex-Token=BEFOREQQ77");
+            assert!(SEEN.lock().unwrap().is_empty(), "no tap is set, so nothing was handed anywhere");
+            let file = std::fs::read_to_string(events_log()).unwrap();
+            assert!(file.contains("tap-test: before the tap"), "and the file got the line as it always does: {file:?}");
+
+            assert!(set_tap(collect).is_ok(), "the first set is accepted");
+            log("tap-test: planted GET /x?X-Plex-Token=SECRETQQ99 ok");
+            {
+                let seen = SEEN.lock().unwrap();
+                assert_eq!(seen.len(), 1, "{seen:?}");
+                assert!(seen[0].contains("X-Plex-Token=<redacted> ok"), "the tap saw the redacted form: {:?}", seen[0]);
+                assert!(!seen[0].contains("SECRETQQ99"), "{:?}", seen[0]);
+            }
+            let file = std::fs::read_to_string(events_log()).unwrap();
+            assert!(file.contains("X-Plex-Token=<redacted> ok") && !file.contains("SECRETQQ99"), "{file:?}");
+
+            let refused_before = tap_refused();
+            log("tap-test: auth ok, Bearer eyJhbGciOi.abc");
+            let file = std::fs::read_to_string(events_log()).unwrap();
+            assert!(file.contains("tap-test: auth ok, Bearer"), "the file keeps a line the network exit refuses: {file:?}");
+            assert_eq!(SEEN.lock().unwrap().len(), 1, "but the tap was not handed it: {:?}", SEEN.lock().unwrap());
+            assert!(tap_refused() > refused_before, "and the refusal was counted");
+
+            assert!(set_tap(collect_late).is_err(), "a second set is refused");
+            log("tap-test: after the refused set");
+            assert_eq!(SEEN.lock().unwrap().len(), 2, "the first tap is still the one called");
+            assert!(LATE.lock().unwrap().is_empty(), "the refused tap was never called");
+        });
+    }
+}
+
 /// The mode of the event log and its two siblings (`plxnative-crash.log`, `plxnative-stderr.log`,
 /// which `src/main.c`'s `open_fd_log` opens at the same mode): owner read/write, the app's own
 /// group (gid 5000 on the television) read, nothing for anyone else.
@@ -260,7 +316,50 @@ pub fn log(m: &str) {
     // Compiled out without the `lab-diagnostics` feature — see `lab`.
     #[cfg(feature = "lab-diagnostics")]
     crate::eventlog::ring::record(&line);
+    // The platform's tap is a NETWORK exit (the hosted platform's datagram sender), so it gets the line only when the
+    // network exit would keep it: `scrub_local` keeps a line the full pass refuses, and that line stays in the file
+    // (the append below is unchanged) but is not handed on, and is counted ([`tap_refused`]). It does its own IO;
+    // this only hands it the text.
+    if let Some(tap) = TAP.get() {
+        if scrub::still_looks_secret(&line) {
+            TAP_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            tap(&line);
+        }
+    }
     let _ = append_record(&p, &line);
+}
+
+/// The platform's log tap: a plain function [`log`] calls with the lines the network exit keeps, once set.
+static TAP: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// Lines the tap was NOT handed because the network exit refuses them ([`scrub::still_looks_secret`]), counted as the
+/// upload counts its refusals.
+static TAP_REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many lines were kept from the tap since it was set, because the network exit would refuse them. They are in the
+/// file all the same.
+pub fn tap_refused() -> u64 {
+    TAP_REFUSED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Install the log tap, once per process. A platform whose log is not the file at [`events_log`]
+/// (a hosted one, whose files nobody can fetch) sets it before it runs the application, and
+/// forwards each line where it can be read.
+///
+/// **The tap is a remote exit, so it gets the network exit's rule: rewrite or refuse** (`scrub`'s module doc). It receives
+/// the line after [`scrub::scrub_local`], and only when [`scrub::still_looks_secret`], the full pass's own refuse
+/// decision, keeps it; a line the full pass would drop (a bare `Bearer` token, which `scrub_local` rewrites no
+/// further) reaches the file but never the tap, and is counted in [`tap_refused`]. So what it sees is a subset of the
+/// file, never more, and it inherits every redaction. It runs on whichever
+/// thread logged, inside [`log`], so it must be quick, must not block and must not log (that
+/// would re-enter it): a failure it cannot report it drops. The base does no IO for it: any
+/// socket or file is the platform's own.
+///
+/// A second call is refused with the function it tried to install, and the first stays: one
+/// platform per process, and a late set must not swap the channel under running threads.
+pub fn set_tap(tap: fn(&str)) -> Result<(), fn(&str)> {
+    TAP.set(tap)
 }
 
 /// The log's credential backstop. These run on the pure function, so they need no filesystem.

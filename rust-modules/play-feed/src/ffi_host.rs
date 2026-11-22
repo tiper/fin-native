@@ -61,10 +61,11 @@
 //! # How it is reached
 //!
 //! The verbs below are private; [`HostSink`] is the simulator's own `tv::sink::VideoSink`, one
-//! method per verb, held by `platform_desktop.rs`'s `SERVICES` for the `hostsim` build (the application builds it in
+//! method per verb, held by the desktop platform crate's `SERVICES` (`platform-desktop/src/lib.rs`) for the `hostsim` build (the application builds it in
 //! `app::adapters::hostsim`, with the simulator's picture) and returned directly by the media
 //! tests' composition (`player::test_physical`) and the application's (`app::adapters::backends`)
-//! in the hostsim tests. The `*_for_test` hooks stay here, next to the statics
+//! in the hostsim tests. It is compiled for the simulator (`hostsim`) and for every test build (`cfg(test)`, or a
+//! dependent that enables `test-support`), so the tests that need it run in the default pass. The `*_for_test` hooks stay here, next to the statics
 //! they touch, and the tests reach them as `plx_play_feed::ffi_host::<hook>` (media does not re-export
 //! this module).
 //!
@@ -1408,6 +1409,10 @@ impl HostSink {
 }
 
 impl VideoSink for HostSink {
+    /// The host decodes nothing unless the clock sink is armed (`plxnative-clocksink`), so a refused
+    /// `Load` is the seam being absent. Read fresh, like the trigger itself: the test arming
+    /// (`force_clocksink_for_test`) is a separate, in-process switch that does not change it.
+    fn lacks_video_path(&self) -> bool { !plx_base::devtrig::flag("clocksink") }
     fn no_object_proof(&self, _: &MainThread) -> bool {
         // NativeStop joins the Load worker before asking. A refused host Load never wrote an
         // object, callback epoch or loaded state. A prior quarantine clears OBJECT_READY too,
@@ -1591,7 +1596,7 @@ pub(crate) mod test_sink {
 mod tests {
     use super::*;
 
-    /// The seam state is process-global and the engine's hostsim tests drive the same atomics.
+    /// The seam state is process-global and the engine's tests drive the same atomics.
     /// Use the crate-wide lock rather than a module-local mutex: two different locks made both
     /// suites individually serial while still allowing them to overwrite `FED_MAX_NS` together.
     fn lock() -> plx_base::testlock::Serial {

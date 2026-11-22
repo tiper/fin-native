@@ -30,10 +30,10 @@
     }
   },
   "include": "include!(concat!(env!(\"OUT_DIR\"), \"/languages.rs\"));",
-  "lock": "12c48c67b18a0f96e240e029b5a078091164ab4f4396b7f1e0401a9633034c11",
+  "lock": "96a33886194418989136e487a9de70fb0d7e73b2a9ab066ff2b8b7b9917bc626",
   "machine_newtype": "reviewed local newtype macro emits pub struct Name(pub u32); doc attributes only",
   "manifests": {
-    "Cargo.toml": "ad450eeb79ce723261f5eaee7acf91bc6332845cd5b52aae4354f1aaf59dff72",
+    "Cargo.toml": "13978616ca8f6d88db6fde65d0651c6c630db8f541e4ffacdecf6ba5c6044460",
     "appkit/Cargo.toml": "5cc1214cba7746fe0f2d4cfa5047b599e0d5124abe7bdaebe210381021b88c4a",
     "base/Cargo.toml": "ebe0b95553bd44f33f422f7d8e22b75ddeb53c7ee81bbe738f675690694568f7",
     "data/Cargo.toml": "74f79e6240f0965069ec34916ae276b3f7e5f4b944cf16a0846570a6b115afa0",
@@ -41,10 +41,13 @@
     "jellyfin/Cargo.toml": "1e2bee52f1b0307e55d29b8bf5e7444f248a86421e1ff55fb490500de0e50765",
     "machine/Cargo.toml": "0bc99e95272916b8d00e1a8dad81440bc4998de12ccd9a00e7853f438c813d03",
     "media-codecs/Cargo.toml": "503c8681289314b5c8a63195aad6796cbad93fcb3eedd8d7cba9e8ed0233783f",
-    "media/Cargo.toml": "f6678328f609a0552573d4be6762c888f4e88aaa0e8b6d2cc9eb1abaa9335a97",
+    "media/Cargo.toml": "a17c8c14730bff0af4183f7c9c2bb9cc6de8fd91ecd66b1afdbf1567fc71bba0",
     "net/Cargo.toml": "bfdb3a08200642eeeafc9762733718c407529f26dce8a7b90665bc77ac928171",
-    "os/Cargo.toml": "3dbc4c654863f682a01f0750d0e2d1d6b42d56740d040b353d0a4ea00dcd1d9a",
+    "os/Cargo.toml": "38d59148bbf6a9814c27411f3310db5d690ac5583050a6e68a39141356fa2000",
     "owp/Cargo.toml": "2c1354bce16b34f0d006fc04cd4c8eb22ef91f00063b53a1113e32f475ecae33",
+    "platform-desktop/Cargo.toml": "d8b6237952dda5e052d16f10215cacb2ea6b581e094a9db2eada59b92aea4c58",
+    "platform-tizen/Cargo.toml": "15bb4ca07cd3b3b096757499a090ca9f0b4083fc9daec1cbdac90f152b75eb01",
+    "platform-webos/Cargo.toml": "d5a7ec2c5e0db66cdf8c9944eef5c86161c82798d0c767772ba42e0a590d354e",
     "play-feed/Cargo.toml": "5bd2b67820914b578fcb371b80ed9274eae4b57078391c38161a67fc22df760d",
     "play-uri/Cargo.toml": "48528dd164a910a32f5396ab8f5bc4c6c13f6fd5f1136ee080f8424fe663280b",
     "playback-contract/Cargo.toml": "bde335ea645552d4f7481b007b80204ecb5bb592caaca22af58a8361cd050dcf",
@@ -87,7 +90,7 @@
       "1fafb56dcc9f423d7c00fd989a3f11bd21022d64d62d8f71f70e3eb97f6b4975",
       "8f46da48c81057c28aa19524d80a585e5aa136bcdd841a1a5359a9f576bbf7b5"
     ],
-    "os/Cargo.toml": "3dbc4c654863f682a01f0750d0e2d1d6b42d56740d040b353d0a4ea00dcd1d9a",
+    "os/Cargo.toml": "38d59148bbf6a9814c27411f3310db5d690ac5583050a6e68a39141356fa2000",
     "os/build.rs": "7e1e3e5ed60ea3433200bb943123aaeb2c892b81bc671ec0d1501ac6e3043af3",
     "os/build_support/catalog.rs": "ed55b6029a9af5aa5cdf8a7cb70e8fd4fe657c30068ca815f5bef46428e232f9",
     "os/src/i18n/mod.rs": [
@@ -95,7 +98,7 @@
       "867bb41013e0016d186e699698c762685325aa02f01ebe92d39797c0a41a37e1",
       "cdbda874c25a7188bc843f5bb644ebc664c3c71dd268a515a94607e99bb4dd6d"
     ],
-    "os/src/lib.rs": "5efef31144cad117fc5cba931d1bb0a4210909e6d6b5374a123b03f521465714"
+    "os/src/lib.rs": "4f043004cd90fd9a4c4167b140869b558d60e98b8714f283dd394df2291bcb51"
   },
   "text_hashing": "sha256-utf8-bytes-crlf-to-lf-local-root-version-v1"
 }

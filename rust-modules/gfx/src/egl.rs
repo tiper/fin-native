@@ -102,12 +102,16 @@ type FnGetConfigAttrib =
     unsafe extern "C" fn(*mut c_void, *mut c_void, c_int, *mut c_int) -> c_uint;
 type FnSurfaceAttrib = unsafe extern "C" fn(*mut c_void, *mut c_void, c_int, c_int) -> c_uint;
 
-/// The SONAMEs an EGL might carry on a webOS television, in the order worth trying. Only used when
+/// The SONAMEs an EGL might carry on this platform, in the order worth trying: the platform's own
+/// statement (`plx_os::tv::Services::libraries`, read through `plx_base::dynlib`). Only used when
 /// `RTLD_DEFAULT` cannot see EGL, which would mean SDL loaded it privately.
 ///
-/// `libEGLfk.so.2` FIRST: it is the one on webOS 2.2.3–5.3.1, which is every release this app has
-/// actually run on. `libEGL.so.1` is webOS 6+ (and 1.x). Neither is linked.
-const EGL_SONAMES: &[&str] = &["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"];
+/// On webOS `libEGLfk.so.2` is FIRST: it is the one on webOS 2.2.3–5.3.1, which is every release this
+/// app has actually run on. `libEGL.so.1` is webOS 6+ (and 1.x). Neither is linked. A platform that
+/// states none (`Libraries::NONE`) has no mapped EGL to ask, and the lookup says so.
+fn egl_sonames() -> &'static [&'static str] {
+    plx_base::dynlib::libraries().egl
+}
 
 /// A resolved EGL entry point, or `None`. **`dlsym`**: the process's own scope first, then an
 /// EGL somebody already mapped (`RTLD_NOLOAD` — SDL `dlopen`s EGL `RTLD_LOCAL`, which
@@ -131,7 +135,10 @@ fn resolve(name: &str, lib: &mut Option<Handle>) -> Option<*mut c_void> {
     let mut global = |n: &str| Handle::self_handle().sym(n).filter(|p| !p.is_null());
     let mut mapped = |n: &str| {
         if lib.is_none() {
-            *lib = Handle::open_loaded(EGL_SONAMES).map(|(h, soname)| {
+            if egl_sonames().is_empty() {
+                plx_base::eventlog::log("egl: the platform names no EGL library; none to ask");
+            }
+            *lib = Handle::open_loaded(egl_sonames()).map(|(h, soname)| {
                 plx_base::eventlog::log(&format!(
                     "egl: RTLD_DEFAULT had no EGL; using the mapped {soname}"
                 ));
@@ -758,6 +765,13 @@ pub mod fence {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The probe asks the platform's EGL names, in its order. No host test publishes, so a process with no
+    /// platform reads the union that was this module's own literal list before the platform stated it.
+    #[test]
+    fn the_probe_reads_the_platforms_egl_names_and_unset_they_are_the_union_of_todays() {
+        assert_eq!(egl_sonames(), ["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"]);
+    }
 
     // The process state CI crashed in: SDL on GLX, so no EGL context is current on this thread,
     // and the "display" the lookup hands back is register garbage — the exact si_addr of

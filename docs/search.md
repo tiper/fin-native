@@ -310,15 +310,15 @@ Both halves are checkable on the dev Mac without a television:
 
 This is the same class of bug as the `SDL_KeyboardEvent` shift `plx_shell_sdl::event` already reads around with
 raw offsets, and it has the same fix: read the bytes, do not trust the struct. Note the offset is a
-`cfg`, not a constant — under `hostsim` desktop SDL2 is stock and the offset really is +12, so a
-single hard-coded number ships garbage on one of the two platforms.
+platform value, not a constant — desktop SDL2 is stock and the offset really is +12, so a
+single hard-coded number ships garbage on one of the two platforms (`Shell::sdl()` states the `SdlFlavor`; `text_off` maps it).
 
 **2. `SDL_WINDOW_INPUT_FOCUS` is a silent precondition.**
 
 `SDL_StartTextInput` looks for a window carrying `0x200` (`SDL_video.h` in the SDK sysroot's `usr/include/SDL2/`) before
 dispatching to the driver hook. Our window is created with
-`SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN` and nothing else — `plx_shell_sdl`'s `SDL_WINDOW_FLAGS` (`shell-sdl/src/window.rs`) is
-`0x2 | 0x1` on the device — so it carries neither `SHOWN` nor a focus flag at creation. **If the flag
+`SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN` and nothing else — `plx_shell_sdl`'s `window_flags_of` (`shell-sdl/src/window.rs`) turns the platform's
+`Placement::Panel` into `0x2 | 0x1` on the device — so it carries neither `SHOWN` nor a focus flag at creation. **If the flag
 is clear the panel never rises, silently and with no error return.** That is why the boot probe logs
 the flag rather than trusting it: a keyboard that does not appear and a keyboard that appeared and
 was dismissed look identical from inside the app.
@@ -340,7 +340,7 @@ television.
 
 **The boot probe's answer on macOS is `keyboard: support=0 active=1 focus=0 winflags=0x26`.** That
 is **trap 2 observed**: `0x26` is `OPENGL | SHOWN | RESIZABLE` (the `hostsim` arm asked for
-`0x2 | 0x20` when this was measured, and is `plx_shell_sdl`'s `SDL_WINDOW_FLAGS` now; SDL adds `SHOWN`), and `0x200` — `SDL_WINDOW_INPUT_FOCUS` — is not in it. The trap is
+`0x2 | 0x20` when this was measured, and is `window_flags_of`'s `Placement::Desktop` arm now; SDL adds `SHOWN`), and `0x200` — `SDL_WINDOW_INPUT_FOCUS` — is not in it. The trap is
 therefore reproducible without a television, which is the useful part; what it does **not** tell you
 is anything about the TV's own answer, since `support=0` here just means desktop SDL has no screen
 keyboard at all.

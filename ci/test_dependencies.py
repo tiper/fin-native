@@ -27,6 +27,7 @@ SCRIPTS = [
     'tools/fwcompat.py', 'rust-modules/build_support/host_link.rs',
     '.github/workflows/ci.yml', '.github/workflows/build-package.yml',
     '.github/workflows/simulators.yml', '.github/workflows/site-video.yml',
+    'mk/platform-tizen.mk', 'tizen/build-sdl.sh', 'tizen/package.py', 'ci/check-tizen-so.py', '.github/workflows/tizen.yml',
 ]
 SHA = re.compile(r'\b[0-9a-f]{64}\b')
 

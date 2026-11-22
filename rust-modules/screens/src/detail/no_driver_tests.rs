@@ -6,8 +6,8 @@
 //! that names a control the viewer was on keeps it. A page seated before its item lands has only the
 //! watched toggle, which presses nothing until the item is there; that seat is the PAGE's, not the
 //! viewer's (`DetailScreen::provisional`), so every frame moves it to the page's default until the
-//! viewer moves focus or presses OK on a landed page, whatever a restore does meanwhile. With a driver
-//! composed every one of these is exactly what it was.
+//! viewer moves focus or acts at it on a landed page (an OK, a key, the pointer, a wheel), whatever a
+//! restore does meanwhile. With a driver composed every one of these is exactly what it was.
 //!
 //! The shared rule these pin is `focus.rs`'s "a disabled item owns no focus stop"
 //! (`next_enabled_index`; the player HUD's disabled discs): the shared button draws no focused face
@@ -690,6 +690,13 @@ impl Running {
         self.deliver(outcome);
     }
 
+    /// An input the viewer makes that the engine does not turn into a move: the screen sees it alone.
+    fn input(&mut self, kind: InputKind<u32>) {
+        let event = ScreenEvent::Input(InputEvent { at: Default::default(), source: plx_machine::machine::Source::Script, kind });
+        let at = self.focus();
+        step(&mut self.screen, &event, Some(at));
+    }
+
     /// OK on the focused control, as a press that commits delivers it.
     fn ok(&mut self) -> Vec<plx_machine::machine::Stamped<TestHost>> {
         let at = self.focus();
@@ -864,6 +871,96 @@ fn an_ok_on_a_landed_page_keeps_the_seat_it_pressed_on() {
     assert_eq!(run.focus(), below, "the later landing leaves the control the viewer pressed OK on");
     clear();
     plx_plex::plex::reset_servers_for_test();
+}
+
+/// The inputs that act at a seat without moving focus: a wheel, a hover on the control already
+/// focused (`focused`: a hover on any other control is a `FocusMoved`), a click, a drag, and any key-down (the Library's set, `LibraryScreen::provisional`).
+fn acts_at_the_seat(focused: u32) -> [(&'static str, InputKind<u32>); 5] {
+    let hit = Some(focused);
+    [
+        ("a wheel", InputKind::Wheel { dy: 1.0 }),
+        ("a pointer on the focused control", InputKind::Pointer { x: 0.0, y: 0.0, hit }),
+        ("a click", InputKind::Click { x: 0.0, y: 0.0, hit: None }),
+        ("a drag", InputKind::Drag { x: 0.0, y: 0.0, hit: None }),
+        ("a key", InputKind::Key { key: Key::Other, sym: 0, wcode: 0, edge: Edge::Down, at_edge: false }),
+    ]
+}
+
+/// **The viewer acting at the seat of a landed page ends the page's claim on it**, though no
+/// `FocusMoved` follows: a wheel scrolls the page with focus staying put, and a hover on the
+/// control already focused moves nothing. The later landing (Also available) leaves the seat where
+/// the viewer was acting, the way the Library's does.
+#[test]
+fn a_wheel_pointer_click_drag_or_key_on_a_landed_page_ends_the_pages_claim_on_the_seat() {
+    for case in 0..acts_at_the_seat(0).len() {
+        let (guard, sid, other, _driver) = movie_awaiting_its_second_source();
+        let mut run = Running::open(bare(&guard, sid, "movie"));
+        run.frames(3);
+        let below = first_extra(&run.screen);
+        let (what, kind) = acts_at_the_seat(below).into_iter().nth(case).expect("a case");
+        assert_eq!(run.focus(), below, "{what}: premise: the page seated below the row");
+        assert!(run.screen.provisional, "{what}: premise: the seat is the page's");
+        run.input(kind);
+        assert!(!run.screen.provisional, "{what}: the viewer acting at the seat is the viewer's claim");
+        alt_lands(&mut run, sid, other);
+        run.frames(10);
+        assert_eq!(run.focus(), below, "{what}: the later landing leaves the seat where the viewer acted");
+        clear();
+        plx_plex::plex::reset_servers_for_test();
+    }
+}
+
+/// **Before the item lands the same inputs leave the seat the page's**: the first seat is the
+/// watched toggle, which writes once the item is there, and a hover or a wheel over a page that has
+/// nothing yet is no choice of it. The landing still takes focus off the toggle.
+#[test]
+fn the_same_inputs_before_the_item_lands_leave_the_page_free_to_move_off_the_toggle() {
+    let sid = ServerId::UNSET;
+    for (what, kind) in acts_at_the_seat(hero::ELEM_MARK_WATCHED) {
+        let guard = install(Detail { sid, rk: "other".into(), ..Default::default() });
+        let _driver = NoDriver::set(true);
+        let mut run = Running::open(bare(&guard, sid, "movie"));
+        assert_eq!(run.focus(), hero::ELEM_MARK_WATCHED, "{what}: premise");
+        run.input(kind);
+        assert!(run.screen.provisional, "{what}: before the landing the seat is still the page's");
+        run.land(resumable(sid));
+        run.frames(6);
+        assert_eq!(run.focus(), first_extra(&run.screen), "{what}: the landing took focus off the toggle");
+        clear();
+    }
+}
+
+/// **The claim ends only once the page's own seat is in place.** In the landing frame the item is
+/// there but `reconcile` has not run, so focus is still on the watched toggle, which writes now.
+/// An OK-down then arms a press that commits only if focus is still on its key: were the claim
+/// ended by that OK, `reconcile` would stop moving focus and the press could commit on the toggle,
+/// a write to the account. The claim holds, `reconcile` moves focus off the toggle, and the press
+/// never commits there.
+#[test]
+fn an_input_in_the_landing_frame_before_the_seat_is_placed_does_not_end_the_claim() {
+    let sid = ServerId::UNSET;
+    for (what, kind) in acts_at_the_seat(hero::ELEM_MARK_WATCHED) {
+        let guard = install(Detail { sid, rk: "other".into(), ..Default::default() });
+        let _driver = NoDriver::set(true);
+        let mut run = Running::open(bare(&guard, sid, "movie"));
+        assert_eq!(run.focus(), hero::ELEM_MARK_WATCHED, "{what}: premise");
+        run.land(resumable(sid));
+        assert_eq!(run.focus(), hero::ELEM_MARK_WATCHED, "{what}: premise: the landing is processed, reconcile has not run");
+        run.input(kind);
+        assert!(run.screen.provisional, "{what}: the page's seat is not in place, so nothing here is the viewer's choice of it");
+        run.frames(6);
+        assert_eq!(run.focus(), first_extra(&run.screen), "{what}: reconcile took focus off the toggle");
+        clear();
+    }
+    let guard = install(Detail { sid, rk: "other".into(), ..Default::default() });
+    let _driver = NoDriver::set(true);
+    let mut run = Running::open(bare(&guard, sid, "movie"));
+    run.land(resumable(sid));
+    run.input(InputKind::Key { key: Key::Ok, sym: 0, wcode: 0, edge: Edge::Down, at_edge: false });
+    assert!(run.screen.provisional, "an OK-down in the landing frame");
+    run.frames(6);
+    assert!(!is_write(run.focus()), "the press that OK armed finds focus off the toggle");
+    clear();
 }
 
 /// **Only a move the viewer makes ends the page's claim on its seat.** A key that moved focus, the
