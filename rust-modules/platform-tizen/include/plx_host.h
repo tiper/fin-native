@@ -133,7 +133,9 @@
  *     in PLAYER_SEEK_DONE; a seek before PREPARED, or while another is in flight, is held and the newest sent when it can be: every
  *     command id gets its SEEK_DONE, folded ones included) and _CLOSE. CLOSE ends in exactly ONE PLAYER_CLOSED for that epoch, whether or not a
  *     player existed, and releases it (the host never leaves a player behind). A verb for an epoch that is not
- *     the host's current one is refused with PLX_HOST_PLAYER_E_STALE.
+ *     the host's current one is refused with PLX_HOST_PLAYER_E_STALE, and so is every PLAY, PAUSE or SEEK for an epoch whose CLOSE the
+ *     host has accepted: the close retires the epoch at the door, before its PLAYER_CLOSED is posted (a second CLOSE of it is still
+ *     accepted and still answers one PLAYER_CLOSED, which the library drops as stale).
  *   - Events: PlxHostEvent grows (size >= PLX_HOST_EVENT_V2_SIZE) by epoch and two i64 payload words a, b. The
  *     kinds, with their payloads:
  *       PLAYER_PREPARED(a = duration ms)  PLAYER_STARTED  PLAYER_PAUSED  PLAYER_POSITION(a = ms)
@@ -149,10 +151,17 @@
  *       b >= 0   the seek landed; b is the target in ms.
  *       b = -1   refused: it did not land. The native player refused it (no PLAYER_ERROR: the player is still there and the next held
  *                seek is tried), or the epoch ended or never prepared first (a close, or an open that failed, answers every command id
- *                still held or in flight with b = -1, and a seek sent to a player that is gone is answered the same way).
+ *                still held or in flight with b = -1, and a seek that reached the queue for a player that has since failed to open is answered the same way; one sent after
+ *                the epoch's CLOSE was accepted is refused with PLX_HOST_PLAYER_E_STALE and queues nothing).
  *       b = -2   expired: no completion within 10 s. Expiry is not refusal: the seek MAY STILL LAND, so PLAYER_POSITION is the
  *                authority on where the player is. The next held seek is then sent while the expired one may still be pending, and a late
  *                completion is credited to the next seek's command ids (the player's callback carries no token).
+ *   - HOME: the host forwards OnPause and OnResume as PLX_HOST_EVENT_PAUSE and _RESUME and also acts on the player itself, because the
+ *     native player raises nothing of its own when the app goes to the background (emulator, 2026-11-22). At OnPause a player that is
+ *     PLAYING is paused and PLAYER_PAUSED is posted; one asked to play before PREPARED has that start held back. At OnResume exactly
+ *     that player is started again (PLAYER_STARTED, or at PREPARED for the held start). A player the library paused, closed or replaced
+ *     in between is not touched, and a host pause is not a library decision: the library sees an ordinary PLAYER_PAUSED and then
+ *     PLAYER_STARTED.
  *   - THREADS: the requests come from the library's loop thread; the host runs them on its own video thread,
  *     never on the loop thread, and never on the Ecore main thread EXCEPT one step: finding the Ecore window and
  *     binding the player to it run there (Ecore belongs to that thread) while the video thread waits, for at most 3 s. plx_host_post may be called from any thread,

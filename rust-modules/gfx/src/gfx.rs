@@ -241,12 +241,13 @@ const FS_TEX_RC: &CStr = glsl_rclip!("shaders/fs_tex.frag");
 const VS_ART_SCRIM: &CStr = glsl!("shaders/vs_art_scrim.vert");
 const FS_ART_SCRIM: &CStr = glsl!("shaders/fs_art_scrim.frag");
 /// The straighten pass (`gfx/straighten.rs`): one vertex shader that stretches the unit quad over a box
-/// of the viewport and one fragment source in three variants, picked by a `#define` prefix. The fetch variants read the frame in place; the
-/// copy variant samples a copy of it.
+/// of the viewport and two fragment sources in three programs. The fetch programs are one source picked by a
+/// `#define` prefix and read the frame in place; the copy program is a source of its own with no directive
+/// (`fs_straighten_copy.frag` says why) and samples a copy of the frame.
 const VS_STRAIGHTEN: &CStr = glsl!("shaders/vs_straighten.vert");
 const FS_STRAIGHTEN_ARM: &CStr = glsl!("shaders/fs_straighten.frag", "#define PLX_STRAIGHTEN_ARM\n");
 const FS_STRAIGHTEN_EXT: &CStr = glsl!("shaders/fs_straighten.frag", "#define PLX_STRAIGHTEN_EXT\n");
-const FS_STRAIGHTEN_COPY: &CStr = glsl!("shaders/fs_straighten.frag");
+const FS_STRAIGHTEN_COPY: &CStr = glsl!("shaders/fs_straighten_copy.frag");
 const GL_VERTEX_SHADER: c_uint = 0x8B31;
 const GL_FRAGMENT_SHADER: c_uint = 0x8B30;
 const GL_COMPILE_STATUS: c_uint = 0x8B81;
@@ -9821,7 +9822,9 @@ mod tests {
     /// compiled and linked and `plx_gfx` drew. Why YaGL rejects the statement is not established (the
     /// message is the one Mesa gives for raw desktop GLSL 1.10, where `highp` is an ordinary
     /// identifier), and an optional program, the straighten copy variant, still fails there with the
-    /// same kind of error and no multi-declarator, its cause also not established. Every other source
+    /// same kind of error and no multi-declarator, its cause not established; its suspect was the `#extension`
+    /// lines in the shared source's inactive branches, so the copy program is a source of its own
+    /// (`fs_straighten_copy.frag`) with no directive in it. Every other source
     /// already spelled one name per statement, and a driver that reads either spelling sees the same
     /// program, so the sources keep to the spelling the other drivers have read. It lists the
     /// directory, so a new shader is covered by being added.

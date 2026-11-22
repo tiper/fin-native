@@ -60,6 +60,9 @@ namespace PlxHost
             internal bool OpenFailed; // an open step failed: the player will never prepare, so a seek is answered at once
             internal volatile bool Playing; // read by the poller
             internal volatile bool Closing; // read by the poller and the main-thread bind
+            // Set when the HOST paused (or held back the start of) this player because the app went to the background (PauseForHome), cleared by
+            // ResumeAfterHome and by any request of the library's own that decides play or pause. Video thread only.
+            internal bool HostPaused;
             internal bool StallSent; // poller only
             // At most ONE native seek is waited on (nothing measured says two overlap safely): `SeekNow` is it, `SeekLater` holds the newest request
             // that arrived meanwhile (or before PREPARED). A seek is { target ms, the command ids it answers }; a request that replaces a held one folds
@@ -208,8 +211,14 @@ namespace PlxHost
             switch ((int)verb)
             {
                 case Native.PLX_HOST_PLAYER_VERB_CLOSE:
+                {
                     // Always accepted: it ends in one PLAYER_CLOSED whether or not a player exists.
-                    return TryEnqueue(epoch, () => DoClose(epoch));
+                    int rc = TryEnqueue(epoch, () => DoClose(epoch));
+                    // An accepted close retires the epoch AT THE DOOR (plx_host.h, PLAYER): every later PLAY, PAUSE or SEEK for it is E_STALE here
+                    // and never reaches the queue. Only if it is still the latest: a newer open's epoch is not touched.
+                    if (rc == Native.PLX_HOST_PLAYER_OK) Interlocked.CompareExchange(ref latestEpoch, 0, epoch);
+                    return rc;
+                }
                 case Native.PLX_HOST_PLAYER_VERB_PLAY:
                 case Native.PLX_HOST_PLAYER_VERB_PAUSE:
                 case Native.PLX_HOST_PLAYER_VERB_SEEK:
@@ -415,6 +424,7 @@ namespace PlxHost
 
         private void DoPlay(Session s)
         {
+            s.HostPaused = false;
             if (!s.Prepared) { s.PlayPending = true; return; } // starts at PREPARED
             s.PlayPending = false;
             int rc = MediaPlayerNative.player_start(s.Handle);
@@ -425,6 +435,7 @@ namespace PlxHost
 
         private void DoPause(Session s)
         {
+            s.HostPaused = false;
             s.PlayPending = false;
             if (!s.Prepared) return;
             int rc = MediaPlayerNative.player_pause(s.Handle);
@@ -582,6 +593,70 @@ namespace PlxHost
             {
                 Monitor.Exit(s.HandleGate);
             }
+        }
+
+        // ---- the Home round trip (OnPause / OnResume, main thread) ---------------------------------------------------------------------------
+        //
+        // MEASURED on the emulator 2026-11-22 (TV 10.0 x86_64, a scratch probe): the native player raises nothing on its own when the app goes to
+        // the background. Paused at OnPause and started at OnResume it resumes in about 130 ms at the same position, and the picture is back once
+        // the window is (about 2 s). So the host pauses what is PLAYING at OnPause and starts exactly that at OnResume. Both only enqueue: the
+        // native calls run on the video thread, in order with the library's own requests, and never on the Ecore main thread that called us.
+
+        // OnPause. A player that is playing is paused (PLAYER_PAUSED is posted, as for the library's own pause); one that was asked to play before
+        // PREPARED is held back so it does not start behind the Home screen. Nothing is paused for a player that is not playing (idle, paused by
+        // the user, completed): there is nothing to give back.
+        internal void PauseForHome()
+        {
+            if (!HasThreads()) return;
+            TryEnqueueInternal(() =>
+            {
+                Session s = current;
+                if (s == null || s.Handle == IntPtr.Zero || s.Closing || s.OpenFailed) return;
+                if (s.Prepared && s.Playing)
+                {
+                    int rc = MediaPlayerNative.player_pause(s.Handle);
+                    if (rc != 0) { Fail(s, "player_pause (home)", rc); return; }
+                    s.Playing = false;
+                    s.HostPaused = true;
+                    PlxApp.Log("player: epoch " + s.Epoch + ": paused for the Home screen");
+                    Post((uint)Native.PLX_HOST_EVENT_PLAYER_PAUSED, s.Epoch, 0, 0);
+                }
+                else if (!s.Prepared && s.PlayPending)
+                {
+                    s.PlayPending = false;
+                    s.HostPaused = true;
+                    PlxApp.Log("player: epoch " + s.Epoch + ": its start is held back for the Home screen");
+                }
+            });
+        }
+
+        // OnResume. Starts what PauseForHome paused or held back, through the library's own PLAY path (so a start before PREPARED is still
+        // deferred to PREPARED and PLAYER_STARTED is posted once it runs). A player the library paused, closed or replaced meanwhile has
+        // lost the flag or is another session, and is left alone.
+        internal void ResumeAfterHome()
+        {
+            if (!HasThreads()) return;
+            TryEnqueueInternal(() =>
+            {
+                Session s = current;
+                if (s == null || !s.HostPaused) return;
+                if (s.Handle == IntPtr.Zero || s.Closing || s.OpenFailed) { s.HostPaused = false; return; }
+                PlxApp.Log("player: epoch " + s.Epoch + ": resumed after the Home screen");
+                DoPlay(s); // clears HostPaused
+            });
+        }
+
+        // Whether the video thread exists: before the first open there is no player to pause, and a Home round trip must not start the threads.
+        private bool HasThreads()
+        {
+            lock (startGate) { return videoThread != null; }
+        }
+
+        // The host's own job (not the library's request, so not bounded by QueueLimit); after the shutdown it is dropped.
+        private void TryEnqueueInternal(Action job)
+        {
+            try { queue.Add(new Job { Epoch = 0, Run = job }); }
+            catch (InvalidOperationException) { }
         }
 
         // ---- the position poller ------------------------------------------------------------------------------------------------------------

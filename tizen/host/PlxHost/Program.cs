@@ -277,6 +277,8 @@ namespace PlxHost
             base.OnPause();
             Log("OnPause");
             Post(Native.PLX_HOST_EVENT_PAUSE, "pause");
+            // The native player does not pause itself when the app goes to the background (emulator, 2026-11-22): pause what is playing.
+            PlxPlayer.Instance.PauseForHome();
         }
 
         protected override void OnResume()
@@ -284,6 +286,7 @@ namespace PlxHost
             base.OnResume();
             Log("OnResume");
             Post(Native.PLX_HOST_EVENT_RESUME, "resume");
+            PlxPlayer.Instance.ResumeAfterHome(); // starts only what OnPause paused
         }
 
         protected override void OnTerminate()

@@ -100,7 +100,7 @@ The thread rules, ownership, start/stop and the `launch_json` keys are the heade
   (`locale`), the Tizen platform version, `res/log-host.txt` (`log_udp`) and the members of `res/dev-boot.json` (`pms_host`, `pms_port`
   and the dev-only `dev` object), then calls `plx_host_start` once on the main thread. Without `res/dev-boot.json` the launch names no
   Plex server and the library refuses it (`PLX_HOST_E_LAUNCH`), which the host logs.
-- `OnPause` / `OnResume` call `plx_host_post`. A locale change is logged and **not forwarded**: the header has no locale event.
+- `OnPause` / `OnResume` call `plx_host_post`, and then `PlxPlayer.PauseForHome` / `ResumeAfterHome` (below). A locale change is logged and **not forwarded**: the header has no locale event.
 - `run_on_host` posts the library's task to the main thread's `SynchronizationContext` (captured in `OnCreate`) and runs it there.
   UNVERIFIED on a device: that Tizen's `CoreUIApplication` installs one on the main thread. If it does not, the host logs a warning at
   start and refuses every task, and the library drops the request (the window is freed by the process exit).
@@ -137,14 +137,57 @@ Measured on the emulator 2026-11-22 (TV 10.0 x86_64, a probe on a scratch branch
 state stays PLAYING after the completed callback (until `player_stop`), so the host does not use the state to validate a completion. A player with no
 display does not advance (position frozen), hence display-before-prepare. The prepared, buffering and completed callbacks fire on one non-main native
 thread per player instance, so they only post events. `EnableExportingVideoFrame` is unsupported (no raw video). The existing `internet` privilege
-was enough. With the window's alpha on the UI draws unchanged; no picture shows yet because the UI is opaque everywhere (the hole is part B).
+was enough. With the window's alpha on the UI draws unchanged, and a picture shows only through a (0, 0, 0, 0) clear (next section).
 
-Not verified: anything on a retail set (the library's thread, the overlay beneath an alpha window, privileges, firmware differences). The C# is not
-compiled by any CI job (`.github/workflows/tizen.yml` runs `tizen-abi` and `tizen-so`, which links the Rust library and never builds `PlxHost`) and was not
-compiled where it was written (`which dotnet` finds none on that Mac). It was compiled and smoke-tested once, on the TV 10.0 emulator at `37d70e0ed`:
-MSBuild 0 warnings, 0 errors; Home, detail and back; `on_stopped code=0 clean=1`; 0 UDP gaps. That smoke opened no player. Later edits to the C# are
-not covered by it until a `make PLATFORM=tizen tizen-tpk` on a machine with the .NET SDK compiles them again. This part plays nothing yet: the Rust URI driver that calls `Hosted::player_open` is part B, so the library still composes
-no backend.
+### The video plane: the window's alpha, the hole and Home (W10 part B2)
+
+Measured on the TV 10.0 x86_64 emulator, 2026-11-22 (a scratch probe; emulator only, no retail set):
+
+- With the window's alpha **on** (`ecore_wl2_window_alpha_set(win, 1)`; this crate set 0 until part B2) the native player's OVERLAY video shows
+  **only through the pixels the frame clears to (0, 0, 0, 0)**; the UI around it is intact. The window is therefore created translucent and stays so
+  (`plx_platform_tizen::ecore::WINDOW_ALPHA`): it is a flag of the window, so nothing is routed per frame and the Tizen shell's `opaque_route` has no
+  work. The pages with a ground clear to an opaque colour, so only the player route and the detail trailer preview (`frame_clear_through`) open the
+  hole, the same shared chain webOS uses. **The player route's clear is keyed on the route, not on the plane**: the loop clears to `(0, 0, 0, 0)`
+  whenever the player route is up (`fr.player`), bound or not, and `PlayerScreen` has no ground, so its spinner and its "Playback failed" read-out sit
+  on a transparent clear even with no plane bound. The straighten pass and the capture skip are the ones keyed on `Player::video_plane_bound`.
+- The **video plane mixes STRAIGHT alpha** (pixel-exact: a straight (255, 255, 255, 128) strip is a 50 % veil over the video) while window-over-window
+  composition is premultiplied: the split webOS has, which `plx_gfx` already handles. Over the bound plane the loop's last draw is the straighten pass
+  (`gfx/straighten.rs`), which divides the frame's premultiplied colour by its alpha; off the plane the frame goes out premultiplied, which is what the
+  window compositor wants.
+- **The straighten program did not build on YaGL** (the emulator's GLES2): `shader compile FAILED: 0:37(1): ... unexpected NEW_IDENTIFIER` at the
+  `precision` statement of the copy variant, then `straighten: no program`. The emulator has neither framebuffer-fetch extension, so the copy variant
+  is its program. The one source held all three variants behind `#if defined(...)` and two `#extension ... : require` lines (the suspect recorded in
+  `docs/platform-ports.md`); the copy variant is now a file of its own, `fs_straighten_copy.frag`, with no preprocessor directive, and
+  `fs_straighten.frag` keeps only the two fetch variants. The arithmetic is the same text in both and a test holds it equal. **After the split the
+  emulator run at `3d56d35b2` (below) logs no compile failure and `straighten: no framebuffer fetch - the pass copies the frame`.** What was never
+  established is WHY YaGL rejected the shared source (the `#extension` lines were the suspect; the split removes them together with the `#if`
+  branches, so it does not say which of the two it was). Whether the straightened picture is right over a bound plane is not measured: no plane is
+  bound until part B1.
+- **Home round trip.** The native player raises nothing when the app goes to the background. Pausing at `OnPause` (`player_pause`) and
+  `player_start` at `OnResume` resumes in about 130 ms at the same position; the picture is back when the window is (about 2 s). `PlxPlayer`
+  does exactly that on its video thread: at `OnPause` a PLAYING player is paused (`PLAYER_PAUSED` is posted) and a start requested before `PREPARED` is
+  held back; at `OnResume` exactly that is started again through the library's PLAY path (`PLAYER_STARTED`). A player the library paused, closed or
+  replaced in between is left alone. `PLAYER_PAUSED` / `PLAYER_STARTED` are the events the library already understands, so a host pause shows as an
+  ordinary pause then play.
+- A `CLOSE` the host accepts now retires its epoch at the door (`Interlocked.CompareExchange(ref latestEpoch, 0, epoch)`): a later PLAY, PAUSE or SEEK
+  for it is `E_STALE` and never queued, as `plx_host.h` promises.
+
+**Emulator run of this part, 2026-11-22, at `3d56d35b2`** (the Windows session; emulator only):
+
+- The `.tpk` built with MSBuild 0 warnings and 0 errors, and `check-tizen-so` passed.
+- **No shader compile failure.** The log shows `straighten: no framebuffer fetch - the pass copies the frame`: the copy program now builds on YaGL.
+- The UI is opaque and correct at alpha 1 (Home, detail, back), a clean stop (`on_stopped code=0 clean=1`), 0 log gaps.
+- A Home round trip resumes the same pid and comes back drawn.
+- **The unbound player route:** hero Play opens "Playback failed" (no URI driver yet, so the plane is never bound), and behind it the emulator shows exactly
+  (0, 0, 0) black (5778 of 5784 samples, the rest the footer text), unchanged from +0.49 s to +6.86 s; the text and pills render cleanly, and Back returns to an
+  opaque Home. The emulator's compositor had nothing under the window: what a retail set composites under a `(0, 0, 0, 0)` clear with no player is
+  unmeasured and belongs to H6.
+
+Still UNVERIFIED: **Home with a player open** (`PauseForHome` and `ResumeAfterHome` were never exercised, because no player existed), a picture through the
+real URI driver (part B1, which calls `Hosted::player_open`: the library still composes no backend, so this part plays nothing), and anything on a retail
+set (H6 stays OPEN: the library's thread, the overlay beneath an alpha window, privileges, firmware differences). The C# is built by no CI job
+(`.github/workflows/tizen.yml` runs `tizen-abi` and `tizen-so`, which links the Rust library and never builds `PlxHost`); it is compiled by a
+`make PLATFORM=tizen tizen-tpk` on a machine with the .NET SDK (the run above did that for this tree).
 
 The application and package id is `plxntizen0` (ten alphanumerics): a neutral name for the emulator package. A retail package id is
 assigned by Samsung's seller process, not chosen here.
@@ -232,8 +275,8 @@ State plainly what was not seen. The log is the evidence. A host-side window cap
 
 ## Known gaps seen on the emulator (2026-11-21)
 
-- The Home hero's Play looks enabled; pressing it opens the player route ("Playback failed / The server cannot play or convert this file", footer `decision_refused`) and logs no decision line.
-- `shader compile FAILED: 0:37(1): error: syntax error, unexpected NEW_IDENTIFIER` on YaGL, followed by `straighten: no program`; it affects only frames over a video plane, which this build has none of.
+- The Home hero's Play looks enabled; pressing it opens the player route ("Playback failed / The server cannot play or convert this file", footer `decision_refused`) and logs no decision line. That route clears to `(0, 0, 0, 0)` over a translucent window: the emulator shows black behind the read-out (above); a retail set is unmeasured (H6).
+- (Fixed in part B2.) `shader compile FAILED: 0:37(1): error: syntax error, unexpected NEW_IDENTIFIER` on YaGL, followed by `straighten: no program`, was seen on 2026-11-21. Part B2 gave the copy variant a source of its own ("The video plane", above) and the 2026-11-22 run at `3d56d35b2` logs `straighten: no framebuffer fetch - the pass copies the frame` instead.
 - webOS-only lines are still printed: `devcaps: ... assuming the 49SM9000PLA profile`, `surface: webOS major 0`, the player footer `webOS unknown — os_info.json unreadable · unknown set`, and three `ff: ... MISSING ... reinstall the package` lines, whose advice does not apply to this package.
 - Closing the app logs `surface: the host asked the library to stop, so the window teardown is not requested; it lives until the process ends`.
 - **The host's self-exit path is unexercised on the emulator.** When the library ends without a host stop (an `Exit` the platform does not intercept, or a
