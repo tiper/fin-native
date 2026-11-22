@@ -714,7 +714,7 @@ fn languages_rs(specs: &[&LanguageSpec]) -> String {
     o.push_str(&each(&|_, s| format!("    #[serde(rename = {:?})]\n    {},\n", s.tag, s.variant)));
     o.push_str("}\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum Language {\n");
     o.push_str(&each(&|_, s| format!("    {},\n", s.variant)));
-    o.push_str("    /// Generated expanded labels; selectable only by the host simulator.\n    #[cfg_attr(not(any(test, feature = \"test-support\", feature = \"hostsim\")), allow(dead_code))]\n    Pseudo,\n}\n");
+    o.push_str("    /// Generated expanded labels; selectable only by the host simulator.\n    #[cfg_attr(not(any(test, feature = \"test-support\", feature = \"sim\")), allow(dead_code))]\n    Pseudo,\n}\n");
     o.push_str(&format!(
         "/// Every language the app ships, `System` excluded: the list every \"each language\" loop and the Settings page read.\npub const SHIPPED: [Preference; {n}] = Preference::SHIPPED;\n"
     ));

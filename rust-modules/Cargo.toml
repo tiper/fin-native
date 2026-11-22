@@ -72,7 +72,7 @@ crate-type = ["rlib"]
 
 # The macOS/desktop UI simulator, `plxnative-sim`, is not a bin of this package: it is the binary of the
 # desktop platform crate (`platform-desktop/src/bin/sim.rs`, `[[bin]]` of `plx_platform_desktop`, which
-# requires that crate's own `hostsim`). See the `hostsim` feature below.
+# requires that crate's own `sim`). See the `sim` feature below.
 
 [features]
 # On by default, so every ordinary `make`, every `make test` and every on-device harness run
@@ -165,25 +165,31 @@ placeholder-sentinel = ["plx_ui/placeholder-sentinel"]
 # stored error-report consent exist. What a reader can `strings` for is therefore still the thing
 # that makes collection possible — the endpoint — and it is absent from an unconfigured artifact.
 # The desktop UI simulator. OFF by default, so no ordinary `make`, `make check` or harness run is
-# affected in any way; `cargo build --features hostsim` selects it.
+# affected in any way; `cargo build --features sim` selects it.
 #
 # It is an ADDITIVE feature in the cargo sense only by convention — it makes `plx_play_feed::ffi_host` the
 # installed `VideoSink` instead of the platform webOS native sink rather than adding to it, and it does
 # so only together with `play-feed` (the stand-in is the Feed backend's: a simulator built with
 # `--no-default-features` names `play-feed` again, which `ci/test_sim_backend.py` holds). That is safe here
-# because the only dependents of this crate are the platform crates, and none names `hostsim` in its
-# dependency on this one (`ci/test_platform_features.py`): the desktop crate's OWN `hostsim` feature forwards
+# because the only dependents of this crate are the platform crates, and none names `sim` in its
+# dependency on this one (`ci/test_platform_features.py`): the desktop crate's OWN `sim` feature forwards
 # this one, so feature unification can never enable it behind someone's back. Do not give it
 # a mutually-exclusive partner feature; the television is the DEFAULT, and the simulator opts in.
 #
-# What it changes, and nothing else: the media seam (29 symbols that exist only on a television),
-# the GL context request (macOS has no GLES2 driver), the window flags and the keyboard event decode
-# (LG's SDL fork shifts SDL_KeyboardEvent; stock SDL2 does not), the last three now `plx_shell_sdl`'s,
-# and, since W7, nothing else of the platform: the desktop platform is its own crate (`plx_platform_desktop`,
-# compiled only under its forward of this feature) and the television's code is `plx_platform_webos`, which
-# a simulator never links. Everything else
+# What it changes: the media seam (29 symbols that exist only on a television) and the
+# simulator's own video sink and compositor stand-in, the supersampled present, the frame-dump switch, the
+# environment-steerable runtime root (`paths::ENV_STEERABLE`), the desktop window fit with its three
+# desktop-only SDL calls in `plx_shell_sdl`, the font-slot and glyph-cache sizes (`gfx/src/text.rs`:
+# `FONT_SLOTS` and `TCACHE`, larger for a desktop) and the environment locale and clock overrides
+# (`PLXNATIVE_FORMAT_LOCALE`, `PLXNATIVE_CLOCK`, `PLXNATIVE_LOCALE`, in `os/src/i18n/mod.rs`), besides the
+# simulator-only developer tooling and its tests. The GL context request (macOS has no GLES2 driver), the window
+# flags and the keyboard, wheel and text layouts (LG's SDL fork shifts SDL_KeyboardEvent; stock SDL2 does
+# not) are NOT its: since W8c-2 they are values the platform states (`Shell::sdl()`, `Shell::window()`), so
+# the desktop platform's table carries them. Since W7 nothing else of the platform is its either: the desktop
+# platform is its own crate (`plx_platform_desktop`, compiled only under its forward of this feature) and the
+# television's code is `plx_platform_webos`, which a simulator never links. Everything else
 # — all of `ui/`, the whole Plex data layer, the demux orchestration — is compiled identically for both.
-hostsim = ["dep:xxhash-rust", "plx_base/hostsim", "plx_machine/hostsim", "plx_os/hostsim", "plx_gfx/hostsim", "plx_plex/hostsim", "plx_telemetry/hostsim", "plx_data/hostsim", "plx_session/hostsim", "plx_media/hostsim", "plx_play_feed?/hostsim", "plx_shell_sdl/hostsim"]
+sim = ["dep:xxhash-rust", "plx_base/sim", "plx_machine/sim", "plx_os/sim", "plx_gfx/sim", "plx_plex/sim", "plx_telemetry/sim", "plx_data/sim", "plx_session/sim", "plx_media/sim", "plx_play_feed?/sim", "plx_shell_sdl/sim"]
 
 # Warnings are ERRORS, for both workspace packages, in every cargo invocation — build, check, test, clippy, the
 # ARM cross-build and the simulator alike. The tree reached zero warnings in all four
@@ -285,7 +291,7 @@ plx_screens = { path = "screens" }
 # window through: SDL's init, the window and its GL context, the swap, the event queue, the stock
 # key, pointer, wheel and text layouts of both SDLs, and the synthetic events pushed back onto the
 # queue. It names no application type and none of the webOS platform (`system`, `port`); the
-# application drives it through its own `Shell` and `Surface`. Its `hostsim` feature is forwarded
+# application drives it through its own `Shell` and `Surface`. Its `sim` feature is forwarded
 # above; its build script links SDL2 into a host test binary only.
 plx_shell_sdl = { path = "shell-sdl" }
 # safe pure-Rust JPEG/PNG decoders — replaces vendored stb_image.h (~8k lines C)
@@ -293,7 +299,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 # raw socket/libc FFI for the stream module (correct constants + struct layouts)
 libc = "0.2"
 # XXH3-64 of every written frame of the demo-video dump (`src/dev/framedump.rs`, the `frames.tsv`
-# column `tools/site_video.py` reads). Optional, and pulled by `hostsim` alone: no television or
+# column `tools/site_video.py` reads). Optional, and pulled by `sim` alone: no television or
 # shipping build compiles it.
 xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"], optional = true }
 # JSON parsing for the pms module (replaces the C's hand-rolled string scrape)

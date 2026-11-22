@@ -118,19 +118,19 @@
 //! and the placeholder counter's (`plx_ui::placeholder`, armed per thread).
 //!
 //! **A runtime switch, off by default.** [`arm`] is called by the dump driver only; nothing in a
-//! shipping loop does. With `hostsim` (and in test builds) it is a runtime switch, and an unarmed
+//! shipping loop does. With `sim` (and in test builds) it is a runtime switch, and an unarmed
 //! hook costs one relaxed atomic load; in every other build [`armed`] and [`held_repeat`] are
 //! constant `false`, so the hooks fold away. Nothing else in the crate changes behaviour.
 
-#[cfg(any(feature = "hostsim", feature = "test-support", test))]
+#[cfg(any(feature = "sim", feature = "test-support", test))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(any(feature = "hostsim", feature = "test-support", test))]
+#[cfg(any(feature = "sim", feature = "test-support", test))]
 static DUMP: AtomicBool = AtomicBool::new(false);
 
 // Thread-local, unlike the switch: only the loop's own thread reads or writes it, and a host test
 // that sets it must not leak a "this is a repeat" into a concurrent test's page dip.
-#[cfg(any(feature = "hostsim", feature = "test-support", test))]
+#[cfg(any(feature = "sim", feature = "test-support", test))]
 thread_local! {
     static REPEAT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set by the host-test [`Armed`] guard and read by [`armed`] alongside [`DUMP`]. Per thread,
@@ -139,29 +139,29 @@ thread_local! {
     static TEST_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Arm dump mode for this process. A no-op outside the simulator (`hostsim`) and host tests.
+/// Arm dump mode for this process. A no-op outside the simulator (`sim`) and host tests.
 pub fn arm() {
-    #[cfg(any(feature = "hostsim", feature = "test-support", test))]
+    #[cfg(any(feature = "sim", feature = "test-support", test))]
     DUMP.store(true, Ordering::Relaxed);
 }
 
 /// Disarm: the ordinary behaviour, and what a host test restores.
 pub fn disarm() {
-    #[cfg(any(feature = "hostsim", feature = "test-support", test))]
+    #[cfg(any(feature = "sim", feature = "test-support", test))]
     DUMP.store(false, Ordering::Relaxed);
 }
 
 /// Is dump mode armed? **A constant `false` outside the simulator and host tests**: without
-/// `hostsim` (every television build) nothing can arm the dump, so this inlines to `false` and every
-/// `if armed()` branch in a per-frame path, old or new, is folded away. With `hostsim` it is one
+/// `sim` (every television build) nothing can arm the dump, so this inlines to `false` and every
+/// `if armed()` branch in a per-frame path, old or new, is folded away. With `sim` it is one
 /// relaxed atomic load.
 #[inline(always)]
 pub fn armed() -> bool {
-    #[cfg(any(feature = "hostsim", feature = "test-support", test))]
+    #[cfg(any(feature = "sim", feature = "test-support", test))]
     {
         DUMP.load(Ordering::Relaxed) || TEST_ARMED.with(std::cell::Cell::get)
     }
-    #[cfg(not(any(feature = "hostsim", feature = "test-support", test)))]
+    #[cfg(not(any(feature = "sim", feature = "test-support", test)))]
     {
         false
     }
@@ -176,11 +176,11 @@ pub fn armed() -> bool {
 /// [`armed`] is.
 #[inline(always)]
 pub fn held_repeat() -> bool {
-    #[cfg(any(feature = "hostsim", feature = "test-support", test))]
+    #[cfg(any(feature = "sim", feature = "test-support", test))]
     {
         REPEAT.with(std::cell::Cell::get)
     }
-    #[cfg(not(any(feature = "hostsim", feature = "test-support", test)))]
+    #[cfg(not(any(feature = "sim", feature = "test-support", test)))]
     {
         false
     }
@@ -188,9 +188,9 @@ pub fn held_repeat() -> bool {
 
 /// Driver only (and host tests): publish whether this iteration is a held repeat. See [`held_repeat`].
 pub fn set_held_repeat(on: bool) {
-    #[cfg(any(feature = "hostsim", feature = "test-support", test))]
+    #[cfg(any(feature = "sim", feature = "test-support", test))]
     REPEAT.with(|r| r.set(on));
-    #[cfg(not(any(feature = "hostsim", feature = "test-support", test)))]
+    #[cfg(not(any(feature = "sim", feature = "test-support", test)))]
     let _ = on;
 }
 

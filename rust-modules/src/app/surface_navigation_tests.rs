@@ -1,9 +1,9 @@
 //! Route/chrome identity and the surface architecture: profile/card menus, Settings and
 //! player panels, and the heartbeat word each mounted screen reports.
 //!
-//! The tests marked `#[cfg(feature = "hostsim")]` below (the item-menu opener-lift ones) run ONLY
+//! The tests marked `#[cfg(feature = "sim")]` below (the item-menu opener-lift ones) run ONLY
 //! with that feature: `make test-crate C=app T=<filter>` filters them out and exits 0. Run them with
-//! `CARGO_INCREMENTAL=0 PATH="$HOME/.cargo/bin:$PATH" cargo test --lib -p plxnative-modules --features hostsim -- <filter>`
+//! `CARGO_INCREMENTAL=0 PATH="$HOME/.cargo/bin:$PATH" cargo test --lib -p plxnative-modules --features sim -- <filter>`
 //! from `rust-modules/`.
 
 use super::*;
@@ -223,7 +223,7 @@ fn each_settings_fps_scene_boot_target_prints_the_overlay_word_the_scene_selects
 /// surface stands over), so only the reset itself can make this true immediately, and a frame in
 /// between would be a window in which the old profile's page is still drawn.
 ///
-/// Not behind `hostsim`: nothing here needs the desktop simulator, so `make check` runs it.
+/// Not behind `sim`: nothing here needs the desktop simulator, so `make check` runs it.
 #[test]
 fn a_profile_switch_dismisses_an_open_settings_surface() {
     let _g = plx_base::testlock::serial();
@@ -584,7 +584,7 @@ fn the_finish_time_switch_follows_whether_the_hud_in_use_declares_the_lane() {
 /// The gate that kept the registry out of the stable install sat on the Bridge's `HudCmd::Open` arm
 /// (`ENV_STEERABLE || flavour().is_some()`), a second copy of the field PR14 deleted from the page, so the
 /// gallery showed in stable and never fetched `index.signed`. This suite builds with no flavour in its app
-/// directory and without `hostsim`, which is the stable install's answer to both halves of that test.
+/// directory and without `sim`, which is the stable install's answer to both halves of that test.
 #[test]
 fn opening_the_player_hud_settings_asks_the_registry_in_the_stable_install_too() {
     assert!(plx_base::paths::flavour().is_none(), "this test stands for the stable install");
@@ -918,7 +918,7 @@ fn opening_the_item_menu_leaves_the_press_springing_and_the_opener_lift_follows_
 /// frames (a host test has no GL, so the page PASS itself, which is what tells the press the card
 /// is left out, is `cards::tests::the_lifted_card_is_left_out_of_the_page_pass_and_drawn_by_the_lift`;
 /// here it is said by hand after the mount frame). The control run (no lift owning the card) proves the counter sees the old behaviour.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 fn page_damage_frames_across_a_taken_holds_spring(lift_owns_the_card: bool) -> (usize, usize) {
     let mut d = Dispatcher::<AppHost>::new();
     let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
@@ -989,7 +989,7 @@ fn page_damage_frames_across_a_taken_holds_spring(lift_owns_the_card: bool) -> (
     (moving, damaged)
 }
 
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 #[test]
 fn a_taken_holds_release_spring_raises_no_page_damage_under_the_open_menu() {
     let _g = plx_base::testlock::serial();
@@ -998,7 +998,7 @@ fn a_taken_holds_release_spring_raises_no_page_damage_under_the_open_menu() {
     assert_eq!(damaged, 0, "none of its {moving} moving frames may be page damage (each is a full page capture)");
 }
 
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 #[test]
 fn the_page_damage_counter_sees_a_spring_the_lift_does_not_own() {
     let _g = plx_base::testlock::serial();

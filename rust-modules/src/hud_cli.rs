@@ -269,7 +269,7 @@ mod tests {
     use std::rc::Rc;
 
     const BUILTIN_CLASSIC: &str = plx_appkit::hud_format::CLASSIC_HUD;
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     const CLASSIC_FIXTURE: &str = include_str!("../appkit/src/hud_format/fixtures/classic/hud.json");
     const REFERENCE_FIXTURE: &str = include_str!("../appkit/src/hud_format/fixtures/reference/hud.json");
 
@@ -752,13 +752,13 @@ mod tests {
     /// `line_h`/`cap_h` that went through `text_tex` would upload a GL texture with no context and take
     /// the whole binary down with a SIGSEGV, which CI would not see and `--hud-lint` would.
     ///
-    /// **In a child process, and only under `hostsim`.** The font switch (`TEXT_OK`), the resolved
+    /// **In a child process, and only under `sim`.** The font switch (`TEXT_OK`), the resolved
     /// application directory and the face paths are each set once per process and never taken back, so a
     /// test that shares a process with any other width or path test would grade that test's state (and
-    /// leave this one's behind). `PLXNATIVE_APP_DIR` is honoured only by a `hostsim` build
+    /// leave this one's behind). `PLXNATIVE_APP_DIR` is honoured only by a `sim` build
     /// (`paths::ENV_STEERABLE`), and the child must START with it: the directory is resolved on first
     /// use. A crash in the child is the parent's assertion failure, not a dead test binary.
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     #[test]
     fn the_headless_fonts_measure_and_lint_the_classic_without_a_gl_context() {
         const NAME: &str = "the_headless_fonts_measure_and_lint_the_classic_without_a_gl_context";

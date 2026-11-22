@@ -20,7 +20,7 @@ default = []
 # only because some code in this crate has a `cfg` on it (the dev-trigger stand-ins of `metadata`
 # and `person`, the simulator's detail source).
 devtriggers = ["plx_base/devtriggers", "plx_machine/devtriggers", "plx_os/devtriggers", "plx_plex/devtriggers", "plx_telemetry/devtriggers"]
-hostsim = ["plx_base/hostsim", "plx_machine/hostsim", "plx_os/hostsim", "plx_plex/hostsim", "plx_telemetry/hostsim"]
+sim = ["plx_base/sim", "plx_machine/sim", "plx_os/sim", "plx_plex/sim", "plx_telemetry/sim"]
 # The `cfg(test)` seams other crates' tests use (`pms::seed_for_test`, `metadata::set_current_for_test`,
 # `browse::view::*::fixture`, the stores' `*_for_test` drivers, ...) plus the test-mode arms
 # `cfg(test)` alone cannot give a dependent. Enabled from the dependents' `[dev-dependencies]`;

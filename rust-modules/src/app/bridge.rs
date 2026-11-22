@@ -1136,7 +1136,7 @@ impl Bridge<'_> {
         std::mem::take(&mut self.retained.observed_library_commands)
     }
 
-    #[cfg(all(test, feature = "hostsim"))]
+    #[cfg(all(test, feature = "sim"))]
         pub(crate) fn take_observed_player_commands(&mut self) -> Vec<plx_screens::registry::PlayerReq> {
         std::mem::take(&mut self.retained.observed_player_commands)
     }
@@ -2700,14 +2700,14 @@ fn start_jobs(&mut self, jobs: Vec<plx_data::stores::StoreJob>) -> usize {
 
     /// The Library grid holds `count` items of `sid` (ratingKeys "1"...), none watched, on a
     /// registered two-source table.
-    #[cfg(all(test, feature = "hostsim"))]
+    #[cfg(all(test, feature = "sim"))]
     pub(crate) fn seed_library_grid_for_test(&mut self, sid: plx_plex::plex::ServerId, count: usize) {
         self.seed_registered_browse_for_test([sid, sid]);
         self.stores.browse.borrow_mut().seed_items_for_test(count);
     }
 
     /// `(watched, unwatched, resume_ms)` of the Library grid's `index`th tile.
-    #[cfg(all(test, feature = "hostsim"))]
+    #[cfg(all(test, feature = "sim"))]
     pub(crate) fn grid_tile_for_test(&self, index: usize) -> Option<(bool, bool, i64)> {
         let mut browse = self.stores.browse.borrow_mut();
         let snapshot = browse.listing_snapshot();
@@ -2737,26 +2737,26 @@ fn start_jobs(&mut self, jobs: Vec<plx_data::stores::StoreJob>) -> usize {
     }
 
     /// Is a view-state write queued or in flight?
-    #[cfg(all(test, feature = "hostsim"))]
+    #[cfg(all(test, feature = "sim"))]
     pub(crate) fn viewstate_busy_for_test(&self) -> bool {
         self.stores.viewstate.borrow().is_busy_for_test()
     }
 
     /// How many hub refetches Home's store has started.
-    #[cfg(all(test, feature = "hostsim"))]
+    #[cfg(all(test, feature = "sim"))]
     pub(crate) fn hub_refetches_for_test(&self) -> u32 {
         self.stores.hubs.refetch_count_for_test()
     }
 
     /// [`seed_hubs_for_test`](Self::seed_hubs_for_test) as a grid of `rows` shelves of `items` cards.
-    #[cfg(all(test, feature = "hostsim"))]
+    #[cfg(all(test, feature = "sim"))]
     pub(crate) fn seed_hub_grid_for_test(&mut self, rows: usize, items: usize) {
         self.stores.hubs.seed_grid_for_test(rows, items);
     }
 
     /// Make the shelf card `rk` a collection: the item menu has nothing to offer it, so a hold on it
     /// is the one the app declines.
-    #[cfg(all(test, feature = "hostsim"))]
+    #[cfg(all(test, feature = "sim"))]
     pub(crate) fn retag_hub_item_as_collection_for_test(&mut self, rk: &str) {
         self.stores.hubs.retag_test_item_as_collection(rk);
     }
@@ -3668,12 +3668,12 @@ pub(crate) fn frame_with_tap(
 }
 
 /// App-backed hostsim frames borrow the same player/resources as the shipping loop.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(all(test, feature = "sim"))]
 pub(crate) fn app_frame(app: &mut super::App, tick: Tick, inputs: Vec<InputEvent<u32>>) -> (&'static str, FrameReport) {
     app_frame_with_tap(app, tick, inputs, &mut NoTap)
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(all(test, feature = "sim"))]
 pub(crate) fn app_frame_with_tap(app: &mut super::App, tick: Tick, inputs: Vec<InputEvent<u32>>,
     tap: &mut dyn plx_ui::dispatch::Tap<AppHost>) -> (&'static str, FrameReport) {
     let mut bridge = app.runtime.bridge(&mut app.bridge);
@@ -5644,7 +5644,7 @@ mod session_endpoint_policy_tests;
 #[path = "session_stored_home_tests.rs"]
 mod session_stored_home_tests;
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(all(test, feature = "sim"))]
 #[path = "restore_characterisation_tests.rs"]
 mod restore_characterisation_tests;
 

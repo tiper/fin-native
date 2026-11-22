@@ -1476,7 +1476,7 @@ pub(crate) fn features() -> Vec<String> {
     if cfg!(feature = "devtriggers") {
         v.push("devtriggers".into());
     }
-    if cfg!(feature = "hostsim") {
+    if cfg!(feature = "sim") {
         v.push("hostsim".into());
     }
     if cfg!(feature = "lab-diagnostics") {

@@ -153,7 +153,7 @@ recall, so be exhaustive rather than tidy:
 - **string literals with a life of their own**: trigger names (`plxnative-*`), event-log field
   names (`loop=`, `fps=`, `pos=`, `vgap=`), manifest gate keys (`loop_floor`, `fps_floor`,
   `fps_ceiling`), make goals and variables (`FLAVOR`, `RELEASE`, `RUN_SECS`), cargo features
-  (`devtools`, `devtriggers`, `hostsim`), remote-FIFO tokens, JSON payload keys.
+  (`devtools`, `devtriggers`, `sim`), remote-FIFO tokens, JSON payload keys.
 - **numbers**: counts, ports, timeouts, sizes, version majors, measured milliseconds.
 - **behaviour verbs** in the diff's own commit message or code comments — "now", "no longer",
   "instead of", "was", "refuses", "defaults to". A doc asserting the old default is the classic.

@@ -130,7 +130,7 @@ function balance(s,    t, o, c) {
 }
 
 # --- cfg predicate evaluation: 0 false, 1 true, 2 unknown. `test` and `feature = "test-support"` take
-# the value `tmode` (0 = production, 1 = test); every other atom (target_os, devtriggers, hostsim ..) is unknown.
+# the value `tmode` (0 = production, 1 = test); every other atom (target_os, devtriggers, sim ..) is unknown.
 function tokenize(s,    n, i, c, j) {
   ntok = 0; n = length(s); i = 1
   while (i <= n) {

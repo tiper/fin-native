@@ -1676,13 +1676,13 @@ check:
 # also why this suite cannot cover anything that links the TV's own libraries: media-codecs/src/ffi.rs gates its four
 # `#[link]` directives out of cfg(test) so the crate's pure logic stays host-testable, and a test
 # that actually calls into FFmpeg or GL fails to link by design. --lib keeps it to the crates' own
-# `#[cfg(test)]` blocks. The one integration test, `rust-modules/tests/host_interface.rs`, needs `hostsim`
+# `#[cfg(test)]` blocks. The one integration test, `rust-modules/tests/host_interface.rs`, needs `sim`
 # and runs in `check-cargo-unit-hostsim` (and `make test-host-interface`), not here; the repo-root `tests/`
 # is the on-device Python harness, a different thing entirely.
 # NB the suite APPENDS to `/tmp/plxnative-events.log` on the dev Mac, and deliberately cannot be
 # pointed elsewhere. Since 2026-08-15 enough of the tree logs its failures (stream, posters, img,
 # account, remote) that host tests exercising those paths write real lines. `PLXNATIVE_RUNTIME_DIR`
-# does NOT help: `paths::ENV_STEERABLE` is `cfg!(feature = "hostsim")`, off here, and widening it to
+# does NOT help: `paths::ENV_STEERABLE` is `cfg!(feature = "sim")`, off here, and widening it to
 # `cfg(test)` would silently retire `paths.rs`'s own test that a television build ignores that
 # variable — the suite is the only place that guarantee is ever checked. Host-side cosmetics are not
 # worth a device guarantee. The television is unaffected either way (`make run` and `tests/run.py`
@@ -1767,23 +1767,23 @@ check-cargo-lint: lint
 # ci/test_test_crate.py pins the two equal.
 UNIT_RUN = python3 ../tools/cargo-test-parallel.py
 UNIT_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_net plx_ui plx_plex plx_telemetry plx_data plx_session plx_media plx_playback_contract plx_play_uri plx_play_feed plx_media_codecs plx_appkit plx_screens plx_shell_sdl plx_platform_webos plx_platform_desktop plx_platform_tizen plx_owp
-# The `hostsim` pass runs only the crates that DECLARE a `hostsim` feature (HOSTSIM_SUITE, a subset of
+# The `hostsim` pass runs only the crates that DECLARE a `sim` feature (HOSTSIM_SUITE, a subset of
 # UNIT_SUITE in the same order; ci/test_test_crate.py pins both the subset and the recipe). The nine that
 # do not (plx_net, plx_ui, plx_appkit, plx_screens, plx_media_codecs, plx_play_uri, plx_playback_contract,
-# plx_platform_tizen, plx_owp) have no `feature = "hostsim"` in their source and the same test names in both passes (14 crates did in
+# plx_platform_tizen, plx_owp) have no `feature = "sim"` in their source and the same test names in both passes (14 crates did in
 # CI run 43528579834; the three that differ are `plxnative-modules`, `plx_media` and `plx_play_feed`,
 # all kept). Their own test set is therefore identical in the two passes. The old second run did link
 # their test binaries against hostsim-built `plx_base`, `plx_gfx`, `plx_os`, `plx_media` and
 # `plx_play_feed` (steerable `ENV_STEERABLE` paths, larger glyph-cache sizes, `ffi_host` present), but
 # none of their tests observes those dependency-side differences; the guard does not check that, it
-# checks that the crate declares no `hostsim` feature and has no `feature = "hostsim"` in its src, and
+# checks that the crate declares no `sim` feature and has no `feature = "sim"` in its src, and
 # fails when one gains either, which is the moment it must join the list.
 HOSTSIM_SUITE = plxnative-modules plx_base plx_machine plx_os plx_gfx plx_plex plx_telemetry plx_data plx_session plx_media plx_play_feed plx_shell_sdl plx_platform_webos plx_platform_desktop
 
 # The default-feature unit suite and everything that drives cargo through ci/ self-tests.
 check-cargo-unit-default:
 	@# WHAT `PLXNATIVE_RUNTIME_DIR` DOES HERE: nothing, in THIS (default-feature) pass. The variable is
-	@# honoured only when `paths::ENV_STEERABLE` (`cfg!(feature = "hostsim")`) is on, which is a
+	@# honoured only when `paths::ENV_STEERABLE` (`cfg!(feature = "sim")`) is on, which is a
 	@# compile-time guarantee that a shipping build cannot be steered, so the default pass resolves the
 	@# runtime root to the bare `/tmp` whatever is exported (the `hostsim` pass below does honour it).
 	@# The variable is still passed, because the wrapper hands each binary a subdirectory of it, and
@@ -1828,28 +1828,29 @@ check-cargo-unit-default:
 	@# disappear rebuilds honest in a scratch workspace that uses the real build.rs.
 	RUST_TOOLCHAIN=$(RUST_TOOLCHAIN) python3 ci/test_build_not_always_dirty.py
 
-# The `hostsim` unit suite (the host feed seam exists only there).
+# The `hostsim` unit suite: the crates that declare `sim`, re-run with it on.
 check-cargo-unit-hostsim:
-	@# The crates of HOSTSIM_SUITE (the ones that declare `hostsim`) again under `hostsim`, which is
-	@# not a duplicate run: the host feed seam (`play-feed/src/ffi_host.rs`) only exists in that configuration,
-	@# so every test that drives an AU through `sf_feed` is COMPILED OUT of the default pass and cannot fail it. The prime-livelock
-	@# regression is one of those, and it guards the 94-second freeze of 2026-08-29 — a defect that
-	@# was invisible to all 1398 default-feature tests because the seam it needs was not there.
+	@# The crates of HOSTSIM_SUITE (the ones that declare `sim`) again under `sim`, which is
+	@# not a duplicate run: the tests that need the feature itself (the simulator's sink and compositor stand-in,
+	@# the steerable runtime root, the desktop window fit) are compiled only with `sim` on. The host feed seam
+	@# (`play-feed/src/ffi_host.rs`) is not one of them since W8c-1: `play-feed/src/lib.rs` compiles it under
+	@# `any(test, test-support)` as well, so the tests that drive an AU through `sf_feed` (the prime-livelock
+	@# regression, which guards the 94-second freeze of 2026-08-29, among them) are in every test build.
 	@# Cargo keys fingerprints by feature set, so the two configurations coexist in one target/ and
 	@# this costs a few seconds warm rather than a rebuild.
 	@# The second cargo line is W7a's gate and a test executable of its own (`--lib` never builds an integration test):
 	@# `rust-modules/tests/host_interface.rs` uses the application crate's `host` module from outside the crate and boots
-	@# a fake platform to its shell's refusal. It needs `hostsim` and a throwaway runtime root, which this pass has;
+	@# a fake platform to its shell's refusal. It needs `sim` and a throwaway runtime root, which this pass has;
 	@# `make test-host-interface` is the same line as an incremental loop.
 	@set -e; d=$$(mktemp -d /tmp/plxnative-check.XXXXXX); trap 'rm -rf "'"$$d"'"' EXIT; \
 	cd rust-modules && PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
-	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_play_feed -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop --features hostsim; \
+	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_play_feed -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop --features sim; \
 	PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
-	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test -p plxnative-modules --test host_interface --features hostsim
+	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test -p plxnative-modules --test host_interface --features sim
 
 # OPT-IN incremental inner loop: the default-feature unit suite (the same `cargo test --lib` as
 # `check-cargo-unit-default`, same throwaway runtime root and telemetry env) with
@@ -1896,13 +1897,13 @@ test-crate:
 	  python3 ../tools/test-crate.py --suite '$(UNIT_SUITE)' --cargo 'cargo +$(RUST_TOOLCHAIN)' $(if $(DEPS),--deps) $(if $(T),--filter '$(T)') $(C)
 
 # `make test-hostsim [C=<crate>...] [T=filter]` -- the `hostsim` tests: the ones under
-# `#[cfg(all(test, feature = "hostsim"))]` (the application crate's `app/run.rs`
+# `#[cfg(all(test, feature = "sim"))]` (the application crate's `app/run.rs`
 # `lifecycle_regression_tests`, the player-return rig; `plx_media`'s `player/engine.rs`, `pump.rs`,
 # `route/decision.rs`), which `test-fast` and `test-crate` do not compile because the feature is off
 # in the default set. `C` is the crate under test, spelled as for `test-crate` (`C=plx_media` or
 # `C=media`; the application crate, the default, is `C=app`; several allowed), and it is the ONLY
 # thing `C` changes: the same recipe, the same managed dir, the same `--require-match`. The features
-# are the crate's own plus `hostsim`, not the application crate's defaults the full suite unifies in
+# are the crate's own plus `sim`, not the application crate's defaults the full suite unifies in
 # (`test-crate` documents that gap); `C=plx_media` measured identical to the suite's line (1839
 # passed, 60 ignored, 2026-10-19). It is the managed form of what AGENTS.md used to hand out as a recipe,
 # `CARGO_INCREMENTAL=1 CARGO_TARGET_DIR=/tmp/<dir> cargo test --lib -p plxnative-modules --features
@@ -1926,7 +1927,7 @@ test-crate:
 # build-gc reclaims. Nothing in `check*`, `lint` or CI names the dir.
 #
 # The same environment as `check-cargo-unit-hostsim` (pinned toolchain, throwaway
-# `PLXNATIVE_RUNTIME_DIR` -- honoured here because `hostsim` is what makes it steerable --, the
+# `PLXNATIVE_RUNTIME_DIR` -- honoured here because `sim` is what makes it steerable --, the
 # telemetry words and HOST_ENV), run through $(UNIT_RUN) so the binary gets its own runtime
 # subdirectory and an empty TMPDIR it must leave empty. `--require-match` makes a filter that
 # matches no test FAIL: libtest prints `0 passed ... N filtered out` and exits 0, which a mistyped
@@ -1935,33 +1936,33 @@ TEST_HOSTSIM_TDIR = target-hostsim
 HOSTSIM_PKGS = $(foreach c,$(or $(strip $(C)),app),$(if $(filter app,$(c)),plxnative-modules,$(if $(filter plx_% plxnative-modules,$(c)),$(c),plx_$(c))))
 .PHONY: test-hostsim
 test-hostsim:
-	@$(if $(RELEASE),echo "make test-hostsim: refused under RELEASE=1 -- it runs the default-plus-hostsim feature set incrementally; RELEASE=1 is the shipping feature set (use make check-nodef for that)." >&2; exit 1,:)
+	@$(if $(RELEASE),echo "make test-hostsim: refused under RELEASE=1 -- it runs the default-plus-sim feature set incrementally; RELEASE=1 is the shipping feature set (use make check-nodef for that)." >&2; exit 1,:)
 	@echo "test-hostsim: incremental hostsim tests of $(HOSTSIM_PKGS) in rust-modules/$(TEST_HOSTSIM_TDIR) -- see 'make disk'; reclaim it with: tools/build-gc.sh --incremental (cache) or rm -rf rust-modules/$(TEST_HOSTSIM_TDIR)"
 	@set -e; d=$$(mktemp -d /tmp/plxnative-check.XXXXXX); trap 'rm -rf "'"$$d"'"' EXIT; \
 	cd rust-modules && CARGO_INCREMENTAL=1 CARGO_TARGET_DIR=$(TEST_HOSTSIM_TDIR) \
 	  PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
-	  $(UNIT_RUN) --require-match $(if $(T),--filter '$(T)') -- cargo +$(RUST_TOOLCHAIN) test --lib $(addprefix -p ,$(HOSTSIM_PKGS)) --features hostsim
+	  $(UNIT_RUN) --require-match $(if $(T),--filter '$(T)') -- cargo +$(RUST_TOOLCHAIN) test --lib $(addprefix -p ,$(HOSTSIM_PKGS)) --features sim
 
 # `make test-host-interface` -- W7a's gate (docs/platform-ports.md, Target shape 8): the application crate's `host`
 # module used from OUTSIDE the crate. `rust-modules/tests/host_interface.rs` is an integration test, a crate of its own
 # that can name only the `pub` items of `plxnative_modules`. It builds a `static Platform` from a fake `Shell`, `Surface`
 # and `FrameProbe` and boots it through `host::run` to the fake shell's refusal of the window (the boot cannot go
-# further without a GL context). It needs `hostsim`: only there is the runtime root steerable, so the boot's logs land
+# further without a GL context). It needs `sim`: only there is the runtime root steerable, so the boot's logs land
 # in the throwaway directory below. The incremental loop, in `rust-modules/$(TEST_HOSTSIM_TDIR)` beside `make test-hostsim`
 # (same feature set, same tree); `make check` runs the same test non-incrementally in `check-cargo-unit-hostsim`.
 # Refused under RELEASE=1 like `test-hostsim`.
 .PHONY: test-host-interface
 test-host-interface:
-	@$(if $(RELEASE),echo "make test-host-interface: refused under RELEASE=1 -- it runs the default-plus-hostsim feature set incrementally; RELEASE=1 is the shipping feature set (use make check-nodef for that)." >&2; exit 1,:)
+	@$(if $(RELEASE),echo "make test-host-interface: refused under RELEASE=1 -- it runs the default-plus-sim feature set incrementally; RELEASE=1 is the shipping feature set (use make check-nodef for that)." >&2; exit 1,:)
 	@echo "test-host-interface: the host interface test of plxnative-modules in rust-modules/$(TEST_HOSTSIM_TDIR) -- see 'make disk'"
 	@set -e; d=$$(mktemp -d /tmp/plxnative-check.XXXXXX); trap 'rm -rf "'"$$d"'"' EXIT; \
 	cd rust-modules && CARGO_INCREMENTAL=1 CARGO_TARGET_DIR=$(TEST_HOSTSIM_TDIR) \
 	  PATH="$$HOME/.cargo/bin:$$PATH" PLXNATIVE_RUNTIME_DIR="$$d" \
 	  $(TELEMETRY_ENV) \
 	  $(HOST_ENV) \
-	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test -p plxnative-modules --test host_interface --features hostsim
+	  $(UNIT_RUN) -- cargo +$(RUST_TOOLCHAIN) test -p plxnative-modules --test host_interface --features sim
 
 # `make fuzz-hud [T=<target>] [SECS=60]` -- the `cargo fuzz` package over every parser a HUD package or the
 # registry reaches (`fuzz/`: its own workspace, outside rust-modules, so nothing shipped names it). T is one
@@ -2514,7 +2515,7 @@ SIM_PMS  ?= $(call cfg_macro,PMS_HOST)
 SIM_PORT ?= $(shell sed -n 's/^\#define[ \t]*PMS_PORT[ \t]*\([0-9]*\).*/\1/p' src/config.local.h 2>/dev/null)
 SIM_DIR  ?= /tmp/plxnative-sim
 # Its OWN target dir, per this file's rule for feature-set splits: `make check` builds default
-# features on nightly, `make sim-macos` builds `hostsim` on the default toolchain. Sharing one dir makes
+# features on nightly, `make sim-macos` builds `sim` on the default toolchain. Sharing one dir makes
 # each invocation rebuild the crate the other way round.
 #
 # `?=` so it can also come from the environment: a checkout on a network or external volume
@@ -2622,7 +2623,7 @@ sim: sim-macos
 
 sim-macos: $(FFMPEG_HOST_STAGED) $(LIBASS_HOST_STAGED) pkg/.ffabi-host-ok
 	$(TELEMETRY_ENV) \
-	  cargo +$(RUST_TOOLCHAIN) build --manifest-path rust-modules/Cargo.toml --target-dir $(SIM_TDIR)$(if $(LAB),-lab,) --features hostsim$(if $(LAB), --features lab-diagnostics,) -p plx_platform_desktop --bin plxnative-sim
+	  cargo +$(RUST_TOOLCHAIN) build --manifest-path rust-modules/Cargo.toml --target-dir $(SIM_TDIR)$(if $(LAB),-lab,) --features sim$(if $(LAB), --features lab-diagnostics,) -p plx_platform_desktop --bin plxnative-sim
 
 # Full product replay is a renderer-backed host gate. Keep the fast unit suite usable without
 # a window system; Simulator CI runs this same driver against the simulator it just built.
@@ -2658,7 +2659,7 @@ SHOT_HERO   ?=
 SHOT_HERO_VARIANTS ?=
 screenshots-sim: $(FFMPEG_HOST_STAGED) $(LIBASS_HOST_STAGED) pkg/.ffabi-host-ok
 	CARGO_INCREMENTAL=0 cargo +$(RUST_TOOLCHAIN) build --manifest-path rust-modules/Cargo.toml --target-dir $(SHOT_TDIR) \
-	  --no-default-features --features hostsim,play-feed,devtriggers -p plx_platform_desktop --bin plxnative-sim
+	  --no-default-features --features sim,play-feed,devtriggers -p plx_platform_desktop --bin plxnative-sim
 
 demo-library:
 	python3 tools/demo_library.py derive
@@ -2675,7 +2676,7 @@ screenshots: screenshots-sim demo-library
 sim-linux: $(LIBASS_HOST_STAGED)
 	$(TELEMETRY_ENV) \
 	  cargo +$(RUST_TOOLCHAIN) build --release --manifest-path rust-modules/Cargo.toml --target-dir "$$SIM_LINUX_TDIR_ENV" \
-	  --features hostsim -p plx_platform_desktop --bin plxnative-sim
+	  --features sim -p plx_platform_desktop --bin plxnative-sim
 
 # The demo video's frame-dump simulator (`rust-modules/src/dev/framedump.rs`; `tools/site_video.py render`
 # drives it). Release, because a dump is a render of thousands of 1080p frames; its own target dir,
@@ -2691,7 +2692,7 @@ SITE_VIDEO_BIN   = $(SITE_VIDEO_TDIR)/release/plxnative-sim
 site-video-sim: $(LIBASS_HOST_STAGED)
 	CARGO_INCREMENTAL=0 cargo +$(RUST_TOOLCHAIN) build --release --manifest-path rust-modules/Cargo.toml \
 	  --target-dir $(SITE_VIDEO_TDIR) --no-default-features \
-	  --features hostsim,play-feed,devtriggers,placeholder-sentinel -p plx_platform_desktop --bin plxnative-sim
+	  --features sim,play-feed,devtriggers,placeholder-sentinel -p plx_platform_desktop --bin plxnative-sim
 
 # Compatibility spelling used by the Windows launcher and existing documentation.
 sim-wsl: sim-linux
@@ -2763,7 +2764,7 @@ sim-macos-clean:
 # note (what it can and cannot do — chiefly: no video off-device).
 #
 # Its own target dir, per this file's rule for feature-set splits: this one is `--release
-# --no-default-features --features hostsim,play-feed`, which is a fourth configuration, and sharing a dir
+# --no-default-features --features sim,play-feed`, which is a fourth configuration, and sharing a dir
 # with `sim` would make each invocation rebuild the crate the other way round.
 MACAPP_TDIR ?= rust-modules/target-macapp
 

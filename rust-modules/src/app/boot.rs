@@ -700,9 +700,9 @@ pub(crate) unsafe fn construct(
     // that does not ask for ALLOW_HIGHDPI, so its window is the 1920x1080 points of the canonical
     // Linux host on a Retina display too, and the shell's density fit finds nothing to correct.
     // (Absent from every shipping build.)
-    #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+    #[cfg(all(feature = "sim", feature = "devtriggers"))]
     let high_dpi = !crate::dev::framedump::requested();
-    #[cfg(not(all(feature = "hostsim", feature = "devtriggers")))]
+    #[cfg(not(all(feature = "sim", feature = "devtriggers")))]
     let high_dpi = true;
     // The window and its GL context: created (with the retry above), corrected for the display's
     // density, and its drawable probed (`surface::probe` reads it once, for good). The `Surface` it
@@ -714,9 +714,9 @@ pub(crate) unsafe fn construct(
     // blocking, so the platform's software pacer (`Shell::frame`) follows the same switch.
     // A frame dump never waits on the display: every iteration is a render, at swap interval 0 and
     // with the software pacer off (`vsync_enabled` is what the pacer is asked with).
-    #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+    #[cfg(all(feature = "sim", feature = "devtriggers"))]
     let dumping = crate::dev::framedump::requested();
-    #[cfg(not(all(feature = "hostsim", feature = "devtriggers")))]
+    #[cfg(not(all(feature = "sim", feature = "devtriggers")))]
     let dumping = false;
     let vsync_enabled = !dumping && (controlled || !crate::dev::scenarios::novsync_armed());
     surface.set_swap_interval(if vsync_enabled { 1 } else { 0 });

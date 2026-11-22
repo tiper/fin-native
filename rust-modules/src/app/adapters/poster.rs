@@ -488,7 +488,7 @@ fn note_dump_failure(key: &[u8], transient: bool) {
 }
 
 /// The first art-request failure since the dump was armed, if any. See [`DUMP_FAILURE`].
-#[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+#[cfg(all(feature = "sim", feature = "devtriggers"))]
 pub(crate) fn dump_failure() -> Option<String> {
     DUMP_FAILURE.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }

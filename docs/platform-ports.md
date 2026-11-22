@@ -37,6 +37,11 @@ changes move the rest, so a lane re-verifies a citation by grep on the symbol, a
 Layer rules quoted from `ci/module-layers.ini` are quoted at `e9924f0f9` (`[play_uri] uses = base platform
 playback_contract`, `:148`): after Wave R the same line reads `uses = base os playback_contract`.
 
+W8c-4 renames the Cargo feature `hostsim` to `sim`. This page is a record, so every `hostsim` it names as a feature, a cfg or a
+`--features` value (the facts, the target shape and the as-landed notes of W8c-1 to W8c-3 included) is the feature that is called `sim` from
+W8c-4 on; the make target `test-hostsim`, `rust-modules/target-hostsim`, `HOSTSIM_SUITE` / `HOSTSIM_PKGS`, the CI job `host unit tests (hostsim)`,
+the module `app::adapters::hostsim` and the replay manifests' `"hostsim"` string keep their names.
+
 ## Problem
 
 PlxNative is one Rust application (17 layer crates, the 13 named in `docs/module-layers.md:12-17` plus playback_contract, media_codecs, play_uri and play_feed, under the top crate `plxnative-modules`) that
@@ -1883,6 +1888,16 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
 - W8c, the 363 non-fence `feature = "hostsim"` lines (360 cfg lines and three doc comments), sorted per crate: a
   host difference becomes a platform value or runner; simulator tooling goes under a renamed `sim` feature; a test
   seam goes to `test-support`.
+  As landed (W8c-4, the rename): the Cargo feature `hostsim` is `sim` in every member manifest that defines or forwards it (the application
+  crate, `plx_base`, `plx_machine`, `plx_os`, `plx_gfx`, `plx_plex`, `plx_telemetry`, `plx_data`, `plx_session`, `plx_media`, `plx_play_feed`,
+  `plx_shell_sdl`, `plx_platform_desktop` and `plx_platform_webos`; `fuzz/Cargo.toml` names `plx_media/sim`), in every `feature = "sim"` cfg, and in every
+  `--features` of the Makefile, `.github/workflows/`, `ci/mkmacapp.py` and `tests/paging_link.py`. `git grep -h 'feature = "hostsim"' <rev> -- 'rust-modules/*.rs' | wc -l`,
+  at `21aee59d4` and this branch's head: 188 -> 0, and `feature = "sim"` 0 -> 188 (a pure rename, so the same 188 lines). The unit,
+  default and `sim` test lists are unchanged. The manifests' prose says what `sim` still selects after W8c-2 and W8c-3 (the media seam,
+  the simulator's sink and compositor stand-in, the supersampled present, the dump switch, the steerable runtime root, the desktop window fit):
+  the GL context request, the window flags and the key, wheel and text layouts are platform values and are not its. The two readonly
+  certificates (`ci/proofs/serde-json-immutable.json`, `ci/proofs/platform-generated-enums.json`) pin the manifests and `os/build_support/catalog.rs`,
+  `os/src/i18n/mod.rs` and the application's `src/lib.rs`, all of which this rename touches, so they are re-sealed in this change (owner-approved), as its last commit.
   As landed (W8c-3, the frame seam): `Shell::frame` is a required hook returning a `FrameSeam { pacer: Pacer,
   present: Present }` (each group has a `NONE`), `FrameProbe::heartbeat_tag` a required method and
   all reachable through `host`. The webOS and Tizen platforms state `FrameSeam::NONE` and `""`; the desktop states the WSLg-aware pacer

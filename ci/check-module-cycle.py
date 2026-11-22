@@ -32,7 +32,7 @@ string contents are blanked, then every `#[cfg(test)]` / `#[cfg(all(test, ..))]`
 brace matching (a `mod tests { .. }`, a single `fn`/`use`/`let`/struct field...), and the rest is
 scanned for `crate::<top-level module>` and the first segments of `use crate::{a, b::c}` groups.
 An edge A -> B means "production code in A names `crate::B`". Feature-gated modules
-(`devtriggers`, `hostsim`) count as production: the graph is the union over feature sets.
+(`devtriggers`, `sim`) count as production: the graph is the union over feature sets.
 
 Honest limits. Paths are matched textually, not resolved: `super::`/`self::` hops that leave a
 top-level module, `use crate as x`, glob re-exports, `$crate` in macros and names reaching another

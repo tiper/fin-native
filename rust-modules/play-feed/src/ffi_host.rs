@@ -1,4 +1,4 @@
-//! The `hostsim` stand-in for `src/starfish.c` — the television's media seam, absent.
+//! The `sim` stand-in for `src/starfish.c` — the television's media seam, absent.
 //!
 //! This file has two behaviours and the default is still the honest failure.
 //!
@@ -61,10 +61,10 @@
 //! # How it is reached
 //!
 //! The verbs below are private; [`HostSink`] is the simulator's own `tv::sink::VideoSink`, one
-//! method per verb, held by the desktop platform crate's `SERVICES` (`platform-desktop/src/lib.rs`) for the `hostsim` build (the application builds it in
+//! method per verb, held by the desktop platform crate's `SERVICES` (`platform-desktop/src/lib.rs`) for the `sim` build (the application builds it in
 //! `app::adapters::hostsim`, with the simulator's picture) and returned directly by the media
 //! tests' composition (`player::test_physical`) and the application's (`app::adapters::backends`)
-//! in the hostsim tests. It is compiled for the simulator (`hostsim`) and for every test build (`cfg(test)`, or a
+//! in the hostsim tests. It is compiled for the simulator (`sim`) and for every test build (`cfg(test)`, or a
 //! dependent that enables `test-support`), so the tests that need it run in the default pass. The `*_for_test` hooks stay here, next to the statics
 //! they touch, and the tests reach them as `plx_play_feed::ffi_host::<hook>` (media does not re-export
 //! this module).

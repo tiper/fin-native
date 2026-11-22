@@ -27,7 +27,7 @@ crate-type = ["rlib"]
 # forwarded WEAKLY (`plxnative-modules?/<feature>`), which adds the optional edge in no build. The
 # dependency names no feature (a dependency feature is unified over the whole build), so nothing here
 # turns a default-feature pass into a Tizen pass. The features are the application's, under the same names
-# with the same defaults (rust-modules/Cargo.toml `[features]`); `hostsim`, the desktop simulator's, is not
+# with the same defaults (rust-modules/Cargo.toml `[features]`); `sim`, the desktop simulator's, is not
 # forwarded. `ci/test_platform_features.py` holds all of this.
 [features]
 default = ["play-uri", "play-feed", "devtools", "devtriggers", "threadcheck"]

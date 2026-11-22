@@ -68,7 +68,7 @@ pub(crate) mod uri_product;
 pub(crate) mod uri_exported;
 
 /// The demo video's frame dump (simulator only): see the module doc.
-#[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+#[cfg(all(feature = "sim", feature = "devtriggers"))]
 pub(crate) mod framedump;
 
 /// Files that are pure diagnostics rather than automation — see [`any_trigger_present`].

@@ -314,13 +314,13 @@ class VerifyRules(unittest.TestCase):
             self.assertTrue(any(name in p and "allowlist" in p for p in problems), (name, problems))
 
     def test_every_gl_function_the_renderer_calls_on_the_tizen_build_is_es2_core(self):
-        # the application declares its GL externs in gfx.rs and surface.rs; the ones behind `hostsim` are the simulator's (the blit; the VAO externs are the desktop platform's own and are not in these files)
+        # the application declares its GL externs in gfx.rs and surface.rs; the ones behind `sim` are the simulator's (the blit; the VAO externs are the desktop platform's own and are not in these files)
         root = Path(__file__).resolve().parent.parent / "rust-modules"
         declared = set()
         for path in list(root.glob("gfx/src/*.rs")) + [root / "base/src/surface.rs"]:
             text = path.read_text(encoding="utf-8")
-            # drop every item that follows a `#[cfg(feature = "hostsim")]` attribute: the next `extern "C" {...}` block or `fn ...}`
-            text = re.sub(r'#\[cfg\(feature = "hostsim"\)\]\s*(?:pub\s+)?(?:unsafe\s+)?(?:extern "C"\s*)?(?:fn[^{]*)?\{.*?\n\}\n', "", text, flags=re.S)
+            # drop every item that follows a `#[cfg(feature = "sim")]` attribute: the next `extern "C" {...}` block or `fn ...}`
+            text = re.sub(r'#\[cfg\(feature = "sim"\)\]\s*(?:pub\s+)?(?:unsafe\s+)?(?:extern "C"\s*)?(?:fn[^{]*)?\{.*?\n\}\n', "", text, flags=re.S)
             declared |= set(re.findall(r"\bfn (gl[A-Z][A-Za-z0-9]*)\s*\(", text))
         self.assertIn("glClear", declared)
         self.assertEqual(sorted(declared - checker.GLES2_CORE), [])

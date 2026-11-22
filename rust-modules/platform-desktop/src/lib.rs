@@ -32,12 +32,12 @@
 //! webOS port (the Wayland handles, glib, luna-service2) is `plx_platform_webos`, which no desktop crate
 //! depends on and the application never names. The simulator links without a television library to drop.
 //!
-//! The crate is compiled only under `hostsim` (its own feature, in no default set), so a default-feature
+//! The crate is compiled only under `sim` (its own feature, in no default set), so a default-feature
 //! pass that lists this package builds an empty library, and a television build never builds it. It is a
 //! mounted module of the `platform desktop` layer (`ci/module-layers.ini`): nothing names it, and it names
 //! no other platform (`docs/platform-ports.md`, W7). The `plxnative-sim` binary beside it
 //! (`src/bin/sim.rs`) is its executable.
-#![cfg(feature = "hostsim")]
+#![cfg(feature = "sim")]
 mod pacer;
 
 use plxnative_modules::host::{

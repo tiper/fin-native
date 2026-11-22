@@ -222,9 +222,9 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   CI runs the three cargo targets plus those two as five parallel jobs
   (`host-lint`, `host-unit-default`, `host-unit-hostsim`, `host-python`, `host-python-harness`) behind an aggregator named
   `host checks (NOT a device gate)`; `ci/test_ci_split.py` pins that no gate falls between them. The cargo half runs `cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp`
-  **on the default feature set, and again with `--features hostsim` for the crates that declare it
+  **on the default feature set, and again with `--features sim` for the crates that declare it
   (`HOSTSIM_SUITE`: all of `UNIT_SUITE` except `plx_net`, `plx_ui`, `plx_appkit`, `plx_screens`,
-  `plx_media_codecs`, `plx_play_uri`, `plx_playback_contract` and `plx_owp`, which have no `hostsim` cfg and run the
+  `plx_media_codecs`, `plx_play_uri`, `plx_playback_contract` and `plx_owp`, which have no `sim` cfg and run the
   same test names in both passes, and `plx_platform_tizen`, whose crate is `#![cfg(feature = "tizen")]`: both passes compile it
   EMPTY, and its tests run only under `cargo test --lib -p plx_platform_tizen --features tizen`, which the `tizen-so` job of `.github/workflows/tizen.yml` runs (the only CI job that does, and only for a change under that workflow's path filter); `ci/test_test_crate.py` fails if one gains the feature or a cfg)**,
   which is not a duplicate run. The host feed seam (`play-feed/src/ffi_host.rs`) exists in the hostsim
@@ -233,7 +233,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   too. Until then it existed ONLY under hostsim and every such test was compiled out of the default
   pass and could not fail it — which is how the prime-livelock regression
   (`player::engine::prime_livelock_tests`) sat outside the gate entirely while 1398 default-feature
-  tests passed. A test that needs `hostsim` itself (a runtime root the environment can steer, the
+  tests passed. A test that needs `sim` itself (a runtime root the environment can steer, the
   application crate's lifecycle rig) is still hostsim-only. Cargo keys fingerprints by feature set, so the two coexist in one `target/` and the
   second pass costs seconds warm. See the testing section for what it does and does not cover.
   **The per-crate test binaries (`UNIT_SUITE`) run side by side, not one after another.** `cargo test` executes the
@@ -309,19 +309,20 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   about one run in three when started alone in a fresh process (300 runs, with a shared and with a
   private runtime dir) and is hidden in the suite by the tests that run before it in the same
   process. Adopting it would also need the tool on every machine and CI job.
-- `make test-hostsim [C=<crate>] [T=filter]` — the `hostsim`-feature unit tests
-  (`#[cfg(all(test, feature = "hostsim"))]`: the application crate's `app/run.rs`
+- `make test-hostsim [C=<crate>] [T=filter]` — the `sim`-feature unit tests (the Cargo feature was `hostsim` until W8c-4;
+  the target, `HOSTSIM_SUITE`, `rust-modules/target-hostsim` and the `host unit tests (hostsim)` CI job keep that name)
+  (`#[cfg(all(test, feature = "sim"))]`: the application crate's `app/run.rs`
   `lifecycle_regression_tests`, the player-return rig), which `test-fast` and `test-crate` do not
   build; `plx_media`'s engine, pump and `route/decision.rs` tests were here until W8c-1 and are now
   `cfg(test)`, so `test-crate` runs them and this pass re-runs them with the feature on. `C` names the crate under
   test, spelled as for `test-crate` (`C=plx_media`, `C=media`; several allowed) and defaulting to
   the application crate (`C=app`); it changes nothing else, so there is one recipe, one managed dir
   and one `--require-match` for all of them. It runs `cargo test --lib -p <crate> --features
-  hostsim` on the pinned toolchain through `$(UNIT_RUN)`, with a fresh `PLXNATIVE_RUNTIME_DIR` (the
-  `hostsim` feature is what makes it steerable) that the recipe removes on exit, and with
+  sim` on the pinned toolchain through `$(UNIT_RUN)`, with a fresh `PLXNATIVE_RUNTIME_DIR` (the
+  `sim` feature is what makes it steerable) that the recipe removes on exit, and with
   `--require-match`: a `T=` that matches no test exits 1 instead of reporting `0 passed` and
   passing, which includes a correctly spelled test that lives in another crate than `C`. The
-  features are the crate's own plus `hostsim`, not the application crate's defaults that the full
+  features are the crate's own plus `sim`, not the application crate's defaults that the full
   suite unifies in (the gap `test-crate` exists to close, `plx_plex` 458 tests against 466): for
   `C=plx_media` that made no difference, 1839 passed / 60 ignored, the line `make check`'s hostsim
   pass prints for the crate (measured 2026-10-19); another crate with `devtriggers`-gated tests
@@ -345,7 +346,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   `run_application`) and asserts that `init` ran before `open`, the `OpenAsk` the application made, and the fake's
   refusal returned as the entry's `Exit`. The boot cannot go further: after `open` it makes real GL calls, and a fake
   surface has no GL context (nothing stubs GL under `test-support`), so frames and the loop are graded by the
-  in-crate tests of `make test-hostsim`, not here. It needs `hostsim`, because only there does `PLXNATIVE_RUNTIME_DIR`
+  in-crate tests of `make test-hostsim`, not here. It needs `sim`, because only there does `PLXNATIVE_RUNTIME_DIR`
   steer the runtime root, so the boot's event log and crash log land in the recipe's throwaway directory; the boot
   replaces the process's panic hook (`install_panic_logger`, which wraps the previous hook and also writes the
   event and crash logs), and only one test in the file boots, because the platform's services install once per
@@ -370,7 +371,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   asserts only what its code promises (no panic, the documented bounds, round trips) and a crash fails the
   run, with the input in `fuzz/artifacts/<target>/`. The package is a top-level `fuzz/` with its own
   `[workspace]`, so no shipped `Cargo.toml` names it and no shipped build changes; it depends on the layer
-  crates by path, with `plx_media/hostsim` (the host configuration of the layers below it: the stand-ins they compile in place of the television's calls, so the package links and runs on a desktop), and `fuzz/build.rs`
+  crates by path, with `plx_media/sim` (the host configuration of the layers below it: the stand-ins they compile in place of the television's calls, so the package links and runs on a desktop), and `fuzz/build.rs`
   reuses `rust-modules/build_support/host_link.rs`. `tools/fuzz-hud.py` is the whole workflow
   (`list | seed | lock | build | run`): it copies `rust-modules/Cargo.lock` to the gitignored `fuzz/Cargo.lock`
   (the shared crates are exactly the shipped versions), builds with the nightly named by `FUZZ_TOOLCHAIN`
@@ -870,7 +871,7 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   GNU-named archive fine, and the TV never gets far enough to miss a descriptor. `check-package.py`
   now asserts both. Full account: `docs/distribution.md` §9.
 - `make macapp` / `make macapp-zip` — **`pkg/PlxNative.app`: the app as a self-contained macOS
-  application**, for sending to somebody who has none of this installed. Same `hostsim` core the
+  application**, for sending to somebody who has none of this installed. Same `sim` core the
   simulator runs, built `--release --no-default-features` (so no dev counter, no `/tmp` trigger
   surface, no FIFO, no capture listener), with every non-system dylib copied in and rewritten to
   `@rpath`, ad-hoc codesigned. It signs in with the real QR flow and browses a real server; **it
@@ -961,14 +962,14 @@ the pinned Sentry Native cross-build), and `sshpass` (Homebrew; deploy/run use y
   would otherwise report the dev build fresh while the release `.a` sat at that path.
   **`make check` cannot see a break in this configuration** — it builds the default feature set —
   **but the PR gate now can**: `.github/workflows/ci.yml` runs `make check-nodef` (the shipping set:
-  `--no-default-features` plus the playback backends) and type-checks both `hostsim` configurations
+  `--no-default-features` plus the playback backends) and type-checks both `sim` configurations
   on every push. Until that landed, the shipping set was first compiled during a release cut, i.e.
   after the change had merged. The
   **`PostToolUse` hook** (`.claude/hooks/release-config-check.py`) stays and is now the fast path
   rather than the only one — it catches the break before the push, and CI does not run in somebody
   else's checkout. It type-checks the bare `--no-default-features` set, which drops `play-uri` and `play-feed` too (a build with
   no playback backend), so it does not replace `make check-nodef`, which passes the Makefile's `RUST_BACKEND_FEATURES`. It type-checks after
-  every edit to a `rust-modules/src/**.rs` or any crate `src/` directory in the hook's `layer_srcs` (the layer crates and `platform-webos`, which it checks with `-p plx_platform_webos` beside the application; `platform-desktop` and `platform-tizen` are absent on purpose, their libraries are empty without `hostsim` and `tizen`; it does not watch `playback-contract`, `media-codecs`,
+  every edit to a `rust-modules/src/**.rs` or any crate `src/` directory in the hook's `layer_srcs` (the layer crates and `platform-webos`, which it checks with `-p plx_platform_webos` beside the application; `platform-desktop` and `platform-tizen` are absent on purpose, their libraries are empty without `sim` and `tizen`; it does not watch `playback-contract`, `media-codecs`,
   `play-feed` or `play-uri`, for which `make check-nodef` is the only gate that compiles them in the shipping set, nor `owp`, which the application does not link yet); it costs well under a second warm, because cargo keys
   fingerprints by feature set and the two configurations coexist in one `target/`. The hazard it
   guards is hand-written `#[cfg(feature = "devtriggers")]` PAIRS, where a spliced-in function
@@ -1314,13 +1315,13 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   `system.rs` (the LG half of the window), `webos.rs` with `webos/` (identity, capability probe, jail repair, toast, `ls2/uri.rs`, the Starfish/ACB
   `video_sink.rs`) and `keymanager.rs`, owns the `feed-sink` and `uri-transport` features, and is the crate the ARM staticlib is built from
   (`RUST_LIB` is `libplx_platform_webos.a`). The desktop crate holds the simulator's tables and entry (`src/lib.rs`, compiled only under its
-  own `hostsim` feature) and the `plxnative-sim` binary (`src/bin/sim.rs`); a simulator or macOS-app build says `-p plx_platform_desktop`.
+  own `sim` feature) and the `plxnative-sim` binary (`src/bin/sim.rs`); a simulator or macOS-app build says `-p plx_platform_desktop`.
   Each has its own `build.rs` (the nanosvg link line reaches only the package that prints it), and each forwards the
   application's features with its defaults (the webOS crate omits `placeholder-sentinel`, which only the simulator's dump build names; `ci/test_platform_features.py`); the desktop's dependencies are `optional` and only its
-  `hostsim` enables them, so a default-feature pass lists it and builds nothing of it.
+  `sim` enables them, so a default-feature pass lists it and builds nothing of it.
   `rust-modules/platform-tizen/` (crate `plx_platform_tizen`, W9) is the third platform crate: a hosted `.so` entry, an Ecore window, an EGL
   context, the remote's keys and a UDP log tap, emulator only; its `uri` feature (W10 part B) composes the Tizen URI driver over the host's native player, and without it the media boot is `host::NO_MEDIA` and nothing plays. Its library is
-  `#![cfg(feature = "tizen")]` (its own feature, in no default set), every dependency is `optional` and only the `tizen` feature enables them (its list is the `tizen` feature in `rust-modules/platform-tizen/Cargo.toml`, which is where to read it), it forwards every application feature but `hostsim`, and `[platform tizen]` in `ci/module-layers.ini` is its layer.
+  `#![cfg(feature = "tizen")]` (its own feature, in no default set), every dependency is `optional` and only the `tizen` feature enables them (its list is the `tizen` feature in `rust-modules/platform-tizen/Cargo.toml`, which is where to read it), it forwards every application feature but `sim`, and `[platform tizen]` in `ci/module-layers.ini` is its layer.
   Its build (`PLATFORM=tizen`: `mk/platform-tizen.mk`, `tizen/`, the `tizen-so`/`tizen-verify`/`tizen-tpk` targets, the compile-only `.github/workflows/tizen.yml`) is `docs/tizen.md`.
   The `PLATFORM` axis also REFUSES the goals that build the webOS television package (`all`, `ipk`, `install`, `deploy`, `test`, the storage helper, `src/%.o`, `symbols*`, `libass`, `sentry-native`: `WEBOS_TV_GOALS` in the `Makefile`) under an explicit `PLATFORM=desktop` or `tizen`, at parse time and before the stamp reset; the queries, the simulators (which imply `desktop`), `macapp` and the `tizen-*` goals are not refused, and `make sim all` is (one platform per invocation). `ci/test_platform_axis.py` pins it.
 - `rust-modules/ui/src/` (workspace crate `plx_ui`) — **the UI, as a shared design system**: `theme.rs` tokens, the retui core
@@ -1998,9 +1999,9 @@ There **is** a host unit suite, and it is not the real gate — both halves matt
 them is how this section used to be wrong in three files at once.
 
 **Tier 1 — `make check` (host).** `cd rust-modules && cargo test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_net -p plx_ui -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_playback_contract -p plx_play_uri -p plx_play_feed -p plx_media_codecs -p plx_appkit -p plx_screens -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop -p plx_platform_tizen -p plx_owp` (a bare `cargo test --lib` runs the application crate only and skips every layer crate: `plx_base`, `plx_machine`, `plx_os`, `plx_gfx`, `plx_net`, `plx_ui`, `plx_plex`, `plx_telemetry`, `plx_data`, `plx_session`, `plx_media`, `plx_appkit`, `plx_screens`, `plx_shell_sdl`) runs the whole
-host suite on the dev Mac, no TV involved — and `make check` runs the crates that declare `hostsim`
-(`HOSTSIM_SUITE`, a subset of that list) a SECOND time under `--features hostsim`, because some tests need
-`hostsim` itself (the application's lifecycle rig, a runtime root the environment can steer); the host feed
+host suite on the dev Mac, no TV involved — and `make check` runs the crates that declare `sim`
+(`HOSTSIM_SUITE`, a subset of that list) a SECOND time under `--features sim`, because some tests need
+`sim` itself (the application's lifecycle rig, a runtime root the environment can steer); the host feed
 seam is no longer a reason, since W8c-1 it is in every test build (the build section's paragraph on the two
 passes says which crates are left out and why). **Treat every test COUNT in this section as
 already wrong, including the one in this sentence.** 386 measured 2026-08-13; 284 on 2026-08-02; a
@@ -2095,7 +2096,7 @@ you get without waking a television. What it covers today, by module:
 on the host.** This tier
 did not exist before 2026-08-14, and the line below used to read "there is no host *runtime*" flatly
 — that is now wrong for the UI half and right for everything else. `plxnative-sim` (the desktop platform crate's binary, `-p plx_platform_desktop`) is the same app
-core built with `--features hostsim` and linked against desktop SDL2 + desktop GL 4.1 core: it
+core built with `--features sim` and linked against desktop SDL2 + desktop GL 4.1 core: it
 renders the real interface against a real PMS, boots to a screen with the same `plxnative-*`
 triggers, is driven by the same remote-FIFO tokens, and screenshots itself. **The
 `ui-sim` skill is the loop.** It exists because the TV is a mutex — one set, one app instance, two

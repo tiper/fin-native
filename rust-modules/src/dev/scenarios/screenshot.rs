@@ -39,10 +39,10 @@ pub(crate) struct ScreenshotArms {
     libmenu_sent: Option<u32>,
     /// `clockstop`'s position, read once (`None` = not read yet), and whether it was reached.
     clockstop: Option<Option<u32>>,
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     clockstop_reached: bool,
     /// What `autopause` still owes the settled capture — see [`PauseDebt`].
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     autopause: PauseDebt,
 }
 
@@ -52,7 +52,7 @@ impl ScreenshotArms {
     /// waiting on its seek — and a capture of that rest is the wrong picture. An arm that was never
     /// armed, reached its state or gave up (and logged it) is not pending. Simulator only, as the
     /// settled capture is.
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     pub(crate) fn pending(&self) -> bool {
         !self.libtype_done
             || !self.libgrid.done
@@ -79,7 +79,7 @@ impl ScreenshotArms {
 ///
 /// `Unread` is the trigger not read yet, which counts as owed, as an unread `clockstop` does: until
 /// the first frame has read it, nothing can say there is nothing to wait for.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum PauseDebt {
     #[default]
@@ -88,7 +88,7 @@ pub(crate) enum PauseDebt {
     Paid,
 }
 
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 impl PauseDebt {
     /// The debt after one frame. `armed` reads whether a trigger asks for a pause at all (called
     /// once, while `Unread`); `edges_left` says the Pause has not landed (the arm is not armed yet,
@@ -109,7 +109,7 @@ impl PauseDebt {
 /// How long `autopause` waits for its Pause, counted from the app's start. Far longer than
 /// [`CEILING_MS`], which is for a screen that is already there: the playhead this waits on is
 /// reached through a Load, an open and playback in real time from the resume point.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 const AUTOPAUSE_CEILING_MS: u32 = 60_000;
 
 /// Has `autopause`'s Pause not landed yet? True while the arm has not armed itself (`pause_tried`
@@ -117,14 +117,14 @@ const AUTOPAUSE_CEILING_MS: u32 = 60_000;
 /// asked for a pause) and while it is armed and waiting on its playhead (`script_armed`, the
 /// scheduled pause still in hand). Without the first clause the frames before the arm arms itself
 /// would read as "nothing left to wait for", which is the flake this debt exists to close.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 fn pause_edges_left(pause_tried: bool, script_armed: bool) -> bool {
     !pause_tried || script_armed
 }
 
 /// Keep [`ScreenshotArms`]' `autopause` debt current. Called every frame by `each_frame`, ahead of
 /// the arms that act on the player. Simulator only, as the settled capture is.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 pub(crate) fn autopause_debt(app: &mut App, fr: &Frame) {
     let sc = &mut app.scenarios;
     let edges_left = pause_edges_left(sc.pause_tried, sc.pause_script.is_some());
@@ -166,11 +166,11 @@ pub(super) fn parse_cell(v: &str) -> Option<(usize, usize)> {
 /// is `plx_machine::idle`'s change clock, which only the simulator keeps; on the television there is none,
 /// the wait is skipped, and the arm behaves exactly as it did before it took a value.
 pub(crate) fn at_rest(now: u32, rest: Option<u32>, last_change_ms: u32, current_changed: bool) -> bool {
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     {
         rest.is_none_or(|ms| !current_changed && now.wrapping_sub(last_change_ms) >= ms)
     }
-    #[cfg(not(feature = "hostsim"))]
+    #[cfg(not(feature = "sim"))]
     {
         let _ = (now, rest, last_change_ms, current_changed);
         true
@@ -394,7 +394,7 @@ pub(crate) fn libmenu_arm(app: &mut App, fr: &Frame) {
 /// there. The stop is a stall of the sink's own making (`HostSink::stop_clock_at`), re-armed
 /// every frame because a Load (a seek) starts a fresh fed timeline.
 pub(crate) fn clockstop_arm(app: &mut App, fr: &Frame) {
-    #[cfg(all(feature = "hostsim", feature = "play-feed"))]
+    #[cfg(all(feature = "sim", feature = "play-feed"))]
     {
         let arms = &mut app.scenarios.shots;
         if arms.clockstop.is_none() {
@@ -425,7 +425,7 @@ pub(crate) fn clockstop_arm(app: &mut App, fr: &Frame) {
             plx_base::eventlog::log(&format!("clockstop: gave up; the playhead never reached {ms} ms"));
         }
     }
-    #[cfg(not(all(feature = "hostsim", feature = "play-feed")))]
+    #[cfg(not(all(feature = "sim", feature = "play-feed")))]
     {
         let _ = fr;
         if app.scenarios.shots.clockstop.is_none() {
@@ -436,7 +436,7 @@ pub(crate) fn clockstop_arm(app: &mut App, fr: &Frame) {
 
 /// How long `clockstop` waits for the playhead. Longer than [`CEILING_MS`]: its position is
 /// usually reached through `autoseek`, which only fires 12 s into a run.
-#[cfg(all(feature = "hostsim", feature = "play-feed"))]
+#[cfg(all(feature = "sim", feature = "play-feed"))]
 const CLOCKSTOP_CEILING_MS: u32 = 60_000;
 
 #[cfg(test)]
@@ -469,7 +469,7 @@ mod tests {
 
     /// The arms of a scene that armed nothing but `autopause`: everything else has landed or was
     /// never asked for, so `pending` is exactly the debt under test.
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     fn only_autopause_unlanded() -> super::ScreenshotArms {
         let landed = || super::SeatArm { done: true, ..Default::default() };
         super::ScreenshotArms {
@@ -487,7 +487,7 @@ mod tests {
     /// picture and no pause. A trigger that is armed holds the capture through every frame before
     /// its Pause lands, including the frames before the arm has armed itself, and releases it when
     /// the Pause has landed.
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     #[test]
     fn an_armed_autopause_holds_the_settled_capture_until_its_pause_lands() {
         use super::PauseDebt;
@@ -511,7 +511,7 @@ mod tests {
     /// The line that holds the frames BEFORE the arm arms itself: the arm's latch is not set and no
     /// pause is scheduled yet, which is the state of the first six seconds of every run. Reading
     /// that as "nothing left" paid the debt on the first frame and brought the flake back.
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     #[test]
     fn autopause_stays_owed_on_the_frames_before_its_arm_arms_itself() {
         use super::{pause_edges_left, PauseDebt};
@@ -526,7 +526,7 @@ mod tests {
         assert!(arms.pending(), "a quiet player before the arm armed itself is not the scene's state");
     }
 
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     #[test]
     fn a_scene_without_autopause_is_not_held_and_a_pause_that_never_lands_gives_up() {
         use super::PauseDebt;

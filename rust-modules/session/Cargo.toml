@@ -23,7 +23,7 @@ default = []
 # trigger files through `plx_base::devtrig`, which is compile-time `None` without it. A missing
 # forward would run the shipping-policy cases in a build that has the dev surface.
 devtriggers = ["plx_base/devtriggers", "plx_machine/devtriggers", "plx_net/devtriggers", "plx_os/devtriggers", "plx_plex/devtriggers", "plx_telemetry/devtriggers"]
-hostsim = ["plx_base/hostsim", "plx_machine/hostsim", "plx_os/hostsim", "plx_plex/hostsim", "plx_telemetry/hostsim"]
+sim = ["plx_base/sim", "plx_machine/sim", "plx_os/sim", "plx_plex/sim", "plx_telemetry/sim"]
 # The `cfg(test)` seams other crates' tests use (`auth::test_support`, `auth::SessionIdentity::of`,
 # `auth::synthetic_incident`, `auth::settled_probe_for_test`, `auth::owner::scenarios`) plus the
 # test-mode arms `cfg(test)` alone cannot give a dependent (the default `ProfileWorkIo::admit`, the

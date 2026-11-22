@@ -146,7 +146,7 @@ def strip_tests(tokens: list[Token]) -> list[Token]:
         if tokens[i].text == '#' and i + 1 < len(tokens) and tokens[i + 1].text == '[':
             end = matching(tokens, i + 1)
             attr = ''.join(t.text for t in tokens[i + 2:end])
-            if attr in ('cfg(test)', 'test', 'cfg(all(test,feature=hostsim))'):
+            if attr in ('cfg(test)', 'test', 'cfg(all(test,feature=sim))'):
                 # Skip the whole annotated item, including attributes between cfg and its body.
                 j = end + 1
                 while j < len(tokens):

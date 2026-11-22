@@ -142,7 +142,7 @@ FLAVOR=<f>` when you need to know where a given flavour's binary, logs and dev t
 ## Tests
 
 **`make check`** — the host gate: the lint pass plus the Rust unit suite run twice (default features
-and `hostsim`), alongside the package, C, harness and tooling self-tests. Seconds once warm, no
+and `sim`), alongside the package, C, harness and tooling self-tests. Seconds once warm, no
 television. Run it before you push, and run it on the pinned toolchain — `make check` uses `cargo +$(RUST_TOOLCHAIN)`
 (the `channel` in `rust-modules/rust-toolchain.toml`) while a bare `cargo test` from the repository root picks up
 your default toolchain, and the two have disagreed.

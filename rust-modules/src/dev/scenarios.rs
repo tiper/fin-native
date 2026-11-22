@@ -1736,7 +1736,7 @@ fn autopause_arm(app: &mut App, fr: &mut Frame) {
         // scheduling had got to: the same frame and clock every run (`HostSink::stop_clock_at`).
         // Re-armed every frame until accepted: a Load in between rebases the fed timeline, and
         // the stop is kept in movie time, so re-arming is idempotent.
-        #[cfg(all(feature = "hostsim", feature = "play-feed"))]
+        #[cfg(all(feature = "sim", feature = "play-feed"))]
         if let Some(ms) = at_ms {
             crate::app::adapters::hostsim::stop_sim_clock_at(Some(i64::from(ms) * 1_000_000));
         }
@@ -1751,7 +1751,7 @@ fn autopause_arm(app: &mut App, fr: &mut Frame) {
                 ));
                 app.scenarios.pause_script = None;
                 app.scenarios.pause_resume_at = hold_ms.map(|hold| fr.now.wrapping_add(hold));
-                #[cfg(all(feature = "hostsim", feature = "play-feed"))]
+                #[cfg(all(feature = "sim", feature = "play-feed"))]
                 crate::app::adapters::hostsim::stop_sim_clock_at(None);
                 pin_headless_hud(app, fr.now, None);
             }
@@ -2293,7 +2293,7 @@ pub(crate) unsafe fn each_frame(app: &mut App, fr: &mut Frame) -> bool {
     screenshot::libmenu_arm(app, fr);
     screenshot::clockstop_arm(app, fr);
     // What `autopause` still owes the settled capture (`screenshot::PauseDebt`).
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     screenshot::autopause_debt(app, fr);
     if !detail_arm(app, fr) {
         return false;

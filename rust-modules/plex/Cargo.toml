@@ -21,7 +21,7 @@ default = []
 # only because some code in this crate has a `cfg` on it (the dev-trigger origin override in
 # `plex::origin`, the simulator's session paths in `plex::session`).
 devtriggers = ["plx_base/devtriggers", "plx_machine/devtriggers", "plx_net/devtriggers", "plx_os/devtriggers"]
-hostsim = ["plx_base/hostsim", "plx_machine/hostsim", "plx_os/hostsim"]
+sim = ["plx_base/sim", "plx_machine/sim", "plx_os/sim"]
 # The `cfg(test)` seams other crates' tests use (`plex::session::TempSession` and its
 # `*_for_test` hooks, `plex::grant`'s reset and evidence seams, `plex::serverinfo::store_for_test`)
 # plus the test-mode arms `cfg(test)` alone cannot give a dependent. Enabled from the dependents'

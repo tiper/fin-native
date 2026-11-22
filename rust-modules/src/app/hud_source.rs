@@ -45,7 +45,7 @@ pub(crate) fn read_artifact(path: &Path) -> Result<Vec<u8>, ReadError> {
     read_file(file, MAX_ARTIFACT_BYTES)
 }
 
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 mod authoring {
     use super::*;
     use std::ffi::CString;
@@ -147,7 +147,7 @@ mod authoring {
     }
 }
 
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 pub(crate) use authoring::{read_source, write_artifact, Source};
 
 #[cfg(test)]

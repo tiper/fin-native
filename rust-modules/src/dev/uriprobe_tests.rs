@@ -3,13 +3,13 @@
 //! here from the media crate when the driver left it; the assertions are unchanged.
 
 /// The display sink the probe opens its window on, as media's `start` hands it: the simulator's
-/// host sink under hostsim, the port's installed sink otherwise.
+/// host sink under `sim`, the port's installed sink otherwise.
 fn display() -> &'static dyn plx_os::tv::sink::DisplaySink {
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     {
         &crate::app::adapters::hostsim::HOST_SINK
     }
-    #[cfg(not(feature = "hostsim"))]
+    #[cfg(not(feature = "sim"))]
     {
         plx_os::tv::sink::display_installed()
     }
@@ -35,10 +35,10 @@ impl UriSession {
     }
     fn poll(&self) -> Result<plx_os::tv::uri::UriPoll, String> { self.0.poll() }
     fn is_done(&self) -> bool { self.0.is_done() }
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     fn window_created(&self) -> bool { self.0.window_created() }
     fn ownership_released(&self) -> bool { self.0.ownership_released() }
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     fn touch_acb_for_test(&mut self, now_ms: u64) { self.0.touch_acb_for_test(now_ms); }
     /// One frame at the clock the test names, with media's route half around it (what `drive` does
     /// at the real one).
@@ -191,7 +191,7 @@ impl Rig {
 
     /// A session whose ACB plane is the one a test hands in (a scripted sink and its own plane
     /// owner), not the process-global pair other tests boot, reset and share.
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     fn on_plane(variant: Variant, sink: &'static dyn plx_os::tv::sink::DisplaySink,
         plane: &'static plx_os::tv::plane::PlaneOwner) -> Rig {
         Rig::build_on(variant, None, sink, plane)
@@ -582,7 +582,7 @@ fn uriprobe_driver_delayed_initial_play_reply_cannot_grade_resume() {
 
 /// The tests which need the host sink to export a window (the webOS 5+ path) or the whole
 /// engine around the driver: `make test-hostsim C=plx_media T=uriprobe`.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 mod hostsim {
     use super::*;
     #[cfg(feature = "play-feed")]

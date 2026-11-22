@@ -3,7 +3,7 @@ name = "plx_shell_sdl"
 version = "0.0.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-description = "PlxNative stock-SDL shell: SDL bring-up, the window and GL context, the swap, the event drain, the key, pointer, wheel and text layouts of both SDLs (LG's fork on the television, stock SDL2 under hostsim), and synthetic-event injection."
+description = "PlxNative stock-SDL shell: SDL bring-up, the window and GL context, the swap, the event drain, the key, pointer, wheel and text layouts of both SDLs (LG's fork on the television, stock SDL2 on a desktop; the platform picks which), and synthetic-event injection."
 repository = "https://github.com/GLinnik21/plx-native"
 publish = false
 build = "build.rs"
@@ -19,11 +19,12 @@ crate-type = ["rlib"]
 
 [features]
 default = []
-# Forwarded from the application crate, which is the only one that sets it. It selects the
-# stock-SDL2 event layouts and the desktop window arithmetic that a simulator runs (the
-# television's SDL fork lays its keyboard, text and wheel events out differently), plus the GL
-# context request. Both arms of every layout stay compiled either way (`cfg!`).
-hostsim = ["plx_base/hostsim"]
+# Forwarded from the application crate, which is the only one that sets it. It selects the desktop
+# window arithmetic a simulator runs (the fit to the display, `Placement::Desktop`'s flags) and the three
+# desktop-only SDL calls behind it. The event layouts (the television's SDL fork lays its keyboard, text
+# and wheel events out differently from stock SDL2) and the GL context request are NOT its: the platform
+# states them (`Shell::sdl()`, W8c-2) and both arms of every layout stay compiled either way.
+sim = ["plx_base/sim"]
 # Stubs for the four text-input calls that a host test binary must not reach (no window, no
 # panel) and the SDL event-queue guard the application's loop tests drive. Enabled from the
 # dependents' `[dev-dependencies]`; never in a shipped build.

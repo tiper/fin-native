@@ -653,17 +653,17 @@ pub fn initialize(preference: Preference, controlled: bool) {
         .as_ref()
         .map(|v| (v.ui.as_deref(), v.fmt.as_deref(), v.clock.as_deref()))
         .unwrap_or_default();
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     let simulated_format = std::env::var("PLXNATIVE_FORMAT_LOCALE").ok();
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     let fmt = simulated_format.as_deref().or(fmt);
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     let simulated_clock = std::env::var("PLXNATIVE_CLOCK").ok();
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     let clock = simulated_clock.as_deref().filter(|v| matches!(*v, "12" | "24" | "locale")).or(clock);
     #[allow(unused_mut)]
     let mut cx = LocaleContext::resolve(preference, ui, fmt, clock, env.as_deref());
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     if let Ok(forced) = std::env::var("PLXNATIVE_LOCALE") {
         cx = LocaleContext::resolve(
             Preference::from_tag(&forced),

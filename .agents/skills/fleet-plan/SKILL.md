@@ -193,7 +193,7 @@ What keeps that in check:
   else and the main checkout keeps its cache. `CARGO_INCREMENTAL=1` in the environment still
   overrides both — the right call only for a lane genuinely doing long iterative work, and for the
   host unit loop that opt-in is `make test-fast` (own `rust-modules/target-fast`, ~2.7 GB, reclaimed
-  by `tools/build-gc.sh --incremental` or `--lanes`), and for the app crate's `hostsim` tests
+  by `tools/build-gc.sh --incremental` or `--lanes`), and for the app crate's `sim`-feature tests
   `make test-hostsim` (own `rust-modules/target-hostsim`, reclaimed the same way), rather than
   exporting it everywhere or pointing a hand-run `cargo` at a `/tmp` dir nothing tracks.
 - **A fresh lane's first build is seeded with an APFS clone of the third-party output**
@@ -317,7 +317,7 @@ cannot be reached once they are running — a hazard you meant to mention is a h
    `tools/tv-session.sh`, no `tools/capture-screen.sh` (a PreToolUse hook refuses them). Verify on
    the simulator — the `ui-sim` skill — with your own root: `make sim-shot SIM_DIR=/tmp/sim-<lane>`.
 3. GATES. Iterate with `make test-crate C=<crate> [T=filter]` (and `make test-hostsim [C=<crate>]
-   T=<filter>` for `hostsim` tests) on the crates you touch, and nothing wider: no local
+   T=<filter>` for `sim`-feature tests) on the crates you touch, and nothing wider: no local
    `make check`, `make check-nodef` or `make check-replay`. Commit and push; the PR's CI is the gate,
    and it merges only on a fully green CI. Never bare `make`, `make all`, `make deploy`, `make ipk`
    — each cross-builds FFmpeg into this worktree (a built lane here measures 1.2–4.8 GB). Still

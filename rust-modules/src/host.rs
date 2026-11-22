@@ -7,8 +7,8 @@
 //! helpers an SDL platform's `Shell` is built from ([`sdl_init`], [`sdl_open`], with [`InitHooks`]), the hosted contract's exit types, [`run`], the
 //! one function defined in here (it hands the platform to the application's entry), and the ready media values
 //! described below. No other module of the
-//! application is public to a television build. A `hostsim` build also keeps the simulator binary's own doors,
-//! each behind `feature = "hostsim"` in `lib.rs` (`grep -n 'feature = "hostsim"' rust-modules/src/lib.rs`):
+//! application is public to a television build. A `sim` build also keeps the simulator binary's own doors,
+//! each behind `feature = "sim"` in `lib.rs` (`grep -n 'feature = "sim"' rust-modules/src/lib.rs`):
 //! `hud_cli`, `sim_runtime_dir`, `sim_events_log`, `publish_sim_webos_major` and
 //! `synthetic_home_initial`, the one `app` item re-exported at the crate root. `HostEvent`, the loop's own event type, stays
 //! private: a platform reports input through [`EventSink`] and the application converts it. The owner's ruling (2026-11-21, Decision 3
@@ -23,9 +23,9 @@
 //! moves it into the webOS platform, so `host` hands a platform READY [`MediaBoot`] values, and a platform crate names
 //! no `PlayerAdapter` (the type `MediaBoot::compose` takes): [`WEBOS_MEDIA`] is the television's (the plane owner's
 //! boot, then the Feed and the product URI driver), compiled in every build of the application because it carries no `cfg` (the application cannot know which platform names it), and, under
-//! `hostsim`, `FEED_MEDIA` is the desktop's (the Feed over the simulator's sink, no URI driver) and `HOST_SINK`
+//! `sim`, `FEED_MEDIA` is the desktop's (the Feed over the simulator's sink, no URI driver) and `HOST_SINK`
 //! is that sink itself (also `play-feed`, the module it lives in). A television build never has the desktop pair.
-//! `SIM_PRESENT` is the one other `hostsim` value: the simulator's [`Present`] hooks, which draw and so stay in the
+//! `SIM_PRESENT` is the one other `sim` value: the simulator's [`Present`] hooks, which draw and so stay in the
 //! application, for the desktop's [`FrameSeam`] to state beside the pacer it owns (a television states `FrameSeam::NONE`).
 //! [`NO_MEDIA`] is the one for a platform with no playback (a Tizen build without its `uri` feature, which composes its own driver): no early init, no driver and no resolver,
 //! so the boot publishes `BackendSet::NONE` and logs `compose: backends=none resolver=no`; it carries no `cfg` either.
@@ -70,13 +70,13 @@ pub use plx_ui::consts::{Action, RawKey};
 /// The simulator's video sink, the Feed backend's host sink built with the simulator's decoded picture: what the desktop
 /// platform's `Services` hold as their video sink and display binding. Under the cfg of the module it lives in, so a
 /// television build never has it. Retires at W11a with `FEED_MEDIA`.
-#[cfg(all(feature = "hostsim", feature = "play-feed"))]
+#[cfg(all(feature = "sim", feature = "play-feed"))]
 pub use crate::app::adapters::hostsim::HOST_SINK;
 
 /// The simulator's [`Present`] hooks, the application's own because they draw (`plx_gfx`, the decoded picture): the
 /// compositor stand-in under a bound frame and the supersampled copy to the window. The desktop platform states it as
-/// its `FrameSeam`'s `present`; a television states `Present::NONE`. `hostsim` builds only.
-#[cfg(feature = "hostsim")]
+/// its `FrameSeam`'s `present`; a television states `Present::NONE`. `sim` builds only.
+#[cfg(feature = "sim")]
 pub const SIM_PRESENT: Present = crate::app::adapters::sim_present::PRESENT;
 
 /// The television's [`MediaBoot`]: the plane owner's boot (`backends::acb_init`, once per process, on a boot that touches
@@ -88,8 +88,8 @@ pub const WEBOS_MEDIA: MediaBoot = MediaBoot {
 };
 
 /// The desktop's [`MediaBoot`]: nothing to boot, and the Feed over the simulator's sink as the only driver, with no URI
-/// driver and so no resolver. `hostsim` builds only. Retires at W11a with [`WEBOS_MEDIA`].
-#[cfg(feature = "hostsim")]
+/// driver and so no resolver. `sim` builds only. Retires at W11a with [`WEBOS_MEDIA`].
+#[cfg(feature = "sim")]
 pub const FEED_MEDIA: MediaBoot = MediaBoot {
     early_init: crate::app::adapters::backends::feed_early_init,
     compose: crate::app::adapters::backends::compose_feed_alone,
@@ -125,7 +125,7 @@ mod surface_pin_tests {
     use std::path::Path;
 
     /// What the crate root may make `pub`, by the head of the item: `host`, and the simulator binary's own doors
-    /// (a separate crate, so they must be `pub`), each existing only under `feature = "hostsim"`. `host` alone is
+    /// (a separate crate, so they must be `pub`), each existing only under `feature = "sim"`. `host` alone is
     /// open to a television build.
     const ROOT_ITEMS: [(&str, bool); 6] = [
         ("pub mod host", false),
@@ -139,7 +139,7 @@ mod surface_pin_tests {
     const HOW_TO_PROCEED: &str = "The application is reachable only through `host`, because the owner's 2026-11-21 amendment to \
          Decision 3 (docs/platform-ports.md) makes `host` the only way a platform crate reaches it. To publish an \
          application item, re-export it from host.rs, which the second pin allows and the third pin (HOST_ITEMS) \
-         lists. Only a new simulator door that is NOT an application item, existing only under `feature = \"hostsim\"`, \
+         lists. Only a new simulator door that is NOT an application item, existing only under `feature = \"sim\"`, \
          extends ROOT_ITEMS in this test, and the reason is recorded in that amendment.";
 
     /// The text of an item's head: up to its first `;`, `{`, `(` or `<`.
@@ -149,7 +149,7 @@ mod surface_pin_tests {
     }
 
     /// `(can be true, can be false)` for the cfg predicate at the start of `s` (whitespace removed), in a build with
-    /// neither `hostsim` nor `test` and whatever else set; also returns the rest of `s`. Any other predicate may be
+    /// neither `sim` nor `test` and whatever else set; also returns the rest of `s`. Any other predicate may be
     /// either, so an `any(...)` naming another feature (`devtriggers` is on by default) can be true.
     fn can_be(s: &str) -> ((bool, bool), &str) {
         let end = s.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(s.len());
@@ -172,15 +172,15 @@ mod surface_pin_tests {
         }
         if let Some(value) = rest.strip_prefix("=\"") {
             let (value, after) = value.split_once('"').expect("a closed string");
-            let never = name == "feature" && value == "hostsim";
+            let never = name == "feature" && value == "sim";
             return ((!never, true), after);
         }
         (((name != "test"), true), rest)
     }
 
     /// Whether the attribute `attr` (whitespace removed) is a `cfg` under which the item cannot exist without
-    /// `hostsim` or `test`: `feature = "hostsim"`, an `any` of those two, or an `all` with `hostsim` among its members.
-    fn confines_to_hostsim(attr: &str) -> bool {
+    /// `sim` or `test`: `feature = "sim"`, an `any` of those two, or an `all` with `sim` among its members.
+    fn confines_to_sim(attr: &str) -> bool {
         let predicate = attr.strip_prefix("#[cfg(").and_then(|a| a.strip_suffix(")]"));
         predicate.is_some_and(|p| !can_be(p).0 .0)
     }
@@ -285,7 +285,7 @@ mod surface_pin_tests {
     fn public_items(source: &str) -> Vec<(usize, String, bool)> {
         public_statements(source)
             .into_iter()
-            .map(|p| (p.at, head(&p.text).to_string(), p.attrs.iter().any(|a| confines_to_hostsim(a))))
+            .map(|p| (p.at, head(&p.text).to_string(), p.attrs.iter().any(|a| confines_to_sim(a))))
             .collect()
     }
 
@@ -294,12 +294,12 @@ mod surface_pin_tests {
         let source = include_str!("lib.rs");
         let items = public_items(source);
         for (at, item, confined) in &items {
-            let Some(&(_, hostsim_only)) = ROOT_ITEMS.iter().find(|&&(known, _)| known == item.as_str()) else {
+            let Some(&(_, sim_only)) = ROOT_ITEMS.iter().find(|&&(known, _)| known == item.as_str()) else {
                 panic!("lib.rs line {at} makes `{item}` public. {HOW_TO_PROCEED}");
             };
             assert!(
-                !hostsim_only || *confined,
-                "lib.rs line {at}: `{item}` is a simulator door and must exist only under `feature = \"hostsim\"` (with \
+                !sim_only || *confined,
+                "lib.rs line {at}: `{item}` is a simulator door and must exist only under `feature = \"sim\"` (with \
                  `test` or `all(..)` at most): an `any(..)` naming another feature, `devtriggers` being on by default, \
                  ships it in a television build. {HOW_TO_PROCEED}"
             );
@@ -361,7 +361,7 @@ mod surface_pin_tests {
                 if name == "host.rs" {
                     in_host += 1;
                 } else {
-                    // The one other: the root's `hostsim`-only `synthetic_home_initial`, which the simulator binary calls.
+                    // The one other: the root's `sim`-only `synthetic_home_initial`, which the simulator binary calls.
                     assert!(
                         name == "lib.rs" && statement == "app::synthetic_home_initial;",
                         "{name} line {at} re-exports from the application (`pub use {statement}`). {HOW_TO_PROCEED}"
@@ -422,9 +422,9 @@ mod surface_pin_tests {
         // The media values: each retires at W11a.
         ("WEBOS_MEDIA", ""),
         ("NO_MEDIA", ""),
-        ("FEED_MEDIA", r#"feature="hostsim""#),
-        ("HOST_SINK", r#"all(feature="hostsim",feature="play-feed")"#),
-        ("SIM_PRESENT", r#"feature="hostsim""#),
+        ("FEED_MEDIA", r#"feature="sim""#),
+        ("HOST_SINK", r#"all(feature="sim",feature="play-feed")"#),
+        ("SIM_PRESENT", r#"feature="sim""#),
     ];
 
     /// The names a `pub use` tree brings in: a group is expanded, `a as b` is `b`, and a glob is `*` (never on the list).
@@ -509,13 +509,13 @@ mod surface_pin_tests {
         let source = [
             "#[doc(hidden)] pub mod app;",
             "#[allow(unused_imports)] pub use app::platform::Shell;",
-            "#[cfg(feature = \"hostsim\")] pub fn sim_runtime_dir() {}",
+            "#[cfg(feature = \"sim\")] pub fn sim_runtime_dir() {}",
             "#[cfg(any(",
             "    test,",
-            "    feature = \"hostsim\"",
+            "    feature = \"sim\"",
             "))] pub mod hud_cli;",
-            "#[cfg(feature = \"hostsim\")] #[doc(hidden)] pub fn two_on_a_line() {}",
-            "#[cfg(feature = \"hostsim\")]",
+            "#[cfg(feature = \"sim\")] #[doc(hidden)] pub fn two_on_a_line() {}",
+            "#[cfg(feature = \"sim\")]",
             "#[allow(dead_code)] pub fn two_groups() {}",
             "#[doc = \"a ] in a string\"] pub fn bracket_in_a_string() {}",
             "#[allow(unused)] fn private() {}",
@@ -540,13 +540,13 @@ mod surface_pin_tests {
         assert_eq!(items[1].0, 2, "the line is the one the attribute starts on");
         assert_eq!(pub_uses(&source), [(2, "app::platform::Shell;".to_string())]);
         // The attribute above a multi-line `pub use` list still reaches the statement, and the attribute is not the item.
-        let list = ["#[cfg(feature = \"hostsim\")]", "pub use a::{", "    B,", "    C,", "};"].join("\n");
+        let list = ["#[cfg(feature = \"sim\")]", "pub use a::{", "    B,", "    C,", "};"].join("\n");
         assert_eq!(pub_uses(&list), [(2, "a::{B,C,};".to_string())]);
-        assert!(public_statements(&list)[0].attrs.iter().any(|a| confines_to_hostsim(a)));
+        assert!(public_statements(&list)[0].attrs.iter().any(|a| confines_to_sim(a)));
     }
 }
 
-/// `NO_MEDIA` is a media boot in EVERY build (no `hostsim`, no webOS), so its test is too.
+/// `NO_MEDIA` is a media boot in EVERY build (no `sim`, no webOS), so its test is too.
 #[cfg(test)]
 mod no_media_tests {
     use super::*;
@@ -574,7 +574,7 @@ mod no_media_tests {
     }
 }
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(all(test, feature = "sim"))]
 mod media_boot_tests {
     use super::*;
 

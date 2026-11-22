@@ -11,8 +11,8 @@
 # would need an `exclude`; here they cannot see it.
 #
 # WHAT IT FUZZES. The parsers of `plx_appkit` (`hud_format`), `plx_data` (`hudpacks`), `plx_net` (`ws`) and `plx_owp` (`json`),
-# built in the host-simulator configuration: `hostsim`, which selects the host configuration of the layers below. The
-# television's own LS2, glib and ACB declarations are compiled in every build, `hostsim` included; a host executable
+# built in the host-simulator configuration: `sim`, which selects the host configuration of the layers below. The
+# television's own LS2, glib and ACB declarations are compiled in every build, `sim` included; a host executable
 # links only because nothing here references them and the linker drops them (`simulators.yml` guards that for the
 # simulator). The parsers have no `cfg`
 # on that feature (`rust-modules/Cargo.toml`, "What it changes, and nothing else"), and nothing here
@@ -47,9 +47,9 @@ plx_owp = { path = "../rust-modules/owp" }
 # The registry-index targets sign with TEST ONLY keys (`src/signing.rs`) to reach what follows the signature
 # check. The same version and features as `plx_data`, so the lock gains nothing.
 ed25519-compact = { version = "=2.6.1", default-features = false, features = ["opt_size"] }
-# Named only to switch the layers below `plx_appkit` to their host configuration (`plx_media/hostsim`
+# Named only to switch the layers below `plx_appkit` to their host configuration (`plx_media/sim`
 # forwards to every layer that has the feature); no code here calls it.
-plx_media = { path = "../rust-modules/media", features = ["hostsim"] }
+plx_media = { path = "../rust-modules/media", features = ["sim"] }
 
 [lib]
 name = "plxnative_fuzz"

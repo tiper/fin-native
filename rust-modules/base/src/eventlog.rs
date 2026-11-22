@@ -69,7 +69,7 @@ pub fn events_log() -> std::path::PathBuf {
 /// when `f` panics).
 ///
 /// **A host test that reads the log back must not read the shared one.** A host test run resolves the
-/// log to the bare `/tmp/plxnative-events.log` (only the `hostsim` feature lets
+/// log to the bare `/tmp/plxnative-events.log` (only the `sim` feature lets
 /// `PLXNATIVE_RUNTIME_DIR` steer it, [`crate::paths::ENV_STEERABLE`]), and that file is one for the
 /// whole machine: every test binary of this `make check`, and of any other checkout's, appends to
 /// it. `serial()` is one process's lock. With two `make check` runs side by side,

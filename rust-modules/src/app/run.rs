@@ -166,7 +166,7 @@ impl plx_ui::dispatch::FrameRuntime<AppHost> for ProductFrameRuntime<'_> {
         }
         // The frame dump (`dev::framedump`) owns the clock and the placeholder count from here:
         // it must run before anything reads `clock::now()`.
-        #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+        #[cfg(all(feature = "sim", feature = "devtriggers"))]
         if crate::dev::framedump::requested() {
             crate::dev::framedump::iteration_begin(app);
         }
@@ -426,9 +426,9 @@ fn clock_and_press(app: &mut App, fr: &mut Frame) {
     // a bare units-per-second. The decision itself is taken just above `glViewport`.
     // A dump's held repeat judges rest with its first pass's `dt` (`framedump::idle_dt`); the
     // clock `now_ms` reads still advances by `fr.dt` alone.
-    #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+    #[cfg(all(feature = "sim", feature = "devtriggers"))]
     let rest_dt = if crate::dev::framedump::active() { crate::dev::framedump::idle_dt(fr.dt) } else { fr.dt };
-    #[cfg(not(all(feature = "hostsim", feature = "devtriggers")))]
+    #[cfg(not(all(feature = "sim", feature = "devtriggers")))]
     let rest_dt = fr.dt;
     plx_machine::motion::report::frame_begin_judging_rest_with(fr.dt, rest_dt);
     // Is a page capture still in flight on the GPU, and is recorded text still warming? Latched
@@ -655,7 +655,7 @@ fn publish_resources(app: &mut App, fr: &mut Frame) {
     app.runtime.bridge(&mut app.bridge).observe_plex_visual_inputs(&mut app.pages.present);
     // Settle decisions must include this frame's input, motion and landed content.
     plx_machine::motion::report::collect_into(&mut app.pages.present, fr.now);
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     if crate::shot::tick(fr.now, app.pages.budget.has_queued_work() || plx_gfx::gfx::snapshot_pending()
         || app.scenarios.shots.pending(), app.pages.present.last_change_ms()) {
         app.pages.present.note(plx_machine::present::PresentEvent::Wake);
@@ -672,7 +672,7 @@ fn admit_frame(app: &mut App, fr: &mut Frame, demand: bool) {
     // asked: it takes-and-clears the damage the deferred frame still needs.)
     fr.deferred = !fr.present && plx_gfx::gfx::snapshot_pending() && app.window_activity.allow_present(true);
     // A dump draws every iteration: a held repeat and a written frame alike are a draw.
-    #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+    #[cfg(all(feature = "sim", feature = "devtriggers"))]
     if crate::dev::framedump::active() {
         fr.present = true;
     }
@@ -867,7 +867,7 @@ const FONT_WARM_SLICE_US: u64 = 2_000;
 unsafe fn present_and_swap(app: &mut App, fr: &mut Frame, pace: Option<u64>) {
     if fr.present {
         // The dump's full prewarm drain and pre-draw debt sample, after the takes and before the draw.
-        #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+        #[cfg(all(feature = "sim", feature = "devtriggers"))]
         if crate::dev::framedump::active() {
             crate::dev::framedump::pre_draw(app);
         }
@@ -878,7 +878,7 @@ unsafe fn present_and_swap(app: &mut App, fr: &mut Frame, pace: Option<u64>) {
         // A finished underlay-field reduction is read HERE, before framebuffer 0 holds anything
         // of this frame — a read between the page and the surfaces splits its render pass.
         plx_gfx::gfx::field_frame_begin();
-        #[cfg(feature = "hostsim")]
+        #[cfg(feature = "sim")]
         let shot_last_change = app.pages.present.last_change_ms();
         let (_vx, _vy, _vw, _vh) = draw(app, fr);
         app.runtime.bridge(&mut app.bridge).observe_plex_visual_inputs(&mut app.pages.present);
@@ -917,17 +917,17 @@ unsafe fn present_and_swap(app: &mut App, fr: &mut Frame, pace: Option<u64>) {
         // Before the swap, never after: the back buffer is undefined once presented.
         // A dump decides here whether this frame is written (`dev::framedump`); otherwise the
         // ordinary screenshot seam.
-        #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+        #[cfg(all(feature = "sim", feature = "devtriggers"))]
         let dumping = crate::dev::framedump::active();
-        #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+        #[cfg(all(feature = "sim", feature = "devtriggers"))]
         if dumping && crate::dev::framedump::after_draw(app, _vx, _vy, _vw, _vh) {
             app.running = false;
         }
-        #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+        #[cfg(all(feature = "sim", feature = "devtriggers"))]
         let screenshot_seam = !dumping;
-        #[cfg(all(feature = "hostsim", not(feature = "devtriggers")))]
+        #[cfg(all(feature = "sim", not(feature = "devtriggers")))]
         let screenshot_seam = true;
-        #[cfg(feature = "hostsim")]
+        #[cfg(feature = "sim")]
         if screenshot_seam && crate::shot::maybe_capture(fr.now, app.pages.present.changed_after_admission()
             || app.pages.budget.has_queued_work() || plx_gfx::gfx::snapshot_pending()
             || app.scenarios.shots.pending(), shot_last_change, _vx, _vy, _vw, _vh) {
@@ -4011,7 +4011,7 @@ unsafe fn controlled_key_input(app: &mut App, event: plx_machine::machine::Input
     app.inputs.push(event);
 }
 
-#[cfg(all(test, feature = "hostsim", feature = "play-feed"))]
+#[cfg(all(test, feature = "sim", feature = "play-feed"))]
 pub(in crate::app) mod lifecycle_regression_tests {
     use super::*;
 

@@ -10,15 +10,15 @@ gate and fail only the ARM build (or only the simulator's), which is what this p
 
 The dependency edge is pinned too, for the reason that decides the whole shape: a feature a dependency spec
 names is enabled on the application in EVERY build that includes the platform package, so a platform crate
-that wrote `features = ["hostsim"]` there would turn every default-feature `cargo test -p ... -p
-plx_platform_desktop` pass into a simulator pass. The desktop's `hostsim` is its own feature, forwarded on
+that wrote `features = ["sim"]` there would turn every default-feature `cargo test -p ... -p
+plx_platform_desktop` pass into a simulator pass. The desktop's `sim` is its own feature, forwarded on
 request, and the library and binary that need it say so. That crate's library is empty without it, so its
-dependencies exist only under it: each is `optional = true`, `hostsim` is the one feature that enables them
+dependencies exist only under it: each is `optional = true`, `sim` is the one feature that enables them
 (`dep:`), and every other feature forwards the application's WEAKLY (`plxnative-modules?/<feature>`), which
 adds the optional edge in no build. A default-feature pass, which lists the package beside the application,
 therefore enables nothing on the application and compiles nothing of the dependencies, and `make lint`
 reports no unused dependency for the empty library. The Tizen crate has the same shape with its own feature,
-`tizen`, in `hostsim`'s place (it forwards every application feature but the simulator's `hostsim`). No `version` on the edge either: the read-only
+`tizen`, in `sim`'s place (it forwards every application feature but the simulator's `sim`). No `version` on the edge either: the read-only
 certificates (ci/readonly_dependencies.py) refuse a versioned dependency on the root package.
 
 Reads manifests and one source file; compiles nothing and runs no cargo.
@@ -37,10 +37,10 @@ PLATFORMS = {
     "platform-webos": {"placeholder-sentinel"},
     "platform-desktop": set(),
     # The simulator's own build feature: the Tizen crate has its own enabling feature (`tizen`) and no simulator.
-    "platform-tizen": {"hostsim"},
+    "platform-tizen": {"sim"},
 }
 # The crates whose application edge is `optional = true`, each with the one feature that enables it.
-OPTIONAL_EDGE = {"platform-desktop": "hostsim", "platform-tizen": "tizen"}
+OPTIONAL_EDGE = {"platform-desktop": "sim", "platform-tizen": "tizen"}
 
 
 def load(path):
@@ -63,7 +63,7 @@ def reachable(features, start):
     return seen
 
 
-def optional_edge_problems(app_features, features, dependencies, exempt, own="hostsim"):
+def optional_edge_problems(app_features, features, dependencies, exempt, own="sim"):
     """The shape of a platform crate whose application edge is `optional = true`, which only `own` enables."""
     found = []
     enabling = {name for name, spec in features.items() if f"dep:{APP_NAME}" in spec}
@@ -96,9 +96,9 @@ def optional_edge_problems(app_features, features, dependencies, exempt, own="ho
     return found
 
 
-def problems(app, platform, exempt, own="hostsim"):
+def problems(app, platform, exempt, own="sim"):
     """Every way `platform` (a parsed manifest) fails to forward `app`'s (a parsed manifest) features.
-    `own` is the feature that enables an optional application edge (`hostsim` for the simulator, `tizen`)."""
+    `own` is the feature that enables an optional application edge (`sim` for the simulator, `tizen`)."""
     found = []
     app_features = app.get("features", {})
     features = platform.get("features", {})
@@ -138,7 +138,7 @@ class ForwardedFeatures(unittest.TestCase):
         for directory, exempt in PLATFORMS.items():
             with self.subTest(directory):
                 self.assertEqual(problems(app, load(MODULES / directory / "Cargo.toml"), exempt,
-                                          OPTIONAL_EDGE.get(directory, "hostsim")), [])
+                                          OPTIONAL_EDGE.get(directory, "sim")), [])
 
     def test_the_exemptions_are_application_features(self):
         features = load(MODULES / "Cargo.toml")["features"]
@@ -184,9 +184,9 @@ class ForwardedFeatures(unittest.TestCase):
                 self.assertNotIn("platform-", spec.get("path", "") if isinstance(spec, dict) else "")
 
     def test_the_optional_crates_are_empty_without_their_feature(self):
-        # The desktop library is `#![cfg(feature = "hostsim")]` and the Tizen one `#![cfg(feature = "tizen")]`, so a
+        # The desktop library is `#![cfg(feature = "sim")]` and the Tizen one `#![cfg(feature = "tizen")]`, so a
         # default-feature pass that lists the package builds nothing and runs no test; the feature itself is declared
-        # above (the desktop forwards the application's `hostsim` as its own).
+        # above (the desktop forwards the application's `sim` as its own).
         for directory, own in OPTIONAL_EDGE.items():
             with self.subTest(directory):
                 source = (MODULES / directory / "src" / "lib.rs").read_text(encoding="utf-8")
@@ -198,7 +198,7 @@ class ForwardedFeatures(unittest.TestCase):
     def test_the_optional_crates_dependencies_exist_only_under_their_feature(self):
         # An empty library with unused dependencies reports them (`make lint`), and a default-feature pass that lists
         # the package would compile all of them for nothing. So every dependency of the desktop and Tizen crates is
-        # optional, their one feature (`hostsim`, `tizen`) alone enables them, and the default features reach none
+        # optional, their one feature (`sim`, `tizen`) alone enables them, and the default features reach none
         # (the weak forwards: `plxnative-modules?/<feature>` adds the edge in no build).
         # Tizen's `serde_json` is the launch string's parser: already in the lock for the application, not a new package.
         expected = {
@@ -217,8 +217,8 @@ class ForwardedFeatures(unittest.TestCase):
                 features = doc["features"]
                 self.assertEqual(sorted(word for word in features[own] if word.startswith("dep:")),
                                  sorted(f"dep:{name}" for name in dependencies))
-                if own == "hostsim":
-                    self.assertIn(f"{APP_NAME}/hostsim", features[own])
+                if own == "sim":
+                    self.assertIn(f"{APP_NAME}/sim", features[own])
                 self.assertEqual(reachable(features, "default") & {own}, set())
                 for feature, words in features.items():
                     if feature != own:
@@ -237,10 +237,10 @@ class ForwardedFeatures(unittest.TestCase):
         self.assertNotIn("uri", load(MODULES / "Cargo.toml")["features"], "the application has no `uri` feature of its own")
 
     def test_the_tizen_crate_is_not_the_simulator(self):
-        # `hostsim` is the desktop's: the Tizen crate neither declares it nor holds a binary, and the weak forwards
+        # `sim` is the desktop's: the Tizen crate neither declares it nor holds a binary, and the weak forwards
         # of the application's features leave it exactly the application's defaults.
         doc = load(MODULES / "platform-tizen" / "Cargo.toml")
-        self.assertNotIn("hostsim", doc["features"])
+        self.assertNotIn("sim", doc["features"])
         self.assertNotIn("bin", doc)
         self.assertEqual(doc["features"]["default"], load(MODULES / "Cargo.toml")["features"]["default"])
 
@@ -284,7 +284,7 @@ class TheCheckBites(unittest.TestCase):
         self.assertEqual(len(problems(self.APP, platform, set())), 1)
 
     def test_a_dependency_feature_a_version_or_a_default_are_found(self):
-        for key, value in (("features", ["hostsim"]), ("version", "0.10.0"), ("package", "x")):
+        for key, value in (("features", ["sim"]), ("version", "0.10.0"), ("package", "x")):
             with self.subTest(key):
                 platform = self.good()
                 platform["dependencies"][APP_NAME][key] = value
@@ -298,16 +298,16 @@ class TheCheckBites(unittest.TestCase):
 
     def test_the_application_in_a_dev_or_build_table_is_found(self):
         platform = self.good()
-        platform["dev-dependencies"] = {APP_NAME: {"path": "..", "features": ["hostsim"]}}
+        platform["dev-dependencies"] = {APP_NAME: {"path": "..", "features": ["sim"]}}
         self.assertEqual(len(problems(self.APP, platform, set())), 1)
 
-    # The simulator's shape: an `optional` application edge only `hostsim` enables, weak forwards elsewhere.
-    OPT_APP = {"features": {"default": ["a"], "a": ["x/a"], "hostsim": ["x/hostsim"]}}
+    # The simulator's shape: an `optional` application edge only `sim` enables, weak forwards elsewhere.
+    OPT_APP = {"features": {"default": ["a"], "a": ["x/a"], "sim": ["x/sim"]}}
 
     def good_optional(self):
         return {
             "features": {"default": ["a"], "a": [f"{APP_NAME}?/a"],
-                         "hostsim": [f"dep:{APP_NAME}", f"{APP_NAME}/hostsim", "dep:lower"]},
+                         "sim": [f"dep:{APP_NAME}", f"{APP_NAME}/sim", "dep:lower"]},
             "dependencies": {APP_NAME: {"path": "..", "default-features": False, "optional": True},
                              "lower": {"path": "../lower", "optional": True}},
         }
@@ -325,7 +325,7 @@ class TheCheckBites(unittest.TestCase):
 
     def test_an_optional_edge_that_a_default_feature_enables_is_found(self):
         platform = self.good_optional()
-        platform["features"]["a"] = [f"{APP_NAME}?/a", "hostsim"]
+        platform["features"]["a"] = [f"{APP_NAME}?/a", "sim"]
         found = problems(self.OPT_APP, platform, set())
         self.assertTrue(any("default features reach" in f for f in found), found)
         platform = self.good_optional()
@@ -340,22 +340,22 @@ class TheCheckBites(unittest.TestCase):
         platform["features"]["a"] = []
         self.assertEqual(problems(self.OPT_APP, platform, set()), [f"`a` does not forward `{APP_NAME}?/a`"])
         platform = self.good_optional()
-        platform["features"]["hostsim"] = [f"dep:{APP_NAME}", "dep:lower"]
+        platform["features"]["sim"] = [f"dep:{APP_NAME}", "dep:lower"]
         self.assertEqual(problems(self.OPT_APP, platform, set()),
-                         [f"`hostsim` enables the application without forwarding `{APP_NAME}/hostsim`"])
+                         [f"`sim` enables the application without forwarding `{APP_NAME}/sim`"])
 
     def test_an_optional_edge_is_enabled_by_the_crates_own_feature(self):
-        # The Tizen shape: `tizen` (not `hostsim`) enables the application, and `hostsim` is exempt.
-        app = {"features": {"default": ["a"], "a": ["x/a"], "hostsim": ["x/hostsim"]}}
+        # The Tizen shape: `tizen` (not `sim`) enables the application, and `sim` is exempt.
+        app = {"features": {"default": ["a"], "a": ["x/a"], "sim": ["x/sim"]}}
         tizen = {
             "features": {"default": ["a"], "a": [f"{APP_NAME}?/a"], "tizen": [f"dep:{APP_NAME}"]},
             "dependencies": {APP_NAME: {"path": "..", "default-features": False, "optional": True}},
         }
-        self.assertEqual(problems(app, tizen, {"hostsim"}, own="tizen"), [])
-        found = problems(app, tizen, {"hostsim"})
-        self.assertTrue(any("not exactly ['hostsim']" in f for f in found), found)
+        self.assertEqual(problems(app, tizen, {"sim"}, own="tizen"), [])
+        found = problems(app, tizen, {"sim"})
+        self.assertTrue(any("not exactly ['sim']" in f for f in found), found)
         tizen["features"]["a"] = [f"{APP_NAME}?/a", "tizen"]
-        found = problems(app, tizen, {"hostsim"}, own="tizen")
+        found = problems(app, tizen, {"sim"}, own="tizen")
         self.assertTrue(any("default features reach" in f for f in found), found)
 
     def test_a_dependency_the_empty_library_does_not_use_must_wait_for_hostsim(self):
@@ -363,7 +363,7 @@ class TheCheckBites(unittest.TestCase):
         platform["dependencies"]["lower"] = {"path": "../lower"}
         self.assertEqual(len(problems(self.OPT_APP, platform, set())), 1)
         platform = self.good_optional()
-        platform["features"]["hostsim"].remove("dep:lower")
+        platform["features"]["sim"].remove("dep:lower")
         self.assertEqual(len(problems(self.OPT_APP, platform, set())), 1)
 
 

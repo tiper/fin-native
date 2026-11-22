@@ -26,7 +26,7 @@ default = []
 # credentials and still has the dev-trigger surface (`HAS_PROD && cfg!(feature = "devtriggers")`),
 # so a missing forward would silently turn that guard off.
 devtriggers = ["plx_base/devtriggers", "plx_net/devtriggers", "plx_os/devtriggers", "plx_plex/devtriggers"]
-hostsim = ["plx_base/hostsim", "plx_os/hostsim", "plx_plex/hostsim"]
+sim = ["plx_base/sim", "plx_os/sim", "plx_plex/sim"]
 # The `cfg(test)` seams other crates' tests use (`telemetry::redirect_for_test`, `spool::set_test_path`,
 # `persistence::last_call_thread`, `diag::test_events`, the schema tables, ...) plus the test-mode
 # arms `cfg(test)` alone cannot give a dependent (the consent file's redirected path, the in-process

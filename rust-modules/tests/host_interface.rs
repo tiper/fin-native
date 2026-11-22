@@ -14,28 +14,28 @@
 //! `open`, `open` asked for the window the application means to ask for, the refusal returned as the
 //! entry's `Exit`), not the loop. The loop's own fake-surface tests are in-crate (`make test-hostsim`).
 //!
-//! **The boot test needs `hostsim`** (the recipe `make test-host-interface` passes it): only there is the
+//! **The boot test needs `sim`** (the recipe `make test-host-interface` passes it): only there is the
 //! runtime root steerable by `PLXNATIVE_RUNTIME_DIR`, so the boot's event log, crash log and diagnostics
 //! land in a throwaway directory and not in a real install's. It refuses to run without that variable.
 //! The rest of the file compiles in every configuration (`make lint` and `check-cargo-lint` build it),
-//! which type-checks the interface from outside in the default non-hostsim feature set too.
+//! which type-checks the interface from outside in the default feature set, without `sim`, too.
 //!
 //! The application replaces the process's panic hook while it boots (`install_panic_logger`): it wraps
 //! the previous hook, so a panic still reaches the test harness, and additionally writes one line to the
 //! event log and the crash log in the runtime root. Only one test here boots, because the services are
 //! installed once per process.
-#![cfg_attr(not(feature = "hostsim"), allow(dead_code))]
+#![cfg_attr(not(feature = "sim"), allow(dead_code))]
 
 use plxnative_modules::host::{
     Action, Composition, Edge, EventSink, Exit, FrameProbe, FrameSeam, GlProfile, InitHooks, InitSteps, Lifecycle,
     MainThread, MediaBoot, OpenAsk, Placement, Platform, PointerEdge, RawKey, SdlFlavor, Services, Shell, Surface,
     WindowPlan,
 };
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 use plxnative_modules::host::Release;
 use std::ffi::c_void;
 use std::os::raw::c_int;
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 use std::ffi::CString;
 use std::sync::Mutex;
 
@@ -78,11 +78,11 @@ impl Shell for FakeShell {
     }
     /// A desktop's window (the fake stands in for the simulator's platform), which the boot test asserts
     /// the application hands to `open` unchanged.
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     fn window(&self, _stored: Option<(c_int, c_int)>) -> WindowPlan {
         WindowPlan { title: c"PlxNative", placement: Placement::Desktop }
     }
-    #[cfg(not(feature = "hostsim"))]
+    #[cfg(not(feature = "sim"))]
     fn window(&self, _stored: Option<(c_int, c_int)>) -> WindowPlan {
         WindowPlan { title: c"PlxNative", placement: Placement::Panel { size: (1920, 1080), fallback: None } }
     }
@@ -195,9 +195,9 @@ const _: fn() = || {
     let _: unsafe fn(&MainThread, &plxnative_modules::host::InitHooks, &OpenAsk) -> Result<Box<dyn Surface>, Exit> = plxnative_modules::host::sdl_open;
     let _: MediaBoot = plxnative_modules::host::WEBOS_MEDIA;
     let _: MediaBoot = plxnative_modules::host::NO_MEDIA;
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     let _: MediaBoot = plxnative_modules::host::FEED_MEDIA;
-    #[cfg(all(feature = "hostsim", feature = "play-feed"))]
+    #[cfg(all(feature = "sim", feature = "play-feed"))]
     let _ = &plxnative_modules::host::HOST_SINK;
 };
 
@@ -305,7 +305,7 @@ fn every_path_into_the_application_crate_goes_through_host() {
 }
 
 /// The entries of `dir` whose name starts with `plxnative-`, sorted.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 fn plxnative_entries(dir: &std::path::Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .map(|rd| {
@@ -326,7 +326,7 @@ fn plxnative_entries(dir: &std::path::Path) -> Vec<String> {
 /// It also PRINTS the `plxnative-*` entries of `/tmp` (where a device's trigger files live) and of the runtime root
 /// before and after, for a reader of `--nocapture`; it does not assert on `/tmp`, which other checkouts' test runs
 /// write under concurrently.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 #[test]
 fn run_boots_the_fake_platform_through_init_then_open_and_returns_the_refusal() {
     let runtime = std::env::var_os("PLXNATIVE_RUNTIME_DIR").map(std::path::PathBuf::from).expect(

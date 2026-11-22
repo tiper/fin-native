@@ -316,7 +316,7 @@ make screenshots SHOT_HERO_VARIANTS=1 # also home-hero-<film>.jpg for each hero 
   `libtype=recommended` first; the view scrolls to it),
   `libtype=<movies|shows|seasons|episodes|collections|recommended>` (the first four set the Show-menu
   type of the page's grid; `collections` and `recommended` press the header control that opens that
-  page; applied before `libgrid`/`libshelf`/`libmenu` act), `libmenu=<sortfilter|sort|filter|type>,<ms>`, and under `hostsim` `clockstop=<ms>`: the clock sink's clock stops at that
+  page; applied before `libgrid`/`libshelf`/`libmenu` act), `libmenu=<sortfilter|sort|filter|type>,<ms>`, and under `sim` `clockstop=<ms>`: the clock sink's clock stops at that
   position while the player stays PLAYING (Up Next only shows while playing; `autopause` would
   take it down). The settled capture waits for every armed seat, menu, clock stop and
   `autopause` pause to land, so a scene that seeks does not rest before it (a busy host can leave a
@@ -336,7 +336,7 @@ make screenshots SHOT_HERO_VARIANTS=1 # also home-hero-<film>.jpg for each hero 
   scene's `free_regions`, which must carry a `tolerance_reason`. Search, detail, sign-in and the
   failure read-out come back byte-identical; scenes with backdrop blur or glass differ by exactly
   1 in anything from a few pixels to ~120k of them. The player is byte-identical too:
-  `autopause=at=<ms>` waits for the playhead to reach that position, and under `hostsim` it also
+  `autopause=at=<ms>` waits for the playhead to reach that position, and under `sim` it also
   stops the clock sink exactly there, so the frame, the clocks and the knob are the same every
   run. Aim `at` between two frames (Sintel is 24 fps), so no PTS rounding picks the neighbour.
 - **The library is openly licensed.** `tests/demo_library/assets.json` pins every source file (URL,
@@ -455,7 +455,7 @@ device-verified" is a useful, honest status. "Verified" without a TV is not.
 ## The frame dump (the demo video's renderer)
 
 `make site-video-sim` builds the simulator for the demo-video pipeline (`--no-default-features
---features hostsim,play-feed,devtriggers,placeholder-sentinel`, release, its own target dir, libass only), and
+--features sim,play-feed,devtriggers,placeholder-sentinel`, release, its own target dir, libass only), and
 `python3 tools/site_video.py render --out DIR --storyboard` plays `tests/video/feel.json` (positions and durations, compiled to the driver's key schedule: Home hero, hero paged to the second page and back, down to the Continue Watching shelf, the third card's Detail opened with OK and scrolled with five downs past its Cast & Crew row to the About section, back, the Movies library walked down with arrows only to its All poster grid and across it, walked back up and left with one back, about 30 s; nothing opened from Detail, no modal; shot with the hold hint taught, so card rests and the card OK are not capped: `render --storyboard` sets the `plxnative-hintoff` trigger (`devtriggers` builds only; it calls `hold_hint::teach_all_for_dev`, once, at boot) because the capsule is a one-time teaching overlay and a film has no viewer to teach) and records its sha256, `--extra-holds`, `--trigger`, how far each beat still moved at its end (`storyboard.rest`) and which titles it opened and `hold_hint: suppressed` in `render.json`. Before the film boots the launcher signs the simulator in to the mock's Demo account through the app's own QR sign-in (a prep boot with the `plxnative-login` trigger), so the profile chip, one `left` from the Home pill that `up` from the hero lands on, reads "Demo" and never "Sign in" should a beat press `left` there. A pushed page is filmed LIVE under the dip, never as a held image (`plx_gfx::dump`'s one page rule: every dip frame re-captures the page, `PageImage::step_filmed`), so a page that mounts hidden and fades in (an `Xfade` mount, the Library's) fades in as it does in the product, with its entrance springs playing, and nothing cuts when the dip ends. Either way `render` runs the simulator headless against the mock catalog (without `--storyboard` it holds Home for `--frames`, 180 by default) and leaves
 `master.mkv`, `frames.tsv`, `dump.json` and `render.json`. The simulator side is
 `rust-modules/src/dev/framedump.rs`, armed by `PLXNATIVE_DUMP=<dir>` (its module doc lists the

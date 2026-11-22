@@ -25,7 +25,7 @@ SPEC.loader.exec_module(checker)
 LIB = """\
 mod app;
 mod gfx;
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 mod hls;
 mod screens;
 mod ui;
