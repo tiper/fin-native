@@ -4,9 +4,11 @@
 // library's window belongs); OnPause and OnResume are forwarded with plx_host_post; OnTerminate calls plx_host_stop and waits for the library's
 // on_stopped. The library makes its own window, draws, reads the remote and runs the application; this host draws nothing.
 //
-// THE CONTRACT is rust-modules/platform-tizen/include/plx_host.h, and the three declarations in `Native` below, the two structs, and the
-// `PLX_HOST_*` constants are written from it. `make PLATFORM=tizen tizen-abi` (ci/check-tizen-so.py) reads this file and the header as text
-// and fails on a name, a signature, a constant's value, or a struct field's name, order or width that differs, so the two cannot drift apart.
+// THE CONTRACT is rust-modules/platform-tizen/include/plx_host.h, and the three declarations in `Native` below, the two structs, the delegates for
+// its function pointers and the `PLX_HOST_*` constants are written from it. Version 2 adds the media player: the table's player_open and player_verb
+// are implemented by PlxPlayer.cs (over the device's libcapi-media-player, PlayerNative.cs), and its events come back through plx_host_post. `make PLATFORM=tizen tizen-abi` (ci/check-tizen-so.py) reads this file and the header as text
+// and fails on a name, a signature, a constant's value, a struct field's name, order or width, or a delegate's widths that differs, so the two cannot
+// drift apart. (The media player's own DllImports are in PlayerNative.cs and are the device library's, not this contract's.)
 //
 // WHAT THIS HOST NEVER DOES. It never calls libc exit(): the process's end is the .NET runtime's. It never frees a callback while the library
 // can still call it: the delegates the table points at are held in static fields until on_stopped has arrived with clean = 1, and after clean = 0
@@ -38,6 +40,8 @@ namespace PlxHost
         public uint Reserved;
         public IntPtr OnStopped;
         public IntPtr RunOnHost;
+        public IntPtr PlayerOpen;
+        public IntPtr PlayerVerb;
     }
 
     // plx_host.h: PlxHostEvent.
@@ -46,6 +50,10 @@ namespace PlxHost
     {
         public uint Size;
         public uint Kind;
+        public uint Epoch;
+        public uint Reserved;
+        public long A;
+        public long B;
     }
 
     // plx_host.h: PlxOnStopped, PlxRunOnHost, PlxHostTask.
@@ -58,16 +66,47 @@ namespace PlxHost
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void PlxHostTask(IntPtr arg);
 
+    // plx_host.h: PlxPlayerOpen and PlxPlayerVerb (version 2). `uri` is a NUL-terminated UTF-8 string, read and copied before the call returns.
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int PlxPlayerOpen(uint epoch, IntPtr uri, int x, int y, int w, int h);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int PlxPlayerVerb(uint epoch, uint verb, long arg0, long arg1);
+
     internal static class Native
     {
         // The soname of the library (ci/check-tizen-so.py checks that it is libplx.so). The exact file name, not a bare "plx": a name the
         // runtime does not have to complete is the spelling a shipped Tizen .NET application is known to resolve.
         private const string Lib = "libplx.so";
 
-        internal const int PLX_HOST_ABI_VERSION = 1;
+        internal const int PLX_HOST_ABI_VERSION = 2;
         internal const int PLX_HOST_OK = 0;
+        internal const int PLX_HOST_E_STATE = -2;
+        internal const int PLX_HOST_E_STALE = -7;
+        internal const int PLX_HOST_PLAYER_OK = 0;
+        internal const int PLX_HOST_PLAYER_E_UNAVAILABLE = -1;
+        internal const int PLX_HOST_PLAYER_E_BUSY = -2;
+        internal const int PLX_HOST_PLAYER_E_ARGS = -3;
+        internal const int PLX_HOST_PLAYER_E_STALE = -4;
+        internal const int PLX_HOST_PLAYER_FAIL_BASE = 2147418112;
         internal const int PLX_HOST_EVENT_PAUSE = 1;
         internal const int PLX_HOST_EVENT_RESUME = 2;
+        internal const int PLX_HOST_EVENT_PLAYER_PREPARED = 16;
+        internal const int PLX_HOST_EVENT_PLAYER_STARTED = 17;
+        internal const int PLX_HOST_EVENT_PLAYER_PAUSED = 18;
+        internal const int PLX_HOST_EVENT_PLAYER_POSITION = 19;
+        internal const int PLX_HOST_EVENT_PLAYER_SEEK_DONE = 20;
+        internal const int PLX_HOST_EVENT_PLAYER_BUFFERING = 21;
+        internal const int PLX_HOST_EVENT_PLAYER_VIDEO_SIZE = 22;
+        internal const int PLX_HOST_EVENT_PLAYER_COMPLETED = 23;
+        internal const int PLX_HOST_EVENT_PLAYER_ERROR = 24;
+        internal const int PLX_HOST_EVENT_PLAYER_INTERRUPTED = 25;
+        internal const int PLX_HOST_EVENT_PLAYER_CLOSED = 26;
+        internal const int PLX_HOST_EVENT_PLAYER_STALL = 27;
+        internal const int PLX_HOST_PLAYER_VERB_PLAY = 1;
+        internal const int PLX_HOST_PLAYER_VERB_PAUSE = 2;
+        internal const int PLX_HOST_PLAYER_VERB_SEEK = 3;
+        internal const int PLX_HOST_PLAYER_VERB_CLOSE = 4;
 
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int plx_host_start(ref PlxHostApi api, [MarshalAs(UnmanagedType.LPUTF8Str)] string launchJson);
@@ -154,6 +193,8 @@ namespace PlxHost
         // them while the library holds their native thunks.
         private static PlxOnStopped onStoppedDelegate;
         private static PlxRunOnHost runOnHostDelegate;
+        private static PlxPlayerOpen playerOpenDelegate;
+        private static PlxPlayerVerb playerVerbDelegate;
 
         // The synchronization context of the main thread, captured in OnCreate: run_on_host posts the library's task to it.
         private static SynchronizationContext hostContext;
@@ -222,6 +263,7 @@ namespace PlxHost
             }
             running = true;
             Log("plx_host_start OK; the library's loop is running");
+            if (playerOpenDelegate != null) PlxPlayer.LogWindow(); // main thread: Ecore
             if (Stopped.IsSet && ShouldExitHost(stopRequested, running))
             {
                 // The loop ended before this line ran (on_stopped found `running` still false): nothing else will end the process.
@@ -253,13 +295,16 @@ namespace PlxHost
                 stopRequested = true;
                 running = false;
                 StopLibrary();
+                // After the library has been asked to stop (it refuses requests from then on): close a player it left open and end the video
+                // thread. Player events it still posts are refused by the library.
+                PlxPlayer.Instance.Shutdown();
             }
         }
 
         protected override void OnLocaleChanged(LocaleChangedEventArgs e)
         {
             base.OnLocaleChanged(e);
-            // The ABI has no locale event (plx_host.h: PLX_HOST_EVENT_PAUSE and _RESUME only): the locale the library knows is the one at start.
+            // The ABI has no locale event (plx_host.h: the host's events are PAUSE and RESUME, and the player's): the locale the library knows is the one at start.
             Log("OnLocaleChanged " + e.Locale + " (not forwarded: the library reads the locale at start only)");
         }
 
@@ -268,6 +313,26 @@ namespace PlxHost
         {
             onStoppedDelegate = OnStoppedNative;
             runOnHostDelegate = RunOnHostNative;
+            // The media player: both pointers, or neither. A device without libcapi-media-player gets NULLs, and the library then plays nothing
+            // (plx_host.h, START: a table without the player group is not refused).
+            string playerNote;
+            bool player;
+            try
+            {
+                player = PlxPlayer.Probe(out playerNote);
+            }
+            catch (Exception e)
+            {
+                // Skew means "no playback", never a refused start: anything the probe throws (the dlopen binding, the player's static state) leaves the pointers NULL.
+                player = false;
+                playerNote = "media player: the probe threw " + e.GetType().Name + ": " + e.Message + "; the table leaves the player pointers NULL";
+            }
+            Log(playerNote);
+            if (player)
+            {
+                playerOpenDelegate = PlxPlayer.OpenNative;
+                playerVerbDelegate = PlxPlayer.VerbNative;
+            }
             var api = new PlxHostApi
             {
                 Size = (uint)Marshal.SizeOf<PlxHostApi>(),
@@ -276,6 +341,8 @@ namespace PlxHost
                 Reserved = 0,
                 OnStopped = Marshal.GetFunctionPointerForDelegate(onStoppedDelegate),
                 RunOnHost = Marshal.GetFunctionPointerForDelegate(runOnHostDelegate),
+                PlayerOpen = player ? Marshal.GetFunctionPointerForDelegate(playerOpenDelegate) : IntPtr.Zero,
+                PlayerVerb = player ? Marshal.GetFunctionPointerForDelegate(playerVerbDelegate) : IntPtr.Zero,
             };
             try
             {
@@ -337,10 +404,52 @@ namespace PlxHost
                 Log("on_stopped clean: the callbacks are released");
                 onStoppedDelegate = null;
                 runOnHostDelegate = null;
+                playerOpenDelegate = null;
+                playerVerbDelegate = null;
             }
             else
             {
                 Log("on_stopped NOT clean: releasing nothing, the process exit is the teardown");
+            }
+        }
+
+        // One player event for the library, from any thread (the video thread, the position poller, a native callback of the player): a non-blocking
+        // plx_host_post. The library answers PLX_HOST_E_STALE for an epoch it no longer holds and PLX_HOST_E_STATE after a stop: both expected
+        // and silent; anything else is logged. The uri and the token are never in an event.
+        internal static void PostPlayer(uint kind, uint epoch, long a, long b)
+        {
+            if (!running) return;
+            try
+            {
+                var ev = new PlxHostEvent { Size = (uint)Marshal.SizeOf<PlxHostEvent>(), Kind = kind, Epoch = epoch, Reserved = 0, A = a, B = b };
+                int rc = Native.plx_host_post(ref ev);
+                if (rc != Native.PLX_HOST_OK && rc != Native.PLX_HOST_E_STALE && rc != Native.PLX_HOST_E_STATE) Log("plx_host_post(player kind " + kind + ") returned " + rc);
+            }
+            catch (Exception e)
+            {
+                Log("exception from plx_host_post(player kind " + kind + "): " + e.GetType().Name + ": " + e.Message);
+            }
+        }
+
+        // Run `action` on the main thread (the Ecore main loop) and wait for it, at most `timeoutMs`. False when it did not finish in time (it may
+        // still run later: the action must be safe to run late). Without a main-thread context it runs inline on the calling thread.
+        internal static bool RunOnMain(Action action, int timeoutMs)
+        {
+            SynchronizationContext context = hostContext;
+            if (context == null)
+            {
+                action();
+                return true;
+            }
+            using (var done = new ManualResetEventSlim(false))
+            {
+                context.Post(state =>
+                {
+                    try { action(); }
+                    catch (Exception e) { Log("exception from a main-thread player step: " + e.GetType().Name + ": " + e.Message); }
+                    finally { try { done.Set(); } catch (ObjectDisposedException) { } }
+                }, null);
+                return done.Wait(timeoutMs);
             }
         }
 
@@ -349,7 +458,7 @@ namespace PlxHost
             if (!running) return;
             try
             {
-                var ev = new PlxHostEvent { Size = (uint)Marshal.SizeOf<PlxHostEvent>(), Kind = kind };
+                var ev = new PlxHostEvent { Size = (uint)Marshal.SizeOf<PlxHostEvent>(), Kind = kind, Epoch = 0, Reserved = 0, A = 0, B = 0 };
                 int rc = Native.plx_host_post(ref ev);
                 if (rc != Native.PLX_HOST_OK) Log("plx_host_post(" + what + ") returned " + rc);
             }

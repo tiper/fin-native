@@ -8,7 +8,7 @@
 use std::os::raw::c_void;
 
 /// `PLX_HOST_ABI_VERSION`: the version of [`PlxHostApi`] this library implements.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 /// A call that succeeded.
 pub const OK: i32 = 0;
@@ -25,11 +25,51 @@ pub const E_WINDOW: i32 = -4;
 pub const E_THREAD: i32 = -5;
 /// `PLX_HOST_E_FULL`: the post queue was full and the event was dropped.
 pub const E_FULL: i32 = -6;
+/// `PLX_HOST_E_STALE`: a player event of an epoch that is not live (never opened, or already closed).
+pub const E_STALE: i32 = -7;
+
+/// `PLX_HOST_PLAYER_OK`: a player request that was queued for the host's video thread.
+pub const PLAYER_OK: i32 = 0;
+/// `PLX_HOST_PLAYER_E_UNAVAILABLE`: the host has no media player, or its video thread is not running.
+pub const PLAYER_E_UNAVAILABLE: i32 = -1;
+/// `PLX_HOST_PLAYER_E_BUSY`: the host's request queue is full.
+pub const PLAYER_E_BUSY: i32 = -2;
+/// `PLX_HOST_PLAYER_E_ARGS`: epoch 0, a NULL or empty uri, an unknown verb.
+pub const PLAYER_E_ARGS: i32 = -3;
+/// `PLX_HOST_PLAYER_E_STALE`: a verb for an epoch that is not the host's current one.
+pub const PLAYER_E_STALE: i32 = -4;
 
 /// `PLX_HOST_EVENT_PAUSE`: `OnPause`, the app went to the background.
 pub const EVENT_PAUSE: u32 = 1;
 /// `PLX_HOST_EVENT_RESUME`: `OnResume`, the app came back.
 pub const EVENT_RESUME: u32 = 2;
+/// `PLX_HOST_EVENT_PLAYER_*`: the player events (version 2), each with its epoch and payload words.
+pub const EVENT_PLAYER_PREPARED: u32 = 16;
+pub const EVENT_PLAYER_STARTED: u32 = 17;
+pub const EVENT_PLAYER_PAUSED: u32 = 18;
+pub const EVENT_PLAYER_POSITION: u32 = 19;
+pub const EVENT_PLAYER_SEEK_DONE: u32 = 20;
+pub const EVENT_PLAYER_BUFFERING: u32 = 21;
+pub const EVENT_PLAYER_VIDEO_SIZE: u32 = 22;
+pub const EVENT_PLAYER_COMPLETED: u32 = 23;
+pub const EVENT_PLAYER_ERROR: u32 = 24;
+pub const EVENT_PLAYER_INTERRUPTED: u32 = 25;
+pub const EVENT_PLAYER_CLOSED: u32 = 26;
+pub const EVENT_PLAYER_STALL: u32 = 27;
+
+/// `PLX_HOST_PLAYER_FAIL_BASE`: a `PLAYER_ERROR` payload at or above this is a failure of the host, not a native code.
+#[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) reads it
+pub const PLAYER_FAIL_BASE: i64 = 2_147_418_112;
+
+/// `PLX_HOST_PLAYER_VERB_*`: `player_verb`'s verbs. The Tizen URI driver (W10 part B) is their caller; the tests use them now.
+#[cfg_attr(not(test), allow(dead_code))]
+pub const VERB_PLAY: u32 = 1;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const VERB_PAUSE: u32 = 2;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const VERB_SEEK: u32 = 3;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const VERB_CLOSE: u32 = 4;
 
 /// What `on_stopped` is: the host's report sink, called exactly once with the process status and whether
 /// the host may release its callbacks and surfaces (`clean` 1) or releases nothing (`clean` 0).
@@ -38,6 +78,14 @@ pub type OnStopped = unsafe extern "C" fn(code: i32, clean: i32);
 pub type HostTask = unsafe extern "C" fn(arg: *mut c_void);
 /// `run_on_host`: queue `task(arg)` for the host's main thread and return 0, or refuse it (non-zero).
 pub type RunOnHost = unsafe extern "C" fn(task: HostTask, arg: *mut c_void) -> i32;
+/// `player_open`: queue "create a player for `epoch`, give it `uri`, bind it to the library's Ecore window (which the
+/// host finds itself) and prepare it"
+/// for the host's video thread, and return at once ([`PLAYER_OK`] queued, negative refused). `uri` is a
+/// NUL-terminated string the host copies before returning.
+pub type PlayerOpen =
+    unsafe extern "C" fn(epoch: u32, uri: *const std::os::raw::c_char, x: i32, y: i32, w: i32, h: i32) -> i32;
+/// `player_verb`: queue one of the `VERB_*` verbs for the player of `epoch`, and return at once.
+pub type PlayerVerb = unsafe extern "C" fn(epoch: u32, verb: u32, arg0: i64, arg1: i64) -> i32;
 
 /// The table the host hands `plx_host_start`. `size` and `abi_version` come first so a later version can
 /// grow the struct: a field is read only when `size` covers it, and a table smaller than version 1 is
@@ -52,20 +100,62 @@ pub struct PlxHostApi {
     pub reserved: u32,
     pub on_stopped: Option<OnStopped>,
     pub run_on_host: Option<RunOnHost>,
+    /// Version 2: the media player's two requests. Read only when `size` covers them and `abi_version` is 2
+    /// or more; both or neither.
+    pub player_open: Option<PlayerOpen>,
+    pub player_verb: Option<PlayerVerb>,
 }
 
-/// One event the host posts. Version 1 carries only a kind.
+/// One event the host posts. Version 1 carries only a kind; version 2 appends what a player event needs
+/// (`reserved` keeps the two `i64` words 8-aligned on every architecture, so no side relies on padding).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PlxHostEvent {
     pub size: u32,
     pub kind: u32,
+    pub epoch: u32,
+    pub reserved: u32,
+    pub a: i64,
+    pub b: i64,
 }
 
 /// What `size` must cover for a version-1 [`PlxHostApi`]: up to and including its last version-1 field.
 pub const API_V1_SIZE: u32 = (std::mem::offset_of!(PlxHostApi, run_on_host) + std::mem::size_of::<Option<RunOnHost>>()) as u32;
 /// What `size` must cover for a version-1 [`PlxHostEvent`].
 pub const EVENT_V1_SIZE: u32 = (std::mem::offset_of!(PlxHostEvent, kind) + std::mem::size_of::<u32>()) as u32;
+/// What `size` must cover for a version-2 [`PlxHostApi`]: through `player_verb`.
+pub const API_V2_SIZE: u32 = (std::mem::offset_of!(PlxHostApi, player_verb) + std::mem::size_of::<Option<PlayerVerb>>()) as u32;
+/// What `size` must cover for a player event: through `b`.
+pub const EVENT_V2_SIZE: u32 = (std::mem::offset_of!(PlxHostEvent, b) + std::mem::size_of::<i64>()) as u32;
+
+/// The host's media player requests (the version-2 group).
+#[derive(Clone, Copy)]
+pub struct PlayerCalls {
+    pub open: PlayerOpen,
+    pub verb: PlayerVerb,
+}
+
+/// Why the table carries no media player. Not an error: the library starts and plays nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoPlayer {
+    /// A version-1 table, or a table too small to hold the player group.
+    TableV1,
+    /// A version-2 table with a NULL `player_open` or `player_verb`.
+    NullPointer,
+    /// The library has not been started, so there is no table to ask.
+    NotStarted,
+}
+
+impl NoPlayer {
+    /// The reason, for the one boot log line.
+    pub fn reason(self) -> &'static str {
+        match self {
+            NoPlayer::NotStarted => "the library has not been started",
+            NoPlayer::TableV1 => "the host's table has no player group (version 1)",
+            NoPlayer::NullPointer => "the host's table leaves a player pointer NULL",
+        }
+    }
+}
 
 /// The host's callbacks, copied out of the table at the start: plain function pointers, valid until
 /// `on_stopped` has been delivered clean.
@@ -73,6 +163,8 @@ pub const EVENT_V1_SIZE: u32 = (std::mem::offset_of!(PlxHostEvent, kind) + std::
 pub struct HostCallbacks {
     pub on_stopped: OnStopped,
     pub run_on_host: RunOnHost,
+    /// The media player, or why there is none.
+    pub player: Result<PlayerCalls, NoPlayer>,
 }
 
 /// Read the table at `api` into [`HostCallbacks`], or say why it is refused ([`E_ARGS`] always: a refused
@@ -90,15 +182,104 @@ pub unsafe fn read_table(api: *const PlxHostApi) -> Result<HostCallbacks, i32> {
     if size < API_V1_SIZE {
         return Err(E_ARGS);
     }
-    // SAFETY: `size` covers every version-1 field.
-    let table = unsafe { api.read_unaligned() };
-    if table.abi_version < ABI_VERSION || table.flags != 0 {
+    // SAFETY: `size` covers every version-1 field, and only those are read (the table is read as a v1 prefix).
+    let table = unsafe { read_v1_prefix(api) };
+    if table.abi_version < 1 || table.flags != 0 {
         return Err(E_ARGS);
     }
-    match (table.on_stopped, table.run_on_host) {
-        (Some(on_stopped), Some(run_on_host)) => Ok(HostCallbacks { on_stopped, run_on_host }),
-        _ => Err(E_ARGS),
+    let (Some(on_stopped), Some(run_on_host)) = (table.on_stopped, table.run_on_host) else {
+        return Err(E_ARGS);
+    };
+    Ok(HostCallbacks { on_stopped, run_on_host, player: read_player(api, size, table.abi_version) })
+}
+
+/// The version-1 fields of the table at `api` (the later ones zero: they are not read from a table that
+/// does not cover them).
+///
+/// # Safety
+/// `api` points at `API_V1_SIZE` readable bytes.
+unsafe fn read_v1_prefix(api: *const PlxHostApi) -> PlxHostApi {
+    let mut table = PlxHostApi {
+        size: 0,
+        abi_version: 0,
+        flags: 0,
+        reserved: 0,
+        on_stopped: None,
+        run_on_host: None,
+        player_open: None,
+        player_verb: None,
+    };
+    // SAFETY: the caller guarantees `API_V1_SIZE` readable bytes, and `table` is at least that large.
+    unsafe { std::ptr::copy_nonoverlapping(api.cast::<u8>(), (&mut table as *mut PlxHostApi).cast::<u8>(), API_V1_SIZE as usize) };
+    table
+}
+
+/// The player group of the table at `api`: present only when `size` covers it, `abi_version` names it and
+/// both pointers are set. A host that does not offer one is not refused (skew is "no playback").
+///
+/// # Safety
+/// `api` points at `size` readable bytes.
+unsafe fn read_player(api: *const PlxHostApi, size: u32, abi_version: u32) -> Result<PlayerCalls, NoPlayer> {
+    if size < API_V2_SIZE || abi_version < 2 {
+        return Err(NoPlayer::TableV1);
     }
+    // SAFETY: `size` covers every version-2 field.
+    let table = unsafe { api.read_unaligned() };
+    match (table.player_open, table.player_verb) {
+        (Some(open), Some(verb)) => Ok(PlayerCalls { open, verb }),
+        _ => Err(NoPlayer::NullPointer),
+    }
+}
+
+/// What a player event reports. The payload words of the kinds that carry none are 0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayerKind {
+    Prepared,
+    Started,
+    Paused,
+    Position,
+    SeekDone,
+    Buffering,
+    VideoSize,
+    Completed,
+    Error,
+    Interrupted,
+    Closed,
+    Stall,
+}
+
+impl PlayerKind {
+    fn of(kind: u32) -> Option<PlayerKind> {
+        Some(match kind {
+            EVENT_PLAYER_PREPARED => PlayerKind::Prepared,
+            EVENT_PLAYER_STARTED => PlayerKind::Started,
+            EVENT_PLAYER_PAUSED => PlayerKind::Paused,
+            EVENT_PLAYER_POSITION => PlayerKind::Position,
+            EVENT_PLAYER_SEEK_DONE => PlayerKind::SeekDone,
+            EVENT_PLAYER_BUFFERING => PlayerKind::Buffering,
+            EVENT_PLAYER_VIDEO_SIZE => PlayerKind::VideoSize,
+            EVENT_PLAYER_COMPLETED => PlayerKind::Completed,
+            EVENT_PLAYER_ERROR => PlayerKind::Error,
+            EVENT_PLAYER_INTERRUPTED => PlayerKind::Interrupted,
+            EVENT_PLAYER_CLOSED => PlayerKind::Closed,
+            EVENT_PLAYER_STALL => PlayerKind::Stall,
+            _ => return None,
+        })
+    }
+
+    /// Only the latest of these per epoch matters: a newer one replaces an older one that is still queued.
+    pub fn coalesces(self) -> bool {
+        matches!(self, PlayerKind::Position | PlayerKind::Buffering)
+    }
+}
+
+/// One player event as the library queues it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlayerEvent {
+    pub epoch: u32,
+    pub kind: PlayerKind,
+    pub a: i64,
+    pub b: i64,
 }
 
 /// An event the host posted, as the queue holds it.
@@ -106,6 +287,7 @@ pub unsafe fn read_table(api: *const PlxHostApi) -> Result<HostCallbacks, i32> {
 pub enum HostEvent {
     Pause,
     Resume,
+    Player(PlayerEvent),
 }
 
 /// Read the event at `event`, or [`E_ARGS`].
@@ -122,10 +304,19 @@ pub unsafe fn read_event(event: *const PlxHostEvent) -> Result<HostEvent, i32> {
         return Err(E_ARGS);
     }
     // SAFETY: `size` covers every version-1 field.
-    match unsafe { event.read_unaligned() }.kind {
+    let kind = unsafe { event.cast::<u32>().add(1).read_unaligned() };
+    match kind {
         EVENT_PAUSE => Ok(HostEvent::Pause),
         EVENT_RESUME => Ok(HostEvent::Resume),
-        _ => Err(E_ARGS),
+        _ => {
+            let kind = PlayerKind::of(kind).ok_or(E_ARGS)?;
+            if size < EVENT_V2_SIZE {
+                return Err(E_ARGS);
+            }
+            // SAFETY: `size` covers every version-2 field, which is the whole struct.
+            let ev = unsafe { event.read_unaligned() };
+            Ok(HostEvent::Player(PlayerEvent { epoch: ev.epoch, kind, a: ev.a, b: ev.b }))
+        }
     }
 }
 
@@ -188,8 +379,31 @@ mod tests {
             ("PLX_HOST_E_WINDOW", i64::from(E_WINDOW)),
             ("PLX_HOST_E_THREAD", i64::from(E_THREAD)),
             ("PLX_HOST_E_FULL", i64::from(E_FULL)),
+            ("PLX_HOST_E_STALE", i64::from(E_STALE)),
+            ("PLX_HOST_PLAYER_OK", i64::from(PLAYER_OK)),
+            ("PLX_HOST_PLAYER_E_UNAVAILABLE", i64::from(PLAYER_E_UNAVAILABLE)),
+            ("PLX_HOST_PLAYER_E_BUSY", i64::from(PLAYER_E_BUSY)),
+            ("PLX_HOST_PLAYER_E_ARGS", i64::from(PLAYER_E_ARGS)),
+            ("PLX_HOST_PLAYER_E_STALE", i64::from(PLAYER_E_STALE)),
             ("PLX_HOST_EVENT_PAUSE", i64::from(EVENT_PAUSE)),
             ("PLX_HOST_EVENT_RESUME", i64::from(EVENT_RESUME)),
+            ("PLX_HOST_EVENT_PLAYER_PREPARED", i64::from(EVENT_PLAYER_PREPARED)),
+            ("PLX_HOST_EVENT_PLAYER_STARTED", i64::from(EVENT_PLAYER_STARTED)),
+            ("PLX_HOST_EVENT_PLAYER_PAUSED", i64::from(EVENT_PLAYER_PAUSED)),
+            ("PLX_HOST_EVENT_PLAYER_POSITION", i64::from(EVENT_PLAYER_POSITION)),
+            ("PLX_HOST_EVENT_PLAYER_SEEK_DONE", i64::from(EVENT_PLAYER_SEEK_DONE)),
+            ("PLX_HOST_EVENT_PLAYER_BUFFERING", i64::from(EVENT_PLAYER_BUFFERING)),
+            ("PLX_HOST_EVENT_PLAYER_VIDEO_SIZE", i64::from(EVENT_PLAYER_VIDEO_SIZE)),
+            ("PLX_HOST_EVENT_PLAYER_COMPLETED", i64::from(EVENT_PLAYER_COMPLETED)),
+            ("PLX_HOST_EVENT_PLAYER_ERROR", i64::from(EVENT_PLAYER_ERROR)),
+            ("PLX_HOST_EVENT_PLAYER_INTERRUPTED", i64::from(EVENT_PLAYER_INTERRUPTED)),
+            ("PLX_HOST_EVENT_PLAYER_CLOSED", i64::from(EVENT_PLAYER_CLOSED)),
+            ("PLX_HOST_EVENT_PLAYER_STALL", i64::from(EVENT_PLAYER_STALL)),
+            ("PLX_HOST_PLAYER_FAIL_BASE", PLAYER_FAIL_BASE),
+            ("PLX_HOST_PLAYER_VERB_PLAY", i64::from(VERB_PLAY)),
+            ("PLX_HOST_PLAYER_VERB_PAUSE", i64::from(VERB_PAUSE)),
+            ("PLX_HOST_PLAYER_VERB_SEEK", i64::from(VERB_SEEK)),
+            ("PLX_HOST_PLAYER_VERB_CLOSE", i64::from(VERB_CLOSE)),
         ] {
             assert_eq!(define(name).parse::<i64>().unwrap(), value, "{name}");
         }
@@ -200,14 +414,30 @@ mod tests {
             ("reserved", offset_of!(PlxHostApi, reserved)),
             ("on_stopped", offset_of!(PlxHostApi, on_stopped)),
             ("run_on_host", offset_of!(PlxHostApi, run_on_host)),
+            ("player_open", offset_of!(PlxHostApi, player_open)),
+            ("player_verb", offset_of!(PlxHostApi, player_verb)),
         ];
         assert_eq!(fields("PlxHostApi"), api.map(|(n, _)| n), "PlxHostApi's fields, in order");
         assert!(api.windows(2).all(|w| w[0].1 < w[1].1), "the Rust offsets ascend in the header's order: {api:?}");
-        let event = [("size", offset_of!(PlxHostEvent, size)), ("kind", offset_of!(PlxHostEvent, kind))];
+        let event = [
+            ("size", offset_of!(PlxHostEvent, size)),
+            ("kind", offset_of!(PlxHostEvent, kind)),
+            ("epoch", offset_of!(PlxHostEvent, epoch)),
+            ("reserved", offset_of!(PlxHostEvent, reserved)),
+            ("a", offset_of!(PlxHostEvent, a)),
+            ("b", offset_of!(PlxHostEvent, b)),
+        ];
         assert_eq!(fields("PlxHostEvent"), event.map(|(n, _)| n), "PlxHostEvent's fields, in order");
         assert!(event.windows(2).all(|w| w[0].1 < w[1].1));
-        assert_eq!(API_V1_SIZE as usize, std::mem::size_of::<PlxHostApi>(), "version 1 ends at the last field");
-        assert_eq!(EVENT_V1_SIZE as usize, std::mem::size_of::<PlxHostEvent>());
+        assert_eq!(API_V2_SIZE as usize, std::mem::size_of::<PlxHostApi>(), "version 2 ends at the last field");
+        assert_eq!(EVENT_V2_SIZE as usize, std::mem::size_of::<PlxHostEvent>());
+        assert_eq!(API_V1_SIZE as usize, offset_of!(PlxHostApi, player_open), "the player group starts where version 1 ends");
+        assert_eq!(EVENT_V1_SIZE as usize, offset_of!(PlxHostEvent, epoch), "the player payload starts where version 1 ends");
+        // Fixed offsets, so a reordering that keeps the names is still caught: the layout the host marshals.
+        assert_eq!((offset_of!(PlxHostEvent, a), offset_of!(PlxHostEvent, b), EVENT_V2_SIZE), (16, 24, 32));
+        for name in ["PLX_HOST_API_V2_SIZE", "PLX_HOST_EVENT_V2_SIZE"] {
+            assert!(code().contains(&format!("#define {name} ")), "the header defines {name}");
+        }
         let code = code();
         for decl in [
             "int32_t plx_host_start(const PlxHostApi *api, const char *launch_json);",
@@ -216,6 +446,8 @@ mod tests {
             "typedef void (*PlxHostTask)(void *arg);",
             "typedef void (*PlxOnStopped)(int32_t code, int32_t clean);",
             "typedef int32_t (*PlxRunOnHost)(PlxHostTask task, void *arg);",
+            "typedef int32_t (*PlxPlayerOpen)(uint32_t epoch, const char *uri, int32_t x, int32_t y, int32_t w, int32_t h);",
+            "typedef int32_t (*PlxPlayerVerb)(uint32_t epoch, uint32_t verb, int64_t arg0, int64_t arg1);",
         ] {
             assert!(code.contains(decl), "the header declares `{decl}`");
         }
@@ -223,6 +455,13 @@ mod tests {
 
     unsafe extern "C" fn stopped(_: i32, _: i32) {}
     unsafe extern "C" fn run(_: HostTask, _: *mut c_void) -> i32 {
+        0
+    }
+
+    unsafe extern "C" fn open(_: u32, _: *const std::os::raw::c_char, _: i32, _: i32, _: i32, _: i32) -> i32 {
+        0
+    }
+    unsafe extern "C" fn verb(_: u32, _: u32, _: i64, _: i64) -> i32 {
         0
     }
 
@@ -234,6 +473,8 @@ mod tests {
             reserved: 0,
             on_stopped: Some(stopped),
             run_on_host: Some(run),
+            player_open: Some(open),
+            player_verb: Some(verb),
         }
     }
 
@@ -254,18 +495,74 @@ mod tests {
         assert_eq!(unsafe { read_table(&no_stop) }.err(), Some(E_ARGS), "no on_stopped");
         let no_run = PlxHostApi { run_on_host: None, ..ok };
         assert_eq!(unsafe { read_table(&no_run) }.err(), Some(E_ARGS), "no run_on_host");
-        let later = PlxHostApi { size: API_V1_SIZE + 64, abi_version: 2, ..ok };
-        assert!(unsafe { read_table(&later) }.is_ok(), "a later version's table is read as version 1");
+        let later = PlxHostApi { size: API_V2_SIZE + 64, abi_version: 3, ..ok };
+        assert!(unsafe { read_table(&later) }.is_ok(), "a later version's table is read as far as version 2 covers");
+    }
+
+    /// **The player group is read only when the table offers it**: a version-2 table with both pointers has
+    /// it; a table that stops at `run_on_host` (a version-1 host), a version-1 table of a bigger size, and a
+    /// version-2 table with either pointer NULL are all ACCEPTED (skew is "no playback", never a refused
+    /// start) and carry the reason.
+    #[test]
+    fn the_player_group_is_read_only_when_the_table_offers_it() {
+        let ok = table();
+        assert!(unsafe { read_table(&ok) }.unwrap().player.is_ok());
+        let v1 = PlxHostApi { size: API_V1_SIZE, abi_version: 1, player_open: None, player_verb: None, ..ok };
+        assert_eq!(unsafe { read_table(&v1) }.unwrap().player.err(), Some(NoPlayer::TableV1));
+        let short = PlxHostApi { size: API_V1_SIZE, ..ok };
+        assert_eq!(unsafe { read_table(&short) }.unwrap().player.err(), Some(NoPlayer::TableV1), "size stops at run_on_host");
+        let versioned = PlxHostApi { abi_version: 1, ..ok };
+        assert_eq!(unsafe { read_table(&versioned) }.unwrap().player.err(), Some(NoPlayer::TableV1), "version 1 names no player group");
+        for broken in [PlxHostApi { player_open: None, ..ok }, PlxHostApi { player_verb: None, ..ok }] {
+            assert_eq!(unsafe { read_table(&broken) }.unwrap().player.err(), Some(NoPlayer::NullPointer));
+        }
+    }
+
+    /// A version-1 host's table is a prefix in memory: only `API_V1_SIZE` bytes are readable, and only those
+    /// are read (the library must not run past a v1 host's struct).
+    #[test]
+    fn a_version_one_table_is_read_without_touching_the_bytes_after_it() {
+        let ok = table();
+        let mut raw = vec![0u8; API_V1_SIZE as usize];
+        // SAFETY: copies the v1 prefix of a live table into a buffer of exactly that size.
+        unsafe { std::ptr::copy_nonoverlapping((&ok as *const PlxHostApi).cast::<u8>(), raw.as_mut_ptr(), raw.len()) };
+        raw[..4].copy_from_slice(&API_V1_SIZE.to_ne_bytes());
+        raw[4..8].copy_from_slice(&1u32.to_ne_bytes());
+        // SAFETY: the buffer is API_V1_SIZE bytes, which is what its `size` word says.
+        let read = unsafe { read_table(raw.as_ptr().cast()) }.expect("a v1 table is accepted");
+        assert_eq!(read.player.err(), Some(NoPlayer::TableV1));
     }
 
     #[test]
     fn an_event_is_decoded_by_its_kind_and_size() {
-        let ev = |size, kind| PlxHostEvent { size, kind };
+        let ev = |size, kind| PlxHostEvent { size, kind, epoch: 0, reserved: 0, a: 0, b: 0 };
         assert_eq!(unsafe { read_event(&ev(EVENT_V1_SIZE, EVENT_PAUSE)) }, Ok(HostEvent::Pause));
         assert_eq!(unsafe { read_event(&ev(EVENT_V1_SIZE, EVENT_RESUME)) }, Ok(HostEvent::Resume));
         assert_eq!(unsafe { read_event(&ev(EVENT_V1_SIZE, 0)) }, Err(E_ARGS));
         assert_eq!(unsafe { read_event(&ev(EVENT_V1_SIZE, 99)) }, Err(E_ARGS));
         assert_eq!(unsafe { read_event(&ev(EVENT_V1_SIZE - 1, EVENT_PAUSE)) }, Err(E_ARGS));
         assert_eq!(unsafe { read_event(std::ptr::null()) }, Err(E_ARGS));
+    }
+
+    /// A player event is decoded with its epoch and payload words; a short `size` (a version-1 sized event
+    /// carrying a player kind) is refused, and a version-1 pause is still accepted at its own size.
+    #[test]
+    fn a_player_event_is_decoded_and_a_short_one_is_refused() {
+        let ev = |size, kind, epoch, a, b| PlxHostEvent { size, kind, epoch, reserved: 0, a, b };
+        assert_eq!(
+            unsafe { read_event(&ev(EVENT_V2_SIZE, EVENT_PLAYER_SEEK_DONE, 7, 42, 91_000)) },
+            Ok(HostEvent::Player(PlayerEvent { epoch: 7, kind: PlayerKind::SeekDone, a: 42, b: 91_000 }))
+        );
+        assert_eq!(
+            unsafe { read_event(&ev(EVENT_V2_SIZE + 16, EVENT_PLAYER_COMPLETED, 3, 0, 0)) },
+            Ok(HostEvent::Player(PlayerEvent { epoch: 3, kind: PlayerKind::Completed, a: 0, b: 0 })),
+            "a later version's bigger event is read as version 2"
+        );
+        assert_eq!(unsafe { read_event(&ev(EVENT_V1_SIZE, EVENT_PLAYER_COMPLETED, 3, 0, 0)) }, Err(E_ARGS), "short");
+        assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE - 1, EVENT_PLAYER_POSITION, 3, 9, 0)) }, Err(E_ARGS), "short by one byte");
+        assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE, 28, 3, 0, 0)) }, Err(E_ARGS), "an unknown kind");
+        // A v1 host's pause is 8 bytes in memory: only 8 are readable and only 8 are read.
+        let pause = [EVENT_V1_SIZE, EVENT_PAUSE];
+        assert_eq!(unsafe { read_event(pause.as_ptr().cast()) }, Ok(HostEvent::Pause));
     }
 }

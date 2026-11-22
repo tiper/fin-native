@@ -16,7 +16,13 @@
 //! thread): both are a bounded queue push that never blocks. [`Hosted::deliver`] drains the queue on the
 //! loop thread, which polls it every iteration, so nothing needs waking. The loop never waits on the host:
 //! work for the host thread leaves as [`Hosted::on_host`], through the host's `run_on_host`.
-use crate::host_abi::{self, HostCallbacks, HostEvent, PlxHostApi, PlxHostEvent};
+//!
+//! The media player (ABI version 2, `include/plx_host.h` PLAYER) is two more requests that leave the same way,
+//! [`Hosted::player_open`] and [`Hosted::player_verb`], through the gate and without waiting, and its events
+//! come back through `post` onto a queue of their own ([`player`]) that the loop thread drains with
+//! [`Hosted::drain_player`]. A table without the player group is accepted: [`Hosted::player_support`] says why
+//! there is no player, and every request is then refused with `PLAYER_E_UNAVAILABLE`.
+use crate::host_abi::{self, HostCallbacks, HostEvent, NoPlayer, PlayerEvent, PlxHostApi, PlxHostEvent};
 use crate::launch::Launch;
 use plxnative_modules::host::{Action, Completion, Edge, EventSink, Exit, HostGate, Lifecycle, Stopped};
 use std::collections::VecDeque;
@@ -25,6 +31,10 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+
+mod player;
+pub use player::Drained;
+use player::PlayerLink;
 
 /// How many inputs the queue holds before a push is refused. A remote makes a handful of events a second;
 /// the bound is only ever reached when the loop thread is not draining.
@@ -66,6 +76,8 @@ pub struct Hosted {
     /// The application was told it went to the background and has not been told it came back. Loop thread
     /// only (`deliver`); atomic so that `new` stays `const`.
     paused: AtomicBool,
+    /// The player's live epochs and its event queue.
+    player: PlayerLink,
 }
 
 impl Default for Hosted {
@@ -86,6 +98,7 @@ impl Hosted {
             said: AtomicUsize::new(0),
             quit_sent: AtomicBool::new(false),
             paused: AtomicBool::new(false),
+            player: PlayerLink::new(),
         }
     }
 
@@ -121,6 +134,10 @@ impl Hosted {
         };
         if self.gate.stopping() || self.callbacks.set(callbacks).is_err() {
             return host_abi::E_STATE;
+        }
+        match self.player_support() {
+            Ok(()) => plx_base::eventlog::log(&format!("host: ABI version {}; the host offers a media player (player_open, player_verb)", host_abi::ABI_VERSION)),
+            Err(why) => plx_base::eventlog::log(&format!("host: ABI version {}; no media player: {}", host_abi::ABI_VERSION, why.reason())),
         }
         let launch = match launch_of(launch_json) {
             Some(launch) => launch,
@@ -210,9 +227,77 @@ impl Hosted {
         let input = match unsafe { host_abi::read_event(event) } {
             Ok(HostEvent::Pause) => Input::Pause,
             Ok(HostEvent::Resume) => Input::Resume,
+            Ok(HostEvent::Player(event)) => return self.post_player(event),
             Err(code) => return code,
         };
         self.push(input).map_or_else(|code| code, |()| host_abi::OK)
+    }
+
+    /// A player event from the host: refused after a stop or when the loop is not running (the same rule as an
+    /// input), dropped when its epoch is not live, queued otherwise. Never blocks.
+    fn post_player(&self, event: PlayerEvent) -> i32 {
+        if self.gate.stopping() || !self.running.load(Ordering::SeqCst) {
+            return host_abi::E_STATE;
+        }
+        self.player.accept(event).map_or_else(|code| code, |()| host_abi::OK)
+    }
+
+    /// The host's media player, or why there is none. A table that does not offer one is not an error.
+    pub fn player_support(&self) -> Result<(), NoPlayer> {
+        match self.callbacks.get() {
+            Some(callbacks) => callbacks.player.map(|_| ()),
+            None => Err(NoPlayer::NotStarted),
+        }
+    }
+
+    /// Ask the host to open a player for `epoch` on `uri` over the library's Ecore window (the host finds it
+    /// itself: `plx_host.h`, PLAYER) and the rectangle `area` (x, y, w, h), without waiting: the host queues
+    /// the request for its video thread and everything after is an event. `Err` carries a `PLAYER_E_*`: no
+    /// player in the table, a stop was requested (the gate refuses the call; the host is not asked), a bad
+    /// argument, or the host's own refusal. The `uri` carries the Plex token: it is copied by the host and is
+    /// never logged here.
+    ///
+    /// A player is opened from the loop thread; the epoch is live from here until its `PLAYER_CLOSED` is accepted.
+    #[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) is its caller
+    pub fn player_open(&self, epoch: u32, uri: &str, area: [i32; 4]) -> Result<(), i32> {
+        if epoch == 0 || uri.is_empty() {
+            return Err(host_abi::PLAYER_E_ARGS);
+        }
+        let Ok(uri) = std::ffi::CString::new(uri) else { return Err(host_abi::PLAYER_E_ARGS) };
+        let Some(Ok(calls)) = self.callbacks.get().map(|c| c.player) else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
+        let Some(_in_flight) = self.gate.enter() else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
+        self.player.opened(epoch);
+        // SAFETY: the host's callback, kept callable until `on_stopped` has been delivered clean; `uri` is a
+        // NUL-terminated string valid for the call, which the host copies before returning.
+        let code = unsafe { (calls.open)(epoch, uri.as_ptr(), area[0], area[1], area[2], area[3]) };
+        if code == host_abi::PLAYER_OK {
+            return Ok(());
+        }
+        self.player.forget(epoch);
+        Err(refusal(code))
+    }
+
+    /// Ask the host for one of the `VERB_*` verbs on the player of `epoch`, without waiting. The same refusals as
+    /// [`Hosted::player_open`], and `PLAYER_E_STALE` for an epoch the host no longer holds.
+    #[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) is its caller
+    pub fn player_verb(&self, epoch: u32, verb: u32, arg0: i64, arg1: i64) -> Result<(), i32> {
+        if epoch == 0 {
+            return Err(host_abi::PLAYER_E_ARGS);
+        }
+        let Some(Ok(calls)) = self.callbacks.get().map(|c| c.player) else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
+        let Some(_in_flight) = self.gate.enter() else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
+        // SAFETY: the host's callback, kept callable until `on_stopped` has been delivered clean.
+        let code = unsafe { (calls.verb)(epoch, verb, arg0, arg1) };
+        if code == host_abi::PLAYER_OK {
+            return Ok(());
+        }
+        Err(refusal(code))
+    }
+
+    /// Hand the application every player event queued, in order, and what was lost. Loop thread only.
+    #[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) is its caller
+    pub fn drain_player(&self, out: &mut Vec<PlayerEvent>) -> Drained {
+        self.player.drain(out)
     }
 
     /// `Surface::deliver`: hand the application everything queued, in order, then the stop as a quit.
@@ -269,6 +354,16 @@ impl Hosted {
         // SAFETY: the host refused the request, so `run_job` will never see `arg`.
         drop(unsafe { Box::from_raw(arg.cast::<Job>()) });
         false
+    }
+}
+
+/// A host's non-zero answer to a player request as one of the contract's refusals: its own negative `PLAYER_E_*`
+/// when it is one, `PLAYER_E_UNAVAILABLE` for anything else (a positive or unknown value is a host bug, and
+/// "refused" is all the library may conclude).
+fn refusal(code: i32) -> i32 {
+    match code {
+        host_abi::PLAYER_E_UNAVAILABLE | host_abi::PLAYER_E_BUSY | host_abi::PLAYER_E_ARGS | host_abi::PLAYER_E_STALE => code,
+        _ => host_abi::PLAYER_E_UNAVAILABLE,
     }
 }
 
@@ -361,10 +456,29 @@ pub(crate) mod testing {
         /// Armed by a test: `run_on_host` blocks until this is released, holding a callback in flight.
         pub(crate) block_run: Option<mpsc::Receiver<()>>,
         pub(crate) entered: Option<mpsc::Sender<()>>,
+        /// Each `player_open` the fake host got: epoch, the uri it copied, the rectangle.
+        pub(crate) opens: Vec<(u32, String, [i32; 4])>,
+        /// Each `player_verb`: epoch, verb, arg0, arg1.
+        pub(crate) verbs: Vec<(u32, u32, i64, i64)>,
+        /// What the fake player requests answer.
+        pub(crate) player_answer: i32,
+        /// Armed by a test: `player_open` blocks until this is released, holding a request in flight.
+        pub(crate) block_open: Option<mpsc::Receiver<()>>,
+        pub(crate) open_entered: Option<mpsc::Sender<()>>,
     }
 
-    pub(crate) static SEEN: Mutex<Seen> =
-        Mutex::new(Seen { stopped: Vec::new(), tasks: Vec::new(), run_answer: 0, block_run: None, entered: None });
+    pub(crate) static SEEN: Mutex<Seen> = Mutex::new(Seen {
+        stopped: Vec::new(),
+        tasks: Vec::new(),
+        run_answer: 0,
+        block_run: None,
+        entered: None,
+        opens: Vec::new(),
+        verbs: Vec::new(),
+        player_answer: 0,
+        block_open: None,
+        open_entered: None,
+    });
 
     pub(crate) fn seen<R>(f: impl FnOnce(&mut Seen) -> R) -> R {
         f(&mut SEEN.lock().unwrap_or_else(|e| e.into_inner()))
@@ -389,6 +503,38 @@ pub(crate) mod testing {
         answer
     }
 
+    pub(crate) unsafe extern "C" fn fake_player_open(
+        epoch: u32,
+        uri: *const std::os::raw::c_char,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) -> i32 {
+        // The host copies the string before returning (the header's OWNERSHIP rule).
+        let copy = unsafe { CStr::from_ptr(uri) }.to_string_lossy().into_owned();
+        let (answer, blocker, entered) = seen(|s| (s.player_answer, s.block_open.take(), s.open_entered.take()));
+        if let Some(entered) = entered {
+            let _ = entered.send(());
+        }
+        if let Some(blocker) = blocker {
+            let _ = blocker.recv_timeout(Duration::from_secs(5));
+        }
+        if answer == 0 {
+            seen(|s| s.opens.push((epoch, copy, [x, y, w, h])));
+        }
+        answer
+    }
+
+    pub(crate) unsafe extern "C" fn fake_player_verb(epoch: u32, verb: u32, arg0: i64, arg1: i64) -> i32 {
+        let answer = seen(|s| s.player_answer);
+        if answer == 0 {
+            seen(|s| s.verbs.push((epoch, verb, arg0, arg1)));
+        }
+        answer
+    }
+
+    /// A version-2 host's table, with the player group.
     pub(crate) fn table() -> PlxHostApi {
         PlxHostApi {
             size: std::mem::size_of::<PlxHostApi>() as u32,
@@ -397,7 +543,14 @@ pub(crate) mod testing {
             reserved: 0,
             on_stopped: Some(fake_on_stopped),
             run_on_host: Some(fake_run_on_host),
+            player_open: Some(fake_player_open),
+            player_verb: Some(fake_player_verb),
         }
+    }
+
+    /// A version-1 host's table: it stops at `run_on_host`, and says version 1.
+    pub(crate) fn table_v1() -> PlxHostApi {
+        PlxHostApi { size: host_abi::API_V1_SIZE, abi_version: 1, player_open: None, player_verb: None, ..table() }
     }
 
     /// A host test's world: the serial lock (`Completion::deliver` disarms the process watchdog), a clean
@@ -422,6 +575,11 @@ pub(crate) mod testing {
                 s.run_answer = 0;
                 s.block_run = None;
                 s.entered = None;
+                s.opens.clear();
+                s.verbs.clear();
+                s.player_answer = 0;
+                s.block_open = None;
+                s.open_entered = None;
             });
             self.hosted = Box::leak(Box::new(Hosted::new()));
         }
@@ -445,7 +603,16 @@ pub(crate) mod testing {
             bring_up: impl FnOnce(&Launch) -> Result<W, i32>,
             run: impl FnOnce(Launch, W) -> Exit + Send + 'static,
         ) -> i32 {
-            let api = table();
+            self.start_with(table(), bring_up, run)
+        }
+
+        /// [`World::start`] with the host's table of the test's choosing.
+        pub(crate) fn start_with<W: super::Made + 'static>(
+            &self,
+            api: PlxHostApi,
+            bring_up: impl FnOnce(&Launch) -> Result<W, i32>,
+            run: impl FnOnce(Launch, W) -> Exit + Send + 'static,
+        ) -> i32 {
             self.hosted.start(&api, LAUNCH.as_ptr(), bring_up, run)
         }
     }
@@ -823,7 +990,7 @@ mod tests {
     #[test]
     fn post_is_bounded_ordered_and_refused_outside_a_run() {
         let w = World::new();
-        let pause = PlxHostEvent { size: host_abi::EVENT_V1_SIZE, kind: EVENT_PAUSE };
+        let pause = PlxHostEvent { size: host_abi::EVENT_V1_SIZE, kind: EVENT_PAUSE, epoch: 0, reserved: 0, a: 0, b: 0 };
         assert_eq!(w.hosted.post(&pause), host_abi::E_STATE, "not started");
         let hosted = w.hosted;
         let (go_tx, go_rx) = mpsc::channel::<()>();
@@ -835,9 +1002,9 @@ mod tests {
             host_abi::OK
         );
         assert_eq!(hosted.post(std::ptr::null()), host_abi::E_ARGS);
-        assert_eq!(hosted.post(&PlxHostEvent { size: host_abi::EVENT_V1_SIZE, kind: 99 }), host_abi::E_ARGS);
+        assert_eq!(hosted.post(&PlxHostEvent { size: host_abi::EVENT_V1_SIZE, kind: 99, epoch: 0, reserved: 0, a: 0, b: 0 }), host_abi::E_ARGS);
         assert_eq!(hosted.post(&pause), host_abi::OK);
-        assert_eq!(hosted.post(&PlxHostEvent { size: host_abi::EVENT_V1_SIZE, kind: EVENT_RESUME }), host_abi::OK);
+        assert_eq!(hosted.post(&PlxHostEvent { size: host_abi::EVENT_V1_SIZE, kind: EVENT_RESUME, epoch: 0, reserved: 0, a: 0, b: 0 }), host_abi::OK);
         let started = Instant::now();
         let mut refused = 0;
         for _ in 0..(QUEUE_LIMIT * 2) {
@@ -909,6 +1076,204 @@ mod tests {
         assert!(seen(|s| s.tasks.is_empty()), "the host was never asked");
         go_tx.send(()).unwrap();
         w.wait_stopped(1);
+    }
+
+    /// A loop that idles until the host's stop and then returns clean, the shape every player test runs under.
+    fn idle_loop(w: &World) -> i32 {
+        w.start(|_| Ok(()), loop_until_quit(w.hosted, complete()))
+    }
+
+    fn player_ev(epoch: u32, kind: u32, a: i64, b: i64) -> PlxHostEvent {
+        PlxHostEvent { size: host_abi::EVENT_V2_SIZE, kind, epoch, reserved: 0, a, b }
+    }
+
+    const AREA: [i32; 4] = [0, 0, 1920, 1080];
+
+    /// **A version-1 host means "no playback", never a refused start.** The table stops at `run_on_host` and
+    /// says version 1: the start is accepted (the loop runs, `on_stopped` comes once at the end), the library
+    /// says why there is no player, every player request is refused with `PLAYER_E_UNAVAILABLE` WITHOUT calling
+    /// the host, and a player event is refused (no epoch can be live).
+    #[test]
+    fn a_version_one_host_starts_and_plays_nothing() {
+        let w = World::new();
+        assert_eq!(w.start_with(table_v1(), |_| Ok(()), loop_until_quit(w.hosted, complete())), host_abi::OK);
+        assert_eq!(w.hosted.player_support(), Err(NoPlayer::TableV1));
+        assert_eq!(w.hosted.player_open(1, "http://10.0.2.2/a.mkv?X=1", AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
+        assert_eq!(w.hosted.player_verb(1, host_abi::VERB_PLAY, 0, 0), Err(host_abi::PLAYER_E_UNAVAILABLE));
+        assert!(seen(|s| s.opens.is_empty() && s.verbs.is_empty()), "the host was never called");
+        assert_eq!(w.hosted.post(&player_ev(1, host_abi::EVENT_PLAYER_PREPARED, 1000, 0)), host_abi::E_STALE);
+        w.hosted.stop(Duration::from_secs(30));
+        assert_eq!(w.wait_stopped(1), [(0, 1)], "an ordinary clean stop");
+    }
+
+    /// A version-2 host that left either player pointer NULL is the same: accepted, no playback.
+    #[test]
+    fn a_version_two_host_with_null_player_pointers_starts_and_plays_nothing() {
+        for api in [
+            PlxHostApi { player_open: None, ..table() },
+            PlxHostApi { player_verb: None, ..table() },
+            PlxHostApi { player_open: None, player_verb: None, ..table() },
+        ] {
+            let w = World::new();
+            assert_eq!(w.start_with(api, |_| Ok(()), loop_until_quit(w.hosted, complete())), host_abi::OK);
+            assert_eq!(w.hosted.player_support(), Err(NoPlayer::NullPointer));
+            assert_eq!(w.hosted.player_open(1, "http://10.0.2.2/a.mkv", AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
+            assert_eq!(w.hosted.player_verb(1, host_abi::VERB_CLOSE, 0, 0), Err(host_abi::PLAYER_E_UNAVAILABLE));
+            assert!(seen(|s| s.opens.is_empty() && s.verbs.is_empty()));
+            w.hosted.stop(Duration::from_secs(30));
+            assert_eq!(w.wait_stopped(1), [(0, 1)]);
+        }
+    }
+
+    /// Before a start there is no table, so no player; the answer is the same refusal.
+    #[test]
+    fn before_a_start_there_is_no_player() {
+        let w = World::new();
+        assert_eq!(w.hosted.player_support(), Err(NoPlayer::NotStarted));
+        assert_eq!(w.hosted.player_open(1, "http://h/a", AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
+    }
+
+    /// **A version-2 host: the request reaches it as the library built it** (the uri copied, the
+    /// rectangle, the verb and its arguments), a bad argument is refused before the host is asked, and the
+    /// host's own refusals come back as the contract's codes.
+    #[test]
+    fn player_requests_reach_the_host_and_refusals_come_back_as_codes() {
+        let w = World::new();
+        assert_eq!(idle_loop(&w), host_abi::OK);
+        assert_eq!(w.hosted.player_support(), Ok(()));
+        assert_eq!(w.hosted.player_open(7, "http://10.0.2.2:32400/a.mkv?token=PLACEHOLDER", [0, 0, 1280, 720]), Ok(()));
+        assert_eq!(
+            seen(|s| s.opens.clone()),
+            [(7, "http://10.0.2.2:32400/a.mkv?token=PLACEHOLDER".to_string(), [0, 0, 1280, 720])]
+        );
+        assert_eq!(w.hosted.player_verb(7, host_abi::VERB_SEEK, 91_000, 42), Ok(()));
+        assert_eq!(seen(|s| s.verbs.clone()), [(7, host_abi::VERB_SEEK, 91_000, 42)]);
+        // Refused before the host: epoch 0, an empty uri, a NUL in the uri.
+        for bad in [(0, "http://h/a"), (1, ""), (1, "http://h/\0a")] {
+            assert_eq!(w.hosted.player_open(bad.0, bad.1, AREA), Err(host_abi::PLAYER_E_ARGS), "{bad:?}");
+        }
+        assert_eq!(seen(|s| s.opens.len()), 1, "none of those reached the host");
+        // The host's refusals are the contract's codes; a value outside them is "unavailable".
+        for (answer, expect) in [
+            (host_abi::PLAYER_E_BUSY, host_abi::PLAYER_E_BUSY),
+            (host_abi::PLAYER_E_STALE, host_abi::PLAYER_E_STALE),
+            (host_abi::PLAYER_E_ARGS, host_abi::PLAYER_E_ARGS),
+            (99, host_abi::PLAYER_E_UNAVAILABLE),
+        ] {
+            seen(|s| s.player_answer = answer);
+            assert_eq!(w.hosted.player_open(8, "http://h/b", AREA), Err(expect));
+            assert_eq!(w.hosted.player_verb(8, host_abi::VERB_PAUSE, 0, 0), Err(expect));
+        }
+        seen(|s| s.player_answer = 0);
+        // A refused open leaves its epoch not live: the host's late event for it is stale.
+        assert_eq!(w.hosted.post(&player_ev(8, host_abi::EVENT_PLAYER_ERROR, 5, 0)), host_abi::E_STALE);
+        w.hosted.stop(Duration::from_secs(30));
+        w.wait_stopped(1);
+    }
+
+    /// **The player's events come back through `post`, in order, with their epoch and payload.** An event of an
+    /// epoch that was never opened, and every event after its epoch's `PLAYER_CLOSED` (a late completion after the
+    /// stop of that player), is dropped at the boundary with `E_STALE`; a short event is `E_ARGS`.
+    #[test]
+    fn player_events_are_queued_by_epoch_and_a_stale_epoch_is_dropped() {
+        let w = World::new();
+        assert_eq!(idle_loop(&w), host_abi::OK);
+        let post = |kind, epoch, a, b| w.hosted.post(&player_ev(epoch, kind, a, b));
+        assert_eq!(post(host_abi::EVENT_PLAYER_PREPARED, 4, 1000, 0), host_abi::E_STALE, "never opened");
+        assert_eq!(w.hosted.player_open(4, "http://h/a", AREA), Ok(()));
+        assert_eq!(post(host_abi::EVENT_PLAYER_PREPARED, 4, 7_200_000, 0), host_abi::OK);
+        assert_eq!(post(host_abi::EVENT_PLAYER_VIDEO_SIZE, 4, 1920, 1080), host_abi::OK);
+        assert_eq!(post(host_abi::EVENT_PLAYER_STARTED, 4, 0, 0), host_abi::OK);
+        assert_eq!(post(host_abi::EVENT_PLAYER_CLOSED, 4, 0, 0), host_abi::OK);
+        assert_eq!(post(host_abi::EVENT_PLAYER_COMPLETED, 4, 0, 0), host_abi::E_STALE, "late: its player is closed");
+        assert_eq!(post(host_abi::EVENT_PLAYER_POSITION, 4, 5, 0), host_abi::E_STALE);
+        assert_eq!(
+            w.hosted.post(&PlxHostEvent { size: host_abi::EVENT_V1_SIZE, ..player_ev(4, host_abi::EVENT_PLAYER_STARTED, 0, 0) }),
+            host_abi::E_ARGS,
+            "a player kind in a version-1 sized event"
+        );
+        let mut out = Vec::new();
+        let drained = w.hosted.drain_player(&mut out);
+        assert_eq!(
+            out.iter().map(|e| (e.epoch, e.kind, e.a, e.b)).collect::<Vec<_>>(),
+            [
+                (4, host_abi::PlayerKind::Prepared, 7_200_000, 0),
+                (4, host_abi::PlayerKind::VideoSize, 1920, 1080),
+                (4, host_abi::PlayerKind::Started, 0, 0),
+                (4, host_abi::PlayerKind::Closed, 0, 0)
+            ]
+        );
+        assert_eq!((drained.stale, drained.overflowed), (3, false));
+        // A new epoch after the close is unaffected by it.
+        assert_eq!(w.hosted.player_open(5, "http://h/b", AREA), Ok(()));
+        assert_eq!(post(host_abi::EVENT_PLAYER_PREPARED, 5, 1, 0), host_abi::OK);
+        w.hosted.stop(Duration::from_secs(30));
+        w.wait_stopped(1);
+    }
+
+    /// **The player's events do not share the input queue**: with the key queue full (a burst of keys the loop
+    /// has not drained), a `PLAYER_COMPLETED` is still accepted and still reaches the drain, while the keys past
+    /// the bound were dropped. Position keeps its latest.
+    #[test]
+    fn a_completion_survives_a_full_key_queue() {
+        let w = World::new();
+        let hosted = w.hosted;
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        assert_eq!(
+            w.start(|_| Ok(()), move |_, ()| {
+                let _ = go_rx.recv_timeout(Duration::from_secs(10));
+                complete()
+            }),
+            host_abi::OK
+        );
+        let pause = PlxHostEvent { size: host_abi::EVENT_V1_SIZE, kind: EVENT_PAUSE, epoch: 0, reserved: 0, a: 0, b: 0 };
+        let refused = (0..QUEUE_LIMIT * 2).filter(|_| hosted.post(&pause) == host_abi::E_FULL).count();
+        assert!(refused > 0, "the key queue overflowed");
+        assert_eq!(hosted.player_open(2, "http://h/a", AREA), Ok(()));
+        assert_eq!(hosted.post(&player_ev(2, host_abi::EVENT_PLAYER_POSITION, 100, 0)), host_abi::OK);
+        assert_eq!(hosted.post(&player_ev(2, host_abi::EVENT_PLAYER_POSITION, 250, 0)), host_abi::OK);
+        assert_eq!(hosted.post(&player_ev(2, host_abi::EVENT_PLAYER_COMPLETED, 0, 0)), host_abi::OK, "not the key queue's fate");
+        let mut out = Vec::new();
+        hosted.drain_player(&mut out);
+        assert_eq!(out.iter().map(|e| (e.kind, e.a)).collect::<Vec<_>>(), [(host_abi::PlayerKind::Position, 250), (host_abi::PlayerKind::Completed, 0)]);
+        hosted.stop(Duration::from_secs(30));
+        go_tx.send(()).unwrap();
+        w.wait_stopped(1);
+    }
+
+    /// **Stop with a player request outstanding, and a late completion.** A `player_open` is inside the host's
+    /// callback (blocked here) when `plx_host_stop` arrives and the loop returns having released everything:
+    /// the clean report waits for the request to return, then comes once, clean. After the stop a further
+    /// request is refused WITHOUT calling the host, and the player's late `COMPLETED` posts `E_STATE` and is
+    /// never queued.
+    #[test]
+    fn a_stop_with_a_player_request_outstanding_holds_the_clean_report_and_drops_the_late_completion() {
+        let w = World::new();
+        assert_eq!(idle_loop(&w), host_abi::OK);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        seen(|s| {
+            s.open_entered = Some(entered_tx);
+            s.block_open = Some(release_rx);
+        });
+        let hosted = w.hosted;
+        let request = std::thread::spawn(move || hosted.player_open(9, "http://h/slow", AREA));
+        entered_rx.recv_timeout(Duration::from_secs(5)).expect("the host is inside player_open");
+        hosted.stop(Duration::from_secs(30));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(w.stopped(), [], "the loop returned, but a player request is still running: nothing is reported");
+        assert_eq!(hosted.gate.in_flight(), 1);
+        // New requests after the stop never reach the host, and the player's late events are refused.
+        let calls_before = seen(|s| s.opens.len() + s.verbs.len());
+        assert_eq!(hosted.player_open(10, "http://h/next", AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
+        assert_eq!(hosted.player_verb(9, host_abi::VERB_CLOSE, 0, 0), Err(host_abi::PLAYER_E_UNAVAILABLE));
+        assert_eq!(seen(|s| s.opens.len() + s.verbs.len()), calls_before, "the host was not asked");
+        assert_eq!(hosted.post(&player_ev(9, host_abi::EVENT_PLAYER_COMPLETED, 0, 0)), host_abi::E_STATE, "a late completion");
+        release_tx.send(()).unwrap();
+        assert_eq!(w.wait_stopped(1), [(0, 1)], "clean, and only after the request returned");
+        assert_eq!(request.join().unwrap(), Ok(()), "the admitted request completed");
+        let mut out = Vec::new();
+        assert!(hosted.drain_player(&mut out).stale == 0 && out.is_empty(), "nothing was queued for the application");
     }
 
     /// A key's action reaches the application alone (no raw pair), with its edge, in the order queued

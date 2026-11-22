@@ -24,9 +24,13 @@ HEADER = """
 #define PLX_HOST_E_ARGS (-1)
 #define PLX_HOST_EVENT_PAUSE 1  /* OnPause */
 #define PLX_HOST_EVENT_RESUME 2
+#define PLX_HOST_EVENT_PLAYER_ERROR 24
+#define PLX_HOST_PLAYER_VERB_CLOSE 4
 typedef void (*PlxHostTask)(void *arg);
 typedef void (*PlxOnStopped)(int32_t code, int32_t clean);
 typedef int32_t (*PlxRunOnHost)(PlxHostTask task, void *arg);
+typedef int32_t (*PlxPlayerOpen)(uint32_t epoch, const char *uri, int32_t x, int32_t y, int32_t w, int32_t h);
+typedef int32_t (*PlxPlayerVerb)(uint32_t epoch, uint32_t verb, int64_t arg0, int64_t arg1);
 typedef struct PlxHostApi {
     uint32_t size;
     uint32_t abi_version;
@@ -34,10 +38,16 @@ typedef struct PlxHostApi {
     uint32_t reserved;
     PlxOnStopped on_stopped;
     PlxRunOnHost run_on_host;
+    PlxPlayerOpen player_open;
+    PlxPlayerVerb player_verb;
 } PlxHostApi;
 typedef struct PlxHostEvent {
     uint32_t size;
     uint32_t kind;
+    uint32_t epoch;
+    uint32_t reserved;
+    int64_t a;
+    int64_t b;
 } PlxHostEvent;
 #define PLX_HOST_API_V1_SIZE ((uint32_t)(offsetof(PlxHostApi, run_on_host) + sizeof(PlxRunOnHost)))
 int32_t plx_host_start(const PlxHostApi *api, const char *launch_json);
@@ -65,7 +75,19 @@ static class Native
     public const int PLX_HOST_E_ARGS = -1;
     public const int PLX_HOST_EVENT_PAUSE = 1;
     public const uint PLX_HOST_EVENT_RESUME = 2;
+    public const int PLX_HOST_EVENT_PLAYER_ERROR = 24;
+    public const int PLX_HOST_PLAYER_VERB_CLOSE = 4;
 }
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate void PlxHostTask(IntPtr arg);
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate void PlxOnStopped(int code, int clean);
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate int PlxRunOnHost(IntPtr task, IntPtr arg);
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate int PlxPlayerOpen(uint epoch, IntPtr uri, int x, int y, int w, int h);
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+internal delegate int PlxPlayerVerb(uint epoch, uint verb, long arg0, long arg1);
 [StructLayout(LayoutKind.Sequential)]
 internal struct PlxHostApi
 {
@@ -75,9 +97,11 @@ internal struct PlxHostApi
     public uint Reserved;
     public IntPtr OnStopped;
     public IntPtr RunOnHost;
+    public IntPtr PlayerOpen;
+    public IntPtr PlayerVerb;
 }
 [StructLayout(LayoutKind.Sequential)]
-internal struct PlxHostEvent { public uint Size; public uint Kind; }
+internal struct PlxHostEvent { public uint Size; public uint Kind; public uint Epoch; public uint Reserved; public long A; public long B; }
 """
 
 READELF_D = """
@@ -127,7 +151,7 @@ class TextParsers(unittest.TestCase):
         real = (HERE.parent / "rust-modules/platform-tizen/include/plx_host.h").read_text()
         self.assertEqual(checker.header_functions(real), ["plx_host_start", "plx_host_post", "plx_host_stop"])
         self.assertEqual([n for _, n in checker.header_struct(real, "PlxHostApi")],
-                         ["size", "abi_version", "flags", "reserved", "on_stopped", "run_on_host"])
+                         ["size", "abi_version", "flags", "reserved", "on_stopped", "run_on_host", "player_open", "player_verb"])
         self.assertEqual(checker.header_defines(real)["PLX_HOST_E_FULL"], -6)
 
     def test_the_shipped_host_and_the_shipped_header_agree(self):
@@ -172,6 +196,24 @@ class TextParsers(unittest.TestCase):
         self.assertTrue(any("PLX_HOST_EVENT_PAUSE" in p and "does not declare" in p for p in problems), problems)
         problems = checker.check_abi(HEADER, CSHARP.replace("PLX_HOST_E_ARGS = -1", "PLX_HOST_E_NEW = 7"))
         self.assertTrue(any("PLX_HOST_E_NEW" in p for p in problems), problems)
+
+    def test_abi_names_a_64_bit_field_declared_as_a_pointer_or_32_bit(self):
+        for bad in (CSHARP.replace("public long A;", "public IntPtr A;"), CSHARP.replace("public long B;", "public int B;")):
+            problems = checker.check_abi(HEADER, bad)
+            self.assertTrue(any(p.startswith("struct PlxHostEvent") for p in problems), (bad, problems))
+
+    def test_abi_names_a_delegate_whose_widths_differ_or_is_missing(self):
+        problems = checker.check_abi(HEADER, CSHARP.replace("long arg0, long arg1", "int arg0, long arg1"))
+        self.assertTrue(any("delegate PlxPlayerVerb" in p for p in problems), problems)
+        problems = checker.check_abi(HEADER, CSHARP.replace("uint epoch, IntPtr uri, int x", "uint epoch, int x"))
+        self.assertTrue(any("delegate PlxPlayerOpen" in p for p in problems), problems)
+        problems = checker.check_abi(HEADER, CSHARP.replace("internal delegate int PlxPlayerOpen(uint epoch, IntPtr uri, int x, int y, int w, int h);", ""))
+        self.assertTrue(any("PlxPlayerOpen" in p and "declares no" in p for p in problems), problems)
+
+    def test_abi_requires_every_event_kind_and_verb_the_header_defines(self):
+        for name in ("PLX_HOST_EVENT_PLAYER_ERROR = 24;", "PLX_HOST_PLAYER_VERB_CLOSE = 4;"):
+            problems = checker.check_abi(HEADER, CSHARP.replace(name, ""))
+            self.assertTrue(any(name.split(" ")[0] in p and "does not declare" in p for p in problems), problems)
 
     def test_abi_names_a_library_that_is_not_the_soname(self):
         problems = checker.check_abi(HEADER, CSHARP.replace('Lib = "libplx.so"', 'Lib = "plx"'))

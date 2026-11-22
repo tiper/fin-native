@@ -667,7 +667,8 @@ the emulator runs (E1-E13) measured it, the item says so.
   Option B's `Ecore_Wl2_Window*`. SDL2 on a retail Tizen TV is not evidenced (2d, 1); the emulator ran static SDL2 + SDL2_ttf with `SDL_Init(TIMER|EVENTS)`
   and no video driver (E10), so the dummy-video-driver variant of Option A was not exercised. Option B drawing
   from a Rust thread works on the emulator (H3, H4; E6, E8) and is unmeasured on a retail set.
-- T6. URI playback via `Tizen.Multimedia.Player` (C#) is proven:
+- T6. URI playback through the platform's player is proven. The host drives the native libcapi-media-player (P/Invoke), not
+  `Tizen.Multimedia.Player`, because the managed `Display` cannot take our window at API8 (measured 2026-11-22):
   - only the User-Agent and Cookie headers pass;
   - no DTS or TrueHD;
   - esplusplayer feed is firmware-dependent (2e).
@@ -686,8 +687,8 @@ The Tizen hello-world (F28) exists to answer these, and the text cites them by n
 - H3: whether Option B, a native Ecore_Wl2 window, draws from a Rust thread (T5).
 - H4: whether Ecore main-thread handlers and a Rust loop thread run without deadlock (T5, F32).
 - H5: whether static SDL2 and SDL2_ttf draw text and a GLES2 texture through our path (F15).
-- H6: whether `Tizen.Multimedia.Player` shows a mock title beneath our window and survives a TV-menu round trip
-  (T6, W10).
+- H6: whether the native libcapi-media-player, driven by the host (the managed `Display` cannot take our window at API8, measured
+  2026-11-22), shows a mock title beneath our window and survives a TV-menu round trip (T6, W10).
 - H7: whether the application's own renderer, `plx_gfx`, compiles its shader programs and draws on the set's GL
   (README "H7" on `samsung/hello-tpk` at `e8da14ce6`; F40 says why a rejected required shader ends the process).
 - H8: whether the application's own libcurl binding (`plx_net` on the `dynlib!` loader) finds a libcurl on the set
@@ -1288,7 +1289,7 @@ Ecore names to `remote_token_key` pairs".
 | lifecycle | SDL app events | SDL app events | C# OnPause/OnResume/OnTerminate through `plx_host_post`; stop request and completion |
 | key store | keymanager3 / palm, `Durable` | `HostFile` (later Keychain) | `MemoryOnly` first (client id, language, resolution kept; Decision 7, B), then the Tizen store |
 | identity, caps | `webos::probe`, codec table, jail verdict | host values, `NotApplicable` | `Tizen` + version, player codec set, `NotApplicable` |
-| backends | Feed (Starfish) + URI (`play-uri`, ACB) | Feed over `HostSink` | URI over `Tizen.Multimedia.Player` (W10), Feed later (W12) |
+| backends | Feed (Starfish) + URI (`play-uri`, ACB) | Feed over `HostSink` | URI over the device's native media player, `libcapi-media-player`, called from the C# host (W10), Feed later (W12) |
 | display evidence | the LG driver's (ACB, exported window) | n/a | the Tizen driver's own |
 | storage helper | LS2/DB8 service (`rust-modules/storage`) | none | none |
 | diagnostics | event, crash and stderr descriptors (`main.c`, F19) | unchanged | in-app UDP log sink, required (Target shape 7, E5) |
@@ -1917,15 +1918,27 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   proves the emulator only: a retail set may still fail H1 or H2.
 
 ### W10 (H). The Tizen URI playback driver
-- Prerequisites: W9, W6c, and H6: `Tizen.Multimedia.Player` shows a mock title beneath our window with
+- Prerequisites: W9, W6c, and H6 (restated below): the native player shows a mock title beneath our window with
   the alpha model that works (report 2e, open conflict). It also survives a TV-menu round trip (review
   M9). The hello-world plays no media (F28, F37), so H6 needs a step-3 probe and a retail set: the
-  emulator cannot test `Tizen.Multimedia` (F37) and the runs did not probe it (E9, E11). The Home round trip of E11
+  emulator could not be assumed to run `Tizen.Multimedia` (F37, E9, E11); the 2026-11-22 probe then measured the native player chain on it (below), which still shows no picture and says nothing of a retail set. The Home round trip of E11
   covers the window and the EGL surface on the emulator only, with no player, so it is not H6. The tester request
   for H6 (with H1 and H2) is posted only with the owner's approval (Decision 5).
 - Goal: a `UriDriver` in `plx_platform_tizen` over `PlxHostApi` player calls (T6): capabilities (no
   DTS/TrueHD, token in the query string, no variable speed), `display()` evidence including readiness, and
   the shell's `video_hole`. No LG binding is faked and no default is published (Target shape 6b).
+- H6, restated (W10 inventory): `player_set_ecore_wl_display` with the library's Ecore_Wl2 window shows a mock
+  title beneath a window whose alpha is on. The managed `Display(Window)` cannot take our window (it takes a
+  MediaView, an ElmSharp window or a NUI window), so the host calls the native player directly (D1 = P1).
+- As landed (PR A, the host ABI and the C# player): `plx_host.h` is version 2: `player_open` and `player_verb`
+  appended to `PlxHostApi` (size-gated, both or neither), player events through `plx_host_post` carrying an epoch
+  (still exactly three exports), `E_STALE` for an event of an epoch that is not live, and a player event queue of its
+  own in `Hosted` (lossless but for position and buffering). A v1 host or NULL pointers is "no playback", never a
+  refused start. The host is `PlxPlayer.cs` over `libcapi-media-player.so.0` (`PlayerNative.cs`): one video thread, a
+  host-side position poll, events posted straight from native callbacks. The window is found host-side
+  (`ecore_wl2_display_window_find(display, 1)`), not passed in the table (measured on the emulator 2026-11-22: it is the
+  pointer the library logs). `tizen-abi` also checks the delegates' widths. Not in PR A: the Rust `TizenUriDriver`
+  and the composition (PR B), the window's alpha and the video hole (PR B), anything on a retail set.
 - Verify: `DriverSet` contract tests against the fake host table, and a late completion after stop; a
   device run on mock media. Risk: UNVERIFIED how PMS's decision answers `X-Plex-Platform: Tizen`: measured
   on the mock, then on a household-owned test server only with the owner's consent.

@@ -41,7 +41,7 @@ builds the webOS package; this platform has none).
 
 | Target | Needs | What it does |
 | --- | --- | --- |
-| `tizen-abi` | any host, python3 | reads `plx_host.h` and `Program.cs` as text: the three `plx_host_*` functions, each one's return type and parameter count, both structs field for field (name, order, width), and every `PLX_HOST_*` constant the host spells equal the header's |
+| `tizen-abi` | any host, python3 | reads `plx_host.h` and `Program.cs` as text: the three `plx_host_*` functions, each one's return type and parameter count, both structs field for field (name, order, width), every function-pointer typedef against the host's `delegate` of the same name (return and parameter widths), and every `PLX_HOST_*` constant the host spells equal the header's (the host must spell the version and every event kind and verb) |
 | `tizen-check` | any host with the target's std | `tizen-abi`, then `cargo check --lib` of the platform crate for `x86_64-unknown-linux-gnu`: compile-only, no link, no SDL |
 | `tizen-sdl` | Linux x86_64, `cc`, `make`, `curl` | the static SDL2 + SDL2_ttf under `tizen/sdl-build/x86_64` (a stamp of the pins, the script and the flags skips a rebuild that would change nothing) |
 | `tizen-so` | Linux x86_64, `libgles-dev` | `cargo rustc --crate-type staticlib` of the platform crate (features `tizen,devtriggers`, profile `tvdev`; under `RELEASE=1` profile `release` and features `tizen` only, so a release library carries no dev-trigger seam), then the link into `tizen/out/x86_64/libplx.so` |
@@ -108,6 +108,43 @@ The thread rules, ownership, start/stop and the `launch_json` keys are the heade
   `clean = 0` (or no report) it releases nothing. The host never calls libc `exit`; a failed start ends through `Exit()`.
 - A failed library load is logged from C# (`DllNotFoundException`, a `dlopen` by absolute path with the loader's own `dlerror`,
   `EntryPointNotFoundException`, `BadImageFormatException`), because nothing else can say why the library never started.
+
+### The media player (ABI version 2; the host side of W10)
+
+Version 2 of the table adds two requests, `player_open(epoch, uri, x, y, w, h)` and `player_verb(epoch, verb, arg0, arg1)`, and the events
+that answer them come back through `plx_host_post` with an `epoch` and two payload words. The header's PLAYER section is the contract.
+There are still exactly three exports. A version-1 host, a table that stops at `run_on_host`, or a version-2 table with a NULL player pointer is
+**accepted**: the library starts, logs `host: no media player: <why>` and plays nothing (the platform composes no URI driver for it). A host built
+from this tree leaves both pointers NULL when `dlopen("libcapi-media-player.so.0")` fails.
+
+| Piece | What it does |
+|---|---|
+| `tizen/host/PlxHost/PlxPlayer.cs` | the requests (validate, enqueue, return at once), one video thread that runs every native player call in order, a position poller (about every 250 ms while playing, off the request queue; `PLAYER_STALL` after 3 s without a reply), and the event posts. Every native callback is registered with the epoch as its `user_data`. |
+| `tizen/host/PlxHost/PlayerNative.cs` | the P/Invokes of `libcapi-media-player.so.0` (`player_create`, `player_set_uri`, `player_set_ecore_wl_display`, `player_prepare_async`, `player_start`, ...), with the prior art cited: TizenFX's Interop and the field project nuvio's `Video.cs`. |
+| `rust-modules/platform-tizen/src/hosted.rs`, `hosted/player.rs` | `Hosted::player_open` / `player_verb` (through the gate: refused after a stop, a request in flight holds the clean `on_stopped`), the live-epoch set and the player's own event queue (lossless but for position and buffering, which keep the latest; `Hosted::drain_player`). |
+
+How the picture is meant to get on screen: the host binds the player to **the library's own Ecore_Wl2 window** as an OVERLAY
+(`player_set_ecore_wl_display`), before prepare. It finds the window itself (`ecore_wl2_connected_display_get(NULL)`, then
+`ecore_wl2_display_window_find(display, 1)`: the library makes exactly one window, the first), so the table carries no window handle; the host logs
+`player: ecore window id 1 -> 0x...` and the library logs `ecore: window_new(...) -> 0x...`, and the two pointers must be equal. The id 1
+assumption is the line to revisit if a second window is ever made first. The Ecore calls and the bind run on the host's main thread, and the video
+thread waits for them for at most 3 s.
+
+Measured on the emulator 2026-11-22 (TV 10.0 x86_64, a probe on a scratch branch, a local clip): the chain `player_create`, the three callbacks,
+`player_set_uri`, `player_set_ecore_wl_display(OVERLAY, our window, 0,0,1920,1080)`, `player_set_display_mode(LETTER_BOX)`, `player_prepare_async`
+(the prepared callback in 250-520 ms), `player_start`, `player_get_play_position` (advancing in real time), the completed callback at the end,
+`player_stop`, `player_unprepare` and `player_destroy` returned `PLAYER_ERROR_NONE` throughout and the error callback never fired. The native
+state stays PLAYING after the completed callback (until `player_stop`), so the host does not use the state to validate a completion. A player with no
+display does not advance (position frozen), hence display-before-prepare. The prepared, buffering and completed callbacks fire on one non-main native
+thread per player instance, so they only post events. `EnableExportingVideoFrame` is unsupported (no raw video). The existing `internet` privilege
+was enough. With the window's alpha on the UI draws unchanged; no picture shows yet because the UI is opaque everywhere (the hole is part B).
+
+Not verified: anything on a retail set (the library's thread, the overlay beneath an alpha window, privileges, firmware differences). The C# is not
+compiled by any CI job (`.github/workflows/tizen.yml` runs `tizen-abi` and `tizen-so`, which links the Rust library and never builds `PlxHost`) and was not
+compiled where it was written (`which dotnet` finds none on that Mac). It was compiled and smoke-tested once, on the TV 10.0 emulator at `37d70e0ed`:
+MSBuild 0 warnings, 0 errors; Home, detail and back; `on_stopped code=0 clean=1`; 0 UDP gaps. That smoke opened no player. Later edits to the C# are
+not covered by it until a `make PLATFORM=tizen tizen-tpk` on a machine with the .NET SDK compiles them again. This part plays nothing yet: the Rust URI driver that calls `Hosted::player_open` is part B, so the library still composes
+no backend.
 
 The application and package id is `plxntizen0` (ten alphanumerics): a neutral name for the emulator package. A retail package id is
 assigned by Samsung's seller process, not chosen here.

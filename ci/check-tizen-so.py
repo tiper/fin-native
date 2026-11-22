@@ -123,7 +123,10 @@ def csharp_dllimports(text: str, library: str | None = None) -> list[tuple[str, 
     return found
 
 
-C_TO_CS = {"int32_t": "int", "uint32_t": "uint", "void": "void"}
+C_TO_CS = {"int32_t": "int", "uint32_t": "uint", "int64_t": "long", "uint64_t": "ulong", "void": "void"}
+# Width classes, for the function-pointer typedefs against the host's delegates (a delegate spells a pointer as IntPtr or string).
+WIDTH = {"int32_t": "i4", "uint32_t": "i4", "int64_t": "i8", "uint64_t": "i8", "void": "void",
+         "int": "i4", "uint": "i4", "long": "i8", "ulong": "i8"}
 
 
 def _c_params(text: str) -> int:
@@ -186,6 +189,32 @@ def csharp_struct(text: str, name: str) -> list[tuple[str, str]]:
     return [(m.group(1), m.group(2)) for m in re.finditer(r"\bpublic\s+([\w.]+)\s+(\w+)\s*;", match.group(1))]
 
 
+def _c_width(param: str) -> str:
+    """The width class of one C parameter: any pointer is `ptr`, else its type's."""
+    if "*" in param:
+        return "ptr"
+    return WIDTH.get(re.sub(r"\s+", " ", param.strip()).rsplit(" ", 1)[0].strip(), "ptr")
+
+
+def header_callbacks(text: str) -> dict[str, tuple[str, list[str]]]:
+    """name -> (return width class, parameter width classes) of each `typedef RET (*Name)(PARAMS);` of the header."""
+    text = strip_c_comments(text)
+    found = {}
+    for m in re.finditer(r"typedef\s+([\w\s\*]+?)\s*\(\s*\*\s*(\w+)\s*\)\s*\(([^)]*)\)\s*;", text):
+        params = [] if m.group(3).strip() in ("", "void") else [_c_width(p) for p in m.group(3).split(",")]
+        found[m.group(2)] = (WIDTH.get(m.group(1).strip(), "ptr"), params)
+    return found
+
+
+def csharp_delegates(text: str) -> dict[str, tuple[str, list[str]]]:
+    """name -> (return width class, parameter width classes) of each `delegate RET Name(PARAMS);` of the host."""
+    found = {}
+    for m in re.finditer(r"\bdelegate\s+([\w.]+)\s+(\w+)\s*\(([^)]*)\)\s*;", strip_c_comments(text)):
+        params = [] if not m.group(3).strip() else [WIDTH.get(p.strip().rsplit(" ", 1)[0].strip(), "ptr") for p in m.group(3).split(",")]
+        found[m.group(2)] = (WIDTH.get(m.group(1), "ptr"), params)
+    return found
+
+
 def _norm(name: str) -> str:
     return name.replace("_", "").lower()
 
@@ -242,9 +271,18 @@ def check_abi(header_text: str, cs_text: str) -> list[str]:
             problems.append(f"the host declares {name}, which the header does not define")
         elif defines[name] != value:
             problems.append(f"{name} is {value} in the host and {defines[name]} in the header")
-    for name in ("PLX_HOST_ABI_VERSION", "PLX_HOST_EVENT_PAUSE", "PLX_HOST_EVENT_RESUME"):
+    # The host sends the version and every event kind and verb, so it spells each of them (and the check pins each to the header).
+    required = ["PLX_HOST_ABI_VERSION"] + sorted(n for n in defines if n.startswith(("PLX_HOST_EVENT_", "PLX_HOST_PLAYER_VERB_")))
+    for name in required:
         if name not in consts:
             problems.append(f"the host does not declare {name} (`const int {name} = N;`): it sends this value, and the check pins it to the header")
+    # Every function pointer the header types has a delegate of the same name in the host, with the same widths (a pointer is any of IntPtr, string).
+    delegates = csharp_delegates(cs_text)
+    for name, signature in sorted(header_callbacks(header_text).items()):
+        if name not in delegates:
+            problems.append(f"the header types the function pointer {name}, and the host declares no `delegate ... {name}(...)`")
+        elif delegates[name] != signature:
+            problems.append(f"delegate {name}: the header says {signature}, the host's says {delegates[name]} (return and parameter widths must be equal)")
     return problems
 
 
