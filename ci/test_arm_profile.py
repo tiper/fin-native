@@ -36,7 +36,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRUBBED = ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "RELEASE", "SYMBOLS", "LAB", "FLAVOR", "CI",
+SCRUBBED = ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "PLATFORM", "RELEASE", "SYMBOLS", "LAB", "FLAVOR", "CI",
             "GITHUB_ACTIONS", "ARM_PROFILE", "TV", "PLAYBACK_BACKENDS")
 
 

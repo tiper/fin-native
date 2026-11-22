@@ -137,8 +137,11 @@ $(if $(filter $(FLAVOR),$(FLAVORS)),,$(error unknown FLAVOR "$(FLAVOR)" — one 
 # target (`RUST_TARGET`), the sysroot (`SYSROOT`) and, once a platform needs them, a managed TFM, a
 # firmware floor and the signing path — stays a set of separate variables that PLATFORM does not choose:
 # `make -s print-rust-target` answers the same under every PLATFORM. Apart from `tizen`'s own file, which
-# nothing reads under another platform, the axis labels and validates and no recipe reads it, so the default
-# `PLATFORM=webos` builds exactly what it built before the axis existed.
+# nothing reads under another platform, no recipe reads it: it labels and validates, and it REFUSES the goals
+# that build the webOS television package (`WEBOS_TV_GOALS` below) under any other value, so the default
+# `PLATFORM=webos` builds exactly what it built before the axis existed and `src/main.c`, `src/starfish.c`,
+# `src/video_plane.c`, `src/access.c`, `src/exit.c` and the storage helper are never built or packaged for
+# another platform (docs/platform-ports.md, W8b).
 #
 # The simulators and the macOS app are desktop builds, so `sim`, `sim-*`, `macapp` and `macapp-zip` imply
 # PLATFORM=desktop when it was not given: `$(origin PLATFORM)` is `undefined` (not on the command line,
@@ -156,10 +159,29 @@ $(if $(strip $(PLATFORMS)),,$(error ci/platform_axis.py --list produced no platf
 ifeq ($(origin PLATFORM),undefined)
 ifneq ($(filter sim sim-% macapp macapp-zip,$(MAKECMDGOALS)),)
 PLATFORM    := desktop
+PLATFORM_IMPLIED := yes
 endif
 endif
 PLATFORM    ?= webos
 $(if $(and $(filter 1,$(words $(PLATFORM))),$(filter $(PLATFORMS),$(PLATFORM))),,$(error unknown PLATFORM "$(PLATFORM)" — one of: $(PLATFORMS)))
+
+# The webOS television goals: what packages or compiles the television's C files (`main.c`, `starfish.c`, `video_plane.c`,
+# `access.c`, `exit.c`, `compat/getauxval.c`, the crash recorder), the storage helper and the ARM libraries the package
+# stages (`src/%.o` is the C unit pattern, `libass` and `sentry-native` the ARM libraries they link or stage). `SRCS` stays
+# one list and no file moves: the keying is HERE, at the goals, not in the source list, because the only C unit another
+# platform compiles is `src/svg.c`, which Tizen builds by its own rule. They are refused under any `PLATFORM` but `webos`,
+# at parse time and above the stamp reset below (so a refusal deletes nothing), and the queries (`print-*`), the simulators,
+# `macapp` and the `tizen-*` goals are not in it. A bare `make` asks for its default goal, `all`, except under `tizen`,
+# whose file makes the default `tizen-check`. PLATFORM is one value per invocation: `make sim all` implies `desktop` from
+# `sim` and so refuses `all`; run the two as separate invocations (or give `PLATFORM=webos` to take both, as before the axis).
+WEBOS_TV_GOALS := all pkg/plxnative pkg/plxnative-storage ipk install deploy test symbols symbols-libs sentry-symbols \
+                  libass sentry-native src/%.o
+WEBOS_TV_ASKED := $(if $(MAKECMDGOALS),$(filter $(WEBOS_TV_GOALS),$(MAKECMDGOALS)),$(if $(filter tizen,$(PLATFORM)),,all))
+ifneq ($(PLATFORM),webos)
+ifneq ($(strip $(WEBOS_TV_ASKED)),)
+$(error `$(strip $(WEBOS_TV_ASKED))` builds the webOS television package (the storage helper, `main.c`, `starfish.c` and the webOS C files) and is refused under PLATFORM=$(PLATFORM)$(if $(PLATFORM_IMPLIED), (implied by the simulator goal beside it: run the two as separate invocations)). Use PLATFORM=webos, the default. The Tizen goals are the `tizen-*` ones (docs/tizen.md))
+endif
+endif
 
 # The id users get. Also `paths::STABLE_APP_ID` in the Rust half and `STABLE_ID` in ci/flavor.py —
 # three copies of one string, each in a language that cannot see the others, and ci/flavor.py's

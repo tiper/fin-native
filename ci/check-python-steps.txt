@@ -444,7 +444,8 @@ python3 .claude/hooks/disk-low-notify-test.py
 # and the environment, anything else refused at parse time, `sim`/`sim-*`/`macapp`/`macapp-zip` implying `desktop` (read from a dry run in a
 # scratch tree, where an explicit value still wins), `print-rust-target` unmoved by it, both new queries leaving a built `pkg/` alone, and
 # that the selector is not named `platform.py`: scripts in ci/ import the stdlib `platform`, so a probe from ci/, every existing consumer and
-# a shadow control are run. No cargo; the scratch trees are private temp dirs.
+# a shadow control are run; and the webOS package goals refused under `PLATFORM=desktop|tizen` (W8b: parse-time, nothing reset, the webOS recipe text
+# unchanged). No cargo; the scratch trees are private temp dirs.
 python3 ci/test_platform_axis.py
 # The platform crates' manifests (W7b, W9): `plx_platform_webos`, `plx_platform_desktop` and `plx_platform_tizen` each forward EVERY feature of the
 # application crate with its defaults (the Tizen crate all but the simulator's `hostsim`) and name none on the dependency edge (a dependency

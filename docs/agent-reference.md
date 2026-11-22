@@ -1323,6 +1323,7 @@ every thin back-edge with `file:line` (the work list for breaking it up); `--dot
   `#![cfg(feature = "tizen")]` (its own feature, in no default set), every dependency (the application, `plx_base`, `plx_os`, and
   `serde_json` for the launch string) is `optional` and only `tizen` enables them, it forwards every application feature but `hostsim`, and `[platform tizen]` in `ci/module-layers.ini` is its layer.
   Its build (`PLATFORM=tizen`: `mk/platform-tizen.mk`, `tizen/`, the `tizen-so`/`tizen-verify`/`tizen-tpk` targets, the compile-only `.github/workflows/tizen.yml`) is `docs/tizen.md`.
+  The `PLATFORM` axis also REFUSES the goals that build the webOS television package (`all`, `ipk`, `install`, `deploy`, `test`, the storage helper, `src/%.o`, `symbols*`, `libass`, `sentry-native`: `WEBOS_TV_GOALS` in the `Makefile`) under an explicit `PLATFORM=desktop` or `tizen`, at parse time and before the stamp reset; the queries, the simulators (which imply `desktop`), `macapp` and the `tizen-*` goals are not refused, and `make sim all` is (one platform per invocation). `ci/test_platform_axis.py` pins it.
 - `rust-modules/ui/src/` (workspace crate `plx_ui`) — **the UI, as a shared design system**: `theme.rs` tokens, the retui core
   (`lib.rs` `Painter`/`View`), reusable components (`widgets.rs`/`table.rs`/`label.rs`/`icons.rs`),
   and, since phase 9 (Player was the last), no legacy screens at all — every route mounts an owned

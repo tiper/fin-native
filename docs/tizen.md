@@ -37,7 +37,9 @@ Generated and never committed (`.gitignore`): `rust-modules/target-tizen/`, `tiz
 ## The targets
 
 Every target is `make PLATFORM=tizen <target>`. A bare `make PLATFORM=tizen` is `tizen-check` (the Makefile's own default goal
-builds the webOS package; this platform has none).
+builds the webOS package; this platform has none). The webOS package goals (`all`, `ipk`, `deploy`, `install`, the storage helper and the C
+units, `WEBOS_TV_GOALS` in the `Makefile`) are refused under `PLATFORM=tizen` with a message, so `make PLATFORM=tizen ipk` cannot package
+the television build by accident; the queries (`print-*`) answer under every `PLATFORM`.
 
 | Target | Needs | What it does |
 | --- | --- | --- |
