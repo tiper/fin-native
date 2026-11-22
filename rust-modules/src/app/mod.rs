@@ -20,19 +20,6 @@ use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::sync::atomic::Ordering::Relaxed;
 
 // ---- constants (SDL 2.0.4 + GLES2 + app) ----
-/// Appended to every heartbeat on a simulator build, and empty on a television.
-///
-/// The heartbeat is the app's perf surface: `tests/run.py --fps` grades `loop=` and `fps=` from it,
-/// and the floors are calibrated to the SM9000's Mali. A Mac renders the same interface through a
-/// completely different GPU, driver and compositor, so those numbers are not merely optimistic —
-/// they are about a different machine. A log line is the unit that gets pasted into an issue or
-/// handed between agents, so the disclaimer has to travel ON the line rather than sit in a doc.
-const SIM_TAG: &str = if cfg!(feature = "hostsim") {
-    " sim=1"
-} else {
-    ""
-};
-
 const GL_COLOR_BUFFER_BIT: c_uint = 0x0000_4000;
 const GL_RENDERER: c_uint = 0x1F01;
 const GL_VERSION: c_uint = 0x1F02;
@@ -239,11 +226,14 @@ pub(crate) struct App {
     /// The window and its GL context (`Shell::open`): the swap, the event poll, the raw handle the
     /// shell's per-window calls take, and the process's SDL quit. Thread-affine, like the loop.
     surface: Box<dyn platform::Surface>,
-    /// WSLg accepts swap interval 1 on X11/GLX without pacing the compositor. This boot-scoped
-    /// flag enables the host-only software frame budget while leaving native Linux and macOS on
-    /// their driver swap behavior.
-    #[cfg(all(feature = "hostsim", target_os = "linux"))]
-    wslg_frame_pacing: bool,
+    /// Whether the platform's software frame pacer is armed (`Shell::frame`'s `Pacer::armed`, asked
+    /// once at boot with whether vsync is on). The desktop arms it on WSLg, whose X11/GLX swap accepts
+    /// interval 1 without waiting; every other platform's swap paces the frame and this is `false`.
+    frame_pacing: bool,
+    /// The platform's frame seam (`Shell::frame`), asked once at boot so the per-frame path calls
+    /// its hooks directly instead of making a `dyn Shell` call to find them first: the pacer's
+    /// `begin`/`end` and the simulator's compose-under and pre-swap present hooks (all empty on a TV).
+    frame: &'static platform::FrameSeam,
     /// Boot time (`SDL_GetTicks` at the end of boot): the origin of every dev-script delay AND
     /// the clock a replay restores from controlled initial inputs — a field BOTH sides
     /// write, so it stays here rather than on `dev::scenarios::Scenarios`.

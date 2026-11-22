@@ -98,8 +98,8 @@ Citations in this section quote the tree at e9924f0f9 with its old names (see "N
   (`workers/ globals/ forks/ fxlanes/`) is one total, "so an entry may move between the area files of
   a family" (`ci/check-ledger-ratchet.py` docstring). No `ci/allow` file names `webos.rs`,
   `keymanager`, `port.rs` or `system.rs` as an entry. `grep -n 'webos\|keymanager\|system\.rs\|port\.rs'
-  ci/allow/...` hits only explanatory text: `wall.txt:7` names `app/window_activity.rs` "out of
-  system.rs".
+  ci/allow/...` hits only explanatory text: `wall.txt:7` named `app/window_activity.rs` "out of
+  system.rs" (a line W8c-3 deleted).
 
 ### The port table
 
@@ -901,7 +901,7 @@ split by who reads it (critic M4):
    pub struct Platform {
        pub services: &'static tv::Services,
        pub shell: &'static dyn Shell,        // a Sync FACTORY of the loop's surface (Target shape 8)
-       pub diag: &'static dyn FrameProbe,    // the six frame probes; a named NONE is fine
+       pub diag: &'static dyn FrameProbe,    // the six frame probes and the heartbeat tag; a named NONE is fine
        pub media: MediaBoot,                 // Target shape 6a
    }
    pub fn run_application(p: &'static Platform) -> Exit;   // returns; Target shape 7
@@ -1213,9 +1213,9 @@ Ecore names to `remote_token_key` pairs".
   only": the entry is `pub(crate)`, and a platform crate has nothing else to call), and the ready media values of
   "What `host` carries beyond the types" below. The re-exports are `Platform`,
   `Services`, `Shell`, `Surface`, `FrameProbe`, `MediaBoot`, `Composition`, `Exit`, `Release` and an `EventSink`
-  trait, the two SDL helpers `sdl_init` and `sdl_open` with `InitHooks` (W7b), and the vocabulary their signatures
+  trait, the frame seam's three types `FrameSeam`, `Pacer` and `Present` (W8c-3; they do not retire), the two SDL helpers `sdl_init` and `sdl_open` with `InitHooks` (W7b), and the vocabulary their signatures
   use: `MainThread`, `OpenAsk`, `Placement`, `Lifecycle`, `PointerEdge`, `Action`, `RawKey` and `Edge`. The eight application-crate items (`Platform`, `Shell`, `Surface`, `FrameProbe`, `MediaBoot`,
-  `Composition`, `Exit`, `Release`), and the four of the hosted contract's exit half added in W9 (`HostGate`, `InFlight`,
+  `Composition`, `Exit`, `Release`), the frame seam's three (`FrameSeam`, `Pacer`, `Present`), and the four of the hosted contract's exit half added in W9 (`HostGate`, `InFlight`,
   `Completion`, `Stopped`), are reachable ONLY through `host` (owner ruling, 2026-11-21; Decision 3, amended):
   `Exit`, `Release` and the four are `pub` inside the private `app`, and `Platform` and the traits are `pub` in a private
   module, so no path outside `host` names them. `Services` is not one of the eight: it stays `plx_os::tv::Services`,
@@ -1256,12 +1256,16 @@ Ecore names to `remote_token_key` pairs".
     own types beside `Exit` and `Release` and do NOT retire at W11a; a platform that is not hosted never names them;
   - `HOST_SINK` (`hostsim` and `play-feed`, the cfg of the module it lives in), the simulator's video sink the desktop's
     `Services` hold, re-exported under exactly that cfg so a television build never has it;
+  - `SIM_PRESENT` (W8c-3; `hostsim` builds only), the simulator's `Present` hooks, the compositor stand-in under a bound frame and the
+    supersampled copy to the window. They draw (`plx_gfx`, the decoded picture), so they stay in the application and the desktop's
+    `FrameSeam` states them beside the pacer it owns. It retires with the simulator's picture (`adapters::hostsim`) at W11a;
+    `FrameSeam`, `Pacer` and `Present` themselves do not retire;
   - `WindowPlan`, `InitSteps`, `SdlFlavor` and `GlProfile` (W8c-2, no `cfg`): the platform's window ask and the SDL values `InitHooks`
     carries. They stay with the SDL helpers (no retirement at W11a);
   - `sdl_init`, `sdl_open` and `InitHooks`, which the webOS crate's `port.rs` and the desktop crate's `src/lib.rs` call. `sdl_open` stays in the
     application crate: `impl Surface for plx_shell_sdl::Window` can live only there (the orphan rule).
 
-  Each media value (`WEBOS_MEDIA`, `FEED_MEDIA`, `NO_MEDIA`) and the `HOST_SINK` re-export RETIRE AT W11a, when the composition moves into the webOS platform (and
+  Each media value (`WEBOS_MEDIA`, `FEED_MEDIA`, `NO_MEDIA`), the `HOST_SINK` re-export and `SIM_PRESENT` RETIRE AT W11a, when the composition moves into the webOS platform (and
   the Feed over the host sink into the desktop); the SDL helpers are not part of that. `publish_composition` is not
   exported: the desktop's test of the published composition (`platform_desktop.rs`'s, before the move) named it, and the move reworked that test onto
   `PlayerAdapter::composed_backends()`, which is why the desktop crate needs `plx_media` in that test only and the webOS crate
@@ -1825,7 +1829,7 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
     manifest line, and selects nothing. The alternative, a virtual workspace manifest with the application in its own directory, would have touched every path
     in the application and every certificate input.
   - `host` gained `WEBOS_MEDIA`, `FEED_MEDIA`, `HOST_SINK`, `sdl_init`, `sdl_open` and `InitHooks` (Target shape 8, "What `host` carries beyond
-    the types"). The two media values and `HOST_SINK` retire at W11a, when the composition moves into the platforms; the SDL helpers do not.
+    the types"); W8c-3 added `FrameSeam`, `Pacer`, `Present` and `SIM_PRESENT`. The two media values and `HOST_SINK` retire at W11a, when the composition moves into the platforms; the SDL helpers do not.
   - The simulator binary lives in the desktop crate (`platform-desktop/src/bin/sim.rs`, `required-features = ["hostsim"]`), not in the
     application, so a `--bins` build of the application compiles none.
   - Each platform crate has its own `build.rs`, the same `host_link::emit` call as the application's: `cargo:rustc-link-arg` (the nanosvg object) reaches only
@@ -1872,6 +1876,22 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
 - W8c, the 363 non-fence `feature = "hostsim"` lines (360 cfg lines and three doc comments), sorted per crate: a
   host difference becomes a platform value or runner; simulator tooling goes under a renamed `sim` feature; a test
   seam goes to `test-support`.
+  As landed (W8c-3, the frame seam): `Shell::frame` is a required hook returning a `FrameSeam { pacer: Pacer,
+  present: Present }` (each group has a `NONE`), `FrameProbe::heartbeat_tag` a required method and
+  all reachable through `host`. The webOS and Tizen platforms state `FrameSeam::NONE` and `""`; the desktop states the WSLg-aware pacer
+  (`platform-desktop/src/pacer.rs`: armed on Linux under WSL's X11 SDL driver, the `Instant`, sleep and two
+  environment reads the loop's `WslgFrameBudget` had in `app/window_activity.rs`, so `ci/allow/wall.txt` 3 -> 2 and
+  its `ci/ports.ini` entry goes), the simulator's present hooks the application keeps because they draw
+  (`host::SIM_PRESENT`: compose-under on a bound frame and the supersampled copy to the window), and ` sim=1`. The app's preview-admission `seam_absent` asks the sink
+  (`VideoSink::lacks_video_path`, W8c-1). The two arms no CI configuration builds (`hostsim` without `play-feed`:
+  `dev/scenarios.rs` autopause `at=`, `dev/scenarios/screenshot.rs` clockstop) are deleted. `feature = "hostsim"`
+  lines in `rust-modules` (`git grep -h 'feature = "hostsim"' <rev> -- 'rust-modules/*.rs' | wc -l`, at `65e2044cd` and this
+  branch's head): 207 -> 188, a delta of 19. The
+  application reads the seam from `App::frame`, asked once at boot, so a TV's frame path makes no `dyn Shell` call
+  per frame, only the empty hooks. The test lists of `plxnative-modules` (default and `hostsim`) and
+  `plx_platform_webos` are unchanged; `plx_platform_desktop`'s `lib.rs` goes 6 -> 7 and its Linux-only
+  `pacer.rs` adds 3, so 6 -> 10 on a Linux build. The `not(hostsim)` term of `src/lib.rs`'s `compile_error!` stays
+  for W8b.
   As landed (W8c-2): the SDL shell's host differences are platform values. `Shell::sdl()` returns the platform's `InitHooks`
     (`steps: InitSteps { before, after, after_context }`, `flavor: SdlFlavor`, `gl: GlProfile`) and `Shell::window()` its
     `WindowPlan { title, placement }`. webOS states `Lg`, `Es2` and its panel placement (the stored-size ask moved into

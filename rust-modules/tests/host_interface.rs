@@ -27,8 +27,9 @@
 #![cfg_attr(not(feature = "hostsim"), allow(dead_code))]
 
 use plxnative_modules::host::{
-    Action, Composition, Edge, EventSink, Exit, FrameProbe, GlProfile, InitHooks, InitSteps, Lifecycle, MainThread,
-    MediaBoot, OpenAsk, Placement, Platform, PointerEdge, RawKey, SdlFlavor, Services, Shell, Surface, WindowPlan,
+    Action, Composition, Edge, EventSink, Exit, FrameProbe, FrameSeam, GlProfile, InitHooks, InitSteps, Lifecycle,
+    MainThread, MediaBoot, OpenAsk, Placement, Platform, PointerEdge, RawKey, SdlFlavor, Services, Shell, Surface,
+    WindowPlan,
 };
 #[cfg(feature = "hostsim")]
 use plxnative_modules::host::Release;
@@ -125,6 +126,9 @@ impl Shell for FakeShell {
     fn hide_is_cursor_swap(&self) -> bool {
         false
     }
+    fn frame(&self) -> &'static FrameSeam {
+        &FrameSeam::NONE
+    }
 }
 
 static SHELL: FakeShell = FakeShell { log: Mutex::new(Vec::new()), asked: Mutex::new(None) };
@@ -139,6 +143,9 @@ impl FrameProbe for FakeProbe {
     fn acquired(&self) {}
     fn fields(&self) -> String {
         String::new()
+    }
+    fn heartbeat_tag(&self) -> &'static str {
+        ""
     }
 }
 

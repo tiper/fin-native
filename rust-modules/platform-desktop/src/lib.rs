@@ -15,8 +15,12 @@
 //!   refusing `NoSink`.
 //!
 //! The shell's hooks and the frame probe are plain no-ops, bar the two that bring SDL up and open its
-//! window (`init` and `open`, the shell crate's, with nothing around `SDL_Init`): SDL owns the window
-//! and its event loop, there is no compositor to hint, no bus to pump and no remote pointer to hide.
+//! window (`init` and `open`, the shell crate's, with nothing around `SDL_Init`), the frame seam and the
+//! heartbeat's ` sim=1` tag: SDL owns the window and its event loop, there is no compositor to hint, no
+//! bus to pump and no remote pointer to hide. The frame seam is the desktop's own (`Shell::frame`): the
+//! WSLg-aware software frame pacer in `pacer.rs` (a wall-clock read, a sleep and two environment reads,
+//! all of it IO and so the platform's), and the simulator's present hooks the application publishes
+//! (`host::SIM_PRESENT`).
 //! The secure store is
 //! `SecureHooks::NONE`: nothing seals, so a session is the 0600 plaintext file the session layer
 //! writes itself, which the simulator's harnesses plant and read.
@@ -34,9 +38,11 @@
 //! no other platform (`docs/platform-ports.md`, W7). The `plxnative-sim` binary beside it
 //! (`src/bin/sim.rs`) is its executable.
 #![cfg(feature = "hostsim")]
+mod pacer;
+
 use plxnative_modules::host::{
-    self, sdl_init, sdl_open, Exit, FrameProbe, GlProfile, InitHooks, InitSteps, MediaBoot, OpenAsk, Placement, Platform,
-    SdlFlavor, Shell, Surface, WindowPlan,
+    self, sdl_init, sdl_open, Exit, FrameProbe, FrameSeam, GlProfile, InitHooks, InitSteps, MediaBoot, OpenAsk, Placement,
+    Platform, SdlFlavor, Shell, Surface, WindowPlan,
 };
 use plx_os::devcaps::dv::{self, DvCapability, DvProbe, ProbeSource};
 use plx_os::tv::toast::{Identity, Outcome, Sent};
@@ -205,7 +211,16 @@ impl Shell for DesktopShell {
     fn hide_is_cursor_swap(&self) -> bool {
         false
     }
+    fn frame(&self) -> &'static FrameSeam {
+        &FRAME
+    }
 }
+
+/// The desktop's frame seam: the WSLg-aware software pacer (`pacer`: armed on Linux under WSL's X11 driver,
+/// where the swap does not wait for the display) and the simulator's present hooks (`host::SIM_PRESENT`: the
+/// compositor stand-in under a bound frame, and the supersampled copy to the window), which the application
+/// keeps because they draw.
+static FRAME: FrameSeam = FrameSeam { pacer: pacer::PACER, present: host::SIM_PRESENT };
 
 /// The desktop frame probe: always unarmed, there is no compositor callback to clock.
 struct DesktopProbe;
@@ -218,6 +233,15 @@ impl FrameProbe for DesktopProbe {
     fn acquired(&self) {}
     fn fields(&self) -> String {
         String::new()
+    }
+    /// Every simulator heartbeat ends ` sim=1`. The heartbeat is the app's perf surface: `tests/run.py --fps`
+    /// grades `loop=` and `fps=` from it, and the floors are calibrated to the SM9000's Mali. A Mac renders the
+    /// same interface through a completely different GPU, driver and compositor, so those numbers are not merely
+    /// optimistic, they are about a different machine. A log line is the unit that gets pasted into an issue or
+    /// handed between agents, so the disclaimer has to travel ON the line rather than sit in a doc. Tools grep
+    /// the text.
+    fn heartbeat_tag(&self) -> &'static str {
+        " sim=1"
     }
 }
 
@@ -259,6 +283,21 @@ mod tests {
         shell.hide_pointer();
         shell.show_pointer_after_motion();
         assert!(!shell.hide_is_cursor_swap());
+    }
+
+    /// **The desktop's frame seam is the pacer and the simulator's present hooks, and the heartbeat says
+    /// it is a simulator.** Off Linux the pacer is never armed; on Linux it is armed only under WSLg
+    /// (`pacer.rs` grades the two facts), so a test machine's own environment never has to be WSL.
+    #[test]
+    fn the_desktop_frame_seam_states_its_pacer_and_the_simulators_present_hooks() {
+        let shell: &dyn Shell = &DesktopShell;
+        let frame = shell.frame();
+        assert!(std::ptr::fn_addr_eq(frame.present.compose_under, host::SIM_PRESENT.compose_under));
+        assert!(std::ptr::fn_addr_eq(frame.present.before_swap, host::SIM_PRESENT.before_swap));
+        #[cfg(not(target_os = "linux"))]
+        assert!(!(frame.pacer.armed)(true), "off Linux the driver's swap paces the frame");
+        assert!(!(frame.pacer.armed)(false), "an uncapped run (frame dump, novsync) never waits on the display");
+        assert_eq!(DesktopProbe.heartbeat_tag(), " sim=1");
     }
 
     /// A desktop has no storage helper: the session, the install's preferences and the consent record

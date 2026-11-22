@@ -11074,7 +11074,7 @@ static mut MUTABLE: u8 = 0;
         "store-seams.txt": 0,
         "threads.txt": 0,
         "ticks.txt": 2,
-        "wall.txt": 3,
+        "wall.txt": 2,
     }
 
     # The Sans-IO ledgers' pins, one number per RULE (the sum over its area files): a ledger only

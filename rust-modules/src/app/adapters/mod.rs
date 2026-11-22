@@ -9,4 +9,6 @@ pub(crate) mod hostsim;
 pub(crate) mod huds;
 pub(crate) mod poster;
 pub(crate) mod session;
+#[cfg(feature = "hostsim")]
+pub(crate) mod sim_present;
 pub(crate) mod stores;

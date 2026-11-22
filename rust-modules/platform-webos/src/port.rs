@@ -7,8 +7,8 @@
 //! these tables: they are their own platform (`plx_platform_desktop`), a different crate that never names
 //! this one, so a desktop executable does not contain the television's code at all.
 use plxnative_modules::host::{
-    self, sdl_init, sdl_open, Exit, FrameProbe, GlProfile, InitHooks, InitSteps, MainThread, OpenAsk, Placement, Platform,
-    SdlFlavor, Shell, Surface, WindowPlan,
+    self, sdl_init, sdl_open, Exit, FrameProbe, FrameSeam, GlProfile, InitHooks, InitSteps, MainThread, OpenAsk, Placement,
+    Platform, SdlFlavor, Shell, Surface, WindowPlan,
 };
 use std::os::raw::{c_char, c_int, c_void};
 
@@ -203,6 +203,10 @@ impl Shell for WebosShell {
     fn hide_is_cursor_swap(&self) -> bool {
         crate::system::cursor_is_transparent()
     }
+    /// The television's swap paces the frame and its compositor is the real one: nothing to state.
+    fn frame(&self) -> &'static FrameSeam {
+        &FrameSeam::NONE
+    }
 }
 
 /// The webOS frame probe, over `crate::system`'s compositor-callback clock.
@@ -226,6 +230,9 @@ impl FrameProbe for WebosProbe {
     }
     fn fields(&self) -> String {
         crate::system::frame_probe_fields()
+    }
+    fn heartbeat_tag(&self) -> &'static str {
+        ""
     }
 }
 

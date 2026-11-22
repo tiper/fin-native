@@ -124,7 +124,7 @@ fn main() {
     let events = plxnative_modules::sim_events_log();
     // The banner is the FIRST line of the log, so a log read from the middle, tailed, or pasted
     // into an issue still declares what produced it. Every heartbeat additionally carries `sim=1`
-    // (see `app.rs`'s SIM_TAG) — one marker at the top is easy to scroll past.
+    // (`DesktopProbe::heartbeat_tag`) — one marker at the top is easy to scroll past.
     let banner = "sim: THIS IS THE DESKTOP SIMULATOR, not a television. No video pipeline; \
                   frame rates here describe this Mac's GPU and must never be read as an fps gate.\n";
     if let Err(e) = std::fs::write(&events, banner) {

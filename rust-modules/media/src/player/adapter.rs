@@ -1139,6 +1139,10 @@ impl PlayerAdapter {
     /// inside (PLX-NATIVE-1Q). Every media-side verb that is not a hook goes through here.
     pub fn display_sink(&self) -> &'static dyn VideoSink { (self.sink)() }
 
+    /// Whether a Load on the composed sink has no video path behind it (the simulator with its clock sink
+    /// off): the application's preview admission asks it without naming the sink.
+    pub fn lacks_video_path(&self) -> bool { self.display_sink().lacks_video_path() }
+
     /// Escrow an exact resolved URL and its source-specific native track map. The route owner
     /// still has to supply a qualified offer and send an addressed Start through the runner.
     pub fn stage_uri_source(&mut self, attempt: AttemptId, source: UriSource)

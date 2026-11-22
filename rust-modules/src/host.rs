@@ -25,6 +25,8 @@
 //! boot, then the Feed and the product URI driver), compiled in every build of the application because it carries no `cfg` (the application cannot know which platform names it), and, under
 //! `hostsim`, `FEED_MEDIA` is the desktop's (the Feed over the simulator's sink, no URI driver) and `HOST_SINK`
 //! is that sink itself (also `play-feed`, the module it lives in). A television build never has the desktop pair.
+//! `SIM_PRESENT` is the one other `hostsim` value: the simulator's [`Present`] hooks, which draw and so stay in the
+//! application, for the desktop's [`FrameSeam`] to state beside the pacer it owns (a television states `FrameSeam::NONE`).
 //! [`NO_MEDIA`] is the one for a platform with no playback yet (the Tizen build): no early init, no driver and no resolver,
 //! so the boot publishes `BackendSet::NONE` and logs `compose: backends=none resolver=no`; it carries no `cfg` either.
 //! Each retires at W11a, when the composition moves into the platform that owns it
@@ -55,7 +57,8 @@ use std::ffi::CStr;
 use std::os::raw::c_int;
 
 pub use crate::app::platform::{
-    sdl_init, sdl_open, Composition, EventSink, FrameProbe, MediaBoot, Platform, Shell, Surface, WindowPlan,
+    sdl_init, sdl_open, Composition, EventSink, FrameProbe, FrameSeam, MediaBoot, Pacer, Platform, Present, Shell, Surface,
+    WindowPlan,
 };
 pub use crate::app::{Completion, Exit, HostGate, InFlight, Release, Stopped};
 pub use plx_base::task::MainThread;
@@ -69,6 +72,12 @@ pub use plx_ui::consts::{Action, RawKey};
 /// television build never has it. Retires at W11a with `FEED_MEDIA`.
 #[cfg(all(feature = "hostsim", feature = "play-feed"))]
 pub use crate::app::adapters::hostsim::HOST_SINK;
+
+/// The simulator's [`Present`] hooks, the application's own because they draw (`plx_gfx`, the decoded picture): the
+/// compositor stand-in under a bound frame and the supersampled copy to the window. The desktop platform states it as
+/// its `FrameSeam`'s `present`; a television states `Present::NONE`. `hostsim` builds only.
+#[cfg(feature = "hostsim")]
+pub const SIM_PRESENT: Present = crate::app::adapters::sim_present::PRESENT;
 
 /// The television's [`MediaBoot`]: the plane owner's boot (`backends::acb_init`, once per process, on a boot that touches
 /// the television) and the composition of the Feed plus the product URI driver (`backends::compose_native`). Compiled in every
@@ -371,13 +380,16 @@ mod surface_pin_tests {
     /// removed; empty for none). The first groups are the interface of a platform's own types and entry; the media values
     /// and the simulator's sink are there because the application keeps the playback composition until W11a, which retires
     /// each of them (`docs/platform-ports.md`, Target shape 8 and W7).
-    const HOST_ITEMS: [(&str, &str); 34] = [
+    const HOST_ITEMS: [(&str, &str); 38] = [
         // What a platform builds, implements and reports input through, and the entry that boots it.
         ("Platform", ""),
         ("Shell", ""),
         ("WindowPlan", ""),
         ("Surface", ""),
         ("FrameProbe", ""),
+        ("FrameSeam", ""),
+        ("Pacer", ""),
+        ("Present", ""),
         ("EventSink", ""),
         ("MediaBoot", ""),
         ("Composition", ""),
@@ -412,6 +424,7 @@ mod surface_pin_tests {
         ("NO_MEDIA", ""),
         ("FEED_MEDIA", r#"feature="hostsim""#),
         ("HOST_SINK", r#"all(feature="hostsim",feature="play-feed")"#),
+        ("SIM_PRESENT", r#"feature="hostsim""#),
     ];
 
     /// The names a `pub use` tree brings in: a group is expanded, `a as b` is `b`, and a glob is `*` (never on the list).

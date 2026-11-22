@@ -429,10 +429,6 @@ pub(crate) fn clockstop_arm(app: &mut App, fr: &Frame) {
     {
         let _ = fr;
         if app.scenarios.shots.clockstop.is_none() {
-            #[cfg(all(feature = "hostsim", not(feature = "play-feed")))]
-            if plx_base::devtrig::read("clockstop").is_some() {
-                plx_base::eventlog::log("clockstop: unavailable without Feed simulator clock");
-            }
             app.scenarios.shots.clockstop = Some(None);
         }
     }

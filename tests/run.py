@@ -6709,7 +6709,7 @@ def select_section(lines, scene):
     return out
 
 
-# The desktop simulator (`make sim`) emits the SAME heartbeat, tagged `sim=1` (app.rs's SIM_TAG).
+# The desktop simulator (`make sim`) emits the SAME heartbeat, tagged `sim=1` (the desktop platform's `FrameProbe::heartbeat_tag`).
 # Its numbers describe a Mac's GPU, driver and compositor; every gate in this file is calibrated to
 # the SM9000's Mali. Refusing the sample is the enforcement — a disclaimer in a doc is a comment,
 # and the whole point of the tag is that a log gets pasted between agents and into issues.

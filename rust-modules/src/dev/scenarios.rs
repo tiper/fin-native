@@ -1731,12 +1731,6 @@ fn autopause_arm(app: &mut App, fr: &mut Frame) {
         }
     }
     if let Some((pause_at, hold_ms, at_ms)) = app.scenarios.pause_script {
-        #[cfg(all(feature = "hostsim", not(feature = "play-feed")))]
-        if at_ms.is_some() {
-            plx_base::eventlog::log("autopause: exact at= unavailable without Feed simulator clock");
-            app.scenarios.pause_script = None;
-            return;
-        }
         // In the simulator the clock sink is also told to stop on `at` exactly, so the pause
         // (accepted a little after the gate opens) freezes that position rather than wherever
         // scheduling had got to: the same frame and clock every run (`HostSink::stop_clock_at`).

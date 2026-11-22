@@ -119,9 +119,7 @@ pub(crate) unsafe fn run(app: &mut App) {
         watchdog.advance();
         let fr = Frame::begin(&app.player.session, app.runtime.metadata_view());
         let mut runtime = ProductFrameRuntime { app, fr, clock_notice: &mut clock_notice,
-            hint_taught: &mut hint_taught,
-            #[cfg(all(feature = "hostsim", target_os = "linux"))]
-            wslg_frame_budget: None };
+            hint_taught: &mut hint_taught, pace: None };
         plx_ui::dispatch::Dispatcher::product_frame(&mut runtime);
         if runtime.fr.present { watchdog.presented(); }
     }
@@ -134,8 +132,8 @@ struct ProductFrameRuntime<'a> {
     fr: Frame,
     clock_notice: &'a mut super::clock_notice::ClockNotice,
     hint_taught: &'a mut super::hint_taught::HintTaught,
-    #[cfg(all(feature = "hostsim", target_os = "linux"))]
-    wslg_frame_budget: Option<super::window_activity::WslgFrameBudget>,
+    /// The platform pacer's stamp for this frame (`Pacer::begin`), `None` unless the pacer is armed.
+    pace: Option<u64>,
 }
 
 impl plx_ui::dispatch::FrameRuntime<AppHost> for ProductFrameRuntime<'_> {
@@ -143,8 +141,7 @@ impl plx_ui::dispatch::FrameRuntime<AppHost> for ProductFrameRuntime<'_> {
     fn pump(&mut self) {
         let app = &mut *self.app;
         plx_telemetry::telemetry::session::tick(matches!(app.route(), AppArg::Player));
-        #[cfg(all(feature = "hostsim", target_os = "linux"))]
-        { self.wslg_frame_budget = app.wslg_frame_pacing.then(super::window_activity::WslgFrameBudget::begin); }
+        self.pace = app.frame_pacing.then(app.frame.pacer.begin);
         self.fr = begin_product_frame(app);
         let fr = &mut self.fr;
         app.instr.mark(plx_base::diag::heartbeat::Phase::Top); // also starts the visit's hang interval
@@ -351,17 +348,13 @@ impl plx_ui::dispatch::FrameRuntime<AppHost> for ProductFrameRuntime<'_> {
     fn draw_and_swap(&mut self) -> bool {
         finish_prepare(self.app);
         self.app.platform.diag.prepare_end();
-        unsafe { present_and_swap(self.app, &mut self.fr,
-            #[cfg(all(feature = "hostsim", target_os = "linux"))]
-            self.wslg_frame_budget.take()); }
+        unsafe { present_and_swap(self.app, &mut self.fr, self.pace.take()); }
         true
     }
     fn skipped(&mut self) {
         finish_prepare(self.app);
         self.app.platform.diag.prepare_end();
-        unsafe { present_and_swap(self.app, &mut self.fr,
-            #[cfg(all(feature = "hostsim", target_os = "linux"))]
-            self.wslg_frame_budget.take()); }
+        unsafe { present_and_swap(self.app, &mut self.fr, self.pace.take()); }
     }
     fn end(&mut self) {
         unsafe {
@@ -865,32 +858,13 @@ pub(crate) fn rig_clear_opaque_region(shell: &dyn Shell) {
     shell.clear_opaque_region();
 }
 
-/// **Simulator only: the television's compositor, over the frame the straighten pass just made.** The
-/// decoded picture under the UI when `plxnative-simvideo` holds one, black otherwise
-/// ([`plx_gfx::gfx::draw_under`]'s straight-alpha mix either way). The pass has no simulator switch, so
-/// this is not optional on a bound frame: a shot of the straight buffer would be the pass's own
-/// intermediate picture.
-#[cfg(feature = "hostsim")]
-fn composite_plane_under() {
-    #[cfg(feature = "play-feed")]
-    if crate::app::adapters::hostsim::composite_under() {
-        return;
-    }
-    plx_gfx::gfx::draw_under_black();
-}
-
 /// One idle iteration's font-warming slice: a key pressed during it waits at most this long more
 /// than the idle poll already makes it wait.
 const FONT_WARM_SLICE_US: u64 = 2_000;
 
 /// **Draw, capture, swap — or sleep one frame period** (spec §3.3 step 10). Everything in here is
 /// inside the present gate's decision, which `prepare_window` has already taken into `fr.present`.
-unsafe fn present_and_swap(
-    app: &mut App,
-    fr: &mut Frame,
-    #[cfg(all(feature = "hostsim", target_os = "linux"))]
-    wslg_frame_budget: Option<super::window_activity::WslgFrameBudget>,
-) {
+unsafe fn present_and_swap(app: &mut App, fr: &mut Frame, pace: Option<u64>) {
     if fr.present {
         // The dump's full prewarm drain and pre-draw debt sample, after the takes and before the draw.
         #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
@@ -935,10 +909,10 @@ unsafe fn present_and_swap(
         // `plxnative-simvideo`, and the simulator's stand-in for the compositor the pass feeds: a
         // bound frame goes through the television's straight-alpha mix over the decoded picture, or
         // over black with none, so a shot is the panel and not the straight buffer. Before the
-        // screenshot seam below, so shots include it.
-        #[cfg(feature = "hostsim")]
+        // screenshot seam below, so shots include it. The television's own compositor is the real one:
+        // its platform states nothing here (`Present::NONE`).
         if app.player.video_plane_bound {
-            composite_plane_under();
+            (app.frame.present.compose_under)();
         }
         // Before the swap, never after: the back buffer is undefined once presented.
         // A dump decides here whether this frame is written (`dev::framedump`); otherwise the
@@ -964,14 +938,9 @@ unsafe fn present_and_swap(
         {
             #[cfg(feature = "threadcheck")]
             let _present_scope = plx_base::task::watchdog::present_scope();
-            #[cfg(feature = "hostsim")]
-            {
-                // `present_supersampled` disables the scissor test itself (a clip left armed would
-                // crop the window copy) - below gfx's `LIVE_SCISSOR`, which it cannot name. Clearing
-                // the clip through gfx first leaves the two in step for the next frame.
-                plx_gfx::gfx::clip_clear();
-                plx_base::surface::present_supersampled();
-            }
+            // The simulator copies its supersampled offscreen frame to the window here
+            // (`host::SIM_PRESENT`); the television states nothing.
+            (app.frame.present.before_swap)();
             // dev (`/tmp/plxnative-framecb`): this frame's compositor callback, requested before
             // the swap that commits it. One latched bool unarmed.
             app.platform.diag.request();
@@ -1016,9 +985,8 @@ unsafe fn present_and_swap(
         // no longer names `ui`'s metrics.
         #[cfg(feature = "devtriggers")]
         plx_ui::card_motion_metrics::presented(fr.now);
-        #[cfg(all(feature = "hostsim", target_os = "linux"))]
-        if let Some(budget) = wslg_frame_budget {
-            budget.finish();
+        if let Some(started) = pace {
+            (app.frame.pacer.end)(started);
         }
     } else {
         if fr.deferred {
@@ -3166,7 +3134,7 @@ fn finish_landed_play(app: &mut App, resume_prepared: bool) {
             // A host Load of 0 with the clock sink off is "no video path", not an
             // admitted slot. Counting it spends the cycle and the later failure
             // opens the breaker, so every later title is skipped.
-            let seam_absent = cfg!(feature = "hostsim") && !plx_base::devtrig::flag("clocksink");
+            let seam_absent = app.adapters.player.lacks_video_path();
             if deferred {
                 // Admission is taken when the queued start launches (or refused if the deadline
                 // refuses it), by the runner that starts it.
@@ -3808,8 +3776,8 @@ pub(crate) unsafe fn heartbeat(app: &mut App, fr: &mut Frame) {
                 app.rec.take_spent_us(),
             );
             log(&format!(
-                "loop={} route={rn}{ov}{pos}{vp} fps={pres}{ld}{tail}{SIM_TAG}",
-                app.loop_shown
+                "loop={} route={rn}{ov}{pos}{vp} fps={pres}{ld}{tail}{}",
+                app.loop_shown, app.platform.diag.heartbeat_tag()
             ));
         }
 }
@@ -4133,8 +4101,8 @@ pub(in crate::app) mod lifecycle_regression_tests {
             ev: [0; 128],
             remote: Default::default(),
             surface: crate::app::platform::detached_surface(),
-            #[cfg(target_os = "linux")]
-            wslg_frame_pacing: false,
+            frame_pacing: false,
+            frame: platform.shell.frame(),
             t0: Default::default(),
             instr: plx_base::diag::heartbeat::Instruments::new(false, 22.0),
             scenarios: crate::dev::scenarios::Scenarios {
@@ -7240,8 +7208,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
             let fr = Frame::begin(&app.player.session, app.runtime.metadata_view());
             let mut rig = TracedProductFrame { native: ProductFrameRuntime {
                 app: &mut app, fr, clock_notice: &mut notice, hint_taught: &mut hint,
-                #[cfg(all(feature = "hostsim", target_os = "linux"))]
-                wslg_frame_budget: None }, trace: vec![], remaining: 0,
+                pace: None }, trace: vec![], remaining: 0,
                 resource_arrived: false, swap_returns };
             assert!(plx_ui::dispatch::Dispatcher::product_frame(&mut rig));
             let mut expected = vec!["pump", "ingest", "results", "tickdrain", "navcommit", "publish", "admit"];
@@ -8673,12 +8640,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
             }
             finish_prepare(app);
             if !fr.present {
-                present_and_swap(
-                    app,
-                    &mut fr,
-                    #[cfg(all(feature = "hostsim", target_os = "linux"))]
-                    None,
-                );
+                present_and_swap(app, &mut fr, None);
             }
         }
         fr.present
@@ -12867,7 +12829,7 @@ mod straighten_wiring_tests {
         let draw = at("let (_vx, _vy, _vw, _vh) = draw(app, fr);");
         let capture = at("crate::capture::tick(fr.now);");
         let pass = at(PASS.trim_start());
-        let compositor = at("composite_plane_under();\n        }");
+        let compositor = at("(app.frame.present.compose_under)();\n        }");
         let dump = at("crate::dev::framedump::after_draw(");
         let shot = at("crate::shot::maybe_capture(");
         let swap = at("app.surface.swap();");
@@ -12878,7 +12840,7 @@ mod straighten_wiring_tests {
         assert!(compositor < dump && compositor < shot, "no reader sees a straight, uncomposited frame");
         assert!(shot < swap && dump < swap, "…and the pass is done before the swap");
         // The compositor stand-in sits behind the same bit the pass is handed.
-        let guard = "        #[cfg(feature = \"hostsim\")]\n        if app.player.video_plane_bound {\n            composite_plane_under();";
+        let guard = "        if app.player.video_plane_bound {\n            (app.frame.present.compose_under)();";
         assert!(src.contains(guard), "the simulator composites on exactly the frames the pass straightened");
     }
 }

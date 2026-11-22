@@ -29,8 +29,8 @@ use crate::egl::Egl;
 use crate::hosted::Hosted;
 use plx_base::eventlog::log;
 use plxnative_modules::host::{
-    EventSink, Exit, FrameProbe, GlProfile, InitHooks, InitSteps, MainThread, OpenAsk, Placement, SdlFlavor, Shell, Surface,
-    WindowPlan,
+    EventSink, Exit, FrameProbe, FrameSeam, GlProfile, InitHooks, InitSteps, MainThread, OpenAsk, Placement, SdlFlavor, Shell,
+    Surface, WindowPlan,
 };
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -135,6 +135,10 @@ impl Shell for TizenShell {
     fn hide_is_cursor_swap(&self) -> bool {
         false
     }
+    /// The panel's EGL swap paces the frame and there is no simulator compositor to stand in for: nothing to state.
+    fn frame(&self) -> &'static FrameSeam {
+        &FrameSeam::NONE
+    }
 }
 
 /// The open window: the EGL context the loop presents through, and the native window it was made for.
@@ -183,6 +187,9 @@ impl FrameProbe for NoProbe {
     fn acquired(&self) {}
     fn fields(&self) -> String {
         String::new()
+    }
+    fn heartbeat_tag(&self) -> &'static str {
+        ""
     }
 }
 

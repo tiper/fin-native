@@ -711,19 +711,17 @@ pub(crate) unsafe fn construct(
     let win = surface.window();
     // vsync on → the frame rate locks to the panel refresh. `/tmp/plxnative-novsync` uncaps it so
     // `fps=` reports the true GPU render rate. WSLg's X11/GLX swap accepts interval 1 without
-    // blocking, so the software budget in `run` follows the same switch.
+    // blocking, so the platform's software pacer (`Shell::frame`) follows the same switch.
     // A frame dump never waits on the display: every iteration is a render, at swap interval 0 and
-    // with the Linux software pacer off (`vsync_enabled` also gates `wslg_frame_pacing`).
+    // with the software pacer off (`vsync_enabled` is what the pacer is asked with).
     #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
     let dumping = crate::dev::framedump::requested();
     #[cfg(not(all(feature = "hostsim", feature = "devtriggers")))]
     let dumping = false;
     let vsync_enabled = !dumping && (controlled || !crate::dev::scenarios::novsync_armed());
     surface.set_swap_interval(if vsync_enabled { 1 } else { 0 });
-    #[cfg(all(feature = "hostsim", target_os = "linux"))]
-    let wslg_frame_pacing = vsync_enabled
-        && std::env::var_os("WSL_DISTRO_NAME").is_some()
-        && std::env::var("SDL_VIDEODRIVER").as_deref() == Ok("x11");
+    let frame = platform.shell.frame();
+    let frame_pacing = (frame.pacer.armed)(vsync_enabled);
     {
         let r = glGetString(GL_RENDERER);
         let v = glGetString(GL_VERSION);
@@ -1559,8 +1557,8 @@ pub(crate) unsafe fn construct(
         ev,
         remote,
         surface,
-        #[cfg(all(feature = "hostsim", target_os = "linux"))]
-        wslg_frame_pacing,
+        frame_pacing,
+        frame,
         t0,
         instr,
         measure_fault_logged: false,
