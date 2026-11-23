@@ -1,4 +1,4 @@
-# The Tizen build (Samsung television, emulator MVP)
+# The Tizen build for Samsung TVs and the TV emulator
 
 `PLATFORM=tizen` builds PlxNative for a Samsung Tizen television as a **hosted library**: a shared object, `libplx.so`, that a small
 .NET application (`tizen/host/PlxHost/`) loads and drives through three C functions. The design is `docs/platform-ports.md`
@@ -6,17 +6,17 @@
 
 ## Scope of the MVP
 
-- **Emulator only.** The one configuration that is built and checked is x86_64: the Tizen TV 10.0 emulator image, `tizen80`.
-  An armv7 (retail) configuration is recorded in `docs/platform-ports.md` and refused by the makefile (`TIZEN_ARCH`) until a retail
-  set has answered what it must (H1, H2 there).
+- **Two builds.** `TIZEN_ARCH=x86_64` targets the Tizen TV 10.0 emulator. `TIZEN_ARCH=armv7` builds the
+  retail SUPER ALPHA package for 2021+ Samsung TVs (Tizen 6.0+). Both use the `tizen80` managed target.
+  A retail TV still needs to run it (H1, H2 and H6 in `docs/platform-ports.md`).
 - **Playback is the `uri` feature's. The driver has run on the Windows emulator against the mock server, and has NOT been run on a retail set (H6 stays OPEN).** The first emulator run (at `126d1f04c`) found faults A-E ("Findings of the first emulator run", below); runs at `fc5d28594` and `b62e1276e` passed those fixes and round 4's and found what review round 5 fixes. Every fix since a run is "fixed in code, emulator re-run pending" until a run passes it. A build with the platform crate's `uri` feature (the makefile's default; `TIZEN_URI=0` builds without it) composes the Tizen URI driver over the host's native player (below): for a title the planner can offer it, the library asks the host to play a progressive URI source. **Which titles those are is a narrow set, and nothing here says one plays**: the planner refuses most real titles before the Tizen qualifier is asked ("The refusal set", below), and a source with more than one audio stream is never certified. A build without `uri`, or a host with no player group in its table, composes no backend (`compose: backends=none`): on a detail page Resume is then dimmed and cannot be focused, and the metadata line reads "Playback unavailable" (the log: `preview: blocked rk=... reason=Cached(RefusedDirect)`); on Home the hero's Play looks enabled, and pressing it opens the player route, which shows "Playback failed / The server cannot play or convert this file" with the footer `decision_refused` and logs no decision line: a known gap (below). What a `uri` build has NOT shown: a picture through this driver (the window's alpha and the straighten pass are part B2's, below; the library emits no `Presented` for it), and Home with a player open. H6 (below) is open.
 - **No frame-rate or latency claim.** The emulator's GL runs on llvmpipe through the emulator's GL forwarding; a number taken there
   says nothing about a television, and none is quoted.
-- **A mock server, never a real account.** The package signs in against the mock Plex server (`tests/mock_pms.py`) with a placeholder
-  token; the emulator reaches the build machine's loopback as `10.0.2.2`. There is no plex.tv sign-in in the MVP, so the session lives in
-  memory (`MemoryOnly`) and nothing is written to anyone's Plex account.
-- **Not a required check.** `.github/workflows/tizen.yml` proves the library links and passes its checks; it is compile-only, and the
-  emulator run is by hand.
+- **Sign-in.** Published packages start at the Plex sign-in screen. Sign-in is held in memory
+  (`MemoryOnly`) and starts again on each launch. Emulator development can opt into a mock Plex server
+  (`tests/mock_pms.py`) and placeholder token through `TIZEN_MOCK_HOST`, with the host loopback at `10.0.2.2`.
+- **CI checks.** `.github/workflows/tizen.yml` links the emulator library and builds and verifies the ARMv7 package.
+  The emulator run is manual.
 
 ## What is where
 
@@ -36,24 +36,25 @@ Generated and never committed (`.gitignore`): `rust-modules/target-tizen/`, `tiz
 
 ## The targets
 
-Every target is `make PLATFORM=tizen <target>`. A bare `make PLATFORM=tizen` is `tizen-check` (the Makefile's own default goal
-builds the webOS package; this platform has none). The webOS package goals (`all`, `ipk`, `deploy`, `install`, the storage helper and the C
+Every target is `make PLATFORM=tizen <target>`. A bare `make PLATFORM=tizen` is `tizen-check`; choose `tizen-tpk`
+or `tizen-tpk-nightly` to create a package. The webOS package goals (`all`, `ipk`, `deploy`, `install`, the storage helper and the C
 units, `WEBOS_TV_GOALS` in the `Makefile`) are refused under `PLATFORM=tizen` with a message, so `make PLATFORM=tizen ipk` cannot package
 the television build by accident; the queries (`print-*`) answer under every `PLATFORM`.
 
 | Target | Needs | What it does |
 | --- | --- | --- |
 | `tizen-abi` | any host, python3 | reads `plx_host.h` and `Program.cs` as text: the three `plx_host_*` functions, each one's return type and parameter count, both structs field for field (name, order, width), every function-pointer typedef against the host's `delegate` of the same name (return and parameter widths), and every `PLX_HOST_*` constant the host spells equal the header's (the host must spell the version and every event kind and verb) |
-| `tizen-check` | any host with the target's std | `tizen-abi`, then `cargo check --lib` of the platform crate for `x86_64-unknown-linux-gnu`: compile-only, no link, no SDL |
-| `tizen-sdl` | Linux x86_64, `cc`, `make`, `curl` | the static SDL2 + SDL2_ttf under `tizen/sdl-build/x86_64` (a stamp of the pins, the script and the flags skips a rebuild that would change nothing) |
-| `tizen-so` | Linux x86_64, `libgles-dev` | `cargo rustc --crate-type staticlib` of the platform crate (features `tizen,uri,devtriggers`, profile `tvdev`; under `RELEASE=1` profile `release` and features `tizen,uri` only, so a release library carries no dev-trigger seam), then the link into `tizen/out/x86_64/libplx.so` |
-| `tizen-verify` | Linux, binutils | `ci/check-tizen-so.py verify` on the linked library (below) |
+| `tizen-check` | any host with the target's std | `tizen-abi`, then `cargo check --lib` of the platform crate for the selected target |
+| `tizen-sdl` | host tools and the selected compiler | the static SDL2 + SDL2_ttf under `tizen/sdl-build/<arch>` (a stamp of the pins, the script and the flags skips a rebuild that would change nothing) |
+| `tizen-so` | Linux x86_64 with `libgles-dev`, or the ARM NDK | `cargo rustc --crate-type staticlib` of the platform crate (features `tizen,uri,devtriggers`, profile `tvdev`; under `RELEASE=1` profile `release` and features `tizen,uri` only, so a release library carries no dev-trigger seam), then the link into `tizen/out/<arch>/libplx.so` |
+| `tizen-verify` | GNU binutils (from the NDK on ARM) | `ci/check-tizen-so.py verify` on the linked library (below) |
 | `tizen-stage` | python3 | stages `lib/libplx.so`, `res/` and the icon into the host project; `TIZEN_MOCK_HOST` and `TIZEN_LOG_HOST` become `res/dev-boot.json` and `res/log-host.txt` |
 | `tizen-tpk` | the above, .NET 8 SDK, a Samsung certificate profile | the signed `tizen/out/PlxNative-x86_64.tpk`; refuses at once, naming the missing variables, without the profile |
+| `tizen-tpk-nightly` | the above, .NET 8 SDK, OpenSSL, `RELEASE=1` | builds and verifies `plxnative-tizen-v<label>-<arch>.tpk` with throwaway signing |
 | `print-tizen-config` | any host | the configuration, one `NAME=value` per line (the CI job prints it) |
 
-`tizen-so` and `tizen-sdl` check in a recipe line that the host is Linux x86_64, so `make -n` resolves anywhere and a real run elsewhere
-stops with the reason.
+The emulator link runs on x86_64 Linux. The ARM build uses the pinned webOS NDK on macOS or arm64
+Linux and the `armv7-unknown-linux-gnueabi` Rust target. Run `make setup-env` to install both.
 
 ### What the link contains
 
@@ -76,8 +77,9 @@ in the documentation shipped with the product), so the `.tpk` carries `res/THIRD
 `DT_NEEDED` is an allowlist, not a deny-list:
 
 - `libGLESv2.so.2` (required: the renderer's GL imports bind at link time, decision D3), `libc.so.6` (required), `libm.so.6`,
-  `libdl.so.2`, `libpthread.so.0`, `librt.so.1`, `libutil.so.1`, `libgcc_s.so.1`, `ld-linux-x86-64.so.2`. The last four are what a Rust std
-  link on `x86_64-unknown-linux-gnu` truly needs beyond the first five; `--as-needed` leaves out any a newer glibc has folded into libc.
+  `libdl.so.2`, `libpthread.so.0`, `librt.so.1`, `libutil.so.1`, `libgcc_s.so.1`, and the matching loader (`ld-linux-x86-64.so.2` for x86_64 or `ld-linux.so.3` for ARM).
+  `--as-needed` leaves out any a newer glibc has folded into libc. The ARM link must be ELF32 ARM EABI5
+  soft-float and stays below glibc 2.30.
 - anything else (`libSDL2`, `libwayland-*`, `libudev`, `libX11`) fails: the static SDL link did not happen, or a configure picked up a
   library from the build machine that the television may not have.
 
@@ -87,10 +89,14 @@ in the script; libGLESv2 has no symbol versions, and an ES 3.0 name such as `glB
 the weak toolchain hooks; the **exported**
 symbols are exactly `plx_host_start`, `plx_host_post` and `plx_host_stop`, equal to the header's functions and to the C# `DllImport` names;
 `TTF_Init`, `TTF_OpenFont`, `TTF_RenderUTF8_Blended`, `FT_Init_FreeType` and `SDL_FreeSurface` are code symbols of the library and none of
-`SDL_*`/`TTF_*`/`FT_*` is exported; and the highest `GLIBC_x.y` version needed is at most `PLX_MAX_GLIBC` (default 2.40, the emulator image's
+`SDL_*`/`TTF_*`/`FT_*` is exported. On x86_64 the highest `GLIBC_x.y` version needed is at most `PLX_MAX_GLIBC` (default 2.40, the emulator image's
 glibc; the CI runner, ubuntu-24.04, links against 2.39). A newer build host is a failure that names the ceiling: link on an older host, raise `PLX_MAX_GLIBC`
 if you know the target's glibc, or `PLX_ALLOW_NEW_GLIBC=1` to report and continue. The parsers and every rule are unit-tested on canned
-`readelf`/`nm` text (`ci/test_tizen_so_check.py`), so the Linux-only check is exercised on any host that runs `make check`.
+`readelf`/`nm` text (`ci/test_tizen_so_check.py`). The ARM check also compares every required import and
+library name against `ci/testdata/tizen60-armv7-abi.json`. Its exports come from the Tizen 6.0 ARM
+rootstrap and the matching Tizen SDK compiler's `libgcc_s.so.1`. Both archives and their SHA-256
+digests are in `ci/dependencies.json` under `tizen60-abi-reference`. The inventory covers link-time
+imports. Runtime libraries loaded by name still need device verification.
 
 ### The contract with the host
 
@@ -100,8 +106,8 @@ The thread rules, ownership, start/stop and the `launch_json` keys are the heade
 
 - `OnCreate` builds `launch_json` from `DirectoryInfo.Resource` (`payload_dir`), `DirectoryInfo.Data` (`state_dir`), the UI culture
   (`locale`), the Tizen platform version, `res/log-host.txt` (`log_udp`) and the members of `res/dev-boot.json` (`pms_host`, `pms_port`
-  and the dev-only `dev` object), then calls `plx_host_start` once on the main thread. Without `res/dev-boot.json` the launch names no
-  Plex server and the library refuses it (`PLX_HOST_E_LAUNCH`), which the host logs.
+  and the dev-only `dev` object), then calls `plx_host_start` once on the main thread. Without
+  `res/dev-boot.json` the app starts the ordinary sign-in flow.
 - `OnPause` / `OnResume` call `plx_host_post`, and then `PlxPlayer.PauseForHome` / `ResumeAfterHome` (below). A locale change is logged and **not forwarded**: the header has no locale event.
 - `run_on_host` posts the library's task to the main thread's `SynchronizationContext` (captured in `OnCreate`) and runs it there.
   UNVERIFIED on a device: that Tizen's `CoreUIApplication` installs one on the main thread. If it does not, the host logs a warning at
@@ -260,7 +266,7 @@ WSL2 Ubuntu 22.04 or newer is enough. Versions come from the repository's pins; 
 - the emulator: Tizen SDK 10.0 CLI with TV Extension 10.0 (Tizen Studio, the IDE, is deprecated), the TV 10.0 x86_64 image under KVM,
   started with `LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe`.
 
-### Signing
+### Developer package signing
 
 A Tizen television or emulator installs only a package signed with a **Samsung certificate profile** (an author certificate and a
 distributor one bound to the device's DUID). The SDK's bundled default certificates are expired and are never used. Four
@@ -274,6 +280,30 @@ PLX_TIZEN_DIST_P12=/path/distributor.p12 PLX_TIZEN_DIST_PASS=...
 ```
 
 `tizen-so`, `tizen-verify` and every CI step need none of this. No certificate, profile, password or DUID is committed or printed.
+
+### The nightly package
+
+```sh
+make PLATFORM=tizen TIZEN_ARCH=armv7 RELEASE=1 tizen-tpk-nightly \
+  TIZEN_NIGHTLY_LABEL="$(python3 ci/nightly.py plan --date "$(date -u +%Y%m%d)" --head HEAD --dry | sed -n 's/^label=//p')"
+```
+
+The nightly target verifies the library, stages the project in a temporary directory and signs it
+with throwaway author and distributor certificates. Apps2Samsung replaces both during install.
+The manifest version advances daily and the library reports the same nightly label as the release.
+The shared source bundle includes the Tizen host and build recipes. The Samsung job attaches
+`tizen-sdl-source.tar` with the two pinned SDL archives alongside the package.
+The package carries no mock server or log address. The build clears the four endpoint variables read
+by `telemetry/sender.rs`, so it has no Sentry or PostHog destination.
+
+Before enabling `SAMSUNG_NIGHTLY_PUBLISH`, build the same target for `x86_64` on Linux or dispatch
+**Tizen library CI** with **Produce the x86_64 nightly package** enabled. Stamp its UDP
+destination as below, re-sign the stamped copy using the emulator's Samsung profile, and install it
+on the TV 10.0 emulator. Confirm the sign-in screen, matching nightly version in the log, and
+successful receipt of the UDP log. Set the repository variable to `true` after that smoke test.
+A real **Nightly** dispatch with **Build even when main has not changed** can then publish on
+an unused UTC date. The [Samsung nightly guide](samsung-nightly.md) covers the retail
+Apps2Samsung path.
 
 ## Build, install, launch
 
@@ -294,7 +324,7 @@ and a value that is absent writes no file and removes a stale one, so the packag
 addresses, never credentials: `res/dev-boot.json` carries a placeholder token that only the mock accepts.
 
 On the TV 10.0 emulator `sdb shell <cmd>` prints nothing (only `sdb shell 0 <cmd>` works), `sdb dlog` is empty and `sdb pull` of the app's
-data directory is refused, so the log leaves the device over UDP. A retail television has no `sdb shell` and no dlog at all.
+data directory is refused, so the log leaves the device over UDP. Use the UDP receiver on retail TVs as well.
 
 ### The log channel
 
@@ -302,6 +332,8 @@ With `TIZEN_LOG_HOST=IPV4:PORT` the host writes every line as one UDP datagram, 
 `log_udp` for its own lines. `seq` counts per sender, so a gap is a lost datagram; `tools/tizen-log-receiver.py` prints the report
 (`-- N datagram(s) lost before ...`) and ends with a count: a run whose log is claimed as evidence ends with `lost 0`. The address is an
 IPv4 literal (no name lookup in a logger). The host also writes `<data>/plx-host.log` and dlog tag `PLXHOST`.
+For a downloaded package, use `--stamp IN.tpk --save FILE` and install the stamped copy after
+re-signing it. On the emulator use `--address 10.0.2.2` to target the host's loopback.
 
 ## What success looks like
 

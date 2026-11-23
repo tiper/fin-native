@@ -458,3 +458,5 @@ python3 ci/test_platform_features.py
 # sequence bookkeeping. No cargo, no dotnet, no certificate; temp dirs only.
 python3 ci/test_tizen_so_check.py
 python3 ci/test_tizen_package.py
+
+python3 ci/test_tizen_log_stamp.py

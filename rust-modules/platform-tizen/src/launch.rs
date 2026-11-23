@@ -1,7 +1,7 @@
 //! The launch string the host hands `plx_host_start`: what the application boots with, as typed values.
 //!
 //! The keys are the header's (`include/plx_host.h`, "LAUNCH JSON"): the payload and data directories, the
-//! Plex server, and optionally the locale, the Tizen version, the UDP log target and the dev-boot values.
+//! optional Plex server, locale, Tizen version, UDP log target and dev-boot values.
 //! Unknown keys are ignored (a newer host may send more); a string that is not JSON, a required key that is
 //! missing or of the wrong type, and a value out of range are a refusal ([`LaunchError`]), which the
 //! hosted contract reports as `PLX_HOST_E_LAUNCH` and `on_stopped(1, 1)`.
@@ -18,9 +18,8 @@ pub struct Launch {
     pub payload_dir: PathBuf,
     /// The app's writable data directory.
     pub state_dir: PathBuf,
-    /// The Plex server the application boots against.
-    pub pms_host: String,
-    pub pms_port: u16,
+    /// A fixed Plex server for dev boots. With no server, the app starts at sign-in.
+    pub pms: Option<(std::ffi::CString, u16)>,
     /// A BCP-47 tag; `en-US` when the host sent none.
     pub locale: String,
     /// The Tizen version as the host read it (`10.0`); `unknown` when it sent none.
@@ -100,10 +99,17 @@ impl Launch {
         };
         let payload_dir = absolute(obj, "payload_dir")?;
         let state_dir = absolute(obj, "state_dir")?;
-        let pms_host = required(obj, "pms_host")?;
-        let pms_port = match obj.get("pms_port").and_then(serde_json::Value::as_u64) {
-            Some(p @ 1..=65535) => p as u16,
-            _ => return refuse("`pms_port` is missing or not an integer in 1..=65535"),
+        let pms = match (obj.contains_key("pms_host"), obj.get("pms_port")) {
+            (false, None) => None,
+            (_, port) => {
+                let host = required(obj, "pms_host")?;
+                let Some(port @ 1..=65535) = port.and_then(serde_json::Value::as_u64) else {
+                    return refuse("`pms_port` is missing or not an integer in 1..=65535");
+                };
+                let host = std::ffi::CString::new(host)
+                    .map_err(|_| LaunchError("`pms_host` has a NUL".to_string()))?;
+                Some((host, port as u16))
+            }
         };
         let locale = string_of(obj, "locale")?.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "en-US".to_string());
         let platform_version =
@@ -125,7 +131,7 @@ impl Launch {
             },
             Some(_) => return refuse("`dev` is not an object"),
         };
-        Ok(Launch { payload_dir, state_dir, pms_host, pms_port, locale, platform_version, log_udp, dev })
+        Ok(Launch { payload_dir, state_dir, pms, locale, platform_version, log_udp, dev })
     }
 }
 
@@ -144,11 +150,18 @@ mod tests {
     }
 
     #[test]
+    fn a_package_without_a_dev_boot_can_start_signed_out() {
+        let launch = Launch::parse(r#"{"payload_dir":"/res","state_dir":"/data"}"#)
+            .expect("a package without a fixed Plex server can launch");
+        assert_eq!(launch.pms, None);
+    }
+
+    #[test]
     fn the_minimal_string_parses_with_the_defaults() {
         let l = Launch::parse(MIN).expect("parses");
         assert_eq!(l.payload_dir, PathBuf::from("/res"));
         assert_eq!(l.state_dir, PathBuf::from("/data"));
-        assert_eq!((l.pms_host.as_str(), l.pms_port), ("10.0.2.2", 32499));
+        assert_eq!(l.pms, Some((c"10.0.2.2".to_owned(), 32499)));
         assert_eq!((l.locale.as_str(), l.platform_version.as_str()), ("en-US", "unknown"));
         assert_eq!(l.log_udp, None, "the log channel is off unless named");
         assert_eq!(l.dev, Dev::default());

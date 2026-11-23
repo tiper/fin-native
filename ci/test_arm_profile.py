@@ -129,7 +129,7 @@ HOST_ONLY_GOALS = (
 # so none may reset the stamp: `make PLATFORM=tizen tizen-abi` after a `make ARM_PROFILE=release deploy` once deleted the release-built pkg/plxnative.
 # Run with PLATFORM=tizen: without it the goal does not exist and the test would pass for the wrong reason.
 TIZEN_GOALS = ("tizen-abi", "tizen-check", "tizen-sdl", "tizen-so", "tizen-verify", "tizen-stage", "tizen-signing", "tizen-tpk",
-               "print-tizen-config")
+               "tizen-tpk-nightly", "print-tizen-config")
 # Goals that stay OUT of SIDE_EFFECT_FREE, each with the reason. A goal that builds, reads or ships the ARM
 # artifacts (or writes under pkg/) must reset the stamp: that is how a stale binary is never deployed.
 STAMPED_GOALS = {
@@ -452,7 +452,7 @@ class HostOnlyGoalsKeepTheBuild(ScratchTree):
         query = set(re.search(r"^QUERY_GOALS\s*=((?:.*\\\n)*.*)$", text, flags=re.M).group(1).replace("\\\n", " ").split())
         self.assertEqual(sorted(g for g in TIZEN_GOALS if g not in free and g not in query), [])
         self.assertIn("print-tizen-config", query)
-        declared = set(re.findall(r"^(tizen-[a-z]+)\b[^:=\n]*:", (ROOT / "mk/platform-tizen.mk").read_text(), flags=re.M))
+        declared = set(re.findall(r"^(tizen-[a-z-]+)\b[^:=\n]*:", (ROOT / "mk/platform-tizen.mk").read_text(), flags=re.M))
         self.assertEqual(declared - set(TIZEN_GOALS), set(), "a tizen-* goal the mk file declares is not covered here")
 
     def test_goals_that_build_or_ship_stay_out_of_the_list(self):

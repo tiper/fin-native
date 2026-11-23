@@ -26,7 +26,7 @@
 # development packages must not grow libraries or dlopen paths the television lacks.
 #
 # Needs: bash, python3, curl, tar, make and a C compiler (`CC`, default `cc`); sha256sum or shasum. No cmake, no pkg-config.
-# The archive for THIS machine is built: on the x86_64 Linux build host that is the Tizen emulator's architecture.
+# PLX_SDL_HOST selects a cross build and AR, NM and RANLIB name the matching tools.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -42,7 +42,12 @@ case "$ROOT" in *[[:space:]]*) die "the checkout path contains a space ($ROOT); 
 for tool in python3 curl tar make; do command -v "$tool" >/dev/null 2>&1 || die "$tool not found (apt install build-essential curl python3)"; done
 CC_CMD="${CC:-cc}"
 command -v "$CC_CMD" >/dev/null 2>&1 || die "no C compiler ($CC_CMD): apt install build-essential"
-command -v ar >/dev/null 2>&1 || die "no ar (binutils)"
+AR_CMD="${AR:-ar}"
+NM_CMD="${NM:-nm}"
+RANLIB_CMD="${RANLIB:-ranlib}"
+for tool in "$AR_CMD" "$NM_CMD" "$RANLIB_CMD"; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool not found (binutils)"
+done
 
 deps() { python3 "$ROOT/ci/deps.py" "$@"; }
 sdl_ver="$(deps get sdl2 version)"
@@ -56,7 +61,11 @@ sha256_stream() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else 
 
 CFLAGS_ALL="-O2 -g0 -fPIC -ffunction-sections -fdata-sections"
 EXTRA_SDL=()
-if [ "$(uname -s)" = Darwin ]; then
+HOST_FLAGS=()
+if [ -n "${PLX_SDL_HOST:-}" ]; then
+  HOST_FLAGS=(--host="$PLX_SDL_HOST")
+  EXTRA_SDL=(--disable-arm-neon --disable-arm-simd)
+elif [ "$(uname -s)" = Darwin ]; then
   # Only so the recipe can be exercised on a Mac: no Cocoa/Metal windowing, SDL_Surface and the dummy driver are all it needs.
   EXTRA_SDL=(--disable-video-cocoa --disable-video-metal --disable-render-metal --disable-joystick-mfi)
 fi
@@ -75,7 +84,8 @@ SDL_CONFIG_FLAGS=(
 TTF_CONFIG_FLAGS=(--disable-shared --enable-static --with-pic --disable-sdltest --disable-harfbuzz --enable-freetype-builtin)
 
 STAMP_WANT="$( { echo "$sdl_ver $ttf_ver"; deps get sdl2 sha256; deps get sdl2-ttf sha256
-                 echo "$CC_CMD|$CFLAGS_ALL|$(uname -sm)"; echo "${SDL_CONFIG_FLAGS[*]}"; echo "${TTF_CONFIG_FLAGS[*]}"
+                 echo "$CC_CMD|$AR_CMD|$NM_CMD|$RANLIB_CMD|$CFLAGS_ALL|${PLX_SDL_CPPFLAGS:-}|${HOST_FLAGS[*]}|$(uname -sm)"
+                 echo "${SDL_CONFIG_FLAGS[*]}"; echo "${TTF_CONFIG_FLAGS[*]}"
                  cat "$0"; } | sha256_stream | cut -d' ' -f1)"
 if [ -f "$PREFIX/STAMP" ] && [ "$(cat "$PREFIX/STAMP")" = "$STAMP_WANT" ] \
    && [ -f "$PREFIX/lib/libSDL2.a" ] && [ -f "$PREFIX/lib/libSDL2_ttf.a" ] && [ -f "$PREFIX/link-libs.txt" ]; then
@@ -97,7 +107,9 @@ TTF_SRC="$(find "$WORK" -maxdepth 1 -type d -name 'SDL2_ttf-*' | head -n 1)"
 run_configure() { # srcdir builddir flags...
   local src="$1" bld="$2"; shift 2
   mkdir -p "$bld"
-  ( cd "$bld" && "$src/configure" --prefix="$PREFIX" "$@" CC="$CC_CMD" CFLAGS="$CFLAGS_ALL" ) > "$bld/configure.log" 2>&1 \
+  ( cd "$bld" && "$src/configure" --prefix="$PREFIX" ${HOST_FLAGS[@]+"${HOST_FLAGS[@]}"} "$@" \
+      CC="$CC_CMD" AR="$AR_CMD" NM="$NM_CMD" RANLIB="$RANLIB_CMD" \
+      CPPFLAGS="${PLX_SDL_CPPFLAGS:-}" CFLAGS="$CFLAGS_ALL" ) > "$bld/configure.log" 2>&1 \
     || { tail -40 "$bld/configure.log" >&2; die "configure failed in $bld"; }
 }
 
@@ -114,7 +126,7 @@ run_configure "$TTF_SRC" "$WORK/ttf" --with-sdl-prefix="$PREFIX" "${TTF_CONFIG_F
 # the FreeType modules: archive exactly those objects.
 objs="$(cd "$WORK/ttf" && find . -name 'libSDL2_ttf_la-*.o' | sort)"
 [ "$(printf '%s\n' "$objs" | wc -l)" -ge 40 ] || die "expected SDL_ttf.o plus ~42 FreeType objects, found: $(printf '%s\n' "$objs" | wc -l)"
-( cd "$WORK/ttf" && rm -f "$PREFIX/lib/libSDL2_ttf.a" && ar rcs "$PREFIX/lib/libSDL2_ttf.a" $objs )
+( cd "$WORK/ttf" && rm -f "$PREFIX/lib/libSDL2_ttf.a" && "$AR_CMD" rcs "$PREFIX/lib/libSDL2_ttf.a" $objs )
 cp "$TTF_SRC/SDL_ttf.h" "$PREFIX/include/SDL2/SDL_ttf.h"
 
 # What the archives need from the system: sdl2-config's static line minus the -L, the archive path and -lSDL2 itself (the makefile
@@ -123,7 +135,7 @@ cp "$TTF_SRC/SDL_ttf.h" "$PREFIX/include/SDL2/SDL_ttf.h"
 echo "SDL2 $sdl_ver, SDL2_ttf $ttf_ver (bundled FreeType, no HarfBuzz)" > "$PREFIX/pins.txt"
 
 say "checks"
-syms="$(nm -A "$PREFIX/lib/libSDL2.a" "$PREFIX/lib/libSDL2_ttf.a" 2>/dev/null || true)"
+syms="$("$NM_CMD" -A "$PREFIX/lib/libSDL2.a" "$PREFIX/lib/libSDL2_ttf.a" 2>/dev/null || true)"
 for s in SDL_Init SDL_CreateRGBSurfaceWithFormat SDL_UpperBlit SDL_ConvertSurfaceFormat SDL_GetTicks TTF_Init TTF_OpenFont TTF_RenderUTF8_Blended FT_Init_FreeType; do
   grep -Eq " T _?$s\$" <<<"$syms" || die "the archives define no $s"
 done

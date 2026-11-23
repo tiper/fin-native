@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render one of docs/{install-and-verify,troubleshooting,nightly-builds}.md into a standalone HTML page
+"""Render one of docs/{install-and-verify,troubleshooting,nightly-builds,samsung-nightly}.md into a standalone HTML page
 for plxnative.com, wrapped in the site's own header/footer and styled with site/styles.css.
 
 Used by `.github/workflows/pages.yml` ("Stage _site") and locally:
@@ -22,7 +22,7 @@ Mode expires" is linked from README.md as "#important-developer-mode-expires", a
 "### Option A — install PlxNative directly" is linked internally as
 "#option-a--install-plxnative-directly", double hyphen and all, where the em dash used to be).
 
-Link rewriting: install-and-verify.md, troubleshooting.md and nightly-builds.md are the only docs
+Link rewriting: The guides in PAGES are the only docs
 rendered as site pages (see PAGES below), so a relative link from one to another becomes a site path,
 fragment kept. Every other repo-relative link — a link to README.md, to a sibling doc that isn't
 rendered (native-video-sandbox.md), to an image — becomes an absolute GitHub blob URL, since
@@ -62,6 +62,12 @@ REPO_ROOT = SCRIPT_DIR.parent
 
 # The only docs rendered as site pages. Adding another page means adding it here.
 PAGES = {
+    "samsung-nightly.md": {
+        "route": "/nightly/samsung/",
+        "title": "PlxNative for Samsung TVs: SUPER ALPHA Nightly",
+        "name": "Samsung nightly",
+        "description": "Install the PlxNative Tizen nightly with Apps2Samsung and capture a log.",
+    },
     "install-and-verify.md": {
         "route": "/install/",
         "title": "Install Plex on LG webOS TV: Unofficial PlxNative App, No Root",

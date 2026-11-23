@@ -51,6 +51,7 @@ static SERVICES: Services = Services {
     storage: plx_os::tv::StorageHooks::NONE,
     layout: plx_os::tv::Layout::DERIVED,
     libraries: plx_os::tv::Libraries::HOST,
+    crash_capture: plx_os::tv::crash_capture::Hooks::NONE,
     legacy_webos_media: plx_os::tv::LegacyWebosMedia::NONE,
 };
 

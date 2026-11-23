@@ -96,9 +96,10 @@
  * LAUNCH JSON (UTF-8, copied; unknown keys are ignored)
  *   required   "payload_dir"       string, absolute: the package's read-only payload (res/: fonts, icons)
  *              "state_dir"         string, absolute: the app's writable data directory
- *              "pms_host"          string: the Plex server the application boots against
- *              "pms_port"          integer 1..65535
- *   optional   "locale"            string, a BCP-47 tag, default "en-US"
+ *   optional   "pms_host"          string: a fixed Plex server for dev boot
+ *              "pms_port"          integer 1..65535, supplied together with pms_host.
+ *                                  Omit both PMS keys to boot without a fixed server.
+ *              "locale"            string, a BCP-47 tag, default "en-US"
  *              "platform_version"  string, the Tizen version ("10.0"), default "unknown"
  *              "log_udp"           string "a.b.c.d:port", an IPv4 literal: one datagram per log line goes
  *                                  there. Absent or empty: the log channel is off.

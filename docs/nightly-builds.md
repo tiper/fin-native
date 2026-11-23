@@ -1,7 +1,7 @@
 # Nightly builds
 
 A nightly is the newest PlxNative build from `main`, published on most days the code changes. It
-installs **beside** the regular app as **PlxNative Nightly** - its own launcher tile and its own
+installs on webOS **beside** the regular app as **PlxNative Nightly** - its own launcher tile and its own
 sign-in - so trying it never touches the release you already trust.
 
 **A nightly is not tested on a television.** It passes the same automated build and packaging
@@ -11,7 +11,12 @@ expect rough edges. New work reaches a nightly before it reaches a release, whic
 The simplest way to follow nightlies is the project's own Homebrew Channel repository: add it once,
 install PlxNative Nightly, and every new build appears as an update on the TV.
 
-## What you need
+## Samsung TVs
+
+The shared nightly also carries a Samsung package when one is available.
+See the [Samsung SUPER ALPHA installation guide](samsung-nightly.md) for Apps2Samsung and log capture.
+
+## What you need for LG webOS
 
 - A TV that already runs the regular PlxNative. The [installation guide](install-and-verify.md)
   covers LG Developer Mode and Homebrew Channel; nothing extra is needed for nightlies.

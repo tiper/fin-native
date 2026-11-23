@@ -13,6 +13,7 @@ on:
       - "docs/install-and-verify.md"
       - "docs/troubleshooting.md"
       - "docs/nightly-builds.md"
+      - "docs/samsung-nightly.md"
       - "ci/nightly.py"
       - "tools/render-doc-page.py"
       - "tools/requirements-docs.txt"
@@ -59,7 +60,7 @@ jobs:
           mkdir -p _site/icons
           mkdir -p _site/docs/screenshots
           mkdir -p _site/fonts
-          mkdir -p _site/nightly
+          mkdir -p _site/nightly/samsung
           mkdir -p _site/ci
           mkdir -p _site/install
           mkdir -p _site/troubleshooting
@@ -144,6 +145,7 @@ jobs:
           # The nightly guide lives at /nightly/ beside the files the Homebrew Channel repository
           # serves from the same directory (staged below).
           python3 tools/render-doc-page.py docs/nightly-builds.md > _site/nightly/index.html
+          python3 tools/render-doc-page.py docs/samsung-nightly.md > _site/nightly/samsung/index.html
 
           # Pages serves everything with a 10-minute browser cache, so a visitor right after a
           # deploy could get the new HTML with the old stylesheet/script, or the other way round.
@@ -151,8 +153,8 @@ jobs:
           # styles.css and site.js. (The asset check below ignores the query string.)
           v="${GITHUB_SHA::8}"
           sed -i -E "s#(styles\.css|site\.js)\"#\1?v=${v}\"#g" \
-            _site/index.html _site/credits.html _site/install/index.html _site/troubleshooting/index.html _site/nightly/index.html _site/404.html
-          grep -c "?v=${v}" _site/index.html _site/credits.html _site/install/index.html _site/troubleshooting/index.html _site/nightly/index.html _site/404.html
+            _site/index.html _site/credits.html _site/install/index.html _site/troubleshooting/index.html _site/nightly/index.html _site/nightly/samsung/index.html _site/404.html
+          grep -c "?v=${v}" _site/index.html _site/credits.html _site/install/index.html _site/troubleshooting/index.html _site/nightly/index.html _site/nightly/samsung/index.html _site/404.html
 
       - name: Stage nightly/latest.json
         # `{"available": false}` when no nightly has ever published — the site has to build before

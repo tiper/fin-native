@@ -5,7 +5,7 @@
 //! name `app::Platform` or implement a crate-private `Shell`. This is the one narrow public face: re-exports
 //! of the types a platform builds or implements, an [`EventSink`] through which it reports input, the two SDL
 //! helpers an SDL platform's `Shell` is built from ([`sdl_init`], [`sdl_open`], with [`InitHooks`]), the hosted contract's exit types, [`run`], the
-//! one function defined in here (it hands the platform to the application's entry), and the ready media values
+//! entry for a host with a fixed server, [`run_signed_out`] for a host without one, and the ready media values
 //! described below. No other module of the
 //! application is public to a television build. A `sim` build also keeps the simulator binary's own doors,
 //! each behind `feature = "sim"` in `lib.rs` (`grep -n 'feature = "sim"' rust-modules/src/lib.rs`):
@@ -113,6 +113,12 @@ pub const NO_MEDIA: MediaBoot = MediaBoot {
 /// `pms_host` and `pms_port` are the pair `plex_run` hands the entry and `plx_platform_desktop::run` takes.
 pub fn run(platform: &'static Platform, pms_host: &CStr, pms_port: u16) -> Exit {
     crate::app::run_application(platform, pms_host.as_ptr(), c_int::from(pms_port))
+}
+
+/// Boot a host with no fixed server. The pair is read only when an injected dev token selects a
+/// fixed server. Without an injected token or a saved session, boot opens ordinary Plex sign-in.
+pub fn run_signed_out(platform: &'static Platform) -> Exit {
+    run(platform, c"", 0)
 }
 
 /// **The owner's ruling, held in the source.** `tests/host_interface.rs` is a separate crate and reads only its own
@@ -380,7 +386,7 @@ mod surface_pin_tests {
     /// removed; empty for none). The first groups are the interface of a platform's own types and entry; the media values
     /// and the simulator's sink are there because the application keeps the playback composition until W11a, which retires
     /// each of them (`docs/platform-ports.md`, Target shape 8 and W7).
-    const HOST_ITEMS: [(&str, &str); 38] = [
+    const HOST_ITEMS: [(&str, &str); 39] = [
         // What a platform builds, implements and reports input through, and the entry that boots it.
         ("Platform", ""),
         ("Shell", ""),
@@ -397,6 +403,7 @@ mod surface_pin_tests {
         ("Release", ""),
         ("Services", ""),
         ("run", ""),
+        ("run_signed_out", ""),
         // The hosted contract's exit half: a hosted platform's callbacks, its stop and its watchdog go through these. They
         // are the application's own types and stay (they do not retire); the C ABI that drives them is the platform's.
         ("HostGate", ""),

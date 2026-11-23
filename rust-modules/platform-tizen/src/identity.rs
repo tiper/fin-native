@@ -1,11 +1,8 @@
 //! What the Tizen build says it is: the platform the Plex server sees, and the locale the host stored.
 //!
-//! **Emulator only, and it says so.** The Tizen build has run on no retail set, so the name and version the
-//! server reads (`X-Plex-Platform` / `X-Plex-Platform-Version`, built by `plex::identity` from the published
-//! `Platform`) are `Tizen` and `<version> (emulator)`, and the boot logs one line, `platform: Tizen <version>
-//! (` + [`BUILD`] + `)`: `emulator only; no playback` without the `uri` feature, `emulator only; direct play
-//! through the host's native player, not run on a retail set` with it. The only seam is
-//! `plx_os::tv::device::publish_platform`; nothing here builds a header.
+//! The name and version the Plex server reads come from the published `Platform`. The
+//! x86_64 emulator build adds `(emulator)`. The armv7 build reports the version as supplied
+//! by the host and logs its super-alpha status.
 //!
 //! No `Info` or `Hardware` is published: their `major` is the webOS firmware major (the capability tables, the
 //! session store's migration and the Feed's era all read it), and `0` is the answer they handle for "not a
@@ -16,13 +13,20 @@ use plx_os::tv::LocaleReply;
 
 /// The version string the PMS sees for the Tizen version `version`.
 pub fn pms_version(version: &str) -> String {
-    format!("{version} (emulator)")
+    if cfg!(target_arch = "arm") {
+        version.to_owned()
+    } else {
+        format!("{version} (emulator)")
+    }
 }
 
 /// What the boot's identity line says this build can do, in the words of `docs/tizen.md`.
-#[cfg(not(feature = "uri"))]
+// In this crate, arm means the retail armv7 configuration.
+#[cfg(target_arch = "arm")]
+pub const BUILD: &str = "super alpha; not run on a retail set";
+#[cfg(all(not(target_arch = "arm"), not(feature = "uri")))]
 pub const BUILD: &str = "emulator only; no playback";
-#[cfg(feature = "uri")]
+#[cfg(all(not(target_arch = "arm"), feature = "uri"))]
 pub const BUILD: &str = "emulator only; direct play through the host's native player, not run on a retail set";
 
 /// The boot-time device probe: publish the platform and say, once, what this build is.
@@ -52,7 +56,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_server_reads_the_version_as_an_emulator() {
+    fn the_server_reads_the_emulator_suffix_only_on_the_emulator_build() {
+        #[cfg(target_arch = "arm")]
+        assert_eq!(pms_version("6.0"), "6.0");
+        #[cfg(not(target_arch = "arm"))]
         assert_eq!(pms_version("10.0"), "10.0 (emulator)");
     }
 
@@ -78,7 +85,7 @@ mod tests {
         });
         let published = plx_os::tv::device::platform().expect("published");
         assert_eq!(published.name, "Tizen");
-        assert_eq!(published.version, "unknown (emulator)", "no launch values stored in this test: the default");
+        assert_eq!(published.version, pms_version("unknown"), "no launch values stored in this test");
         assert_eq!(
             log.lines().filter(|l| l.contains("platform: Tizen")).collect::<Vec<_>>(),
             [format!("platform: Tizen unknown ({BUILD})")]

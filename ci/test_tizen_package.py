@@ -5,6 +5,7 @@ Nothing here runs dotnet or needs a certificate: `stage` and `verify_tpk` work o
 the part a CI machine can prove. The refusal must NAME the missing variables and must never print a value.
 """
 import importlib.util
+import base64
 import json
 import re
 import tempfile
@@ -143,6 +144,52 @@ class DotnetBuild(unittest.TestCase):
         seen = self.build({"PLATFORM": "tizen"})
         self.assertEqual(seen["env"]["AuthorPass"], "p")
         self.assertFalse(any("p" == a or "q" == a for a in seen["command"]), "a password is on the command line")
+
+
+class Nightly(unittest.TestCase):
+    label = "0.11.0-nightly-20261122"
+
+    def test_versions_advance_and_inputs_are_validated(self):
+        self.assertEqual(package.nightly_version(self.label), "0.11.9822")
+        self.assertEqual(package.nightly_version("0.11.0-nightly-20261123"), "0.11.9823")
+        self.assertEqual(package.nightly_version("255.255.0-nightly-20261122"), "255.255.9822")
+        for label in ("0.11.0-nightly-20260230", "0.11.0-nightly-19991231", "1.2.3",
+                      "256.2.3-nightly-20261122", "1.256.3-nightly-20261122"):
+            with self.assertRaises(package.PackageError):
+                package.nightly_version(label)
+        for mock, log, env in (("mock", None, {}), (None, "log", {}), (None, None, {"PLX_TIZEN_AUTHOR_PASS": ""})):
+            with self.assertRaises(package.PackageError):
+                package.check_nightly(self.label, mock, log, env)
+
+    def test_verify_requires_both_ephemeral_certificates(self):
+        version = package.nightly_version(self.label)
+        with tempfile.TemporaryDirectory() as scratch:
+            tpk = Path(scratch) / "package.tpk"
+            with zipfile.ZipFile(tpk, "w") as archive:
+                archive.writestr(package.MANIFEST,
+                    f'<manifest xmlns="http://tizen.org/ns/packages" package="{package.PACKAGE_ID}" '
+                    f'version="{version}" api-version="6.0"><ui-application><label>{package.NIGHTLY_LABEL}</label>'
+                    '</ui-application></manifest>')
+                for name, cert in (("author-signature.xml", b"author"), ("signature1.xml", b"dist")):
+                    archive.writestr(name, '<Signature xmlns="http://www.w3.org/2000/09/xmldsig#"><KeyInfo><X509Data>'
+                                     f'<X509Certificate>{base64.b64encode(cert).decode()}</X509Certificate></X509Data></KeyInfo></Signature>')
+            package.verify_nightly(tpk, version, b"author", b"dist")
+            with self.assertRaisesRegex(package.PackageError, "author-signature.xml"):
+                package.verify_nightly(tpk, version, b"sdk-default", b"dist")
+            with self.assertRaisesRegex(package.PackageError, "signature1.xml"):
+                package.verify_nightly(tpk, version, b"author", b"sdk-default")
+
+    def test_throwaway_key_uses_a_tizen_sdk_compatible_envelope(self):
+        with tempfile.TemporaryDirectory() as scratch, \
+                unittest.mock.patch.object(package.subprocess, "run") as run, \
+                unittest.mock.patch.object(package.subprocess, "check_output", return_value=b"cert"):
+            package.throwaway_certificate(Path(scratch), "author", SECRET)
+        command = run.call_args.args[0]
+        for flag in ("-keypbe", "-certpbe"):
+            self.assertEqual(command[command.index(flag) + 1], "PBE-SHA1-3DES")
+        self.assertEqual(command[command.index("-macalg") + 1], "sha1")
+        self.assertNotIn(SECRET, command)
+        self.assertEqual(run.call_args.kwargs["env"]["PLX_EPHEMERAL_PASSWORD"], SECRET)
 
 
 class HostProject(unittest.TestCase):

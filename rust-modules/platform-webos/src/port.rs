@@ -67,6 +67,10 @@ static SERVICES: plx_os::tv::Services = plx_os::tv::Services {
         curl: &["libcurl.so.4", "libcurl.so.5"],
         egl: &["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"],
     },
+    #[cfg(all(target_arch = "arm", target_os = "linux", not(feature = "sim")))]
+    crash_capture: crate::crash_capture::HOOKS,
+    #[cfg(not(all(target_arch = "arm", target_os = "linux", not(feature = "sim"))))]
+    crash_capture: plx_os::tv::crash_capture::Hooks::NONE,
     legacy_webos_media: plx_os::tv::LegacyWebosMedia {
         sink: SINK,
         display_sink: DISPLAY,

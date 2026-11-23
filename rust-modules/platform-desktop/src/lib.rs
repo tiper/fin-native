@@ -83,6 +83,7 @@ static SERVICES: Services = Services {
         curl: &["libcurl.so.4", "libcurl.so.5", "libcurl.4.dylib"],
         egl: &["libEGLfk.so.2", "libEGL.so.1", "libEGL.so"],
     },
+    crash_capture: plx_os::tv::crash_capture::Hooks::NONE,
     legacy_webos_media: LegacyWebosMedia {
         sink: SINK,
         display_sink: DISPLAY,

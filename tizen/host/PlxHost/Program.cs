@@ -591,7 +591,7 @@ namespace PlxHost
             {
                 if (!File.Exists(path))
                 {
-                    Log("dev boot: none (no " + path + "): the launch names no Plex server and the library will refuse it");
+                    Log("dev boot: none, starting at Plex sign-in");
                     return null;
                 }
                 string text = File.ReadAllText(path).Trim();

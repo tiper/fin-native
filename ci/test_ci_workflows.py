@@ -269,6 +269,22 @@ class NightlyHomebrewRepository(unittest.TestCase):
         self.assertLess(publish.index("gh release create"),
                         publish.index("--pattern com.beb.plxnative.nightly.manifest.json"))
 
+    def test_samsung_is_optional_in_the_shared_nightly(self):
+        publish = job_body("nightly.yml", "publish")
+        self.assertIn("needs: [plan, build, tizen]", publish)
+        self.assertIn("!cancelled() && needs.plan.outputs.skip != 'true' && needs.build.result == 'success'", publish)
+        self.assertIn("needs.tizen.result == 'success'", publish)
+        self.assertIn('"${samsung_assets[@]}"', publish.split("gh release create")[1].split("--target")[0])
+        self.assertIn("dist/tizen-sdl-source.tar", publish)
+        self.assertLess(publish.index("gh release create"), publish.index("cd verify && sha256sum -c nightly-tizen.sha256"))
+        self.assertNotIn("ci/deps.py fetch sdl2", code("build-package.yml"))
+        self.assertIn("args+=(--force-new-nightly)", job_body("nightly.yml", "plan"))
+        for job in ("pages", "prune"):
+            self.assertIn("!cancelled() && needs.publish.result == 'success'", job_body("nightly.yml", job))
+        tizen = job_body("nightly.yml", "tizen")
+        self.assertIn("needs.plan.outputs.dry == 'true' || vars.SAMSUNG_NIGHTLY_PUBLISH == 'true'", tizen)
+        self.assertIn("uses: ./.github/workflows/tizen-package.yml", tizen)
+
     def test_a_nightly_is_released_in_the_nightly_repository_and_tagged_here(self):
         # The release and its assets go to `ci/nightly.py release-repo` with the token scoped to it;
         # the tag is pushed HERE first, at the built commit, because `plan` and the notes' compare

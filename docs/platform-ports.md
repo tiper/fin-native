@@ -1356,8 +1356,9 @@ Ecore names to `remote_token_key` pairs".
   and signing path. Each platform records its tested configurations, one per Rust target it is tested on. Tizen has
   two (Decision 8). x86_64 is a first-class configuration of `mk/platform-tizen.mk`: the TV 10.0 emulator, `tizen80`,
   the Samsung Public certificate profile the emulator needs too (E2), and the configuration W9's MVP is accepted on.
-  armv7 softfp (T3) with the NDK sysroot, a named firmware range and the same kind of profile is the retail
-  configuration; it is recorded but untested until a retail set answers H1 and H2. Their variables are printed by the
+  The armv7 soft-float configuration uses the pinned NDK sysroot and builds a SUPER ALPHA
+  nightly for Tizen 6.0 and newer. Apps2Samsung re-signs it for each install. A retail TV still
+  needs to answer H1 and H2. See [the Samsung nightly guide](samsung-nightly.md). Their variables are printed by the
   CI job and quoted in the PR. What has run so far is x86_64 on the Tizen 10 emulator (E1-E13): it exercised
   `tizen80`, the signing path and the host contract but neither the ARM library nor the NDK sysroot (H1, H2), and its
   results read "emulator only". A further configuration (aarch64, `tizen90`, glibc 2.40) is added only when a
@@ -1962,7 +1963,7 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   credential is persisted; per Decision 7, B only `client_id`, language and interface resolution are, in the
   `install_preferences` v2 file, and every other setting is forgotten each launch: stated in the PR); identity
   `Tizen`, `native_video: NotApplicable`, `PLAYBACK_BACKENDS=none`, `BackendSet::NONE` with Play disabled and a
-  reason; `mk/platform-tizen.mk` with its two configurations, x86_64 first class and armv7 recorded (the PLATFORM
+  reason; `mk/platform-tizen.mk` with its two configurations, x86_64 for the emulator and armv7 for the nightly (the PLATFORM
   axis); the CI compile-only job.
 - Verify: a build-bench table; the export check against `DllImport`; the webOS ARM link command unchanged
   (`make -n` diff); fw-compat-reviewer; the packaged `.so`'s dependencies inspected, that exact `.tpk` loaded;

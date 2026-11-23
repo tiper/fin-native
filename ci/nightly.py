@@ -66,6 +66,12 @@ RELEASE_REPO = "plxnative/plx-native-nightly"
 SITE_ORIGIN = "https://plxnative.com"
 REPO_JSON_URL = f"{SITE_ORIGIN}/nightly/repo.json"
 GUIDE_URL = f"{SITE_ORIGIN}/nightly/"
+SAMSUNG_GUIDE_URL = f"{GUIDE_URL}samsung/"
+SAMSUNG_ALPHA = (
+    "It has never been run on a real Samsung TV - only on Samsung's TV emulator. "
+    "For Samsung TVs from 2021 or newer (Tizen 6.0 or newer) only. "
+    "It may not start at all."
+)
 PACKAGE_ID = "com.beb.plxnative.nightly"
 #: The manifest `build-package.yml` generates for the nightly package and `publish` attaches to the
 #: release under this name; also what is served beside `repo.json`.
@@ -141,7 +147,7 @@ def changed_outside_site_docs(paths: "list[str]") -> bool:
     return any(not (p.startswith("site/") or p.startswith("docs/")) for p in paths if p.strip())
 
 
-def plan_decision(dry: bool, prev_tag: "str | None", changed: "list[str]") -> "tuple[bool, str]":
+def plan_decision(dry: bool, prev_tag: "str | None", changed: "list[str]", *, force: bool = False) -> "tuple[bool, str]":
     """The `(skip, reason)` decision, isolated from git and the clock so `--selftest` can cover it
     directly. `changed` is `git diff --name-only prev_tag..head`'s output, meaningful only when
     `prev_tag` is not `None` and `dry` is false — the two cases that skip ever fires for.
@@ -153,6 +159,8 @@ def plan_decision(dry: bool, prev_tag: "str | None", changed: "list[str]") -> "t
     """
     if dry:
         return False, "dry run (pull_request or dry_run input) — always builds regardless of what changed"
+    if force:
+        return False, "manual dispatch requested a new nightly even if main is unchanged"
     if prev_tag is None:
         return False, "no previous nightly tag — first nightly"
     if changed_outside_site_docs(changed):
@@ -160,7 +168,7 @@ def plan_decision(dry: bool, prev_tag: "str | None", changed: "list[str]") -> "t
     return True, f"no commit outside site/ and docs/ since {prev_tag}"
 
 
-def cmd_plan(date: str, head: str, dry: bool) -> int:
+def cmd_plan(date: str, head: str, dry: bool, force: bool = False) -> int:
     """Print `$GITHUB_OUTPUT`-shaped `key=value` lines: `version`, `label`, `tag`, `prev_tag`,
     `skip`, `reason`. Refuses (non-zero, `::error::`) if `tag` already exists — same-day rebuilds
     are refused by design; delete the release and its tag first if a genuine re-cut is wanted.
@@ -184,9 +192,9 @@ def cmd_plan(date: str, head: str, dry: bool) -> int:
 
     prev_tag = newest_nightly_tag()
     changed = []
-    if not dry and prev_tag is not None:
+    if not (dry or force) and prev_tag is not None:
         changed = [p for p in _git(["diff", "--name-only", f"{prev_tag}..{head}"]).splitlines() if p]
-    skip, reason = plan_decision(dry, prev_tag, changed)
+    skip, reason = plan_decision(dry, prev_tag, changed, force=force)
 
     print(f"version={version}")
     print(f"label={label}")
@@ -198,7 +206,7 @@ def cmd_plan(date: str, head: str, dry: bool) -> int:
 
 
 def render_notes(*, label: str, sha: str, prev_tag: "str | None", ipk: str, sha256: str, repo: str,
-                  changes: "list[str]") -> str:
+                  changes: "list[str]", tpk: str = "", tpk_sha256: str = "") -> str:
     """The release body. Markdown, no hard wrapping (each sentence stays on one line — a reader's
     browser wraps it, a `sed`-based diff of two notes should not have to fight line breaks that
     carry no meaning), and every link absolute so the body reads the same copied out of the page as
@@ -230,7 +238,18 @@ def render_notes(*, label: str, sha: str, prev_tag: "str | None", ipk: str, sha2
             f"[Latest stable release]({latest_release_link})"
         )
 
+    samsung = "## Samsung (Tizen)\n\nNo Samsung build tonight."
+    if tpk:
+        samsung = (
+            "## Samsung (Tizen) - SUPER ALPHA\n\n"
+            f"{SAMSUNG_ALPHA} "
+            f"[If you try it, please send us a log]({SAMSUNG_GUIDE_URL}#send-a-log).\n\n"
+            f"Install `{tpk}` with Apps2Samsung. [Samsung installation guide]({SAMSUNG_GUIDE_URL})\n\n"
+            "The exact SDL build inputs are attached as `tizen-sdl-source.tar`.\n\n"
+            f"```\n{tpk_sha256}  {tpk}\n```"
+        )
     return "\n\n".join([
+        "## LG (webOS)",
         f"Automatic build of `main` at [`{short_sha}`]({commit_link}). It installs beside "
         "PlxNative as a separate app, \"PlxNative Nightly\", with its own launcher tile and its "
         "own sign-in — your regular PlxNative install is untouched.",
@@ -258,10 +277,17 @@ def render_notes(*, label: str, sha: str, prev_tag: "str | None", ipk: str, sha2
         f"```\n{sha256}  {ipk}\n```\n\n"
         "This package bundles FFmpeg under LGPL-2.1-or-later; the complete corresponding source is "
         "attached below. Nightly builds are deleted after 30 days.",
+
+        samsung,
     ])
 
 
 def cmd_notes(args: argparse.Namespace) -> int:
+    if bool(args.tpk) != bool(args.tpk_sha256) or (args.tpk and (
+        args.tpk != f"plxnative-tizen-v{args.label}-armv7.tpk" or not re.fullmatch(r"[0-9a-f]{64}", args.tpk_sha256)
+    )):
+        print("::error::Samsung notes require the expected TPK filename and its SHA-256", file=sys.stderr)
+        return 1
     changes_raw = _git([
         "log", "--first-parent", "--format=- %s", f"{args.prev_tag}..{args.sha}",
         "--", ".", ":!site", ":!docs",
@@ -269,7 +295,7 @@ def cmd_notes(args: argparse.Namespace) -> int:
     changes = [line for line in changes_raw.splitlines() if line]
     print(render_notes(
         label=args.label, sha=args.sha, prev_tag=args.prev_tag or None,
-        ipk=args.ipk, sha256=args.sha256, repo=args.repo, changes=changes,
+        ipk=args.ipk, sha256=args.sha256, repo=args.repo, changes=changes, tpk=args.tpk, tpk_sha256=args.tpk_sha256,
     ))
     return 0
 
@@ -633,6 +659,9 @@ def _selftest() -> int:
                                   changed=["rust-modules/src/app.rs"])
     check(skip is False, "not dry, prev_tag set, an app file changed -> do not skip")
 
+    skip, reason = plan_decision(dry=False, prev_tag="nightly/v0.7.0-nightly-20260918", changed=[], force=True)
+    check(skip is False and "manual dispatch" in reason, "a manual retry can build unchanged main")
+
     # notes rendering
     body = render_notes(
         label="0.7.0-nightly-20260919", sha="abc1234def5678900000000000000000000000",
@@ -663,6 +692,20 @@ def _selftest() -> int:
     check("## Changes\n\n" in first_notes, "no prev_tag -> '## Changes' heading, not '## Changes since' with nothing after it")
     check("## Changes since" not in first_notes,
           "no prev_tag -> never renders the dangling '## Changes since' heading")
+    check("No Samsung build tonight." in first_notes and "SUPER ALPHA" not in first_notes,
+          "a missing Tizen artifact does not advertise an install")
+    tpk = "plxnative-tizen-v0.7.0-nightly-20260919-armv7.tpk"
+    samsung_notes = render_notes(
+        label="0.7.0-nightly-20260919", sha="0" * 40, prev_tag=None,
+        ipk="plxnative-v0.7.0-nightly-20260919.ipk", sha256="0" * 64, repo="plxnative/plx-native",
+        changes=[], tpk=tpk, tpk_sha256="1" * 64,
+    )
+    samsung_guide = (Path(__file__).resolve().parents[1] / "docs/samsung-nightly.md").read_text()
+    for phrase in ("SUPER ALPHA", SAMSUNG_ALPHA, "If you try it, please send us a log"):
+        check(phrase in samsung_notes and phrase in " ".join(samsung_guide.split()),
+              f"the Samsung guide and notes both carry {phrase!r}")
+    check(f"{'1' * 64}  {tpk}" in samsung_notes and f"{SAMSUNG_GUIDE_URL}#send-a-log" in samsung_notes,
+          "Samsung notes give the exact artifact, checksum and log instructions")
 
     # latest-json field mapping
     fake_release = {
@@ -836,6 +879,9 @@ def main() -> int:
     p_plan.add_argument("--dry", action="store_true",
                          help="never skip and never refuse an existing tag — this run will not publish")
 
+    p_plan.add_argument("--force-new-nightly", action="store_true",
+                        help="build if main is unchanged, preserving the same-day tag check")
+
     p_notes = sub.add_parser("notes")
     p_notes.add_argument("--label", required=True)
     p_notes.add_argument("--sha", required=True)
@@ -843,6 +889,8 @@ def main() -> int:
     p_notes.add_argument("--ipk", required=True)
     p_notes.add_argument("--sha256", required=True)
     p_notes.add_argument("--repo", required=True)
+    p_notes.add_argument("--tpk", default="")
+    p_notes.add_argument("--tpk-sha256", default="")
 
     p_latest = sub.add_parser("latest-json")
     p_latest.add_argument("--repo", required=True)
@@ -867,7 +915,7 @@ def main() -> int:
         return _selftest()
 
     if args.cmd == "plan":
-        return cmd_plan(args.date, args.head, args.dry)
+        return cmd_plan(args.date, args.head, args.dry, args.force_new_nightly)
     if args.cmd == "notes":
         return cmd_notes(args)
     if args.cmd == "latest-json":

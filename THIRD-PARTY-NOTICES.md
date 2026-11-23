@@ -538,7 +538,8 @@ file only if its target is itself a `*.plex.direct` name that fails the same way
 
 ### 2.8 The Tizen package: SDL2, SDL2_ttf and FreeType, statically linked into `libplx.so`
 
-This section applies to the **Tizen** package (`PlxNative-x86_64.tpk`, built by `make PLATFORM=tizen tizen-tpk`; `docs/tizen.md`), not to the
+This section applies to the **Tizen** packages (`PlxNative-x86_64.tpk` from `make PLATFORM=tizen tizen-tpk`,
+and `plxnative-tizen-v<label>-armv7.tpk` from `make PLATFORM=tizen TIZEN_ARCH=armv7 RELEASE=1 tizen-tpk-nightly`; see `docs/tizen.md`), not to the
 webOS `.ipk`. A Tizen television carries no SDL, so that package links its own, statically, into its one native library
 `lib/libplx.so`, and exports none of it. Both are fetched at build time from the pins in `ci/dependencies.json` (`sdl2`, `sdl2-ttf`: the
 upstream release archives and their sha256), compiled unaltered by `tizen/build-sdl.sh`, and are not kept in this repository:
@@ -568,8 +569,7 @@ and `libecore_wl2.so.1` again, to find the window `libplx.so` made. All of them 
 `docs/tizen.md`), `libass-plx*.so.0` (`rust-modules/gfx/src/rtl.rs:55` for Arabic and Hebrew text, `rust-modules/media/src/player/ass.rs:1272` for
 subtitles) and, in a `devtriggers` build with the dev capture on, `libturbojpeg.so.0` in the application directory (`rust-modules/src/capture.rs:472`).
 Not compiled into this library at all: the webOS port (`libhelpers.so.2`, `rust-modules/platform-webos/src/system.rs:985`), the separate storage
-service binary (`luna-service2` and `glib-2.0`, `rust-modules/os/src/storage_service/bus.rs:23,42`), Sentry Native (declared for 32-bit ARM Linux
-only, `rust-modules/telemetry/src/telemetry/native.rs:790`) and zlib (the `lab-diagnostics` feature, `rust-modules/base/src/diag.rs:7`, which
+service binary (`luna-service2` and `glib-2.0`, `rust-modules/os/src/storage_service/bus.rs:23,42`), Sentry Native (declared by the webOS platform, `rust-modules/platform-webos/src/crash_capture.rs`) and zlib (the `lab-diagnostics` feature, `rust-modules/base/src/diag.rs:7`, which
 `TIZEN_FEATURES` does not enable). EGL lookups by `rust-modules/gfx/src/egl.rs:110` only look at an EGL already mapped (`RTLD_NOLOAD`) and open nothing.
 The package's only assemblies are our own `bin/PlxHost.dll` (with its `bin/PlxHost.pdb`) and its only native library is `lib/libplx.so` (beside them it
 holds the manifest, the signatures, `PlxHost.deps.json`, `res/` and `shared/res/`). `PlxHost.deps.json` of the emulator-run package gives runtime
@@ -596,7 +596,7 @@ needs an entry in this section first. Every other heading of this file has exact
 - **2.5 Compiler runtime fragments: does not apply.** The startup objects named there are the webOS NDK's and `src/compat/getauxval.c` is built for
   32-bit ARM Linux only. This library is linked by the build host's own compiler; GCC's startup objects, if that compiler is GCC, are under the
   same GCC Runtime Library Exception, whose text (`licenses/GCC-exception-3.1.txt`) the package carries anyway.
-- **2.6 Native crash capture: does not apply.** The Sentry Native symbols are declared only for 32-bit ARM Linux and no crash handler is staged.
+- **2.6 Native crash capture: does not apply.** The webOS platform declares the Sentry Native symbols. The Tizen package has no native crash handler.
 - **2.7 Public CA root certificates: does not apply.** `le-roots.pem` is not staged.
 - **2.8** (this section): the Tizen package's own entry for SDL2, SDL2_ttf and FreeType.
 - **3 Dynamically linked: applies with a difference.** It describes the webOS television's libraries. For the Tizen package every library below

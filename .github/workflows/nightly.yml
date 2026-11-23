@@ -66,13 +66,24 @@ on:
         required: false
         type: boolean
         default: false
+      force_new_nightly:
+        description: Build even when main has not changed, for example after enabling Samsung publication
+        type: boolean
+        default: false
   pull_request:
     # Only a change that could plausibly break tomorrow's 03:00 UTC run earns a build here — not
     # every PR. Widen this list if another file the nightly path depends on gains one.
     paths:
       - .github/workflows/nightly.yml
       - .github/workflows/build-package.yml
+      - .github/workflows/tizen-package.yml
+      - mk/platform-tizen.mk
+      - tizen/**
+      - tools/tizen-log-receiver.py
       - ci/nightly.py
+      - ci/check-tizen-so.py
+      - ci/dependencies.json
+      - ci/testdata/tizen60-armv7-abi.json
       - ci/flavor.py
       - ci/version_rule.py
       - ci/check-package.py
@@ -170,10 +181,12 @@ jobs:
         # problem (see `plan_decision`'s own docstring in ci/nightly.py).
         env:
           DRY: ${{ steps.dry.outputs.dry }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force_new_nightly }}
         run: |
           set -euo pipefail
           args=(--date "${{ steps.date.outputs.date }}" --head "${{ steps.sha.outputs.sha }}")
           [ "$DRY" = "true" ] && args+=(--dry)
+          [ "$FORCE" = "true" ] && args+=(--force-new-nightly)
           python3 ci/nightly.py plan "${args[@]}" >> "$GITHUB_OUTPUT"
       - run: |
           {
@@ -230,19 +243,30 @@ jobs:
     secrets:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
+  tizen:
+    name: build Samsung nightly
+    needs: plan
+    # Enable on the repository after the x86_64 nightly boots and logs on the Samsung TV emulator.
+    # Dry runs always exercise the full staging path, including before that smoke test.
+    if: ${{ needs.plan.outputs.skip != 'true' && (needs.plan.outputs.dry == 'true' || vars.SAMSUNG_NIGHTLY_PUBLISH == 'true') }}
+    uses: ./.github/workflows/tizen-package.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      label: ${{ needs.plan.outputs.label }}
+
   publish:
     name: publish nightly prerelease
     runs-on: ubuntu-latest
     # Measured max 1.4 min over the last 40 successful runs; limit ~2x, rounded up to 5 (unset = 360).
     timeout-minutes: 10
-    needs: [plan, build]
+    needs: [plan, build, tizen]
     # A dry run (workflow_dispatch's `dry_run` input, or any pull_request) still runs this job —
     # only the network-mutating steps below are individually gated on `needs.plan.outputs.dry`.
     # Staging the artifact, rendering notes and verifying the checksum locally are exactly the
     # steps a change to THIS job's own logic needs exercised before it reaches `main`; skipping
     # the whole job the way this used to work is why the bare-filename `sha256sum -c` bug in the
     # staging step survived every dry run and only broke on the first real nightly.
-    if: ${{ needs.plan.outputs.skip != 'true' }}
+    if: ${{ !cancelled() && needs.plan.outputs.skip != 'true' && needs.build.result == 'success' }}
     permissions:
       contents: write
     steps:
@@ -272,9 +296,15 @@ jobs:
         with:
           name: nightly-assets
           path: raw
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ needs.tizen.result == 'success' }}
+        with:
+          name: tizen-assets
+          path: raw-tizen
       - name: Stage nightly assets
         env:
           LABEL: ${{ needs.plan.outputs.label }}
+          TIZEN_RESULT: ${{ needs.tizen.result }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -301,6 +331,12 @@ jobs:
           cp raw/ffmpeg-*.tar.xz dist/
           cp raw/build-ffmpeg.sh dist/
           cp raw/plxnative-source-*.tar.gz* dist/
+          if [ "$TIZEN_RESULT" = success ]; then
+            tpk="plxnative-tizen-v${LABEL}-armv7.tpk"
+            cp "raw-tizen/$tpk" raw-tizen/nightly-tizen.sha256 raw-tizen/tizen-log-receiver.py raw-tizen/tizen-sdl-source.tar dist/
+            ( cd dist && test "$(sha256sum "$tpk" tizen-sdl-source.tar)" = "$(cat nightly-tizen.sha256)" )
+            echo "tpk=$tpk" >> "$GITHUB_OUTPUT"
+          fi
           echo "ipk=$ipk" >> "$GITHUB_OUTPUT"
         id: stage
       - name: Render release notes
@@ -310,11 +346,16 @@ jobs:
           PREV_TAG: ${{ needs.plan.outputs.prev_tag }}
           IPK: ${{ steps.stage.outputs.ipk }}
           REPO: ${{ github.repository }}
+          TPK: ${{ steps.stage.outputs.tpk }}
         run: |
           set -euo pipefail
           sha256=$(cut -d' ' -f1 dist/nightly.sha256)
+          tizen_notes=()
+          if [ -n "$TPK" ]; then
+            tizen_notes=(--tpk "$TPK" --tpk-sha256 "$(head -n 1 dist/nightly-tizen.sha256 | cut -d' ' -f1)")
+          fi
           python3 ci/nightly.py notes --label "$LABEL" --sha "$SHA" --prev-tag "$PREV_TAG" \
-            --ipk "$IPK" --sha256 "$sha256" --repo "$REPO" > "$RUNNER_TEMP/notes.md"
+            --ipk "$IPK" --sha256 "$sha256" --repo "$REPO" "${tizen_notes[@]}" > "$RUNNER_TEMP/notes.md"
       - name: Verify the staged checksum
         # Runs in every non-skipped build, dry or real: this is the local, no-network check that
         # `nightly.sha256` (written from inside `dist/` by the staging step above, so it carries
@@ -330,6 +371,7 @@ jobs:
           LABEL: ${{ needs.plan.outputs.label }}
           SHA: ${{ needs.plan.outputs.sha }}
           IPK: ${{ steps.stage.outputs.ipk }}
+          TPK: ${{ steps.stage.outputs.tpk }}
         run: |
           set -euo pipefail
           release_repo=$(python3 ci/nightly.py release-repo)
@@ -341,8 +383,13 @@ jobs:
           trap 'git push --delete origin "refs/tags/$TAG" || true' ERR
           # The release repository has none of this repository's commits, so its own copy of the
           # tag sits on its `main`; the built commit is the tag above, which the notes link.
+          samsung_assets=()
+          if [ -n "$TPK" ]; then
+            samsung_assets=("dist/$TPK" dist/nightly-tizen.sha256 dist/tizen-log-receiver.py dist/tizen-sdl-source.tar)
+          fi
           gh release create "$TAG" --repo "$release_repo" \
             "dist/$IPK" dist/nightly.sha256 dist/com.beb.plxnative.nightly.manifest.json dist/ffmpeg-*.tar.xz dist/build-ffmpeg.sh dist/plxnative-source-*.tar.gz* \
+            "${samsung_assets[@]}" \
             --target main \
             --title "PlxNative $LABEL" \
             --prerelease \
@@ -357,6 +404,13 @@ jobs:
           mkdir -p verify
           gh release download "$TAG" --repo "$release_repo" --pattern "$IPK" --dir verify
           test "$(sha256sum "verify/$IPK" | cut -d' ' -f1)" = "$(cut -d' ' -f1 dist/nightly.sha256)"
+          if [ -n "$TPK" ]; then
+            gh release download "$TAG" --repo "$release_repo" --dir verify \
+              --pattern "$TPK" --pattern nightly-tizen.sha256 --pattern tizen-log-receiver.py --pattern tizen-sdl-source.tar
+            cmp dist/nightly-tizen.sha256 verify/nightly-tizen.sha256
+            cmp dist/tizen-log-receiver.py verify/tizen-log-receiver.py
+            ( cd verify && sha256sum -c nightly-tizen.sha256 )
+          fi
           # The published manifest must name the published package's hash — the one thing the
           # television checks on install.
           gh release download "$TAG" --repo "$release_repo" --pattern com.beb.plxnative.nightly.manifest.json --dir verify
@@ -379,7 +433,7 @@ jobs:
   pages:
     name: refresh site latest-nightly pointer
     needs: [plan, publish]
-    if: ${{ needs.plan.outputs.dry != 'true' && needs.plan.outputs.skip != 'true' }}
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.plan.outputs.dry != 'true' }}
     # pages.yml's own top-level `permissions:` covers its push/workflow_dispatch triggers; a
     # reusable-workflow call needs the CALLER job to grant what the called job actually uses.
     permissions:
@@ -394,7 +448,7 @@ jobs:
     # Measured max 0.2 min over the last 40 successful runs; limit ~2x, rounded up to 5 (unset = 360).
     timeout-minutes: 10
     needs: [plan, publish]
-    if: ${{ needs.plan.outputs.dry != 'true' && needs.plan.outputs.skip != 'true' }}
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.plan.outputs.dry != 'true' }}
     permissions:
       contents: write
     steps:

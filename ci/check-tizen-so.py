@@ -33,19 +33,28 @@ Standard library only; Python 3.10 or newer.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
+
+import deps
 
 PREFIX = "plx_host_"
 SONAME = "libplx.so"
 DEFAULT_MAX_GLIBC = "2.40"  # the emulator image's glibc; the CI runner (ubuntu-24.04) links against 2.39, below it
 
+ARCHITECTURES = {
+    "x86_64": ("ELF64", "Advanced Micro Devices X86-64", "ld-linux-x86-64.so.2", DEFAULT_MAX_GLIBC),
+    "armv7": ("ELF32", "ARM", "ld-linux.so.3", "2.30"),
+}
 NEEDED_ALLOWED = (
     "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1", "libutil.so.1", "libgcc_s.so.1",
-    "libGLESv2.so.2", "ld-linux-x86-64.so.2",
+    "libGLESv2.so.2",
 )
 NEEDED_REQUIRED = ("libGLESv2.so.2", "libc.so.6")
 # The OpenGL ES 2.0 core entry points (Khronos gl2.h): the whole set libGLESv2 answers unversioned on every Tizen image. A `gl*` outside it
@@ -71,11 +80,22 @@ glUniform3iv glUniform4f glUniform4fv glUniform4i glUniform4iv glUniformMatrix2f
 glValidateProgram glVertexAttrib1f glVertexAttrib1fv glVertexAttrib2f glVertexAttrib2fv glVertexAttrib3f glVertexAttrib3fv
 glVertexAttrib4f glVertexAttrib4fv glVertexAttribPointer glViewport
 """.split())
-# Weak references every toolchain emits and every loader answers.
+# Optional toolchain hooks. On ARM the pinned Rust std's sys/{fs,random,thread,thread_local,time}
+# tests these weak glibc references before use and falls back when the loader leaves one unresolved.
 UNDEFINED_WEAK_OK = {"__gmon_start__", "_ITM_deregisterTMCloneTable", "_ITM_registerTMCloneTable", "__cxa_finalize"}
+ARMV7_WEAK_OK = {
+    "__clock_gettime64", "__cxa_thread_atexit_impl", "__futimens64", "copy_file_range",
+    "getrandom", "gettid", "statx",
+}
 # The entry points of the text path that must be inside the object: SDL_ttf, its FreeType, SDL's surface.
 INSIDE_OBJECT = ("TTF_Init", "TTF_OpenFont", "TTF_RenderUTF8_Blended", "FT_Init_FreeType", "SDL_FreeSurface")
 STATIC_PREFIXES = ("SDL_", "TTF_", "FT_")
+TIZEN60_ARCHIVE_ID = "tizen60-abi-reference"
+ROOTSTRAP_PREFIX = "data/platforms/tizen-6.0/mobile/rootstraps/mobile-6.0-device.core/"
+ROOTSTRAP_ELFS = (
+    "lib/ld-2.30.so", "lib/libc-2.30.so", "lib/libdl-2.30.so", "lib/libm-2.30.so",
+    "lib/libpthread-2.30.so", "lib/librt-2.30.so", "lib/libutil-2.30.so", "usr/lib/libGLESv2.so.2.0",
+)
 
 
 class CheckError(Exception):
@@ -324,13 +344,23 @@ def version_key(text: str) -> tuple[int, ...]:
 
 
 def verify_object(*, readelf_d: str, readelf_syms: str, nm_local: str, header_text: str, cs_text: str, max_version: str,
-                  allow_new_glibc: bool = False, text_relocations: bool = False, static_tls: bool = False) -> list[str]:
+                  allow_new_glibc: bool = False, text_relocations: bool = False, static_tls: bool = False,
+                  arch: str = "x86_64", readelf_h: str | None = None) -> list[str]:
     """Every rule `verify` states, over already-captured tool output (so a test can feed it canned text)."""
     problems: list[str] = []
     needed, soname = needed_and_soname(readelf_d)
-    bad = [name for name in needed if name not in NEEDED_ALLOWED]
+    elf_class, machine, loader, _ = ARCHITECTURES[arch]
+    if readelf_h is not None:
+        fields = dict(re.findall(r"^\s*(Class|Machine|Flags):\s*([^\n]+)", readelf_h, re.MULTILINE))
+        if (fields.get("Class"), fields.get("Machine")) != (elf_class, machine):
+            problems.append(f"expected {elf_class} {machine} for {arch}")
+        flags = fields.get("Flags", "")
+        if arch == "armv7" and ("Version5 EABI" not in flags or "soft-float ABI" not in flags or "hard-float ABI" in flags):
+            problems.append(f"expected ARM EABI5 soft-float flags, found {flags!r}")
+    allowed = (*NEEDED_ALLOWED, loader)
+    bad = [name for name in needed if name not in allowed]
     if bad:
-        problems.append(f"DT_NEEDED outside the allowlist: {' '.join(bad)} (allowed: {' '.join(NEEDED_ALLOWED)})")
+        problems.append(f"DT_NEEDED outside the allowlist: {' '.join(bad)} (allowed: {' '.join(allowed)})")
     for name in NEEDED_REQUIRED:
         if name not in needed:
             problems.append(f"DT_NEEDED lacks {name}")
@@ -344,6 +374,7 @@ def verify_object(*, readelf_d: str, readelf_syms: str, nm_local: str, header_te
 
     symbols = dynsyms(readelf_syms)
     undefined = [row for row in symbols if row["ndx"] == "UND" and row["name"]]
+    weak_allowed = UNDEFINED_WEAK_OK | (ARMV7_WEAK_OK if arch == "armv7" else set())
     outside = []
     for row in undefined:
         name = row["name"]
@@ -353,7 +384,7 @@ def verify_object(*, readelf_d: str, readelf_syms: str, nm_local: str, header_te
             continue
         if row["version"].startswith(("GLIBC_", "GCC_")):
             continue
-        if row["bind"] == "WEAK" and name in UNDEFINED_WEAK_OK:
+        if row["bind"] == "WEAK" and not row["version"] and name in weak_allowed:
             continue
         if not row["version"] and name in GLES2_CORE:
             continue  # libGLESv2 has no symbol versions
@@ -398,15 +429,83 @@ def run(command: list[str]) -> str:
     return result.stdout
 
 
-def verify_file(so: Path, header_text: str, cs_text: str) -> list[str]:
-    readelf_d = run(["readelf", "-d", str(so)])
-    readelf_syms = run(["readelf", "--dyn-syms", "-W", str(so)])
-    nm_local = run(["nm", str(so)])
-    max_version = os.environ.get("PLX_MAX_GLIBC") or DEFAULT_MAX_GLIBC
+def inventory(rootstrap: Path, toolchain: Path, readelf: str) -> dict:
+    assets = deps.assets_of(deps.entry(TIZEN60_ARCHIVE_ID))
+    paths = {"rootstrap": rootstrap, "gcc": toolchain}
+    for key, path in paths.items():
+        if deps.digest(path) != assets[key]["sha256"]:
+            raise CheckError(f"{key} archive did not match the Tizen 6.0 SDK pin")
+    libraries = {}
+    with tempfile.TemporaryDirectory(prefix="plx-tizen-abi-") as scratch:
+        binary = Path(scratch) / "lib.so"
+        for key, path in paths.items():
+            with zipfile.ZipFile(path) as archive:
+                names = [ROOTSTRAP_PREFIX + name for name in ROOTSTRAP_ELFS] if key == "rootstrap" else [
+                    name for name in archive.namelist() if name.endswith("/libgcc_s.so.1")
+                ]
+                for name in names:
+                    binary.write_bytes(archive.read(name))
+                    if binary.read_bytes()[:4] != b"\x7fELF":
+                        if key == "gcc":
+                            continue  # the SDK also records some symlinks as text
+                        raise CheckError(f"{name} is not ELF")
+                    header = run([readelf, "-h", str(binary)])
+                    if not re.search(r"^\s*Machine:\s*ARM\s*$", header, re.MULTILINE):
+                        continue
+                    _, soname = needed_and_soname(run([readelf, "-d", str(binary)]))
+                    if soname is None:
+                        raise CheckError(f"{name} has no SONAME")
+                    symbols = dynsyms(run([readelf, "--dyn-syms", "-W", str(binary)]))
+                    exported = {
+                        row["name"] + ("@" + row["version"] if row["version"] else "")
+                        for row in symbols if row["ndx"] not in ("UND", "ABS") and row["bind"] in ("GLOBAL", "WEAK", "UNIQUE")
+                    }
+                    record = {"archive": key, "path": name, "symbols": sorted(exported)}
+                    if soname in libraries and libraries[soname]["symbols"] != record["symbols"]:
+                        raise CheckError(f"the SDK has different ARM implementations of {soname}")
+                    libraries[soname] = record
+    required = set(NEEDED_ALLOWED) | {ARCHITECTURES["armv7"][2]}
+    if libraries.keys() != required:
+        raise CheckError(f"SDK SONAME inventory differs from the ARM allowlist: {sorted(required ^ libraries.keys())}")
+    return {"sources": {key: {"url": asset["url"], "sha256": asset["sha256"]} for key, asset in assets.items()},
+            "libraries": libraries}
+
+
+def verify_inventory(needed: list[str], symbols: list[dict[str, str]], reference: dict) -> list[str]:
+    libraries = reference["libraries"]
+    missing = sorted(set(needed) - libraries.keys())
+    available = {symbol for name in needed if name in libraries for symbol in libraries[name]["symbols"]}
+    imports = {
+        row["name"] + ("@" + row["version"] if row["version"] else "")
+        for row in symbols
+        if row["ndx"] == "UND" and row["name"] and (row["bind"] != "WEAK" or row["version"])
+    }
+    problems = [f"Tizen 6.0 SDK has no {name}" for name in missing]
+    problems.extend(f"Tizen 6.0 SDK has no export for {symbol}" for symbol in sorted(imports - available))
+    return problems
+
+
+def verify_file(so: Path, header_text: str, cs_text: str, arch: str, readelf: str, nm: str, against: Path | None) -> list[str]:
+    readelf_h = run([readelf, "-h", str(so)])
+    readelf_d = run([readelf, "-d", str(so)])
+    readelf_syms = run([readelf, "--dyn-syms", "-W", str(so)])
+    nm_local = run([nm, str(so)])
+    max_version = ARCHITECTURES[arch][3]
+    if arch == "x86_64":
+        max_version = os.environ.get("PLX_MAX_GLIBC") or max_version
     problems = verify_object(readelf_d=readelf_d, readelf_syms=readelf_syms, nm_local=nm_local, header_text=header_text, cs_text=cs_text,
-                             max_version=max_version, allow_new_glibc=os.environ.get("PLX_ALLOW_NEW_GLIBC") == "1",
-                             text_relocations="TEXTREL" in readelf_d, static_tls="STATIC_TLS" in readelf_d)
+                             max_version=max_version,
+                             allow_new_glibc=arch == "x86_64" and os.environ.get("PLX_ALLOW_NEW_GLIBC") == "1",
+                             text_relocations="TEXTREL" in readelf_d, static_tls="STATIC_TLS" in readelf_d,
+                             arch=arch, readelf_h=readelf_h)
     needed, _ = needed_and_soname(readelf_d)
+    symbols = dynsyms(readelf_syms)
+    if against is not None:
+        reference = json.loads(against.read_text())
+        sdk_problems = verify_inventory(needed, symbols, reference)
+        problems.extend(sdk_problems)
+        if not sdk_problems:
+            print("Tizen 6.0 ARM SDK: all required imports and SONAMEs found")
     print(f"{so}: {so.stat().st_size} bytes")
     print("DT_NEEDED: " + " ".join(needed))
     print("exports: " + " ".join(sorted({row["name"] for row in dynsyms(readelf_syms) if row["ndx"] not in ("UND", "ABS") and row["bind"] in ("GLOBAL", "WEAK")})))
@@ -426,10 +525,23 @@ def main(argv: list[str]) -> int:
     p.add_argument("--out", required=True, type=Path)
     p = sub.add_parser("verify")
     p.add_argument("so", type=Path)
+    p.add_argument("--arch", choices=ARCHITECTURES, default="x86_64")
+    p.add_argument("--readelf", default="readelf")
+    p.add_argument("--nm", default="nm")
+    p.add_argument("--against", type=Path, help="check the ARM link against the Tizen 6.0 SDK inventory")
     p.add_argument("--header", required=True, type=Path)
     p.add_argument("--host-cs", required=True, type=Path)
+    p = sub.add_parser("inventory")
+    p.add_argument("--rootstrap", required=True, type=Path)
+    p.add_argument("--gcc", required=True, type=Path)
+    p.add_argument("--readelf", default="readelf")
+    p.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "inventory":
+            reference = inventory(args.rootstrap, args.gcc, args.readelf)
+            args.out.write_text(json.dumps(reference, indent=2, sort_keys=True) + "\n")
+            return 0
         header_text = args.header.read_text()
         if args.command == "map":
             functions = header_functions(header_text)
@@ -438,8 +550,9 @@ def main(argv: list[str]) -> int:
             write_map(functions, args.out)
             return 0
         cs_text = args.host_cs.read_text()
-        problems = check_abi(header_text, cs_text) if args.command == "abi" else verify_file(args.so, header_text, cs_text)
-    except (CheckError, OSError) as error:
+        problems = (check_abi(header_text, cs_text) if args.command == "abi"
+                    else verify_file(args.so, header_text, cs_text, args.arch, args.readelf, args.nm, args.against))
+    except (CheckError, OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
         print(f"check-tizen-so: {error}", file=sys.stderr)
         return 1
     for problem in problems:

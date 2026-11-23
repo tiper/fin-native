@@ -1,14 +1,13 @@
-//! The Tizen platform: what the application is handed on a Samsung television, EMULATOR ONLY.
+//! The Tizen platform: what the application is handed on a Samsung television.
 //!
 //! **What this is, and is not.** A hosted `.so`: the .NET host (a Tizen `.tpk`, built by the `tizen`
 //! packaging recipe, not here) `dlopen`s it, calls [`plx_host_start`](exports), and the application runs on
 //! a loop thread this crate starts while the host's main thread stays the Ecore main loop. It has run on the
-//! Tizen TV emulator and on no retail set, and it says so: the platform the Plex server reads is `Tizen` with a
-//! version ending `(emulator)` ([`identity`]). **Playback is the `uri` feature's** (W10 part B): built with it, the
+//! Tizen TV emulator and on no retail set. The x86_64 build appends `(emulator)` to the Plex platform
+//! version and the retail ARMv7 build logs its super-alpha status ([`identity`]). **Playback is the `uri` feature's** (W10 part B): built with it, the
 //! media boot is [`player::MEDIA`], the URI driver over the host's native player, which the planner offers a narrow set of titles to (host-tested only: nothing has been run on a device, and no title is claimed to play);
-//! built without it, the media boot is `host::NO_MEDIA` and nothing plays (`compose: backends=none`). The x86_64 build is not an `all(target_os = "linux", target_arch = "arm")` one, so the
-//! crash-capture branches the television build has are not selected here: a fault on the emulator leaves no
-//! crash file.
+//! built without it, the media boot is `host::NO_MEDIA` and nothing plays (`compose: backends=none`).
+//! Both configurations have no native crash capture hook.
 //!
 //! **The contract** is `include/plx_host.h` (the .NET side is written against that text), mirrored by
 //! [`host_abi`] and pinned against it by a test. [`hosted`] holds the machinery: start and stop, the loop
@@ -62,7 +61,7 @@ pub(crate) static HOSTED: hosted::Hosted = hosted::Hosted::new();
 /// What the lower layers read from the Tizen platform. Every hook is stated, as `tv` requires; where Tizen
 /// has nothing to say the shared `NONE` group's own value is named.
 ///
-/// - `identity`: the device probe publishes `Tizen`/`(emulator)` and the one honest log line; the locale is
+/// - `identity`: the device probe publishes `Tizen` and the build's platform version; the locale is
 ///   the host's (`DirectoryInfo`'s culture, passed in the launch string); there is no capability probe, no
 ///   native video to repair, no device files and no sound-output service.
 /// - `secure`: no key manager, and `MemoryOnly`: nothing persists a credential on this platform, so a session
@@ -93,6 +92,7 @@ static SERVICES: Services = Services {
     storage: StorageHooks { authority: Authority::Files },
     layout: layout::LAYOUT,
     libraries: Libraries { curl: &["libcurl.so.4"], egl: &["libEGL.so.1"] },
+    crash_capture: plx_os::tv::crash_capture::Hooks::NONE,
     legacy_webos_media: LegacyWebosMedia::NONE,
 };
 

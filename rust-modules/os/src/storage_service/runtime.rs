@@ -1,4 +1,6 @@
 //! One independently published rendezvous per installed service identity.
+//! The ARM code below implements the optional storage helper with std and libc only. Tizen
+//! selects file authority and never starts that helper, even though it also builds for ARM Linux.
 use super::wire::ErrorCode;
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 use super::wire::{Descriptor, DESCRIPTOR_NAME, PROTOCOL, SOCKET_NAME};

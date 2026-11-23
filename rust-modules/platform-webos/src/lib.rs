@@ -22,6 +22,8 @@
 #[cfg(all(target_arch = "arm", target_os = "linux", not(feature = "sim"),
     not(any(feature = "play-uri", feature = "play-feed"))))]
 compile_error!("native playback requires play-uri or play-feed");
+#[cfg(all(target_arch = "arm", target_os = "linux", not(feature = "sim")))]
+mod crash_capture;
 mod keymanager;
 mod port;
 mod system;

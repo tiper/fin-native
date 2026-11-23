@@ -19,7 +19,7 @@ GPL_SHA256 = "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
 ROOT_FILES = {'Makefile', 'LICENSE', 'LICENSING.md', 'THIRD-PARTY-NOTICES.md',
               'README.md', 'CONTRIBUTING.md', 'DCO', 'PRIVACY.md', 'SECURITY.md',
               'TRADEMARKS.md', '.gitignore', 'AGENTS.md', 'CLAUDE.md'}
-ROOT_DIRS = {'src', 'include', 'rust-modules', 'assets', 'ci', 'tools', 'docs', 'tests', 'licenses', 'locales', '.agents'}
+ROOT_DIRS = {'src', 'include', 'rust-modules', 'assets', 'ci', 'tools', 'docs', 'tests', 'licenses', 'locales', '.agents', 'mk', 'tizen'}
 PKG_FILES = {'OFL.txt', 'appfont.ttf', 'appfont-bold.ttf', 'appfont-cjk.ttf', 'appfont-emoji.ttf', 'le-roots.pem',
              'appfont-arabic.ttf', 'appfont-arabic-bold.ttf', 'appfont-hebrew.ttf', 'appfont-hebrew-bold.ttf',
              'appinfo.json', 'icon.png', 'icon160.png', 'icon320.png', 'icon400.png',
@@ -68,6 +68,12 @@ def allowed(name):
         return False
     if name in {'ipkroot/ctl/control', '.agents/skills/wake-tv/wake-tv.sh'} or name.startswith('.claude/hooks/'):
         return True
+    if p.parts[0] == 'tizen' and (p.suffix.lower() in {'.p12', '.pfx', '.key', '.tpk'}
+            or p.parts[1:2] in {('out',), ('sdl-build',)}
+            or (p.parts[:3] == ('tizen', 'host', 'PlxHost')
+                and p.parts[3:4] in {('bin',), ('obj',), ('lib',), ('res',), ('shared',)})
+            or p.name in {'dev-boot.json', 'log-host.txt'}):
+        return False
     if name in ROOT_FILES or p.parts[0] in ROOT_DIRS:
         return not any(part in {'target', '__pycache__'} for part in p.parts)
     if p.parts[0] == 'pkg':

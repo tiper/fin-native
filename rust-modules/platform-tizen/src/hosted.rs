@@ -798,7 +798,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let code = w.start(
             |launch| {
-                assert_eq!((launch.pms_host.as_str(), launch.pms_port), ("10.0.2.2", 32499));
+                assert_eq!(launch.pms, Some((c"10.0.2.2".to_owned(), 32499)));
                 Ok(41u32)
             },
             move |launch, window| {
@@ -814,6 +814,23 @@ mod tests {
         assert_eq!(w.wait_stopped(1), [(0, 1)]);
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(w.stopped(), [(0, 1)], "exactly once");
+    }
+
+    #[test]
+    fn a_host_without_a_fixed_server_starts_the_loop() {
+        let w = World::new();
+        let signed_out = c"{\"payload_dir\":\"/res\",\"state_dir\":\"/data\"}";
+        let result = w.hosted.start(
+            &table(),
+            signed_out.as_ptr(),
+            |_| Ok(()),
+            |launch, ()| {
+                assert!(launch.pms.is_none());
+                complete()
+            },
+        );
+        assert_eq!(result, host_abi::OK);
+        assert_eq!(w.wait_stopped(1), [(0, 1)]);
     }
 
     /// A loop that returns with a worker still inside firmware released nothing: `clean = 0`, whatever the
