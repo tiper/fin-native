@@ -153,6 +153,29 @@
     "patches": []
   },
   {
+    "id": "tizen60-abi-reference",
+    "version": "6.0",
+    "license": "See SDK component licenses",
+    "upstream": "https://download.tizen.org/sdk/tizenstudio/official/",
+    "assets": {
+      "rootstrap": {
+        "name": "mobile-6.0-rs-device.core_0.0.123_ubuntu-64.zip",
+        "url": "https://download.tizen.org/sdk/tizenstudio/official/binary/mobile-6.0-rs-device.core_0.0.123_ubuntu-64.zip",
+        "sha256": "94fe9569003f6af3ca574166d25052ce6ef2a4588a209bd87bae9b9420bf7566"
+      },
+      "gcc": {
+        "name": "cross-arm-gcc-9.2_0.1.9_ubuntu-64.zip",
+        "url": "https://download.tizen.org/sdk/tizenstudio/official/binary/cross-arm-gcc-9.2_0.1.9_ubuntu-64.zip",
+        "sha256": "706dd9d3df216fe9cbd706625a0fe8edfc83981b06a55bef302c1f23830b3ca0"
+      }
+    },
+    "update": {
+      "type": "manual",
+      "hold": "Pinned to Tizen 6.0 to verify the minimum supported SDK ABI. A new pin requires regenerating and reviewing the export inventory."
+    },
+    "patches": []
+  },
+  {
     "id": "sdl2",
     "version": "2.32.10",
     "license": "Zlib",

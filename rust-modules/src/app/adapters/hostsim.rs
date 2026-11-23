@@ -4,7 +4,7 @@
 //! draws: `sim_video` composites the picture under the finished UI frame with `plx_gfx`. The media
 //! layer's host tests build their own sink beside it (`player::test_physical`, with no picture).
 //!
-//! `hostsim` builds only: the television's port holds the Starfish sink.
+//! `sim` builds only: the television's port holds the Starfish sink.
 
 mod sim_video;
 

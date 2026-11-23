@@ -59,7 +59,7 @@ fn decode_limits() -> image::Limits {
     l.max_image_height = Some(4096);
     l.max_alloc = Some(32 * 1024 * 1024);
     // The simulator's supersampled renders request up to 4x these boxes, on a host with the memory.
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     if plx_base::surface::render_scale() > 1 {
         l.max_image_width = Some(16384);
         l.max_image_height = Some(16384);

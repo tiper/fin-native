@@ -14,7 +14,7 @@
 //! (`ci/build-ffmpeg.sh`) is built from the television's ONE component list, which has no video
 //! decoders — the TV decodes in hardware — and growing that list for a Mac would make the two
 //! builds diverge. A system `ffmpeg` binary (`PLXNATIVE_SIM_FFMPEG`, else `ffmpeg` on `PATH`) keeps
-//! the decode entirely outside this process and the simulator's link line. `hostsim`-only: the
+//! the decode entirely outside this process and the simulator's link line. `sim`-only: the
 //! television build does not contain this file.
 //!
 //! **What it costs, and the bound.** One 1920x1080 RGBA frame (8 MiB) crosses a pipe per decoded

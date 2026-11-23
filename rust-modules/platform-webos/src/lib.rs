@@ -19,9 +19,11 @@
 //! (`docs/platform-ports.md`, W7). The one thing `plx_os` keeps of all this is the interface the table
 //! fills (`plx_os::tv`).
 // Host checks may build without an executor; a native television artifact must select one.
-#[cfg(all(target_arch = "arm", target_os = "linux", not(feature = "hostsim"),
+#[cfg(all(target_arch = "arm", target_os = "linux", not(feature = "sim"),
     not(any(feature = "play-uri", feature = "play-feed"))))]
 compile_error!("native playback requires play-uri or play-feed");
+#[cfg(all(target_arch = "arm", target_os = "linux", not(feature = "sim")))]
+mod crash_capture;
 mod keymanager;
 mod port;
 mod system;
@@ -33,7 +35,7 @@ mod backend_rule_tests {
     /// The rule used to sit in the application crate, which would have made it a rule of every 32-bit ARM
     /// Linux build of the application, a Tizen one included; it is the webOS platform's own. A host test
     /// cannot build for ARM, so this reads the source: the `compile_error!` is here with its whole `cfg`
-    /// (ARM, Linux, no `hostsim`, neither backend), and the application crate has none. The negative build
+    /// (ARM, Linux, no `sim`, neither backend), and the application crate has none. The negative build
     /// itself (`cargo check -p plx_platform_webos --target armv7-unknown-linux-gnueabi --no-default-features`)
     /// is the one that fails on it. Needles are split with `concat!`, so this test's own text never matches.
     #[test]
@@ -47,7 +49,7 @@ mod backend_rule_tests {
         for part in [
             "target_arch = \"arm\"",
             "target_os = \"linux\"",
-            "not(feature = \"hostsim\")",
+            "not(feature = \"sim\")",
             "not(any(feature = \"play-uri\", feature = \"play-feed\"))",
         ] {
             assert!(cfg.contains(part), "the rule's cfg lost `{part}`");

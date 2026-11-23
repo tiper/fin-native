@@ -3650,6 +3650,26 @@ fn an_opted_in_auto_play_on_a_remote_link_says_why_the_original_stayed_in_standa
     assert_eq!(uri_decline_line(UriEngine::Off, &plan), None, "Standard has nothing to explain");
 }
 
+/// **A play no composed backend can carry logs its refusal with the typed reasons, for any viewer.** A composition with no Feed
+/// (Tizen) ends a resolve it cannot hand to the URI driver in `NoQualifiedBackend`, whose viewer-facing sentence is the generic
+/// "could not open"; before this the event log held nothing that named why (the `uri: original declined` line is an
+/// opted-in viewer's alone), so a refused play on a Standard viewer read as a mystery.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn a_refused_play_on_a_composition_without_a_feed_logs_the_typed_reasons_whatever_the_engine() {
+    use plx_plex::plex::session::UriEngine;
+    let (plan, logged) = plx_base::eventlog::with_private_log(|| {
+        let (plan, _) = uri_engine_resolve("uri-refused-line", UriEngine::Off, 1, MDE_DIRECTPLAY,
+            vec![cold_track(1, "ac3", "eng", true, "")], "ac3",
+            |env, _| env.backends = plx_playback_contract::BackendSet::URI);
+        (plan, std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default())
+    });
+    assert!(matches!(plan.verdict, Some(PlayVerdict::NoQualifiedBackend)), "{:?}", plan.verdict);
+    let lines: Vec<&str> = logged.lines().filter(|l| l.contains("play: no backend can carry this play")).collect();
+    assert_eq!(lines.len(), 1, "{logged}");
+    assert!(lines[0].contains("uri original: ") && lines[0].contains("pms: "), "{}", lines[0]);
+}
+
 /// The guards that skip qualification altogether leave a reason too, and a play the URI engine took
 /// says nothing.
 #[test]

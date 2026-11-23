@@ -20,7 +20,7 @@ default = []
 devtriggers = []
 threadcheck = []
 lab-diagnostics = []
-hostsim = []
+sim = []
 # The `cfg(test)` fixtures other crates' tests use, plus the test-mode behaviour (disarmed
 # watchdog, no SDL link, the per-process state root) that `cfg(test)` alone cannot give a
 # dependent. Enabled from the application crate's `[dev-dependencies]`; never in a shipped build.

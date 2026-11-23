@@ -9,7 +9,7 @@
 //! staticlib; a staticlib has no link step), so the ARM cross build reaches the early return in
 //! `build_support/host_link.rs` (`host_link::emit`) and emits nothing further.
 //!
-//! **The gate is the TARGET, not the `hostsim` feature, and that distinction was paid for.** It
+//! **The gate is the TARGET, not the `sim` feature, and that distinction was paid for.** It
 //! used to be the feature, on the reasoning that the simulator is "the only configuration that
 //! links anything here" — which was true only for as long as no host test reached the drawing
 //! layer. `cargo test --lib` builds an executable too, and macOS `ld64` dead-strips BEFORE it

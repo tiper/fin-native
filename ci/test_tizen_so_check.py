@@ -143,6 +143,48 @@ def verify(**overrides):
     return checker.verify_object(**args)
 
 
+class ArmLink(unittest.TestCase):
+    header = "  Class: ELF32\n  Machine: ARM\n  Flags: 0x5000200, Version5 EABI, soft-float ABI\n"
+
+    def check(self, **overrides):
+        args = dict(arch="armv7", readelf_h=self.header, max_version="2.30",
+                    readelf_d=READELF_D.replace("ld-linux-x86-64.so.2", "ld-linux.so.3"))
+        args.update(overrides)
+        return verify(**args)
+
+    def test_an_eabi5_soft_float_elf_with_arm_loader_passes(self):
+        self.assertEqual(self.check(), [])
+
+    def test_wrong_class_float_abi_and_loader_fail(self):
+        self.assertTrue(any("ELF32" in p for p in self.check(readelf_h=self.header.replace("ELF32", "ELF64"))))
+        self.assertTrue(any("soft-float" in p for p in self.check(readelf_h=self.header.replace("soft-float", "hard-float"))))
+        for loader in ("ld-linux-x86-64.so.2", "ld-linux-armhf.so.3"):
+            self.assertTrue(any(loader in p for p in self.check(readelf_d=READELF_D.replace("ld-linux-x86-64.so.2", loader))))
+
+    def test_arm_ceiling_and_weak_reference_fallback(self):
+        self.assertTrue(any("GLIBC_2.31" in p for p in self.check(readelf_syms=READELF_SYMS.replace("2.14", "2.31"))))
+        weak = READELF_SYMS.replace("__gmon_start__", "__clock_gettime64")
+        self.assertEqual(self.check(readelf_syms=weak), [])
+        self.assertTrue(any("__clock_gettime64" in p for p in self.check(readelf_syms=weak.replace("WEAK", "GLOBAL"))))
+
+    def test_sdk_requires_exact_versions_from_needed_sonames(self):
+        symbols = checker.dynsyms(READELF_SYMS)
+        reference = {"libraries": {"libc.so.6": {"symbols": ["memcpy@GLIBC_2.14"]},
+                                  "libGLESv2.so.2": {"symbols": ["glClear"]},
+                                  "libgcc_s.so.1": {"symbols": ["_Unwind_Resume@GCC_3.0"]}}}
+        needed = list(reference["libraries"])
+        self.assertEqual(checker.verify_inventory(needed, symbols, reference), [])
+        problems = checker.verify_inventory(["libc.so.6", "ld-linux.so.3"], symbols, reference)
+        self.assertIn("Tizen 6.0 SDK has no ld-linux.so.3", problems)
+        self.assertIn("Tizen 6.0 SDK has no export for glClear", problems)
+        symbols[0]["version"] = "GLIBC_2.12"
+        self.assertIn("Tizen 6.0 SDK has no export for memcpy@GLIBC_2.12",
+                      checker.verify_inventory(needed, symbols, reference))
+        symbols[0]["bind"] = "WEAK"
+        self.assertIn("Tizen 6.0 SDK has no export for memcpy@GLIBC_2.12",
+                      checker.verify_inventory(needed, symbols, reference))
+
+
 class TextParsers(unittest.TestCase):
     def test_header_functions_are_the_declarations_only(self):
         self.assertEqual(checker.header_functions(HEADER), ["plx_host_start", "plx_host_post", "plx_host_stop"])
@@ -314,13 +356,13 @@ class VerifyRules(unittest.TestCase):
             self.assertTrue(any(name in p and "allowlist" in p for p in problems), (name, problems))
 
     def test_every_gl_function_the_renderer_calls_on_the_tizen_build_is_es2_core(self):
-        # the application declares its GL externs in gfx.rs and surface.rs; the ones behind `hostsim` are the simulator's (the blit; the VAO externs are the desktop platform's own and are not in these files)
+        # the application declares its GL externs in gfx.rs and surface.rs; the ones behind `sim` are the simulator's (the blit; the VAO externs are the desktop platform's own and are not in these files)
         root = Path(__file__).resolve().parent.parent / "rust-modules"
         declared = set()
         for path in list(root.glob("gfx/src/*.rs")) + [root / "base/src/surface.rs"]:
             text = path.read_text(encoding="utf-8")
-            # drop every item that follows a `#[cfg(feature = "hostsim")]` attribute: the next `extern "C" {...}` block or `fn ...}`
-            text = re.sub(r'#\[cfg\(feature = "hostsim"\)\]\s*(?:pub\s+)?(?:unsafe\s+)?(?:extern "C"\s*)?(?:fn[^{]*)?\{.*?\n\}\n', "", text, flags=re.S)
+            # drop every item that follows a `#[cfg(feature = "sim")]` attribute: the next `extern "C" {...}` block or `fn ...}`
+            text = re.sub(r'#\[cfg\(feature = "sim"\)\]\s*(?:pub\s+)?(?:unsafe\s+)?(?:extern "C"\s*)?(?:fn[^{]*)?\{.*?\n\}\n', "", text, flags=re.S)
             declared |= set(re.findall(r"\bfn (gl[A-Z][A-Za-z0-9]*)\s*\(", text))
         self.assertIn("glClear", declared)
         self.assertEqual(sorted(declared - checker.GLES2_CORE), [])

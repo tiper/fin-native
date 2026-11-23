@@ -249,7 +249,7 @@ Other subsystems the plan touches
   reader exists, private (`ui/src/rec/strict_json.rs`, `mod strict_json;` at `ui/src/rec.rs:40`); no JSON
   Schema crate (`grep -c 'name = "schemars"\|name = "jsonschema"' Cargo.lock` prints 0); `plx_ui` already
   depends on `serde_json` (`ui/Cargo.toml:50`). The lint host is the existing `plxnative-sim` bin
-  (`Cargo.toml:64-67`, `required-features = ["hostsim"]`); dev triggers are the default `devtriggers`
+  (`Cargo.toml:64-67`, `required-features = ["sim"]`); dev triggers are the default `devtriggers`
   feature, absent from the shipping `--no-default-features` set (`Cargo.toml:73`, `:88`).
 
 ## Decisions (with reasons)
@@ -1496,7 +1496,7 @@ the television's. `plxnative-sim --hud-lint` prints every state's cost beside it
 ## Storage per install mode
 
 New `paths::hud_candidates()` on F39's pattern, keyed by `app_id()`:
-0. a steerable (hostsim) build: `in_runtime_dir("huds")` FIRST, so simulators never share one store;
+0. a steerable (`sim`) build: `in_runtime_dir("huds")` FIRST, so simulators never share one store;
 1. `/media/developer/{id}-huds/` (Dev Mode: rw, survives reinstall);
 2. `/media/internal/.{id}-huds/` (the HBC/cryptofs jail's persistent rw location);
 3. `/media/developer/temp/{id}-huds/` if (1) is refused, created owner-only like the image cache;

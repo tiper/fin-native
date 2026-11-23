@@ -65,9 +65,9 @@ GATES = {
         r"ci/test_build_not_always_dirty\.py",
     ],
     "check-cargo-unit-hostsim": [
-        r"cargo \+\$\(RUST_TOOLCHAIN\) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_play_feed -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop --features hostsim",
+        r"cargo \+\$\(RUST_TOOLCHAIN\) test --lib -p plxnative-modules -p plx_base -p plx_machine -p plx_os -p plx_gfx -p plx_plex -p plx_telemetry -p plx_data -p plx_session -p plx_media -p plx_play_feed -p plx_shell_sdl -p plx_platform_webos -p plx_platform_desktop --features sim",
         # W7a: the `host` module used from outside the crate (`make test-host-interface` is the same line)
-        r"cargo \+\$\(RUST_TOOLCHAIN\) test -p plxnative-modules --test host_interface --features hostsim",
+        r"cargo \+\$\(RUST_TOOLCHAIN\) test -p plxnative-modules --test host_interface --features sim",
     ],
 }
 

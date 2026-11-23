@@ -286,7 +286,7 @@ namespace PlxHost
             base.OnResume();
             Log("OnResume");
             Post(Native.PLX_HOST_EVENT_RESUME, "resume");
-            PlxPlayer.Instance.ResumeAfterHome(); // starts only what OnPause paused
+            PlxPlayer.Instance.ResumeAfterHome(); // starts nothing: the library's foreground restore re-opens the source (plx_host.h, HOME); this only drops the host's pause note and logs why
         }
 
         protected override void OnTerminate()
@@ -297,10 +297,13 @@ namespace PlxHost
             {
                 stopRequested = true;
                 running = false;
-                StopLibrary();
-                // After the library has been asked to stop (it refuses requests from then on): close a player it left open and end the video
-                // thread. Player events it still posts are refused by the library.
+                bool asked = RequestLibraryStop();
+                // After the library has been asked to stop (it refuses requests from then on, so it can NOT close a player it has open: its
+                // CLOSE is answered locally and the library treats the release as ours, plx_host.h STOP): close that player and end the video
+                // thread NOW, before waiting for on_stopped, so the native player is released on every terminate path, also when the wait
+                // below runs into the platform's own kill. Of the player events it still posts only PLAYER_CLOSED is heard by the library (the confirmation of a close it had accepted); the rest are refused.
                 PlxPlayer.Instance.Shutdown();
+                if (asked) WaitLibraryStopped();
             }
         }
 
@@ -384,17 +387,23 @@ namespace PlxHost
         }
 
         // plx_host_stop returns at once; on_stopped then arrives from the library's loop (clean = 1) or its deadline thread (clean = 0).
-        private void StopLibrary()
+        // False when the call threw (the callbacks stay referenced: the library may still call them).
+        private bool RequestLibraryStop()
         {
             try
             {
                 Native.plx_host_stop();
+                return true;
             }
             catch (Exception e)
             {
                 Log("exception from plx_host_stop: " + e.GetType().Name + ": " + e.Message);
-                return; // the callbacks stay referenced: the library may still call them
+                return false;
             }
+        }
+
+        private void WaitLibraryStopped()
+        {
             // The wait is bounded: the library's own deadline thread reports a loop that does not finish, so this is the backstop for a library
             // that never reports at all.
             if (!Stopped.Wait(TimeSpan.FromSeconds(15)))
@@ -582,7 +591,7 @@ namespace PlxHost
             {
                 if (!File.Exists(path))
                 {
-                    Log("dev boot: none (no " + path + "): the launch names no Plex server and the library will refuse it");
+                    Log("dev boot: none, starting at Plex sign-in");
                     return null;
                 }
                 string text = File.ReadAllText(path).Trim();

@@ -1975,4 +1975,261 @@ mod uri_boot_tests {
         assert!(bus.shapes().is_empty());
         plx_os::tv::plane::installed().reset_for_test();
     }
+
+    /// **A Home round trip with a URI-original attempt reopens the same item at the saved position.** The
+    /// background parks the attempt (`park_playback`: Stop(Suspend), the native session is closed) and the
+    /// foreground's restore goes through the lifecycle machine's `Prepare`. A URI original plan installs no
+    /// `PlaybackSession::url` (`plan.uri_source_ready`), so `begin_resume` answered `NoRoute` and the restore
+    /// never opened anything: the Tizen emulator's "Home with a player open never resumes". The restore now
+    /// re-resolves the same source at the saved position through the foreground flight, and the Load that
+    /// follows opens the URI driver again.
+    #[test]
+    fn a_home_round_trip_reopens_a_uri_original_attempt_at_the_saved_position() {
+        let _serial = plx_base::testlock::serial();
+        let Some(mut rig) = Rig::serving(false) else { return };
+        let bus = compose_self_certified(&mut rig);
+        rig.request();
+        assert!(plx_media::route::arm_play_resume(&mut rig.app.player.session, 12_000_000_000));
+        launch_uri(&mut rig);
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert_eq!(bus.shapes().len(), 1, "the first open");
+        assert!(plx_media::route::url(&rig.app.player.session).is_empty(),
+            "a URI original installs no stream URL: this is what `begin_resume` reads");
+        let saved = intended_pos(&mut rig.app.player.session);
+        assert_eq!(saved, 12_000_000_000, "the resume position is the saved one");
+        park_playback(&mut rig.app);
+        // The native session's close completes, as the hub's would.
+        bus.0.lock().unwrap().1 = CloseStatus::Released;
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert!(rig.app.player.lifecycle.awaiting_load(), "the session is parked");
+        let activation = did_foreground_with_link(&mut rig.app);
+        // The restore's own position: the saved one less the foreground's rewind (the machine's `Prepare`).
+        let (ForegroundState::Prepared { resume_ns, .. } | ForegroundState::PreparePending { resume_ns, .. }) =
+            rig.app.player.lifecycle.state() else { panic!("the restore prepares at a position") };
+        let restore_ms = resume_ns / 1_000_000;
+        assert!(restore_ms > 0 && restore_ms <= 12_000, "{restore_ms}");
+        let mut frames = 0;
+        while bus.shapes().len() != 2 {
+            window_frame(&mut rig);
+            frames += 1;
+            std::thread::sleep(Duration::from_millis(2));
+            assert!(frames < 1500, "the foreground restore did not reopen the URI source: activation {:?}, machine {:?}, \
+                play_pending {}, restore outstanding {}, owed {}, source {:?}, url {:?}, control {}", activation,
+                rig.app.player.lifecycle.state(), plx_media::route::play_pending(),
+                rig.app.adapters.player.uri_restore_outstanding(),
+                plx_media::route::uri_restore_owed(&rig.app.player.session), rig.app.player.session.source_selection(),
+                plx_media::route::url(&rig.app.player.session), plx_media::route::control_phase_label());
+        }
+        assert!(rig.app.player.lifecycle.awaiting_load() || bus.shapes().len() == 2);
+        poll_until("the reopened source was not loaded", || {
+            window_frame(&mut rig);
+            bus.calls("load") == 2
+        });
+        bus.say("load", r#"{"errorCode":0,"returnValue":true,"errorText":"No Error","mediaId":"m2"}"#);
+        window_frame(&mut rig);
+        bus.say("subscribe", r#"{"audioInfo":{"track":0,"immersive":"none","mediaId":"m2"}}"#);
+        for _ in 0..3 { window_frame(&mut rig); }
+        bus.say("subscribe", r#"{"loadCompleted":{"mediaId":"m2"}}"#);
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert_eq!(bus.calls("seek"), 1, "the reopened source is sought to the restore's position before its first Play");
+        let sought: serde_json::Value = serde_json::from_str(&bus.last_payload("seek")).unwrap();
+        assert_eq!(sought["position"], restore_ms);
+        plx_os::tv::plane::installed().reset_for_test();
+    }
+    /// A first URI attempt (the item, resumed at 12 s) driven to Playing: the open, the seek to the saved position, the first
+    /// Play and the clock it reports, so that the attempt's own position is 12 s.
+    fn play_uri_to_twelve_seconds(rig: &mut Rig, bus: &'static Bus) {
+        poll_until("the source was not loaded", || { window_frame(rig); bus.calls("load") == 1 });
+        bus.say("load", r#"{"errorCode":0,"returnValue":true,"errorText":"No Error","mediaId":"m1"}"#);
+        window_frame(rig);
+        bus.say("subscribe", r#"{"audioInfo":{"track":0,"immersive":"none","mediaId":"m1"}}"#);
+        window_frame(rig);
+        bus.say("subscribe", r#"{"loadCompleted":{"mediaId":"m1"}}"#);
+        for _ in 0..3 { window_frame(rig); }
+        bus.say("seek", r#"{"errorCode":0,"returnValue":true,"errorText":"No Error","mediaId":"m1"}"#);
+        for _ in 0..3 { window_frame(rig); }
+        bus.say("subscribe", r#"{"seekDone":{"mediaId":"m1"}}"#);
+        for _ in 0..3 { window_frame(rig); }
+        assert_eq!(bus.calls("play"), 1, "the first Play");
+        bus.say("play", r#"{"returnValue":true,"mediaId":"m1","playing":true,"currentTime":12000}"#);
+        for _ in 0..3 { window_frame(rig); }
+        assert_eq!(plx_media::player::intended_pos_known_ns(&rig.app.player.session), Some(12_000_000_000),
+            "the attempt has played to 12 s");
+    }
+
+    /// **The parked attempt's own `stopped` timeline goes out when the restore retires it, at its own position.** A Home round
+    /// trip parks attempt A and the restore plays the item again as B, a new session. A's `stopped` used to be a side effect of
+    /// B's first report (the retired-session mechanism of #1236 reports it at the NEW report's position), so the server saw A
+    /// stopped after B played and at B's time (the emulator's mock: `timeline A playing 9377`, `playQueue B`, `transcode stop A`,
+    /// `timeline A stopped time=15588`, `timeline B playing 15588`). The park itself reports nothing, as the webOS Feed's suspend
+    /// does (a Feed's engine goes on under the same session); the retire reports A's stop, carrying A's saved position, before the
+    /// second resolve starts. The stop and the resolve are two workers, so the order the mock sees rests on the restore's
+    /// `drain_previous` (the resolve drains the stop worker first), not on the workers' speed: with the stop worker slowed by 400 ms
+    /// this test failed before that and passes after it.
+    #[test]
+    fn a_restore_reports_the_parked_attempt_stopped_at_its_own_position_before_the_next_play() {
+        let _serial = plx_base::testlock::serial();
+        let Some(mut rig) = Rig::serving(false) else { return };
+        let bus = compose_self_certified(&mut rig);
+        rig.request();
+        assert!(plx_media::route::arm_play_resume(&mut rig.app.player.session, 12_000_000_000));
+        launch_uri(&mut rig);
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert_eq!(bus.shapes().len(), 1, "the first open");
+        play_uri_to_twelve_seconds(&mut rig, bus);
+        park_playback(&mut rig.app);
+        bus.0.lock().unwrap().1 = CloseStatus::Released;
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert!(rig.app.player.lifecycle.awaiting_load(), "the session is parked");
+        let timelines = |rig: &Rig| rig.requests.lock().unwrap().iter()
+            .filter(|r| r.contains("/:/timeline")).cloned().collect::<Vec<_>>();
+        assert!(timelines(&rig).iter().all(|r| !r.contains("state=stopped")),
+            "the park reports no stop (the webOS Feed's suspend does not either): {:?}", timelines(&rig));
+        did_foreground_with_link(&mut rig.app);
+        let mut frames = 0;
+        while bus.shapes().len() != 2 {
+            window_frame(&mut rig);
+            frames += 1;
+            std::thread::sleep(Duration::from_millis(2));
+            assert!(frames < 1500, "the foreground restore did not reopen the URI source");
+        }
+        // The stop is a worker's POST: give it its moment, then read the order the server saw.
+        poll_until("A's stopped timeline never reached the server", || {
+            window_frame(&mut rig);
+            timelines(&rig).iter().any(|r| r.contains("state=stopped"))
+        });
+        let requests = rig.requests.lock().unwrap().clone();
+        let stopped: Vec<usize> = requests.iter().enumerate()
+            .filter(|(_, r)| r.contains("/:/timeline") && r.contains("state=stopped")).map(|(i, _)| i).collect();
+        assert_eq!(stopped.len(), 1, "one stop for A: {requests:#?}");
+        let queues: Vec<usize> = requests.iter().enumerate()
+            .filter(|(_, r)| r.contains("/playQueues")).map(|(i, _)| i).collect();
+        assert!(queues.len() >= 2, "the restore resolved again: {requests:#?}");
+        assert!(stopped[0] < queues[1], "A is stopped before B's resolve starts: {requests:#?}");
+        assert!(requests[stopped[0]].contains("time=12000"), "A's stop carries A's own position: {}", requests[stopped[0]]);
+        plx_os::tv::plane::installed().reset_for_test();
+    }
+
+    /// **A host terminate while a URI attempt is parked still reports it stopped, at its own position.** The host's terminate reaches
+    /// the library as a Suspend (the emulator's log: `stop requested (Suspend)`, then `the library is stopping, so the close
+    /// cannot be asked`), which parks the attempt: its native session is closed, no route attempt is bound, and the exit's
+    /// `playback_needs_teardown` read false, so the server never heard the title stopped (no `stopped` timeline, no transcode
+    /// stop) and kept showing it as playing. The exit stops it through the same path a Back does.
+    #[test]
+    fn an_exit_while_a_uri_attempt_is_parked_reports_it_stopped_at_its_own_position() {
+        let _serial = plx_base::testlock::serial();
+        let Some(mut rig) = Rig::serving(false) else { return };
+        let bus = compose_self_certified(&mut rig);
+        rig.request();
+        assert!(plx_media::route::arm_play_resume(&mut rig.app.player.session, 12_000_000_000));
+        launch_uri(&mut rig);
+        for _ in 0..3 { window_frame(&mut rig); }
+        play_uri_to_twelve_seconds(&mut rig, bus);
+        park_playback(&mut rig.app);
+        bus.0.lock().unwrap().1 = CloseStatus::Released;
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert!(rig.app.player.lifecycle.awaiting_load(), "the session is parked");
+        let stops = |rig: &Rig| rig.requests.lock().unwrap().iter()
+            .filter(|r| r.contains("/:/timeline") && r.contains("state=stopped")).cloned().collect::<Vec<_>>();
+        assert!(stops(&rig).is_empty(), "the park reports nothing");
+        super::end_playback_for_exit(&mut rig.app.player.session, &mut rig.app.adapters.player);
+        plx_media::route::drain_scrobble();
+        let all = rig.requests.lock().unwrap().clone();
+        let stops = stops(&rig);
+        assert_eq!(stops.len(), 1, "the exit reported the parked attempt stopped: {all:?}");
+        assert!(stops[0].contains("time=12000"), "at its own position: {}", stops[0]);
+        plx_os::tv::plane::installed().reset_for_test();
+    }
+
+    /// **A restore the request door refuses has already reported the parked attempt stopped, and the exit does not report it
+    /// again.** The restore sends A's `stopped` BEFORE the door is asked (the replacement's resolve waits behind it), but nothing
+    /// marked A finalized, so a door that refused left A parked and owing the stop it had sent: the exit's
+    /// `parked_uri_owes_stop` (or the next foreground's restore) reported A stopped a second time.
+    #[test]
+    fn a_refused_restore_leaves_the_parked_attempt_reported_once_and_its_exit_does_not_report_it_again() {
+        let _serial = plx_base::testlock::serial();
+        let Some(mut rig) = Rig::serving(false) else { return };
+        let bus = compose_self_certified(&mut rig);
+        rig.request();
+        assert!(plx_media::route::arm_play_resume(&mut rig.app.player.session, 12_000_000_000));
+        launch_uri(&mut rig);
+        for _ in 0..3 { window_frame(&mut rig); }
+        play_uri_to_twelve_seconds(&mut rig, bus);
+        park_playback(&mut rig.app);
+        bus.0.lock().unwrap().1 = CloseStatus::Released;
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert!(rig.app.player.lifecycle.awaiting_load(), "the session is parked");
+        let stops = |rig: &Rig| rig.requests.lock().unwrap().iter()
+            .filter(|r| r.contains("/:/timeline") && r.contains("state=stopped")).cloned().collect::<Vec<_>>();
+        // A route transition owns the player: the request door refuses the restore's re-resolve.
+        plx_media::route::force_applying_for_test(4242);
+        did_foreground_with_link(&mut rig.app);
+        poll_until("the restore never reported A stopped", || {
+            window_frame(&mut rig);
+            plx_media::route::drain_scrobble();
+            !stops(&rig).is_empty()
+        });
+        poll_until("the refused restore never settled", || {
+            window_frame(&mut rig);
+            !rig.app.adapters.player.uri_restore_outstanding()
+        });
+        assert_eq!(bus.shapes().len(), 1, "the door refused: no second native session was opened");
+        assert_eq!(stops(&rig).len(), 1, "the restore reported A stopped once");
+        super::end_playback_for_exit(&mut rig.app.player.session, &mut rig.app.adapters.player);
+        plx_media::route::drain_scrobble();
+        let all = rig.requests.lock().unwrap().clone();
+        assert_eq!(stops(&rig).len(), 1, "the exit does not report the already reported attempt again: {all:?}");
+        plx_os::tv::plane::installed().reset_for_test();
+    }
+
+    /// **An ended URI attempt with no player page is stopped once, not on every frame of its release.** The EOS orphan
+    /// branch (`playback_tick`) stops an engine nothing owns, and a URI attempt's release is a close the host confirms
+    /// several frames later while the attempt still reads "needing teardown" (the Tizen emulator logged the line five times
+    /// at its end of stream; the webOS URI driver closes its own session at the end, so its release is already underway when
+    /// the branch is first reached). The branch must wait while the release is `Releasing` and then stop exactly once.
+    /// Here the native close is not confirmed for twelve frames, and then it is.
+    #[test]
+    fn an_ended_uri_attempt_with_no_player_page_is_stopped_once_while_its_release_is_pending() {
+        let _serial = plx_base::testlock::serial();
+        let Some(mut rig) = Rig::serving(false) else { return };
+        let bus = compose_self_certified(&mut rig);
+        rig.request();
+        launch_uri(&mut rig);
+        for _ in 0..3 { window_frame(&mut rig); }
+        poll_until("the source was not loaded", || {
+            window_frame(&mut rig);
+            bus.calls("load") == 1
+        });
+        bus.say("load", r#"{"errorCode":0,"returnValue":true,"errorText":"No Error","mediaId":"m1"}"#);
+        window_frame(&mut rig);
+        bus.say("subscribe", r#"{"audioInfo":{"track":0,"immersive":"none","mediaId":"m1"}}"#);
+        for _ in 0..3 { window_frame(&mut rig); }
+        bus.say("subscribe", r#"{"loadCompleted":{"mediaId":"m1"}}"#);
+        for _ in 0..3 { window_frame(&mut rig); }
+        assert!(super::super::bridge::player(&rig.app.pages).is_none(), "no player page is mounted");
+        bus.say("subscribe", r#"{"mediaId":"m1","endOfStream":true}"#);
+        let stops = |log: &str| log.matches("EOS: stopping an off-route engine nothing owns").count();
+        let (releasing, log) = plx_base::eventlog::with_private_log(|| {
+            for _ in 0..12 {
+                window_frame(&mut rig);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            (rig.app.adapters.player.backend_snapshot().phase,
+                std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default())
+        });
+        assert_eq!(plx_media::player::ended(&rig.app.player.session), Some(true));
+        assert_eq!(releasing, plx_playback_contract::Phase::Releasing, "the native close is not confirmed yet");
+        assert_eq!(stops(&log), 0, "a release already underway is not stopped again on every frame: {log}");
+        // The host confirms the close; the stop nothing else would make follows, once.
+        bus.0.lock().unwrap().1 = CloseStatus::Released;
+        let log = plx_base::eventlog::with_private_log(|| {
+            for _ in 0..12 {
+                window_frame(&mut rig);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            std::fs::read_to_string(plx_base::eventlog::events_log()).unwrap_or_default()
+        });
+        assert_eq!(stops(&log), 1, "the one stop, once the release is done: {log}");
+        plx_os::tv::plane::installed().reset_for_test();
+    }
 }

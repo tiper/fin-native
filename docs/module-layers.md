@@ -170,7 +170,7 @@ reads the whole crate for the same IO and clock gates as every other layer.
 (`rust-modules/play-feed/`) and it names `base`, `os`, `net`, `playback_contract` and `media_codecs`: the
 buffer-feed backend (the guarded transport, the physical FFmpeg demuxer and HLS parser, the native payload
 construction and executor, which implement the Feed port traits) and the simulator's `VideoSink` stand-in
-(`ffi_host`, behind that crate's `hostsim` feature, and in test builds (`cfg(test)` / `test-support`)). It was `plx_media::player`'s own until the player stopped
+(`ffi_host`, behind that crate's `sim` feature, and in test builds (`cfg(test)` / `test-support`)). It was `plx_media::player`'s own until the player stopped
 depending on a backend: `plx_media` is the neutral orchestration (routes, the engine, the `BackendRunner`) and
 does not name it in production code, while the application composes it
 (`app/adapters/backends.rs`, behind the application crate's `play-feed` feature, which the release build
@@ -351,7 +351,7 @@ proves the references are gone and nothing more; L15b is open.
 | **L15d** neutral types and the simulator as its own platform (L15b item 2) — **W3d and W4 landed** | — | W3d landed (the opaque `Backend` tag, `sandbox` to `native_video`, identity publishes a platform name and version, `device::Info` keeps its webOS fields in `WebosDetail`, and `devcaps` reads its files through the platform), and so did W4: `platform_desktop` (then `rust-modules/src/platform_desktop.rs`, a second fence section, `[platform desktop]`; `rust-modules/platform-desktop/src/lib.rs` since W7b) is the simulator's and the macOS app's own platform value, which the `plxnative-sim` binary enters through; the `hostsim` terms of the television's fence are gone, so the television's code was compiled into every build and the linker dropped it from a desktop executable (`simulators.yml` linked the macapp feature set to guard that until W7; since W7b the desktop crate does not link the television's crate), and the stand-ins in `webos` and `keymanager` were test seams, compiled for tests and `test-support` (`docs/platform-ports.md`, W4). The desktop platform is the second implementation. |
 | **L15e** events, the shell and composition — **W5a to W5c, W6, W6b, W6c and W7a landed** | — | W5 (`HostEvent` with `Option<Action>`) landed in three PRs, lifecycle and quit (W5a, #1484), keys and text (W5b, #1487) and the pointer and wheel (W5c, #1492), and so did W6b (platform-supplied composition in two boot phases, #1489) and W6 (`plx_shell_sdl`, a `[shell_sdl]` layer: SDL's bring-up, the window, the swap, the event decode and the text-input calls moved out of the application behind its private `Shell` and `Surface`, and the LG half stays in `system.rs`). W6c (a URI-only and a two-driver composition play an ordinary title) landed (#1494), and W7a published the construction interface through `plxnative_modules::host` alone (`rust-modules/src/host.rs`, tested from outside the crate by `rust-modules/tests/host_interface.rs`, `make test-host-interface`). |
 | **L15f** extract the platform crates — **W7b landed** | — | `rust-modules/platform-webos` (`plx_platform_webos`, the crate the ARM staticlib is built from) and `rust-modules/platform-desktop` (`plx_platform_desktop`, which also holds the `plxnative-sim` binary) are crates above `app`, over the narrow public `host` module W7a published (the row above); `port`, `system`, `webos` and `keymanager` left `plx_os` and the application, and the gate learned "a platform is a crate above `app`" (`[platform X]` carries `uses`, its member is the crate's `mount`, nothing names it, no platform names another). After L15d, before L15g and L15h (the storage-authority part of W8a, #1488, #1490 and #1491, landed ahead of W7; the rest of W8 still follows W7). |
-| **L15g** the webOS facts and the remaining `hostsim` (L15b item 3) — **W8a started** | — | W8a has begun: the platform states where the account's records live (`tv::Services.storage`, #1488), and telemetry's consent store (#1490) and plex's session persistence (#1491) follow it instead of the `target_arch = "arm"` fence. Still planned: the rest of W8a, one PR per directory (`os`, `src`, `base`, `storage` and `play-feed`; telemetry's nine `target_arch = "arm"` lines in `telemetry/src/telemetry/native.rs`, the Sentry Native crash capture, are not among them and no step owns them yet, the follow-up for Tizen ARM retail builds that #1490 names), sorting the `target_arch = "arm"` and `target_os = "linux"` sites into "is webOS" (a platform value or runner) and "is 32-bit ARM" or "is Linux" (stays); then W8b, the library name lists, `paths` and the packaging, and W8c, the `feature = "hostsim"` lines left in the tree (none of them in the fence now; `git grep -h 'feature = "hostsim"' -- '*.rs' | wc -l` counts them). |
+| **L15g** the webOS facts and the remaining `sim` feature lines (L15b item 3) — **W8a started** | — | W8a has begun: the platform states where the account's records live (`tv::Services.storage`, #1488), and telemetry's consent store (#1490) and plex's session persistence (#1491) follow it instead of the `target_arch = "arm"` fence. Still planned: the rest of W8a, one PR per directory (`os`, `src`, `base`, `storage` and `play-feed`; telemetry's nine `target_arch = "arm"` lines in `telemetry/src/telemetry/native.rs`, the Sentry Native crash capture, are not among them and no step owns them yet, the follow-up for Tizen ARM retail builds that #1490 names), sorting the `target_arch = "arm"` and `target_os = "linux"` sites into "is webOS" (a platform value or runner) and "is 32-bit ARM" or "is Linux" (stays); then W8b, the library name lists, `paths` and the packaging, and W8c, the `feature = "sim"` lines left in the tree (none of them in the fence now; `git grep -h 'feature = "sim"' -- '*.rs' | wc -l` counts them). W8c-4 landed the rename of the Cargo feature from `hostsim` to `sim`. |
 | **L15h** the OS-neutral Feed sink (L15b item 1) — **planned** | — | W11: `plx_acb` (an `[acb]` layer) takes the ACB plane owner and the URI media verbs out of `os`, the Feed-side ACB results become neutral, and the bind sequence moves behind a neutral sink. Needs the television. |
 
 ### L15: the webOS port
@@ -414,7 +414,7 @@ ACB bind verbs that the Feed pump walks. Another TV OS cannot implement it as it
 through the sink the composition hands them (`PlayerAdapter::display_sink`; `app/adapters/backends.rs`).
 `ffi_host` is no longer swapped in under `webos::video_sink`. It is the simulator's own `VideoSink`
 (`HostSink`), outside the fence. It is the Feed backend's stand-in, so it lives in `plx_play_feed` behind that crate's
-`hostsim` feature, and in test builds (`cfg(test)` / `test-support`), and names only the layers below it; what its sink is built with arrives as
+`sim` feature, and in test builds (`cfg(test)` / `test-support`), and names only the layers below it; what its sink is built with arrives as
 `ffi_host::Hooks`: the pipeline-event entry and the inverse of its position rebase, both that
 crate's own (`Hooks::over`), and a `ffi_host::FrameSink` that the application's
 `app::adapters::hostsim::sim_video` implements (the one place that draws, so `plx_gfx` stays on the
@@ -456,9 +456,9 @@ still webOS's. Three things were left, and item 2 is done:
    same interfaces: it states every hook of `tv::Services` (the shared `NONE` groups where a host has
    nothing to say, its own capability probe, root press, toast and sink) with a no-op `Shell` and
    `FrameProbe`, and `platform-desktop/src/bin/sim.rs` enters through it, so the webOS table no longer runs host arms. The
-   `hostsim` terms are gone from `system`, `port`, `webos` and `keymanager`. The stand-ins in `webos` and
+   `sim` terms are gone from `system`, `port`, `webos` and `keymanager`. The stand-ins in `webos` and
    `keymanager` are test seams only, `cfg(test)` of the webOS platform crate (it has no `test-support` feature,
-   so nothing outside its own tests can see them): a simulator never links that crate at all (`docs/platform-ports.md`, W4, W7b). `hostsim` no longer selects a platform: it selects the
+   so nothing outside its own tests can see them): a simulator never links that crate at all (`docs/platform-ports.md`, W4, W7b). `sim` no longer selects a platform: it selects the
    host build of what is not one (the media seam's host sink, the GL context request, the window flags
    and the keyboard event decode), while the television's wayland and glib calls are `plx_platform_webos`'s, a crate no desktop
    crate names, so a simulator never contains them and no dead-strip is relied on.
@@ -539,7 +539,7 @@ on. Each extraction:
   (while the split ran it was also the one `staticlib` the Makefile links; since W7b that archive is built from
   `plx_platform_webos`, which depends on it). `ci/test_no_host_staticlib.py` and the `$(RUST_LIB)` rule
   stay valid;
-- forwards the features. `devtools`, `devtriggers`, `threadcheck`, `lab-diagnostics` and `hostsim`
+- forwards the features. `devtools`, `devtriggers`, `threadcheck`, `lab-diagnostics` and `sim`
   become features of each layer that has a `cfg` on them, enabled from the top crate;
 - gives test helpers a feature. `cfg(test)` of a dependency is never set when a dependent's tests
   build, so every `--report` item of the layer being extracted moves behind a `test-support` feature
@@ -644,7 +644,7 @@ items get their own `use plx_machine::{..}`), and the two things it could not re
 and the `$crate::ui::machine` inside `focusable_via_*!`, which became `plx_machine::…` (a macro body
 that names another crate's path expands in the caller, which depends on `plx_machine` anyway).
 `pub(crate)` and `pub(super)` became `pub` across the moved files; `machine` has one
-`macro_rules!`, `newtype!`, used only inside `machine.rs`. Features: `devtriggers` and `hostsim`
+`macro_rules!`, `newtype!`, used only inside `machine.rs`. Features: `devtriggers` and `sim`
 are forwarded (`motion`'s held phase clock, `idle`'s simulator settle clock) and `test-support`
 is new. What it taught beyond the recipe:
 
@@ -715,7 +715,7 @@ the port fence read `plx_os::webos::` exactly as it had read `crate::webos::`: a
 either from `coldstart.rs` still fails the gate for both. The 1828 `crate::<member>::` references in
 150 application files were rewritten by a script to `plx_os::<member>::`; `pub(crate)` became
 `pub` across the moved files and in what the two generators emit (`Flavor`, the `i18n::msg`
-accessors). Features: `devtriggers`, `hostsim` and `lab-diagnostics` are forwarded, `test-support`
+accessors). Features: `devtriggers`, `sim` and `lab-diagnostics` are forwarded, `test-support`
 is new and enables the two lower layers'. The 218 tests of the layer run in their own binary: the
 suite is 5603 tests before and after (157 + 66 + 218 + 5162). What it taught beyond the recipe:
 
@@ -811,7 +811,7 @@ listed `ui::overdraw`. A script wrote the rewrite (`crate::<member>::` to `plx_g
 the application, `crate::ui::overdraw` to `plx_gfx::overdraw`, `pub(crate)` to `pub` in the moved
 files except the `glsl!` re-export, which names a non-exported `macro_rules!` and must stay
 `pub(crate)`); the application's `lib.rs` and `ui/mod.rs` lost the six `mod` lines and the
-`pub mod overdraw;`. Features: `devtriggers` and `hostsim` are forwarded to the lower layers, `devtools`
+`pub mod overdraw;`. Features: `devtriggers` and `sim` are forwarded to the lower layers, `devtools`
 is a feature of this crate alone (the seven-segment counter in `gfx`, enabled by the application's
 own `devtools`), and `test-support` is new and enables the two lower layers'. The 94 tests of the
 layer run in their own binary. What it taught beyond the recipe:
@@ -1110,7 +1110,7 @@ and `plx_plex::http::...`, and every `crate::plex::` *inside* the moved files st
 3 897 references in 213 application files changed, by `split-plex-rewrite.py` (`crate::plex` and
 `crate::http` to `plx_plex::plex` and `plx_plex::http`, `pub(crate)` to `pub`). The crate
 depends on `plx_base`, `plx_machine`, `plx_os` and `plx_net`, owns no build script and links
-nothing. Features: `devtriggers` and `hostsim` are forwarded, `test-support` is new and enables the
+nothing. Features: `devtriggers` and `sim` are forwarded, `test-support` is new and enables the
 four lower layers'. Its 458 tests run in their own binary. What it taught beyond the recipe:
 
 - **`--report`'s 21 items were the smaller half of the test seam.** Most of `plex::session`'s
@@ -1257,7 +1257,7 @@ are `plx_base::diag::*`). The members kept their names, so a path is
 application files changed, by `split-telemetry-rewrite.py` (`crate::telemetry` and `crate::diag` to
 `plx_telemetry::telemetry` and `plx_telemetry::diag`, `pub(crate)` to `pub`). Nothing stayed behind:
 `diag` and `telemetry` named each other and nothing above them, so the pair that was one module cycle
-is inside one crate and left the cycle baseline. Features: `devtriggers` and `hostsim` are
+is inside one crate and left the cycle baseline. Features: `devtriggers` and `sim` are
 forwarded, `test-support` is new and enables the four lower layers'. Its 235 tests run in their own
 binary: the suite is 5620 tests before and after the split (5630 on the tip it landed on, the ten more being `main`'s Home tests). This is the privacy-critical layer, so what it
 taught is mostly about what would have gone quiet:
@@ -1401,7 +1401,7 @@ only the references in 135 application files changed, by `split-data-rewrite.py`
 to `plx_data::<member>`, `pub(crate)` to `pub`, the eight `mod` lines out of `lib.rs`). The root-level
 files the members include by `#[path]` (`pms_*_tests.rs`, `pms_test_support.rs`, `metadata_*`,
 `search_*`: 17 files) moved with their module into `data/src/`, because none of them names a higher
-layer. Features: `devtriggers` and `hostsim` are forwarded, `test-support` is new and enables the
+layer. Features: `devtriggers` and `sim` are forwarded, `test-support` is new and enables the
 five lower layers'. Its 422 tests (425 with `devtriggers`) run in their own binary. It was the
 layer with the most `--report` items (26); the lane's report listed 18 across all layers after it (14 with Split 10 combined) and `data` is
 ready. What it taught beyond the recipe:
@@ -1538,7 +1538,7 @@ not ship:
   the condition is always true, so the two would have run in the default build, where the
   development credential policy is on, and failed. `plx_session/devtriggers` is forwarded from the
   application (and forwards to the six layers below, `plx_telemetry`'s included, so its
-  production-credentials guard keeps seeing the feature); `hostsim` is forwarded the same way.
+  production-credentials guard keeps seeing the feature); `sim` is forwarded the same way.
   `cargo test -p plx_session` *alone* built the layers below with the shipping credential policy,
   and `a_changed_refresh_republishes_reached_unauthorized_and_offline_after_registry_replacement`
   failed (it registers plaintext test servers). That configuration did not exist before the split
@@ -1634,7 +1634,7 @@ they were combined) and landed as one change. Combining them:
   suite does and runs the same tests (425 and 258, twice each, green); `make test-fast T=…` is
   unchanged. A dev-dependency feature reaches test builds only: `cargo tree -e
   features,normal,build --no-default-features` for `plxnative-modules` differs from `main`'s by the
-  two new crates and nothing else, with no `devtriggers`, `test-support` or `hostsim` in it. A later
+  two new crates and nothing else, with no `devtriggers`, `test-support` or `sim` in it. A later
   layer whose tests need the dev set uses the same line; the lower
   crates did not need it, because their tests pass without the feature.
 - **The seams were checked in the combined artifact.** `cargo tree -e normal -f '{p} [{f}]'` lists
@@ -1698,7 +1698,7 @@ the feed's application entry points are `plx_play_feed`'s (`plx_play_feed::demux
 
 `media` was extracted eleventh: `rust-modules/media/` is the workspace member `plx_media` (an `rlib`,
 `uses = base machine os gfx net plex telemetry data`; the manifest names those eight, with
-`plx_gfx` optional behind `hostsim` because only the simulator's `player::sim_video` drew; that file
+`plx_gfx` optional behind `sim` because only the simulator's `player::sim_video` drew; that file
 has since moved to the application, `app::adapters::hostsim`, and the manifest no longer names `plx_gfx`), holding
 `ff` (then the bundled-FFmpeg demuxer), `aq`, `abr`, `hls`, `curlio`, `player` (the buffer-feed engine,
 `player/CLAUDE.md` with it) and `route`: 70 files, 84,579 lines. It is the layer with the FFI, and
@@ -1745,7 +1745,7 @@ modules on the cycle (`app dev textinput`), 10 outside". What it taught:
   application's test binary finds none of `sf_load`, `sf_play`, `vp_create_window`, `acb_start`).
   That is the one place where the single-crate guarantee "a host test references no Starfish
   extern" became "no live code does"; Linux CI's `host unit tests` jobs (default features and
-  `hostsim`) link and pass it.
+  `sim`) link and pass it.
 - **Every `cfg(test)` arm was read, not only the six `--report` named.** The six
   (`player::preview::{reset_for_test, force_playing_for_test}`, `player::{restore_state_for_test,
   swap_state_for_test, failtest_policy_shape_for_test, every_failure_row}`) are
@@ -1759,19 +1759,19 @@ modules on the cycle (`app dev textinput`), 10 outside". What it taught:
   `enhancement_test_session` calling `test_support::test_original_candidate`; the fixture now lives
   in `route/decision.rs` beside the seam and `decision_test_support.rs` re-exports it. The crate
   declares `lab-diagnostics` (two `cfg_attr(not(feature = "lab-diagnostics"), allow(dead_code))`)
-  and forwards `devtriggers` and `hostsim`; `devtools` and `threadcheck` are not used. The
+  and forwards `devtriggers` and `sim`; `devtools` and `threadcheck` are not used. The
   crate dev-depends on itself with `devtriggers` (the rule of "Splits 9 and 10 together"), so
   `cargo test -p plx_media` alone runs its 924 tests (6 ignored, 930 listed) and builds with the
-  `hostsim` set as well.
+  `sim` set as well.
 - **The seams were checked in the artifact, per crate.** In the `plx_media` rlib of a `--release
   --no-default-features` build `strings` finds none of 36 seam names (`enhancement_test_session`,
   `test_original_candidate`, `restore_state_for_test`, `swap_state_for_test`,
   `reset_for_test`, `force_playing_for_test`, `failtest_policy_shape_for_test`, `every_failure_row`,
   `FEED_TEST_CLOCK_US`, `drain_test_elapsed`, ...); the `--features test-support` control build
-  finds 29 of the 36 (the other seven are inlined or `hostsim`-only). `cargo tree -e normal` lists
+  finds 29 of the 36 (the other seven are inlined or `sim`-only). `cargo tree -e normal` lists
   no `test-support` with the default features or with `--no-default-features`. `cargo tree -e
   normal,build -f '{p} [{f}]'` for `plxnative-modules` differs from `main`'s by one line,
-  `plx_media v0.0.0 [default,..]`, in the default, release and `hostsim` configurations.
+  `plx_media v0.0.0 [default,..]`, in the default, release and `sim` configurations.
 - **Gates that read the old location.** `ci/check-deps.sh` has `SRC_MEDIA` wherever it reads
   `SRC_SESSION`, and the rules that named the directories by path follow the files: `wall`
   (`route/plan.rs`), `mutators` (`route/`, `player/`) and `sink` (`player/` is the exemption, and
@@ -1842,7 +1842,7 @@ doc links that named `screens`, `app`, `lab` and `focusprobe` unbracketed. What 
   `any(test, feature = "test-support")` now: 22 lines in 4 files, by `split-appkit-gate.py`, none
   flipped back (the module's blanket `allow(dead_code)` would hide a flip-back from rustc, so none
   was attempted). Nothing in the crate switches on `cfg!(test)` or `cfg(not(test))`, and it has no
-  `devtriggers`/`hostsim`/`threadcheck` `cfg`, so the features are `devtriggers` (forwarded to the
+  `devtriggers`/`sim`/`threadcheck` `cfg`, so the features are `devtriggers` (forwarded to the
   nine crates below and used for the crate's own self dev-dependency, the rule of "Splits 9 and 10
   together", so `cargo test -p plx_appkit` alone builds the layers below as the Makefile's suite
   does) and `test-support`. The old blanket `#![allow(dead_code)]` of the module (its comment records
@@ -1875,7 +1875,7 @@ doc links that named `screens`, `app`, `lab` and `focusprobe` unbracketed. What 
   build. `cargo tree -e normal` lists no `test-support` with the default features or with
   `--no-default-features`, and `cargo tree -e normal,build -f '{p} [{f}]'` for `plxnative-modules` differs
   from `main`'s by one line, `plx_appkit v0.0.0 [default,devtriggers]` (`[default]` with
-  `--no-default-features`), in the default, release and `hostsim` configurations.
+  `--no-default-features`), in the default, release and `sim` configurations.
 - **FFI and linkage are untouched, proven in the artifact.** The crate declares no `extern "C"`,
   `#[no_mangle]` or `dynlib!`. The ARM staticlib built the way the Makefile builds it from `main` and
   from the branch has the same 291 defined C-ABI symbols and the same 279 undefined non-Rust symbols

@@ -45,10 +45,10 @@ devtools = ["plxnative-modules/devtools"]
 devtriggers = ["plxnative-modules/devtriggers"]
 threadcheck = ["plxnative-modules/threadcheck"]
 lab-diagnostics = ["plxnative-modules/lab-diagnostics"]
-# The host test pass the Makefile runs under `--features hostsim` (its `HOSTSIM_SUITE`): this crate's
+# The host test pass the Makefile runs under `--features sim` (its `HOSTSIM_SUITE`): this crate's
 # tests are in both passes, as they were in the application's. It selects the application's
 # simulator configuration and nothing of its own; a television build never sets it.
-hostsim = ["plxnative-modules/hostsim"]
+sim = ["plxnative-modules/sim"]
 
 [dependencies]
 plxnative-modules = { path = "..", default-features = false }

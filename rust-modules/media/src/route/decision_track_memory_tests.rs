@@ -145,7 +145,7 @@ mod through_build_stream {
     /// comes back beside the requests the server saw and what the event log gained.
     ///
     /// **The log it returns is this resolve's alone.** A host test run resolves the event log to the
-    /// bare `/tmp/plxnative-events.log` (only `hostsim` can steer it), one file for the whole machine:
+    /// bare `/tmp/plxnative-events.log` (only `sim` can steer it), one file for the whole machine:
     /// every test binary of this `make check`, and of the other run beside it or another checkout's,
     /// appends to it, and `serial()` is one process's lock. Slicing "what the file gained" off that
     /// file therefore also returned a second run's `track-memory: applied subtitle (track 55001)` (the
@@ -620,7 +620,7 @@ fn q_top_b_a_fixed_rung_burns_the_remembered_subtitle() {
 }
 
 /// **The log a resolve returns is that resolve's alone.** The event log of a host test run is one file
-/// for the whole machine (`/tmp/plxnative-events.log`; only `hostsim` can steer it), and a second
+/// for the whole machine (`/tmp/plxnative-events.log`; only `sim` can steer it), and a second
 /// `make check`, another checkout or another lane appends to it from its own process while this one
 /// resolves, in the same fixtures' words: `q_top_b_a_fixed_rung_burns_the_remembered_subtitle` read
 /// three `track 55001` lines for its one resolve. `serial()` is one process's lock, so it cannot keep

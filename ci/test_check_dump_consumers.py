@@ -103,7 +103,7 @@ class RealTree(unittest.TestCase):
     def test_every_consumer_is_named_in_the_admission_rule_doc(self):
         """The consumer list in dump.rs is prose, but every FILE the gate allows must be named in it."""
         doc = (gate.REPO / 'rust-modules' / 'gfx' / 'src' / 'dump.rs').read_text()
-        head = doc[:doc.index('#[cfg(any(feature = "hostsim"')]
+        head = doc[:doc.index('#[cfg(any(feature = "sim"')]
         self.assertIn('The admission rule', head)
         entries, _ = gate.allowed(gate.REPO)
         for rel in entries:

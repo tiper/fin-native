@@ -461,7 +461,7 @@ unsafe fn copy_target(vw: c_int, vh: c_int) -> c_uint {
 /// One GL blend factor the simulator's compositor model uses: the data the GL call
 /// ([`UnderBlend::gl`]) and the host test's model ([`UnderBlend::apply`]) both read, so the test
 /// checks the factors the simulator actually sets.
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlendFactor {
     One,
@@ -469,7 +469,7 @@ pub enum BlendFactor {
     OneMinusDstAlpha,
 }
 
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 impl BlendFactor {
     /// The `GLenum`.
     pub const fn gl(self) -> c_uint {
@@ -491,14 +491,14 @@ impl BlendFactor {
 }
 
 /// A `glBlendFuncSeparate` as `(source, destination)` factors for colour and for alpha.
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnderBlend {
     pub rgb: (BlendFactor, BlendFactor),
     pub alpha: (BlendFactor, BlendFactor),
 }
 
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 impl UnderBlend {
     /// The four `glBlendFuncSeparate` arguments.
     pub const fn gl(self) -> [c_uint; 4] {
@@ -525,7 +525,7 @@ impl UnderBlend {
 /// not what the frame was meant to show: a premultiplied pixel it is given comes out multiplied by its
 /// own alpha, which is exactly the fault the pass exists to remove, so the simulator shows the bug
 /// without the pass and the fix with it.
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 pub const UNDER: UnderBlend = UnderBlend {
     rgb: (BlendFactor::OneMinusDstAlpha, BlendFactor::DstAlpha),
     alpha: (BlendFactor::OneMinusDstAlpha, BlendFactor::One),

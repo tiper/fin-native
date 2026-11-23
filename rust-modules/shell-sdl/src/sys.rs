@@ -1,8 +1,8 @@
 //! Every SDL2 symbol this crate calls, declared once. A PLAIN link, not `dynlib!`: the rule in
 //! `plx_base::dynlib` is for libraries whose SONAME moves, and these are stock public SDL2 API:
-//! every name declared outside the `hostsim` block is exported by all 14 firmware inventories
+//! every name declared outside the `sim` block is exported by all 14 firmware inventories
 //! (`tools/fwcompat.py --lib libSDL2-2.0.so.0`), so there is nothing here for a runtime bind to
-//! tolerate. The one `hostsim` name the inventories do not all carry is `SDL_GetDisplayUsableBounds`:
+//! tolerate. The one `sim` name the inventories do not all carry is `SDL_GetDisplayUsableBounds`:
 //! 1.2.0 through 3.9.2 lack it and 4.4.2 onward have it, and the ARM binary never imports it.
 //!
 //! The Wayland and `SDL_SysWMinfo` calls are NOT here and never may be: the television's SDL fork
@@ -39,7 +39,7 @@ extern "C" {
 // Desktop-only window management. Apart for the mirror-image reason: a television owns the whole
 // panel and never asks how big a display is, so on that build these would be dead code — which
 // `[workspace.lints.rust] warnings = "deny"` makes a build failure, not a warning.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 extern "C" {
     /// `SDL_GetDisplayUsableBounds` — the display minus the menu bar and the Dock, which is what
     /// a window may actually occupy. The out parameter is an `SDL_Rect`: exactly four `c_int`.

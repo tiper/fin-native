@@ -233,10 +233,16 @@ impl Hosted {
         self.push(input).map_or_else(|code| code, |()| host_abi::OK)
     }
 
-    /// A player event from the host: refused after a stop or when the loop is not running (the same rule as an
-    /// input), dropped when its epoch is not live, queued otherwise. Never blocks.
+    /// A player event from the host: refused when the loop is not running, and after a stop (the same rule as an
+    /// input) EXCEPT `PLAYER_CLOSED`; dropped when its epoch is not live, queued otherwise. Never blocks.
+    ///
+    /// A CLOSE the host accepted before `plx_host_stop` is answered by a `PLAYER_CLOSED` that lands after it (from the host's
+    /// video thread, or from `PlxPlayer.Shutdown`'s own close at terminate). That event is the confirmation the application's
+    /// stop waits for, and the loop is still running until it has it: refusing it held the stop for [`STOP_DEADLINE`] and
+    /// reported it unclean. Every other kind stays refused, and an epoch that is not live is still stale.
     fn post_player(&self, event: PlayerEvent) -> i32 {
-        if self.gate.stopping() || !self.running.load(Ordering::SeqCst) {
+        let confirms_a_close = event.kind == host_abi::PlayerKind::Closed;
+        if (self.gate.stopping() && !confirms_a_close) || !self.running.load(Ordering::SeqCst) {
             return host_abi::E_STATE;
         }
         self.player.accept(event).map_or_else(|code| code, |()| host_abi::OK)
@@ -258,14 +264,14 @@ impl Hosted {
     /// never logged here.
     ///
     /// A player is opened from the loop thread; the epoch is live from here until its `PLAYER_CLOSED` is accepted.
-    #[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) is its caller
+    #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) is its caller
     pub fn player_open(&self, epoch: u32, uri: &str, area: [i32; 4]) -> Result<(), i32> {
         if epoch == 0 || uri.is_empty() {
             return Err(host_abi::PLAYER_E_ARGS);
         }
         let Ok(uri) = std::ffi::CString::new(uri) else { return Err(host_abi::PLAYER_E_ARGS) };
         let Some(Ok(calls)) = self.callbacks.get().map(|c| c.player) else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
-        let Some(_in_flight) = self.gate.enter() else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
+        let Some(_in_flight) = self.gate.enter() else { return Err(host_abi::PLAYER_E_STOPPING) };
         self.player.opened(epoch);
         // SAFETY: the host's callback, kept callable until `on_stopped` has been delivered clean; `uri` is a
         // NUL-terminated string valid for the call, which the host copies before returning.
@@ -279,13 +285,13 @@ impl Hosted {
 
     /// Ask the host for one of the `VERB_*` verbs on the player of `epoch`, without waiting. The same refusals as
     /// [`Hosted::player_open`], and `PLAYER_E_STALE` for an epoch the host no longer holds.
-    #[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) is its caller
+    #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) is its caller
     pub fn player_verb(&self, epoch: u32, verb: u32, arg0: i64, arg1: i64) -> Result<(), i32> {
         if epoch == 0 {
             return Err(host_abi::PLAYER_E_ARGS);
         }
         let Some(Ok(calls)) = self.callbacks.get().map(|c| c.player) else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
-        let Some(_in_flight) = self.gate.enter() else { return Err(host_abi::PLAYER_E_UNAVAILABLE) };
+        let Some(_in_flight) = self.gate.enter() else { return Err(host_abi::PLAYER_E_STOPPING) };
         // SAFETY: the host's callback, kept callable until `on_stopped` has been delivered clean.
         let code = unsafe { (calls.verb)(epoch, verb, arg0, arg1) };
         if code == host_abi::PLAYER_OK {
@@ -295,7 +301,7 @@ impl Hosted {
     }
 
     /// Hand the application every player event queued, in order, and what was lost. Loop thread only.
-    #[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) is its caller
+    #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) is its caller
     pub fn drain_player(&self, out: &mut Vec<PlayerEvent>) -> Drained {
         self.player.drain(out)
     }
@@ -792,7 +798,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let code = w.start(
             |launch| {
-                assert_eq!((launch.pms_host.as_str(), launch.pms_port), ("10.0.2.2", 32499));
+                assert_eq!(launch.pms, Some((c"10.0.2.2".to_owned(), 32499)));
                 Ok(41u32)
             },
             move |launch, window| {
@@ -808,6 +814,23 @@ mod tests {
         assert_eq!(w.wait_stopped(1), [(0, 1)]);
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(w.stopped(), [(0, 1)], "exactly once");
+    }
+
+    #[test]
+    fn a_host_without_a_fixed_server_starts_the_loop() {
+        let w = World::new();
+        let signed_out = c"{\"payload_dir\":\"/res\",\"state_dir\":\"/data\"}";
+        let result = w.hosted.start(
+            &table(),
+            signed_out.as_ptr(),
+            |_| Ok(()),
+            |launch, ()| {
+                assert!(launch.pms.is_none());
+                complete()
+            },
+        );
+        assert_eq!(result, host_abi::OK);
+        assert_eq!(w.wait_stopped(1), [(0, 1)]);
     }
 
     /// A loop that returns with a worker still inside firmware released nothing: `clean = 0`, whatever the
@@ -1265,8 +1288,9 @@ mod tests {
         assert_eq!(hosted.gate.in_flight(), 1);
         // New requests after the stop never reach the host, and the player's late events are refused.
         let calls_before = seen(|s| s.opens.len() + s.verbs.len());
-        assert_eq!(hosted.player_open(10, "http://h/next", AREA), Err(host_abi::PLAYER_E_UNAVAILABLE));
-        assert_eq!(hosted.player_verb(9, host_abi::VERB_CLOSE, 0, 0), Err(host_abi::PLAYER_E_UNAVAILABLE));
+        assert_eq!(hosted.player_open(10, "http://h/next", AREA), Err(host_abi::PLAYER_E_STOPPING));
+        assert_eq!(hosted.player_verb(9, host_abi::VERB_CLOSE, 0, 0), Err(host_abi::PLAYER_E_STOPPING),
+            "a stop closes the gate: the library cannot close the host's player any more, and says why");
         assert_eq!(seen(|s| s.opens.len() + s.verbs.len()), calls_before, "the host was not asked");
         assert_eq!(hosted.post(&player_ev(9, host_abi::EVENT_PLAYER_COMPLETED, 0, 0)), host_abi::E_STATE, "a late completion");
         release_tx.send(()).unwrap();

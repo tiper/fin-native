@@ -71,7 +71,7 @@ class ConcurrentSteps(unittest.TestCase):
         self.assertTrue((out / 'auxv-test').is_file())
 
     def test_no_rust_test_arms_a_trigger_in_the_shared_runtime_root(self):
-        # A host test run resolves the runtime root to the bare `/tmp` (only `hostsim` can steer it),
+        # A host test run resolves the runtime root to the bare `/tmp` (only `sim` can steer it),
         # so a test that writes `plxnative-<trigger>` there is visible to every other test process
         # on the machine. Two of them did, and a second checkout's player test read the armed
         # `plxnative-failtest` ("left: []  right: [Transport(None)]", 119 of 150 side-by-side runs).

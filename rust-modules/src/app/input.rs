@@ -1167,7 +1167,7 @@ pub(super) unsafe fn apply_item_action<R: super::playback::PlaybackResources>(
 #[path = "menu_play_season_tests.rs"]
 mod menu_play_season_tests;
 
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(all(test, feature = "sim"))]
 #[path = "item_menu_player_return_tests.rs"]
 mod item_menu_player_return_tests;
 

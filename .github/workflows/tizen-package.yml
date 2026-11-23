@@ -1,0 +1,75 @@
+name: Build Samsung Tizen package
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      label:
+        type: string
+        required: false
+      arch:
+        type: string
+        default: armv7
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Tizen package (${{ inputs.arch }})
+    runs-on: ${{ inputs.arch == 'x86_64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/rust-toolchain
+      - uses: ./.github/actions/deps-cache
+      - id: ndk
+        if: inputs.arch == 'armv7'
+        uses: ./.github/actions/webos-ndk
+      - name: Install the emulator link dependencies
+        if: inputs.arch == 'x86_64'
+        timeout-minutes: 15
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libgles-dev binutils
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        timeout-minutes: 10
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build and verify the package
+        env:
+          WEBOS_SDK: ${{ steps.ndk.outputs.sdk-dir }}
+          LABEL: ${{ inputs.label }}
+          TIZEN_ARCH: ${{ inputs.arch }}
+        run: |
+          set -euo pipefail
+          if [ -z "$LABEL" ]; then
+            LABEL=$(python3 ci/nightly.py plan --date "$(date -u +%Y%m%d)" --head "$(git rev-parse HEAD)" --dry | sed -n 's/^label=//p')
+          fi
+          make PLATFORM=tizen TIZEN_ARCH="$TIZEN_ARCH" RELEASE=1 print-tizen-config tizen-abi
+          make PLATFORM=tizen TIZEN_ARCH="$TIZEN_ARCH" RELEASE=1 tizen-tpk-nightly TIZEN_NIGHTLY_LABEL="$LABEL"
+          mkdir -p tizen-assets
+          tpk="plxnative-tizen-v$LABEL-$TIZEN_ARCH.tpk"
+          cp "tizen/out/$tpk" tools/tizen-log-receiver.py tizen-assets/
+          # The shared source bundle carries the project and its Tizen recipes. Attach the exact
+          # SDL inputs from this job so their availability cannot block a webOS-only release.
+          source_dir=$(mktemp -d)
+          trap 'rm -rf "$source_dir"' EXIT
+          for dep in sdl2 sdl2-ttf; do
+            archive=$(python3 ci/deps.py fetch "$dep")
+            cp "$archive" "$source_dir/"
+          done
+          ( cd "$source_dir" && sha256sum ./*.tar.gz > SHA256SUMS )
+          tar -C "$source_dir" -cf tizen-assets/tizen-sdl-source.tar .
+          ( cd tizen-assets && sha256sum "$tpk" tizen-sdl-source.tar > nightly-tizen.sha256 )
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.arch == 'x86_64' && 'tizen-emulator-assets' || 'tizen-assets' }}
+          path: tizen-assets/
+          if-no-files-found: error

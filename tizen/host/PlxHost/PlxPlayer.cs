@@ -270,6 +270,9 @@ namespace PlxHost
             if (threadsFailed) return false;
             lock (startGate)
             {
+                // Shutdown set this under the same lock: after it no thread starts and no request is taken, so a request that was already past the
+                // library's gate can neither create a video thread that nothing closes nor reach a native player that Shutdown has already swept.
+                if (shuttingDown) return false;
                 if (videoThread != null) return true;
                 try
                 {
@@ -322,6 +325,14 @@ namespace PlxHost
 
         private void DoOpen(uint epoch, string uri, int x, int y, int w, int h)
         {
+            // An open queued before Shutdown's CompleteAdding but after its close job would create a native player nothing closes: decline it. The
+            // epoch ends with its one PLAYER_CLOSED (no player was made), which the library still hears while its loop runs.
+            if (shuttingDown)
+            {
+                PlxApp.Log("player: epoch " + epoch + ": the open was declined, the host is shutting down");
+                Post((uint)Native.PLX_HOST_EVENT_PLAYER_CLOSED, epoch, 0, 0);
+                return;
+            }
             OpenSteps(epoch, uri, x, y, w, h);
         }
 
@@ -598,9 +609,12 @@ namespace PlxHost
         // ---- the Home round trip (OnPause / OnResume, main thread) ---------------------------------------------------------------------------
         //
         // MEASURED on the emulator 2026-11-22 (TV 10.0 x86_64, a scratch probe): the native player raises nothing on its own when the app goes to
-        // the background. Paused at OnPause and started at OnResume it resumes in about 130 ms at the same position, and the picture is back once
-        // the window is (about 2 s). So the host pauses what is PLAYING at OnPause and starts exactly that at OnResume. Both only enqueue: the
-        // native calls run on the video thread, in order with the library's own requests, and never on the Ecore main thread that called us.
+        // the background, and a player paused at OnPause and started at OnResume resumes in about 130 ms at the same position. The host does
+        // only the first half of that: it pauses what is PLAYING at OnPause, so nothing plays behind the Home screen in the moment before the
+        // library acts. The library owns the rest (plx_host.h, HOME): at the background it parks the attempt (a CLOSE the host performs, the
+        // host closes its player at a stop), and at the foreground it re-opens the same source at the saved position as a new epoch. OnResume
+        // therefore starts nothing. Both only enqueue: the native calls run on the video thread, in order with the library's own requests,
+        // and never on the Ecore main thread that called us.
 
         // OnPause. A player that is playing is paused (PLAYER_PAUSED is posted, as for the library's own pause); one that was asked to play before
         // PREPARED is held back so it does not start behind the Home screen. Nothing is paused for a player that is not playing (idle, paused by
@@ -630,19 +644,29 @@ namespace PlxHost
             });
         }
 
-        // OnResume. Starts what PauseForHome paused or held back, through the library's own PLAY path (so a start before PREPARED is still
-        // deferred to PREPARED and PLAYER_STARTED is posted once it runs). A player the library paused, closed or replaced meanwhile has
-        // lost the flag or is another session, and is left alone.
+        // OnResume. Starts NOTHING: the resume of a player is the library's (see plx_host.h, HOME). It only drops what PauseForHome remembered and
+        // logs why an OnResume resumed nothing, so a run's log names the path.
         internal void ResumeAfterHome()
         {
             if (!HasThreads()) return;
             TryEnqueueInternal(() =>
             {
                 Session s = current;
-                if (s == null || !s.HostPaused) return;
-                if (s.Handle == IntPtr.Zero || s.Closing || s.OpenFailed) { s.HostPaused = false; return; }
-                PlxApp.Log("player: epoch " + s.Epoch + ": resumed after the Home screen");
-                DoPlay(s); // clears HostPaused
+                if (s == null || !s.HostPaused)
+                {
+                    PlxApp.Log("player: OnResume: nothing to resume (" + (s == null ? "no player" : "epoch " + s.Epoch + ": the host did not pause it, or the library's own play, pause or close decided since") + ")");
+                    return;
+                }
+                if (s.Handle == IntPtr.Zero || s.Closing || s.OpenFailed)
+                {
+                    s.HostPaused = false;
+                    PlxApp.Log("player: OnResume: epoch " + s.Epoch + " is closed or closing (the library parked it at the background); not resumed");
+                    return;
+                }
+                // The library owns the resume: it parks the attempt at the background (CLOSE) and re-opens the same source at the saved position at the
+                // foreground, as a new epoch. A host start here would race that restore, so the pause stays and the flag is dropped.
+                s.HostPaused = false;
+                PlxApp.Log("player: OnResume: epoch " + s.Epoch + " left as it is: the library's foreground restore owns the resume");
             });
         }
 
@@ -726,9 +750,12 @@ namespace PlxHost
         // could not close itself (a host-initiated stop).
         internal void Shutdown()
         {
-            shuttingDown = true;
             Thread video;
-            lock (startGate) { video = videoThread; }
+            lock (startGate)
+            {
+                shuttingDown = true; // under the gate EnsureThreads reads it under: a start that is not past it yet is refused, one that is has its thread in `video`
+                video = videoThread;
+            }
             if (video == null) return;
             try
             {

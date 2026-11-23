@@ -166,7 +166,7 @@ impl plx_ui::dispatch::FrameRuntime<AppHost> for ProductFrameRuntime<'_> {
         }
         // The frame dump (`dev::framedump`) owns the clock and the placeholder count from here:
         // it must run before anything reads `clock::now()`.
-        #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+        #[cfg(all(feature = "sim", feature = "devtriggers"))]
         if crate::dev::framedump::requested() {
             crate::dev::framedump::iteration_begin(app);
         }
@@ -426,9 +426,9 @@ fn clock_and_press(app: &mut App, fr: &mut Frame) {
     // a bare units-per-second. The decision itself is taken just above `glViewport`.
     // A dump's held repeat judges rest with its first pass's `dt` (`framedump::idle_dt`); the
     // clock `now_ms` reads still advances by `fr.dt` alone.
-    #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+    #[cfg(all(feature = "sim", feature = "devtriggers"))]
     let rest_dt = if crate::dev::framedump::active() { crate::dev::framedump::idle_dt(fr.dt) } else { fr.dt };
-    #[cfg(not(all(feature = "hostsim", feature = "devtriggers")))]
+    #[cfg(not(all(feature = "sim", feature = "devtriggers")))]
     let rest_dt = fr.dt;
     plx_machine::motion::report::frame_begin_judging_rest_with(fr.dt, rest_dt);
     // Is a page capture still in flight on the GPU, and is recorded text still warming? Latched
@@ -655,7 +655,7 @@ fn publish_resources(app: &mut App, fr: &mut Frame) {
     app.runtime.bridge(&mut app.bridge).observe_plex_visual_inputs(&mut app.pages.present);
     // Settle decisions must include this frame's input, motion and landed content.
     plx_machine::motion::report::collect_into(&mut app.pages.present, fr.now);
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     if crate::shot::tick(fr.now, app.pages.budget.has_queued_work() || plx_gfx::gfx::snapshot_pending()
         || app.scenarios.shots.pending(), app.pages.present.last_change_ms()) {
         app.pages.present.note(plx_machine::present::PresentEvent::Wake);
@@ -672,7 +672,7 @@ fn admit_frame(app: &mut App, fr: &mut Frame, demand: bool) {
     // asked: it takes-and-clears the damage the deferred frame still needs.)
     fr.deferred = !fr.present && plx_gfx::gfx::snapshot_pending() && app.window_activity.allow_present(true);
     // A dump draws every iteration: a held repeat and a written frame alike are a draw.
-    #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+    #[cfg(all(feature = "sim", feature = "devtriggers"))]
     if crate::dev::framedump::active() {
         fr.present = true;
     }
@@ -874,7 +874,7 @@ const FONT_WARM_SLICE_US: u64 = 2_000;
 unsafe fn present_and_swap(app: &mut App, fr: &mut Frame, pace: Option<u64>) {
     if fr.present {
         // The dump's full prewarm drain and pre-draw debt sample, after the takes and before the draw.
-        #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+        #[cfg(all(feature = "sim", feature = "devtriggers"))]
         if crate::dev::framedump::active() {
             crate::dev::framedump::pre_draw(app);
         }
@@ -885,7 +885,7 @@ unsafe fn present_and_swap(app: &mut App, fr: &mut Frame, pace: Option<u64>) {
         // A finished underlay-field reduction is read HERE, before framebuffer 0 holds anything
         // of this frame — a read between the page and the surfaces splits its render pass.
         plx_gfx::gfx::field_frame_begin();
-        #[cfg(feature = "hostsim")]
+        #[cfg(feature = "sim")]
         let shot_last_change = app.pages.present.last_change_ms();
         let (_vx, _vy, _vw, _vh) = draw(app, fr);
         app.runtime.bridge(&mut app.bridge).observe_plex_visual_inputs(&mut app.pages.present);
@@ -924,17 +924,17 @@ unsafe fn present_and_swap(app: &mut App, fr: &mut Frame, pace: Option<u64>) {
         // Before the swap, never after: the back buffer is undefined once presented.
         // A dump decides here whether this frame is written (`dev::framedump`); otherwise the
         // ordinary screenshot seam.
-        #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+        #[cfg(all(feature = "sim", feature = "devtriggers"))]
         let dumping = crate::dev::framedump::active();
-        #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+        #[cfg(all(feature = "sim", feature = "devtriggers"))]
         if dumping && crate::dev::framedump::after_draw(app, _vx, _vy, _vw, _vh) {
             app.running = false;
         }
-        #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+        #[cfg(all(feature = "sim", feature = "devtriggers"))]
         let screenshot_seam = !dumping;
-        #[cfg(all(feature = "hostsim", not(feature = "devtriggers")))]
+        #[cfg(all(feature = "sim", not(feature = "devtriggers")))]
         let screenshot_seam = true;
-        #[cfg(feature = "hostsim")]
+        #[cfg(feature = "sim")]
         if screenshot_seam && crate::shot::maybe_capture(fr.now, app.pages.present.changed_after_admission()
             || app.pages.budget.has_queued_work() || plx_gfx::gfx::snapshot_pending()
             || app.scenarios.shots.pending(), shot_last_change, _vx, _vy, _vw, _vh) {
@@ -2345,6 +2345,10 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
         // pump to do it, and the landing's replacement encoder runs on the server until it is.
         plx_media::route::discard_stale_flight_landing();
         if app.window_activity.allow_present(true) && app.player.lifecycle.flight_pending() {
+            // A parked URI original's restore is a re-resolve the lifecycle (which has no metadata store) owes and
+            // this frame performs and drains (`player::begin_resume`'s URI branch).
+            plx_media::player::pump_uri_restore(&mut app.player.session, &mut app.adapters.player,
+                app.runtime.metadata_mut());
             // The foreground restore waits on a flight (its resume's rebuild or an Original
             // rollback): the lifecycle machine drains it, not the pump (there is no Engine) and not
             // the cold-resume drain (`playback_may_run` is false while the restore is parked).
@@ -2411,6 +2415,11 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
             crate::dev::scenarios::maybe_replay_after_eos(app, handed_off_to_up_next);
         } else if playback_may_run(app)
             && plx_media::player::ended(&app.player.session) == Some(true)
+            // **Once.** A URI attempt's stop is a CLOSE the host confirms a few frames later, and the attempt stays
+            // "needing teardown" until its `PLAYER_CLOSED`: without this, every frame of that wait asked for the same
+            // stop again and logged the line below (5 times at the Tizen emulator's EOS). A stop already underway is
+            // the release machine's to finish.
+            && app.adapters.player.backend_snapshot().phase != plx_playback_contract::Phase::Releasing
             && super::content::off_route_orphan(
                 app.adapters.player.playback_needs_teardown(&app.player.session),
                 plx_media::route::is_preview(&app.player.session),
@@ -2940,7 +2949,9 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
         // Tell the machine at this transaction boundary (`Superseded(Playback)`): it retires the
         // parked owner and leaves a pending Load to its own settlement. A same-session Prepared
         // retry does not set play_pending and remains owned by drive_foreground.
-        if app.window_activity.allow_present(true) && plx_media::route::play_pending() {
+        // The re-resolve a parked URI original's restore started is the restore's own, not a successor.
+        if app.window_activity.allow_present(true) && plx_media::route::play_pending()
+            && !app.adapters.player.uri_restore_outstanding() {
             let _ = drive_foreground(
                 &mut app.player.lifecycle,
                 &mut app.player.session,
@@ -3827,6 +3838,22 @@ pub(crate) fn quits_sdl(native_exit: plx_media::player::NativeExit) -> bool {
     release_of(native_exit) == Release::Complete
 }
 
+/// The playback half of [`shutdown`]: abandon the pending report and stop what the server was told is playing. That includes a
+/// URI attempt a Suspend parked (the host's terminate is one): its native session is already closed, so nothing reads as live,
+/// but its `stopped` timeline and transcode stop were never sent, and a restore that will never come is the only thing that
+/// would have sent them (`PlayerAdapter::parked_uri_owes_stop`).
+pub(crate) fn end_playback_for_exit(
+    ps: &mut plx_media::route::PlaybackSession,
+    pa: &mut plx_media::player::adapter::PlayerAdapter,
+) {
+    ps.finish_metric_request(plx_media::player::attempt_metrics::RequestOutcome::Cancelled);
+    pa.sync_request_metrics(ps);
+    plx_media::player::report::abandon_pending(ps);
+    if pa.playback_needs_teardown(ps) || pa.parked_uri_owes_stop(ps) {
+        plx_media::player::stop_playback(ps, pa);
+    }
+}
+
 /// Teardown after the loop: abandon the pending report, stop the active backend, wait for the stop
 /// scrobble, close the capture stream and the poster workers, quit SDL (unless a worker is still
 /// in firmware: `surface.quit()` is the platform's, and WHETHER it runs is this function's). Answers
@@ -3837,12 +3864,7 @@ pub(crate) unsafe fn shutdown(
     pa: &mut plx_media::player::adapter::PlayerAdapter,
     surface: &dyn super::platform::Surface,
 ) -> Release {
-    ps.finish_metric_request(plx_media::player::attempt_metrics::RequestOutcome::Cancelled);
-    pa.sync_request_metrics(ps);
-    plx_media::player::report::abandon_pending(ps);
-    if pa.playback_needs_teardown(ps) {
-        plx_media::player::stop_playback(ps, pa);
-    }
+    end_playback_for_exit(ps, pa);
     // The stop's `Unload` runs off-frame; the process must not exit inside it, nor with the
     // object it is releasing left undestroyed. The wait is bounded, and a worker still inside
     // firmware (an overdue `Unload`, or a timed-out Load's media thread) means the display must not
@@ -4025,7 +4047,7 @@ unsafe fn controlled_key_input(app: &mut App, event: plx_machine::machine::Input
     app.inputs.push(event);
 }
 
-#[cfg(all(test, feature = "hostsim", feature = "play-feed"))]
+#[cfg(all(test, feature = "sim", feature = "play-feed"))]
 pub(in crate::app) mod lifecycle_regression_tests {
     use super::*;
 

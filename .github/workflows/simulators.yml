@@ -195,7 +195,7 @@ jobs:
       - name: Build native macOS simulator
         run: make sim-macos SIM_TDIR=rust-modules/target-sim-ci
       - name: Link the macOS app's feature set
-        # What `make macapp` ships: `--no-default-features --features hostsim,play-feed` (the
+        # What `make macapp` ships: `--no-default-features --features sim,play-feed` (the
         # release build in `ci/mkmacapp.py`, linked here in DEBUG: the harder case for the reliance
         # below, and cheaper than a release build). The simulator is the binary of the desktop platform
         # crate (`plx_platform_desktop`), which depends on no television code: the Wayland and
@@ -209,7 +209,7 @@ jobs:
           CARGO_INCREMENTAL=0 cargo "+$(make -s print-rust-toolchain)" build \
             --manifest-path rust-modules/Cargo.toml \
             --target-dir rust-modules/target-sim-ci-macapp \
-            --no-default-features --features hostsim,play-feed -p plx_platform_desktop --bin plxnative-sim
+            --no-default-features --features sim,play-feed -p plx_platform_desktop --bin plxnative-sim
       - name: Replay all committed product recordings
         # 960x540, not the driver's 1920x1080 default. The runner has no GPU (the log says `GL:
         # Apple Software Renderer`), so a replay is CPU-bound in the rasteriser and costs what the
