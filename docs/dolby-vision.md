@@ -156,6 +156,40 @@ the L5 offsets into the DM registers `Active_area_*`.
 - It is not verified on a device: our dev set's W19H `libkadaptor` has no `active_area` string, so
   it cannot reproduce the strip, and the reporter's C8 is where the failure was seen.
 
+### 1b. RPUs with no configuration record
+
+**The bug class.** A remux can drop the container's Dolby Vision record (the MP4 `dvcC`/`dvvC`, the
+Matroska `BlockAdditionMapping`) and keep the RPUs (`UNSPEC62`) in every access unit. The server reads
+the record, so it reports no Dolby Vision (a Jellyfin server called one such file HDR10+), the route
+declares no node, and the panel shows the HDR10 base layer while every RPU is still fed. Seen on an LG
+C1 on 2026-11-18: the active-area check of 1a was rewriting the RPUs of a play that declared none.
+
+**The rule.** For an HEVC stream with no record, the demuxer reads its first eight packets
+(`ff::RpuOnlyScan`) and reports, once per open, what the first RPU says (`FeedRaw::rpu_dovi`): Profile 5
+(`bl_compat` 0) or Profile 8 over a PQ (1) or HLG (4) base layer, the compatibility read from the
+stream's transfer since there is no record to read it from. An RPU that maps an enhancement layer (a
+Profile 7, whose conversion keys on the record), an enhancement-layer NAL in the packet, an RPU that does
+not parse and a Profile 8 over any other transfer report nothing. Once the Load has returned and no
+flight is out, the pump asks the route to declare it (`route::declare_rpu_dovi`): the decision the
+record would have frozen, through `frozen_dv_decision` with the Dolby Vision setting frozen at the
+resolve (`RpuDv::Open`, set for a file with no record) and the capability the route froze. Only a
+direct play declares, and not during an Original trial that has not shown a picture yet (the plain
+seek waits for it too): a server remux's `start.mkv` begins at its offset, so the reload's seek would
+land wrong, and its report leaves the play open. Off and a set without confirmed support decline and
+close it. A declaration rewrites the installed route, the file's own declaration and the stored Auto
+Original candidate. A source whose base layer is unusable forbids a video copy on every rebuild
+(`is_no_video_copy` reads the file's declaration, not only the route's contract, which a return to
+Original resets), so an inferred Profile 5, like one with a record, is never offered to the server for a
+copy. That does not give an inferred Profile 5 a correct server route: the server has no record either,
+so its encode is of the base layer and nothing declares it, the same picture the copy gave. The play
+reloads once at the newest tap, else where the Engine was aimed. The reloaded Load carries the node and
+the landing guard (#1166) arms as for any declared direct play; a withdrawal later in the play closes
+it, so it is not undone.
+
+**Limits.** Every play of such a file pays one extra Load (nothing remembers the finding), a remux the
+server makes of it is not declared, and the URI engine is not covered. Not yet compared on a set
+against the same film with its record.
+
 ---
 
 ## 2. The Load payload: two nodes, both recovered from the set's own binaries
