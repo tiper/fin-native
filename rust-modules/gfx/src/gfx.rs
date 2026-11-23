@@ -1217,7 +1217,7 @@ fn glsl_preamble(ty: c_uint) -> &'static CStr {
 /// (`surface::render_scale`, simulator only), so every rounded corner would come out `n` times
 /// softer than the render it sits in. Narrow exactly that ramp to one physical pixel. `None` —
 /// the source untouched — at scale 1, so the default simulator compiles what the television does.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 unsafe fn supersample_aa(src: *const c_char) -> Option<std::ffi::CString> {
     let n = plx_base::surface::render_scale();
     if n <= 1 {
@@ -1284,9 +1284,9 @@ fn try_compile(ty: c_uint, src: *const c_char) -> Option<c_uint> {
         let s = glCreateShader(ty);
         // Two source strings rather than a concatenation: GL joins them itself, so the preamble
         // needs no allocation and the original `&CStr` sources stay untouched.
-        #[cfg(feature = "hostsim")]
+        #[cfg(feature = "sim")]
         let supersampled = supersample_aa(src);
-        #[cfg(feature = "hostsim")]
+        #[cfg(feature = "sim")]
         let src = supersampled.as_ref().map_or(src, |c| c.as_ptr());
         let srcs: [*const c_char; 2] = [glsl_preamble(ty).as_ptr(), src];
         glShaderSource(s, 2, srcs.as_ptr(), std::ptr::null());
@@ -2959,7 +2959,7 @@ pub fn draw_art_wash(
 /// of a logical one, and the textures are rasterised at `n`x to match, so that is what it snaps to.
 #[inline]
 pub fn snap(v: f32) -> f32 {
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     {
         let n = plx_base::surface::render_scale();
         if n > 1 {
@@ -3890,7 +3890,7 @@ pub fn draw_tex_carded_blend(tex: c_uint, next: c_uint, mix: f32, crop: [f32; 4]
 
 /// Run `draw` with the simulator's compositor blend ([`straighten::UNDER`]) set and the app's own put
 /// back after.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 fn under_blend(draw: impl FnOnce()) {
     let [src_rgb, dst_rgb, src_a, dst_a] = straighten::UNDER.gl();
     unsafe {
@@ -3909,7 +3909,7 @@ fn under_blend(draw: impl FnOnce()) {
 /// ([`straighten::straighten_surface`], run first) removes, so the simulator shows both. Used by
 /// `app::adapters::hostsim::sim_video` for the screenshot pipeline's player figure and, with no
 /// picture, by [`draw_under_black`]; restores the app's blend.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 pub fn draw_under(tex: c_uint, x: f32, y: f32, w: f32, h: f32) {
     under_blend(|| draw_tex(tex, x, y, w, h, 0.0, [1.0f32; 4].as_ptr()));
 }
@@ -3918,7 +3918,7 @@ pub fn draw_under(tex: c_uint, x: f32, y: f32, w: f32, h: f32) {
 /// straightened (the pass has no simulator switch), so it has to go through the compositor model
 /// whether or not the simulator holds a decoded picture, or a screenshot would read the straight
 /// buffer itself.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 pub fn draw_under_black() {
     let black = [0.0f32, 0.0, 0.0, 1.0];
     under_blend(|| draw_rect(0.0, 0.0, SCR_W, SCR_H, 0.0, 0.0, black.as_ptr(), black.as_ptr(), 0.0, 1.0));

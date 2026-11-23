@@ -4,11 +4,11 @@
 
 pub(crate) mod backends;
 pub(crate) mod consent;
-#[cfg(all(feature = "hostsim", feature = "play-feed"))]
+#[cfg(all(feature = "sim", feature = "play-feed"))]
 pub(crate) mod hostsim;
 pub(crate) mod huds;
 pub(crate) mod poster;
 pub(crate) mod session;
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 pub(crate) mod sim_present;
 pub(crate) mod stores;

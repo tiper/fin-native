@@ -126,7 +126,7 @@ impl PersonBioScreen {
     ///
     /// **Doing that from a key handler does not fail as a skipped test. It fails as a LINK ERROR.**
     /// This screen's `step` is called by the host suite, `cargo test --lib` builds without
-    /// `--features hostsim`, and nothing then supplies SDL_ttf or GL — so one `.min(pages)` on this
+    /// `--features sim`, and nothing then supplies SDL_ttf or GL — so one `.min(pages)` on this
     /// line once stopped the whole suite from BUILDING, with an undefined `_TTF_SizeUTF8` naming
     /// `plx_gfx::text` and nothing about this panel. It cost a bisect to find. Anything reachable
     /// from a key handler here has to stay clear of text measurement.

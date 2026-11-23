@@ -390,6 +390,14 @@ impl MoreRow {
     }
 }
 
+/// Whether the Quality section is withheld for this session: under Force Direct Play (no rung can change what plays) and
+/// when no composed backend can carry a rung (no Feed, and the URI provider certifies no converted output:
+/// [`plx_media::route::PlaybackSession::quality_pick_carriable`]), where a pick would persist a ceiling a playing original
+/// cannot honour. `forced` below is this answer.
+fn quality_withheld(ps: &plx_media::route::PlaybackSession) -> bool {
+    plx_media::route::forced_direct_play(ps) || !ps.quality_pick_carriable()
+}
+
 /// Is the Quality row offered? Force Direct Play never offers one (no rung can change what plays),
 /// and an empty ladder has nothing to open onto — a row leading to an empty page would read as a
 /// menu that failed to load.
@@ -513,7 +521,7 @@ fn quality_form(
 
 impl MoreMenuState {
     fn open_focused(ps: &plx_media::route::PlaybackSession, page: Option<MorePage>, folded: Vec<FoldedRow>, current: plx_media::route::Quality) -> Self {
-        let forced = plx_media::route::forced_direct_play(ps);
+        let forced = quality_withheld(ps);
         let rows = rows_for(forced);
 
         let speed = plx_media::player::selected_rate(ps).unwrap_or(plx_media::player::RATE_NORMAL);
@@ -645,7 +653,7 @@ impl MoreMenuState {
     }
 
     pub fn refresh_with_quality(&mut self, ps: &plx_media::route::PlaybackSession, current: plx_media::route::Quality) -> bool {
-        let forced = plx_media::route::forced_direct_play(ps);
+        let forced = quality_withheld(ps);
         self.refresh_to(
             ps,
             forced,
@@ -980,8 +988,8 @@ where
 /// be a row here too — there is none, and the debug assert in [`MoreMenuState::open_focused`] is
 /// what would catch one being added on one side only.
 ///
-/// **`forced` (Force Direct Play) drops the Quality section entirely.** Every rung is a request for
-/// the server to convert, and Force forbids conversion, so under it no rung can change what plays:
+/// **`forced` (Force Direct Play, or a composition that converts nothing) drops the Quality section entirely.** Every rung is a request for
+/// the server to convert, and Force forbids conversion (a no-Feed composition cannot perform one), so under it no rung can change what plays:
 /// a row that cannot change the outcome is not offered (the same rule as the failure read-out's
 /// `player::failure_actions`). Pure over the flag so both shapes are testable without a session.
 fn rows_for(forced: bool) -> Vec<Action> {
@@ -1525,6 +1533,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **A composition that converts nothing offers no Quality row either**: no Feed, and no URI resolver that certifies a
+    /// converted output (here none at all; `plx_media`'s `a_quality_pick_no_composed_backend_can_carry_is_refused_and_leaves_the_route_alone`
+    /// covers the Tizen resolver that is installed and certifies none). A rung picked there would persist a ceiling the playing
+    /// original cannot honour and queue a Retranscode no pump consumes, so the ladder is not offered. A Feed (webOS) keeps it.
+    #[test]
+    fn a_composition_that_converts_nothing_offers_no_quality_row() {
+        plx_media::speed_audio::force_speed_decoder_for_test(true); // a host test loads no FFmpeg
+        let mut ps = plx_media::route::PlaybackSession::default();
+        ps.install_backends(plx_media::route::BackendSet::URI);
+        let st = MoreMenuState::new(&ps);
+        assert!(!st.rows.iter().any(|a| matches!(a, Action::SetQuality(_))), "{:?}", st.rows);
+        assert!(!quality_offered(&st.rows, st.forced));
+        ps.install_backends(plx_media::route::BackendSet::BOTH);
+        let st = MoreMenuState::new(&ps);
+        assert!(quality_offered(&st.rows, st.forced), "a composition with a Feed keeps the ladder");
     }
 
     /// **Force Direct Play leaves no Quality row and no page**: no rung can change what plays under

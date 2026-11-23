@@ -9524,7 +9524,7 @@ impl PersonOwnerGateFixture {
         files = {}
         for i, visibility in enumerate(("pub", "pub(crate)", "pub(super)")):
             for j, predicate in enumerate(('test', 'all(test, feature = "devtriggers")',
-                                           'all(any(test, feature = "test-support"), feature = "hostsim")')):
+                                           'all(any(test, feature = "test-support"), feature = "sim")')):
                 files[f"_check_deps_visible_test_{i}_{j}.rs"] = (
                     f"#[cfg({predicate})]\n{visibility} mod fixture {{\n"
                     "    fn work() { std::thread::spawn(|| {}); }\n}\n")

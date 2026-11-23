@@ -1270,6 +1270,55 @@ class ExtraMediaAudioSelection(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_FFMPEG_AND_FFPROBE, "no ffmpeg/ffprobe")
+class ExtraMediaVideoOnly(unittest.TestCase):
+    """`--extra-media-video-only`: a file with no audio stream is served (the Tizen emulator has no audio
+    device, so its playback runs use video-only media); without the flag the same file is refused."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.clip = pathlib.Path(cls.tmp.name) / "silent.mp4"
+        subprocess.check_call([
+            "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=size=64x64:rate=24:duration=1",
+            "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-t", "1", str(cls.clip)])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_a_file_without_audio_is_refused_unless_the_flag_says_so(self):
+        with self.assertRaises(ValueError) as why:
+            Library(movies=0, extra_media=[self.clip])
+        self.assertIn("needs video and audio", str(why.exception))
+
+    def test_the_flag_serves_it_with_no_audio_stream_and_no_audio_fields(self):
+        lib = Library(movies=0, extra_media=[self.clip], extra_media_video_only=True)
+        media = lib.items[EXTRA_MEDIA_RK_BASE]["Media"][0]
+        self.assertEqual([s["streamType"] for s in media["Part"][0]["Stream"]], [1])
+        self.assertNotIn("audioCodec", media)
+        self.assertNotIn("audioChannels", media)
+        self.assertEqual(media["container"], "mp4")
+
+    def test_the_flag_needs_extra_media(self):
+        with self.assertRaises(ValueError) as why:
+            Library(movies=0, extra_media_video_only=True)
+        self.assertIn("--extra-media", str(why.exception))
+
+    def test_the_bytes_are_served_with_ranges(self):
+        server, pms = serve(0, movies=0, extra_media=[self.clip], extra_media_video_only=True)
+        try:
+            key = get(pms, f"/library/metadata/{EXTRA_MEDIA_RK_BASE}")["Metadata"][0]["Media"][0]["Part"][0]["key"]
+            req = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}{key}",
+                                         headers={"Range": "bytes=0-7"})
+            with urllib.request.urlopen(req) as answer:
+                self.assertEqual(answer.status, 206)
+                self.assertEqual(len(answer.read()), 8)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
+@unittest.skipUnless(HAS_FFMPEG_AND_FFPROBE, "no ffmpeg/ffprobe")
 class ExtraMediaSubtitle(unittest.TestCase):
     """`--extra-media-subtitle N`: the Nth subtitle stream of an `--extra-media` file is the server-selected
     one (`selected` on it alone), the file's `default` flag untouched: the shape PMS reports when a profile's

@@ -12,7 +12,7 @@
 //!     composes the URI driver `Acb` with no `ptype` trigger.
 //!   - [`compose_feed`] and [`compose_native`] install what a platform's drivers are: the Feed (or, with
 //!     none, the platform's display sink) for a platform that has one, and on webOS the product URI driver
-//!     too; [`compose_none`] (`host::NO_MEDIA`) installs nothing, for a platform with no playback yet. They publish nothing: they return what they composed, and the application's one
+//!     too; [`compose_none`] (`host::NO_MEDIA`) installs nothing, for a platform with no playback (a Tizen build without its `uri` feature). They publish nothing: they return what they composed, and the application's one
 //!     publisher (`app::platform::publish_composition`) tells the route session the set the
 //!     installed drivers form, so policy offers what is physically there instead of what Cargo
 //!     features happened to be on. the platform crates name these two through
@@ -164,13 +164,13 @@ pub(crate) fn compose_feed(adapter: &mut PlayerAdapter) {
 
 /// The desktop's `early_init`: nothing to initialize before the first adapter. The plane owner's default facts are
 /// the absent ones the host sink's `VP_EXPORTED`/`VP_NONE` boot would state. `host::FEED_MEDIA` states it.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 pub(crate) fn feed_early_init(_mt: &MainThread) {}
 
 /// The desktop's `compose`: [`compose_feed`] over the host sink alone. It composes no URI driver (that is the
 /// television's ACB driver), so it returns no resolver and the session is published the Feed alone.
 /// `host::FEED_MEDIA` states it.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 pub(crate) fn compose_feed_alone(adapter: &mut PlayerAdapter, _controlled: bool) -> Composition {
     compose_feed(adapter);
     Composition::default()
@@ -318,11 +318,11 @@ const TEST_HOOKS: NativeHooks = native_hooks_over!(test_raw_sink, test_clock_us,
 /// test's reset can wait it out (`ffi_host::UnloadWorker`); a build with no host sink has no drain.
 #[cfg(all(test, feature = "play-feed"))]
 fn test_unload_worker() -> impl Send + 'static {
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     {
         plx_play_feed::ffi_host::UnloadWorker::enter()
     }
-    #[cfg(not(feature = "hostsim"))]
+    #[cfg(not(feature = "sim"))]
     {
         NoWorker
     }
@@ -330,11 +330,11 @@ fn test_unload_worker() -> impl Send + 'static {
 
 #[cfg(all(test, feature = "play-feed"))]
 fn test_raw_sink() -> &'static dyn VideoSink {
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     {
         &super::hostsim::HOST_SINK
     }
-    #[cfg(not(feature = "hostsim"))]
+    #[cfg(not(feature = "sim"))]
     {
         sink::installed()
     }
@@ -550,8 +550,8 @@ pub(crate) fn install_uri_product_with_ports(adapter: &mut PlayerAdapter, produc
 /// publishes: the install, then [`publish_composition`](crate::app::platform::publish_composition)
 /// with the resolver it returned (the session learns the adapter's whole set, Feed included).
 /// Whether the driver installed. Gated as its only caller is: the lifecycle rig's
-/// `uri_boot_tests`, which `run.rs` builds under `hostsim` and `play-feed`.
-#[cfg(all(test, feature = "hostsim", feature = "play-feed", feature = "play-uri"))]
+/// `uri_boot_tests`, which `run.rs` builds under `sim` and `play-feed`.
+#[cfg(all(test, feature = "sim", feature = "play-feed", feature = "play-uri"))]
 pub(crate) fn install_and_publish_uri_product(adapter: &mut PlayerAdapter,
     session: &mut plx_media::route::PlaybackSession, product: UriProduct,
     transport: &'static dyn plx_os::tv::uri::UriMedia,
@@ -673,7 +673,7 @@ mod tests {
     /// workers it counts, and a worker is counted by the hooks' `spawn_unload` entering
     /// `UnloadWorker` before it spawns. The application's test hooks are the table the app's player
     /// tests run their Unload over, so their worker has to be one of those.
-    #[cfg(all(feature = "hostsim", feature = "play-feed"))]
+    #[cfg(all(feature = "sim", feature = "play-feed"))]
     #[test]
     fn the_test_hooks_unload_worker_is_counted_by_the_drain_wait() {
         use plx_play_feed::ffi_host;

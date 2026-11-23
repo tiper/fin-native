@@ -2,7 +2,7 @@
 //! and writes every frame it declares clean, as raw RGB24 for `ffmpeg -c:v ffv1 -level 3 -g 1`, one
 //! xxh3 per frame into `frames.tsv`, and a summary into `dump.json`. `tools/site_video.py render`
 //! is the launcher that owns the pipe, the pinned ffmpeg, the sentinel scan and `render.json`.
-//! Simulator only: this file compiles under `hostsim` + `devtriggers` and nowhere else.
+//! Simulator only: this file compiles under `sim` + `devtriggers` and nowhere else.
 //!
 //! **Armed by `PLXNATIVE_DUMP=<dir>`** (where `frames.tsv` and `dump.json` go), read once at the
 //! first loop iteration. The rest, all optional:

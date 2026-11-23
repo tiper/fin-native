@@ -2,7 +2,7 @@
 //! No worker, machine state, playback request, or per-frame instrumentation is introduced.
 
 use plx_appkit::hud_format::lint::{text_metrics, LintLang};
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 use plx_appkit::hud_format::schema;
 use plx_machine::machine::Measure;
 use serde_json::{json, Value};
@@ -33,7 +33,7 @@ pub(crate) fn font_hashes() -> Result<BTreeMap<String, String>, String> {
     Ok(hashes)
 }
 
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 pub(crate) fn info() -> Value {
     use plx_appkit::hud_format::{bundle, schema_emit, svg_subset};
     let hud_schemas = schema::versions().map(|version @ (major, minor)| {
@@ -56,7 +56,7 @@ pub(crate) fn info() -> Value {
 }
 
 /// Preview automation reads the compiler's actual controls instead of reproducing HUD layout.
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 pub(crate) fn inspect(
     package: &plx_appkit::hud_format::bundle::VerifiedPackage,
     measure: &dyn Measure,
@@ -143,7 +143,7 @@ pub(crate) fn metrics(
 }
 
 /// Registry CI passes a measured profile explicitly. Shipping playback never loads this file.
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 pub(crate) fn skew_profile(text: &str) -> Result<BTreeMap<i32, f32>, String> {
     let profile: Value =
         serde_json::from_str(text).map_err(|e| format!("invalid text-skew JSON: {e}"))?;

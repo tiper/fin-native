@@ -98,12 +98,12 @@ impl RuntimeOwners {
         self.session.machine.read()
     }
 
-    #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+    #[cfg(all(feature = "sim", feature = "devtriggers"))]
     pub(crate) fn landgate(&self) -> &plx_machine::landgate::Gate {
         &self.stores.machines.landgate
     }
 
-    #[cfg(all(feature = "hostsim", feature = "devtriggers"))]
+    #[cfg(all(feature = "sim", feature = "devtriggers"))]
     pub(crate) fn open_claims(&self) -> Vec<&'static str> {
         use plx_data::stores::StoreId;
         let mut open = Vec::new();

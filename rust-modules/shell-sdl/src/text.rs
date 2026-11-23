@@ -45,7 +45,7 @@ use std::os::raw::c_void;
 /// so the application's own tests get these stubs through the `test-support` feature, which its
 /// `[dev-dependencies]` enable and no shipped build does.
 ///
-/// **Only a test is stubbed.** `hostsim` links desktop SDL2 and takes the real arm, which is the
+/// **Only a test is stubbed.** `sim` links desktop SDL2 and takes the real arm, which is the
 /// whole point: the simulator is where the decode path is exercised by typing.
 // the stubs carry SDL's own C names ON PURPOSE: `use`d unqualified by the arms above, so the call
 // sites read identically in both builds and a signature drift shows up as a type error there

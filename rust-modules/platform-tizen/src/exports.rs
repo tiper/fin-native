@@ -21,7 +21,7 @@ use crate::launch::Launch;
 use crate::{devboot, layout, log_udp, surface, HOSTED, PLATFORM};
 use plx_base::eventlog::log;
 use plxnative_modules::host::{self, Exit};
-use std::ffi::{c_char, CString};
+use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 /// Steps 1-4 above, on the host thread. Refuses with [`host_abi::E_WINDOW`] when the window or a library it
@@ -41,11 +41,10 @@ fn bring_up(launch: &Launch) -> Result<Window, i32> {
 /// The loop thread's body: hand the window over, then run the application.
 fn run(launch: Launch, window: Window) -> Exit {
     surface::hand_over(window);
-    let Ok(pms_host) = CString::new(launch.pms_host.as_str()) else {
-        log("host: the launch string's pms_host holds a NUL byte");
-        return Exit::refused(1);
-    };
-    host::run(&PLATFORM, &pms_host, launch.pms_port)
+    match launch.pms {
+        Some((host, port)) => host::run(&PLATFORM, &host, port),
+        None => host::run_signed_out(&PLATFORM),
+    }
 }
 
 /// `plx_host_start` over `hosted` (the process's own, in the export). A panic while bringing up is caught in

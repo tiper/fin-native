@@ -74,7 +74,7 @@ impl TizenShell {
 impl Shell for TizenShell {
     /// What Tizen states about its SDL, which it does not use: no SDL window, no SDL event and no step. The
     /// values are the ones a Tizen build compiled before the platform stated them (the television's
-    /// layout, an ES 2.0 context and the nothing-to-do steps: the `not(hostsim)` arms every build without
+    /// layout, an ES 2.0 context and the nothing-to-do steps: the `not(sim)` arms every build without
     /// the simulator took), and the ES2 context is the one [`crate::egl::Egl`] makes.
     fn sdl(&self) -> InitHooks {
         InitHooks { steps: InitSteps::NONE, flavor: SdlFlavor::Lg, gl: GlProfile::Es2 }

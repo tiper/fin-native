@@ -19,7 +19,7 @@ default = []
 # only because some code in this crate has a `cfg` on it (`motion`'s held phase clock,
 # `idle`'s simulator settle clock).
 devtriggers = ["plx_base/devtriggers"]
-hostsim = ["plx_base/hostsim"]
+sim = ["plx_base/sim"]
 # The `cfg(test)` fixtures other crates' tests use (`landgate`'s fixture gate, `idle::reset_for_test`,
 # `machine::{BareArg, BareMeasure}`, the `Measure` impl for `fontcov`'s `ShippedMeasure`) plus the
 # test-mode behaviour that `cfg(test)` alone cannot give a dependent (`present`'s private wake door,

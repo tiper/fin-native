@@ -208,7 +208,7 @@ class MakeWiring(unittest.TestCase):
     def test_the_hostsim_pass_is_exactly_the_crates_that_declare_hostsim(self):
         """The `hostsim` pass runs HOSTSIM_SUITE, a subset of UNIT_SUITE (`make check`'s first run of
         every binary is the default pass). A crate left out has an identical test set in both passes:
-        no `hostsim` feature in its manifest and no `feature = "hostsim"` in its source. What the guard
+        no `sim` feature in its manifest and no `feature = "sim"` in its source. What the guard
         does not check is the dependency side: the old pass linked those crates' test binaries
         against hostsim-built `plx_base`, `plx_gfx`, `plx_os`, `plx_media` and `plx_play_feed`
         (`ENV_STEERABLE` paths, glyph-cache sizes, `ffi_host` present), and none of their tests
@@ -221,7 +221,7 @@ class MakeWiring(unittest.TestCase):
         self.assertTrue(set(hostsim) <= set(unit))
         start = text.index("\ncheck-cargo-unit-hostsim:")
         recipe = text[start:start + 6000].split("\n\n")[0]
-        self.assertIn("test --lib " + " ".join(f"-p {p}" for p in hostsim) + " --features hostsim", recipe)
+        self.assertIn("test --lib " + " ".join(f"-p {p}" for p in hostsim) + " --features sim", recipe)
         manifests = {"plxnative-modules": ROOT / "rust-modules"}
         for member in (ROOT / "rust-modules").iterdir():
             manifest = member / "Cargo.toml"
@@ -231,13 +231,13 @@ class MakeWiring(unittest.TestCase):
                     manifests[name.group(1)] = member
         for crate in unit:
             root = manifests[crate]
-            declares = re.search(r"^hostsim\s*=", (root / "Cargo.toml").read_text(), flags=re.M) is not None
+            declares = re.search(r"^sim\s*=", (root / "Cargo.toml").read_text(), flags=re.M) is not None
             sources = (root / "src").rglob("*.rs")
-            cfgs = [str(f.relative_to(ROOT)) for f in sources if 'feature = "hostsim"' in f.read_text(errors="replace")]
+            cfgs = [str(f.relative_to(ROOT)) for f in sources if 'feature = "sim"' in f.read_text(errors="replace")]
             if crate in hostsim:
-                self.assertTrue(declares, f"{crate} is in HOSTSIM_SUITE but declares no `hostsim` feature, which `--features hostsim -p {crate}` needs")
+                self.assertTrue(declares, f"{crate} is in HOSTSIM_SUITE but declares no `sim` feature, which `--features sim -p {crate}` needs")
             else:
-                self.assertFalse(declares, f"{crate} declares `hostsim`: add it to HOSTSIM_SUITE and the recipe")
+                self.assertFalse(declares, f"{crate} declares `sim`: add it to HOSTSIM_SUITE and the recipe")
                 self.assertEqual(cfgs, [], f"{crate} has a hostsim cfg: add it to HOSTSIM_SUITE and the recipe")
 
     def test_check_never_names_test_crate(self):

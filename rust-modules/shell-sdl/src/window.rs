@@ -11,7 +11,7 @@
 //! `system.rs` has the buffer that survives that, and a pin in `lib.rs` keeps this crate off it).
 use crate::init::InitHooks;
 use crate::sys;
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 use crate::sys::{SDL_GetDisplayUsableBounds, SDL_SetWindowPosition, SDL_SetWindowSize};
 use plx_base::eventlog::log;
 use plx_base::task::MainThread;
@@ -37,7 +37,7 @@ use std::os::raw::{c_int, c_void};
 fn window_flags_of(placement: &Placement) -> u32 {
     match placement {
         Placement::Panel { .. } => 0x2 | 0x1,
-        #[cfg(feature = "hostsim")]
+        #[cfg(feature = "sim")]
         Placement::Desktop => 0x2 | SDL_WINDOW_ALLOW_HIGHDPI,
     }
 }
@@ -49,9 +49,9 @@ const SDL_WINDOW_ALLOW_HIGHDPI: u32 = 0x2000;
 pub const SDL_WINDOW_INPUT_FOCUS: u32 = 0x200;
 
 // The window we ASK SDL for. `surface::probe` then reads back what we actually got.
-#[cfg(any(feature = "hostsim", test))]
+#[cfg(any(feature = "sim", test))]
 const SCR_W: c_int = plx_base::surface::LOGICAL_W as c_int;
-#[cfg(any(feature = "hostsim", test))]
+#[cfg(any(feature = "sim", test))]
 const SCR_H: c_int = plx_base::surface::LOGICAL_H as c_int;
 
 /// Where, and how big, to ask for the window.
@@ -68,7 +68,7 @@ pub enum Placement {
     /// display's pixel density once the window exists (`fit_window_to_density`). The request is the
     /// desktop's own size, not a setting, so there is no retry here. Only a simulator build has the
     /// SDL calls that read a display's size.
-    #[cfg(feature = "hostsim")]
+    #[cfg(feature = "sim")]
     Desktop,
 }
 
@@ -122,11 +122,11 @@ impl Window {
         // (`SDL_WINDOWPOS_CENTERED`) at whatever fits — see `plan_desktop_window`. The density is not
         // known until a window exists, so this is the 1x answer; `fit_window_to_density` below
         // corrects it on a display where that was wrong.
-        #[cfg(feature = "hostsim")]
+        #[cfg(feature = "sim")]
         let mut desktop_ask: Option<WindowAsk> = None;
         let (wx, wy, ww_req, wh_req, mut fallback) = match ask.placement {
             Placement::Panel { size: (w, h), fallback } => (0, 0, w, h, fallback),
-            #[cfg(feature = "hostsim")]
+            #[cfg(feature = "sim")]
             Placement::Desktop => {
                 let planned = desktop_window_ask();
                 desktop_ask = Some(planned);
@@ -143,7 +143,7 @@ impl Window {
         // the canvas is a report-worthy surprise, a desktop's is the window's own divisor.
         let note = match ask.placement {
             Placement::Panel { .. } => plx_base::surface::DrawableNote::Television,
-            #[cfg(feature = "hostsim")]
+            #[cfg(feature = "sim")]
             Placement::Desktop => plx_base::surface::DrawableNote::Desktop,
         };
         let (mut ww_try, mut wh_try) = (ww_req, wh_req);
@@ -173,7 +173,7 @@ impl Window {
         // SAFETY: the caller's contract (see `# Safety`): the platform's step, on the main thread, behind the context.
         unsafe { (hooks.steps.after_context)() };
         // Correct the size for the display's density now: `surface::probe` below reads the drawable once.
-        #[cfg(feature = "hostsim")]
+        #[cfg(feature = "sim")]
         if let Some(desktop_ask) = desktop_ask {
             unsafe { fit_window_to_density(win, desktop_ask) };
         }
@@ -203,7 +203,7 @@ impl Window {
 
 
 /// What a DESKTOP window is asked to be, before the display's pixel density is known.
-#[cfg(any(feature = "hostsim", test))]
+#[cfg(any(feature = "sim", test))]
 #[derive(Clone, Copy)]
 enum WindowAsk {
     /// `PLXNATIVE_WIN=<w>x<h>`: a DRAWABLE of exactly this many pixels, on any display.
@@ -219,14 +219,14 @@ enum WindowAsk {
 /// Integers, never a float multiplied back: 960 points of a 2x window must come out as exactly
 /// 1920 pixels, and a ratio that is not a whole number (a 150% Windows display) must round the
 /// same way on the way out as on the way in.
-#[cfg(any(feature = "hostsim", test))]
+#[cfg(any(feature = "sim", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Density {
     window_w: c_int,
     drawable_w: c_int,
 }
 
-#[cfg(any(feature = "hostsim", test))]
+#[cfg(any(feature = "sim", test))]
 impl Density {
     /// One pixel per point: every 1x display, and what is assumed until a window has been measured.
     const UNIT: Density = Density { window_w: 1, drawable_w: 1 };
@@ -263,7 +263,7 @@ impl Density {
 }
 
 /// `PLXNATIVE_WIN`'s value: `<w>x<h>`, both positive. Anything else is no override.
-#[cfg(any(feature = "hostsim", test))]
+#[cfg(any(feature = "sim", test))]
 fn parse_window_override(v: &str) -> Option<(c_int, c_int)> {
     let (w, h) = v.split_once(['x', 'X'])?;
     match (w.trim().parse::<c_int>(), h.trim().parse::<c_int>()) {
@@ -297,7 +297,7 @@ fn parse_window_override(v: &str) -> Option<(c_int, c_int)> {
 /// A Mac is the case the `surface` doc was written against — 1920x1080 exceeds the usable area of
 /// every laptop display Apple ships, so asking for it flatly would put the title bar above the
 /// screen and the bottom of the interface under the Dock.
-#[cfg(any(feature = "hostsim", test))]
+#[cfg(any(feature = "sim", test))]
 fn plan_desktop_window(ask: WindowAsk, density: Density) -> (c_int, c_int) {
     let points = |(w, h): (c_int, c_int)| (density.points(w), density.points(h));
     match ask {
@@ -317,12 +317,12 @@ fn plan_desktop_window(ask: WindowAsk, density: Density) -> (c_int, c_int) {
 }
 
 /// `SDL_WINDOWPOS_CENTERED` on display 0.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 const WINDOWPOS_CENTERED: c_int = 0x2FFF_0000u32 as c_int;
 
 /// What this process is asked for: `PLXNATIVE_WIN` if it holds a size, else the fit to the display,
 /// or the canvas itself if SDL cannot say how big the display is.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 fn desktop_window_ask() -> WindowAsk {
     if let Some((w, h)) = std::env::var_os("PLXNATIVE_WIN").and_then(|v| parse_window_override(&v.to_string_lossy())) {
         return WindowAsk::Drawable(w, h);
@@ -345,7 +345,7 @@ fn desktop_window_ask() -> WindowAsk {
 /// centred at the old size) to the points that give the drawable that was asked for:
 /// `PLXNATIVE_WIN=1920x1080` is a 960x540-point window, not a 1920x1080-point one with a 3840x2160
 /// drawable. Called before `surface::probe`, which reads the drawable once and for good.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 unsafe fn fit_window_to_density(win: *mut c_void, ask: WindowAsk) {
     let ((ww, wh), (dw, dh)) = plx_base::surface::window_and_drawable_size(win);
     let density = Density::measured(ww, dw);

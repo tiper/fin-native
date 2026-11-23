@@ -65,7 +65,7 @@ fuzz/coverage/
 # the reason every other feature set does (cargo does not hash its output; see the Makefile).
 rust-modules/target-lab/
 rust-modules/target-sim-lab/
-# `make screenshots-sim` — the documentation-screenshot simulator (hostsim + devtriggers).
+# `make screenshots-sim` — the documentation-screenshot simulator (`sim` + devtriggers).
 rust-modules/target-sim-shots/
 rust-modules/target-sim-video/
 # `simulators.yml` builds into `target-sim-ci` (`make sim-macos SIM_TDIR=...`) and `target-sim-ci-macapp`

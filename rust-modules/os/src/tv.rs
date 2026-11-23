@@ -1,5 +1,6 @@
 //! The television, as everything outside the port sees it (step L15, docs/module-layers.md).
 pub mod authority;
+pub mod crash_capture;
 pub mod device;
 pub mod home;
 pub mod launch;
@@ -22,7 +23,7 @@ use std::sync::OnceLock;
 /// What the platform's settings service said about the locale. i18n owns the parse and the log lines.
 pub enum LocaleReply { NoPlatform, Unavailable, Reply(String) }
 
-/// What the lower layers read from the platform, in seven groups. Installed once ([`install`]) before
+/// What the lower layers read from the platform, in eight groups. Installed once ([`install`]) before
 /// anything reads it, and read only by `tv`'s own modules, so no other module can issue a verb the
 /// interfaces below do not offer. The exceptions are [`layout`](Services::layout) and
 /// [`libraries`](Services::libraries): they are no verbs, and the application's `Platform::install_services`
@@ -46,6 +47,7 @@ pub struct Services {
     /// publishes it into `plx_base::dynlib`, which the tables in `plx_net` and `plx_gfx` read. A platform
     /// with neither states [`Libraries::NONE`].
     pub libraries: Libraries,
+    pub crash_capture: crash_capture::Hooks,
     pub legacy_webos_media: LegacyWebosMedia,
 }
 
@@ -138,6 +140,7 @@ impl Services {
         storage: StorageHooks::NONE,
         layout: Layout::DERIVED,
         libraries: Libraries::HOST,
+        crash_capture: crash_capture::Hooks::NONE,
         legacy_webos_media: LegacyWebosMedia::NONE,
     };
 }
@@ -183,9 +186,16 @@ mod tests {
             storage: StorageHooks { authority },
             layout: Layout { payload_dir, state_root, fallback_dir },
             libraries: Libraries { curl, egl },
+            crash_capture: crash_capture::Hooks { start, stop, set_user, record_window },
             legacy_webos_media: LegacyWebosMedia { sink, display_sink, uri_media },
         } = Services::HOST_TEST;
 
+        assert!(start.is_none());
+        stop();
+        set_user(None);
+        record_window(crash_capture::Breadcrumb {
+            stage: "test", playing: None, version: None, display: None, surface: None,
+        });
         probe_device();
         start_capability_probe();
         assert!(repair_native_video.is_none(), "a platform with nothing to repair states no hook");

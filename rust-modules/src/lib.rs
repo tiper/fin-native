@@ -18,16 +18,16 @@ mod dev; // the /tmp/plxnative-* trigger surface, behind one `devtriggers` featu
 mod focusprobe; // dev: one diffable line naming everything app.rs's key ladder can move, logged when it changes
 /// The one narrow public face of the application for a platform crate: the types it builds and implements
 /// (`Platform`, `Shell`, `Surface`, `EventSink`, ...), the SDL helpers, the entry `run` and the ready media values
-/// (`WEBOS_MEDIA`, and under `hostsim` `FEED_MEDIA` and `HOST_SINK`), as re-exports. Every other module of
-/// the application stays private to a television build (`docs/platform-ports.md`, Target shape 8; a `hostsim`
+/// (`WEBOS_MEDIA`, and under `sim` `FEED_MEDIA` and `HOST_SINK`), as re-exports. Every other module of
+/// the application stays private to a television build (`docs/platform-ports.md`, Target shape 8; a `sim`
 /// build also exposes the simulator binary's own doors below).
 pub mod host;
 // The simulator's HUD tools (`--hud-lint`, `--hud-schema`, `--hud-export`): a library function the thin
 // `platform-desktop/src/bin/sim.rs` calls before it reads a PMS host. `pub` because that binary is a separate crate; absent
 // from the television build, which has no use for a linter and no argv to read it from.
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 pub mod hud_cli;
-#[cfg(any(test, feature = "hostsim", feature = "devtriggers"))]
+#[cfg(any(test, feature = "sim", feature = "devtriggers"))]
 mod hud_tools;
 mod lab; // Cloud Lab bridge: pinned diagnostic uploads + optional outbound command long-poll
 // Pure RELEASE_LINE-parsing helpers, `include!`d verbatim by build.rs so `cargo test --lib`
@@ -39,7 +39,7 @@ mod lab; // Cloud Lab bridge: pinned diagnostic uploads + optional outbound comm
 #[cfg(test)]
 mod release_line;
 mod remote; // dev/testing remote-control channel: a FIFO the loop drains into synthetic SDL keys
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 mod shot; // simulator screenshots: read the frame back and write a PNG (see the module doc)
 mod textinput; // the TV's own on-screen keyboard, via plain SDL_StartTextInput (see the module doc)
 
@@ -49,7 +49,7 @@ mod textinput; // the TV's own on-screen keyboard, via plain SDL_StartTextInput 
 /// directory and truncate the event log inside it before the app starts. Exposing the resolver
 /// keeps ONE definition of where that is — a second `env::var` read in the binary would be a
 /// second answer waiting to drift from this one.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 pub fn sim_runtime_dir() -> std::path::PathBuf {
     plx_base::paths::runtime_dir().to_path_buf()
 }
@@ -57,7 +57,7 @@ pub fn sim_runtime_dir() -> std::path::PathBuf {
 /// Publish a webOS major version for this simulator run (`PLXNATIVE_SIM_WEBOS_MAJOR`, read by the
 /// binary): the simulator has no firmware file, so it otherwise reports "unknown" and the
 /// webOS-1-3-only Interface resolution row stays hidden.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 pub fn publish_sim_webos_major(major: u32) {
     plx_os::tv::device::publish_info(plx_os::tv::device::Info { major, ..Default::default() });
 }
@@ -68,11 +68,11 @@ pub fn publish_sim_webos_major(major: u32) {
 /// would mean a rename could leave the binary truncating a file the app never appends to — the
 /// simulator's log would silently start non-empty, which is exactly the state `tests/run.py` dates
 /// its first line from.
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 pub fn sim_events_log() -> std::path::PathBuf {
     plx_base::eventlog::events_log()
 }
 
-#[cfg(feature = "hostsim")]
+#[cfg(feature = "sim")]
 pub use app::synthetic_home_initial;
 

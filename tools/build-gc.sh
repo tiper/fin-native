@@ -269,7 +269,7 @@ usage: tools/build-gc.sh [MODE] [-n]
                   that reaches into that tree's `deps/`; `--incremental` and `--evict` take only
                   its `incremental` dirs). Cargo keys each build by a
                   metadata hash that folds in the exact feature/flag/profile combination (lib
-                  test, `--no-default-features` check, devtools/hostsim, ARM); a source edit
+                  test, `--no-default-features` check, devtools/sim, ARM); a source edit
                   reuses the SAME hash's files, but a hash nothing builds anymore — yesterday's
                   feature set, a reverted flag — keeps its binary, `.d`, `.rlib`/`.rmeta` and every
                   `*.rcgu.o` codegen-unit object forever, because cargo has no notion of "nobody
@@ -815,7 +815,7 @@ external_incremental_trees() {
 # because everything in there is nominally "still needed" — cargo put it there for a reason and
 # will read some of it on the next build. What cargo does NOT do is ever forget a reason once it
 # stops applying: each distinct feature/flag/profile combination (a plain `--lib` test build, the
-# `--no-default-features` check gate, devtools/hostsim, the ARM cross build) gets its own metadata
+# `--no-default-features` check gate, devtools/sim, the ARM cross build) gets its own metadata
 # hash, a source edit only touches the files under the CURRENT hash, and a hash nothing builds
 # anymore — yesterday's feature set, a reverted flag — keeps its binary and every `*.rcgu.o`
 # codegen-unit object beside it forever. Measured 2026-09-28 in the main checkout:

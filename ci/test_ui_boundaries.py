@@ -59,7 +59,7 @@ class BoundaryTests(unittest.TestCase):
                 self.assertTrue(boundary.screen_violations(source))
 
     def test_shipping_disabled_developer_io_still_fails(self):
-        for cfg in ('feature = "devtriggers"', 'all(feature = "hostsim", not(test))',
+        for cfg in ('feature = "devtriggers"', 'all(feature = "sim", not(test))',
                     'any(test, feature = "devtriggers")'):
             self.assertTrue(boundary.screen_violations(f'#[cfg({cfg})] fn helper() {{ std::fs::read("x"); }}'))
 
@@ -67,7 +67,7 @@ class BoundaryTests(unittest.TestCase):
         source = '''
         // std::fs::read("comment")
         fn pure() { let s = r#"std::fs::read("data")"#; }
-        #[cfg(all(test, feature = "hostsim"))]
+        #[cfg(all(test, feature = "sim"))]
         #[allow(dead_code)] mod fixtures { fn seed() { std::fs::read("x"); } }
         #[cfg(any(test, feature = "test-support"))]
         fn fixture() { plx_base::devtrig::read("x"); }

@@ -2,7 +2,7 @@
 """`make test-hostsim` and `make check-nodef` keep their cargo trees where the disk tooling can see them.
 
 AGENTS.md used to hand out two hand recipes, a `CARGO_TARGET_DIR=/tmp/<dir> cargo test --lib -p
-plxnative-modules --features hostsim` and a `CARGO_INCREMENTAL=0 cargo check ... --no-default-features`,
+plxnative-modules --features sim` and a `CARGO_INCREMENTAL=0 cargo check ... --no-default-features`,
 and every agent that ran one picked its own `/tmp/<dir>`. Nothing tracked those: on 2026-10-19 there
 were 28 PlxNative cargo trees in `/tmp`, 45.6 GiB, none of them visible to `make disk` or
 `tools/build-gc.sh`. The two make targets replace the recipes, and this pins the property that
@@ -11,7 +11,7 @@ matters, that the default paths belong to this checkout or its configured extern
 * `test-hostsim` builds into `rust-modules/target-hostsim` (a checkout-relative path), whatever `CARGO_TARGET_DIR` the caller exported; it is incremental in that dir only,
   runs `plxnative-modules` (or the `C=<crate>` named, spelled as for `test-crate`: `plx_media`,
   `media`, `app`, several allowed; the SAME recipe, so the same dir and the same rules) with
-  `--features hostsim`, gives the run a throwaway runtime dir that is removed afterwards, and FAILS
+  `--features sim`, gives the run a throwaway runtime dir that is removed afterwards, and FAILS
   when the `T=` filter matches no test (libtest says `0 passed` and exits 0, which a mistyped name
   reads exactly like a green run);
 * `check-nodef` sets no target dir of its own (so cargo's default, `rust-modules/target`, or the
@@ -96,7 +96,7 @@ class TestHostsim(unittest.TestCase):
             self.assertTrue(call["cwd"].endswith("rust-modules"), call["cwd"])
             self.assertEqual(inside_checkout(call), Path(TDIR))
             self.assertEqual(call["runtime_dir_set"], "yes")
-            self.assertRegex(call["args"], r"^\+\S+ test --lib -p plxnative-modules --features hostsim --no-run "
+            self.assertRegex(call["args"], r"^\+\S+ test --lib -p plxnative-modules --features sim --no-run "
                                            r"--message-format=json-render-diagnostics$")
             # One package, so one test binary, and the filter goes to it (the runner builds, then runs).
             (line,) = fake.bin_calls()
@@ -126,7 +126,7 @@ class TestHostsim(unittest.TestCase):
                     self.assertEqual(call["target_dir"], TDIR)
                     self.assertEqual(inside_checkout(call), Path(TDIR))
                     self.assertRegex(call["args"], r"^\+\S+ test --lib " + re.escape(packages)
-                                     + r" --features hostsim --no-run --message-format=json-render-diagnostics$")
+                                     + r" --features sim --no-run --message-format=json-render-diagnostics$")
                     self.assertIn(packages.replace("-p ", ""), out.stdout.replace("\n", " "))
 
     def test_c_keeps_the_filter_and_the_zero_tests_failure(self):
@@ -143,7 +143,7 @@ class TestHostsim(unittest.TestCase):
     def test_c_is_one_recipe_not_a_second_one(self):
         text = (ROOT / "Makefile").read_text()
         self.assertEqual(len(re.findall(r"^test-hostsim:[ \t]*$", text, re.M)), 1)
-        self.assertEqual(len(re.findall(r"--features hostsim", recipe_body("test-hostsim"))), 1)
+        self.assertEqual(len(re.findall(r"--features sim", recipe_body("test-hostsim"))), 1)
 
     def test_the_throwaway_runtime_dir_is_removed_afterwards(self):
         with FakeCargoHome() as fake:

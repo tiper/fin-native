@@ -67,7 +67,7 @@ impl HangProbe {
 }
 
 impl Remote {
-    #[cfg(all(test, feature = "devtriggers", feature = "hostsim"))]
+    #[cfg(all(test, feature = "devtriggers", feature = "sim"))]
     pub(crate) fn buffered_for_test(tokens: &str) -> Self {
         Self { fd: -1, buf: tokens.to_owned() }
     }

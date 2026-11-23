@@ -26,12 +26,18 @@ Standard library only; Python 3.10 or newer.
 from __future__ import annotations
 
 import argparse
+import base64
+from datetime import date
+import ipaddress
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
@@ -42,6 +48,9 @@ PROJECT = "PlxHost.csproj"
 # name chosen for the emulator MVP. A retail package id is assigned by Samsung's seller process, not chosen here.
 PACKAGE_ID = "plxntizen0"
 TFM = "tizen80"
+MANIFEST = "tizen-manifest.xml"
+MANIFEST_NS = "{http://tizen.org/ns/packages}"
+NIGHTLY_LABEL = "PlxNative Nightly"
 
 SIGNING_VARS = ("PLX_TIZEN_AUTHOR_P12", "PLX_TIZEN_AUTHOR_PASS", "PLX_TIZEN_DIST_P12", "PLX_TIZEN_DIST_PASS")
 
@@ -83,9 +92,12 @@ class PackageError(Exception):
 def log_host(value: str) -> str:
     """`IPV4:PORT`: the UDP log channel takes an IPv4 literal only (a blocking name lookup has no place in a logger)."""
     match = re.fullmatch(r"((?:\d{1,3}\.){3}\d{1,3}):(\d{1,5})", value)
-    if not match or any(int(octet) > 255 for octet in match.group(1).split(".")) or not 1 <= int(match.group(2)) <= 65535:
-        raise PackageError(f"TIZEN_LOG_HOST / --log-host must be IPV4:PORT, e.g. 10.0.2.2:9999 (got: {value})")
-    return f"{match.group(1)}:{int(match.group(2))}"
+    try:
+        if match and 1 <= int(match[2]) <= 65535:
+            return f"{ipaddress.IPv4Address(match[1])}:{int(match[2])}"
+    except ipaddress.AddressValueError:
+        pass
+    raise PackageError(f"TIZEN_LOG_HOST / --log-host must be IPV4:PORT, e.g. 10.0.2.2:9999 (got: {value})")
 
 
 def mock_host(value: str) -> str:
@@ -155,9 +167,10 @@ def stage_notices(root: Path, host: Path) -> None:
         shutil.copyfile(src, target)
 
 
-def stage(root: Path, so: Path, mock: str | None, log: str | None) -> Path:
+def stage(root: Path, so: Path, mock: str | None, log: str | None, *,
+          host: Path | None = None, nightly: bool = False) -> Path:
     """Fill the host project. Returns the project directory."""
-    host = root / HOST_DIR
+    host = host or root / HOST_DIR
     if not so.is_file():
         raise PackageError(f"{so} is missing; build it first: make PLATFORM=tizen tizen-so tizen-verify")
     for name in GENERATED:
@@ -169,6 +182,8 @@ def stage(root: Path, so: Path, mock: str | None, log: str | None) -> Path:
     (host / "lib").mkdir(parents=True)
     shutil.copyfile(so, host / "lib/libplx.so")
     for source, target in PAYLOAD:
+        if nightly and source == "pkg/dev/largeIcon.png":
+            source = "pkg/nightly/largeIcon.png"
         src = root / source
         if not src.is_file():
             raise PackageError(f"{source} is missing from the checkout")
@@ -188,9 +203,8 @@ def stage(root: Path, so: Path, mock: str | None, log: str | None) -> Path:
     return host
 
 
-def build_tpk(root: Path, so: Path, mock: str | None, log: str | None, env: dict[str, str]) -> Path:
+def compile_tpk(host: Path, env: dict[str, str]) -> Path:
     author, dist = check_signing(env)
-    host = stage(root, so, mock, log)
     dotnet_root = Path(env.get("DOTNET_ROOT") or Path.home() / ".dotnet")
     # GNU make exports a command-line `PLATFORM=tizen` into every recipe, and MSBuild reads the environment as properties, case-insensitively:
     # left in, it builds as Platform=tizen and writes bin/tizen/Release/ and obj/tizen/, where the glob below finds nothing. Drop it, and pin
@@ -212,14 +226,108 @@ def build_tpk(root: Path, so: Path, mock: str | None, log: str | None, env: dict
     if result.returncode != 0:
         raise PackageError(f"dotnet build failed (exit {result.returncode})")
     built = sorted((host / "bin/Release" / TFM).glob("*.tpk"))
-    if not built:
-        raise PackageError("dotnet produced no .tpk")
+    if len(built) != 1:
+        raise PackageError(f"expected one TPK from dotnet, found {len(built)}")
+    return built[0]
+
+
+def build_tpk(root: Path, so: Path, mock: str | None, log: str | None, env: dict[str, str]) -> Path:
+    check_signing(env)
+    host = stage(root, so, mock, log)
+    built = compile_tpk(host, env)
     out = root / "tizen/out"
     out.mkdir(parents=True, exist_ok=True)
     tpk = out / f"PlxNative-{so.parent.name}.tpk"
-    shutil.copyfile(built[0], tpk)
-    verify_tpk(tpk, so, mock, log)
+    verify_tpk(built, so, mock, log)
+    shutil.copyfile(built, tpk)
     return tpk
+
+
+def nightly_version(label: str) -> str:
+    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-nightly-([0-9]{8})", label)
+    if not match:
+        raise PackageError("nightly label must be X.Y.Z-nightly-YYYYMMDD")
+    try:
+        raw = match[4]
+        built = date.fromisoformat(f"{raw[:4]}-{raw[4:6]}-{raw[6:]}")
+        parts = (int(match[1]), int(match[2]), (built - date(2000, 1, 1)).days)
+    except ValueError as error:
+        raise PackageError("nightly label must carry a valid calendar date") from error
+    # Samsung's TV Seller Office documents the three component widths, including for .NET TPKs.
+    if any(not 0 <= part <= limit for part, limit in zip(parts, (255, 255, 65535))):
+        raise PackageError("nightly manifest version components must fit 0..255, 0..255 and 0..65535")
+    return ".".join(map(str, parts))
+
+
+def check_nightly(label: str, mock: str | None, log: str | None, env: dict[str, str]) -> str:
+    if any(key.startswith("PLX_TIZEN_") for key in env):
+        raise PackageError("the nightly uses throwaway certificates. Unset all PLX_TIZEN_* variables")
+    if mock is not None or log is not None:
+        raise PackageError("the nightly cannot carry a mock server or a log destination")
+    return nightly_version(label)
+
+
+def throwaway_certificate(scratch: Path, name: str, password: str) -> tuple[Path, bytes]:
+    key, cert, p12 = (scratch / f"{name}.{suffix}" for suffix in ("key", "pem", "p12"))
+    subprocess.run(["openssl", "req", "-new", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256",
+                    "-days", "1", "-subj", f"/CN=PlxNative Nightly {name}/",
+                    "-keyout", str(key), "-out", str(cert)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Tizen.NET.Sdk 1.1.9 cannot read the PBES2 envelopes OpenSSL 3 produces by default.
+    # This export format is for throwaway keys consumed locally and removed as soon as signing ends.
+    subprocess.run(["openssl", "pkcs12", "-export", "-inkey", str(key), "-in", str(cert),
+                    "-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES", "-macalg", "sha1",
+                    "-out", str(p12), "-passout", "env:PLX_EPHEMERAL_PASSWORD"],
+                   check=True, env={**os.environ, "PLX_EPHEMERAL_PASSWORD": password},
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return p12, subprocess.check_output(["openssl", "x509", "-in", str(cert), "-outform", "DER"])
+
+
+def verify_nightly(tpk: Path, version: str, author: bytes, distributor: bytes) -> None:
+    with zipfile.ZipFile(tpk) as package:
+        manifest = ET.fromstring(package.read(MANIFEST))
+        if (manifest.get("package"), manifest.get("api-version"), manifest.get("version")) != (PACKAGE_ID, "6.0", version):
+            raise PackageError("the nightly manifest has the wrong package, API or version")
+        if manifest.findtext(f"{MANIFEST_NS}ui-application/{MANIFEST_NS}label") != NIGHTLY_LABEL:
+            raise PackageError("the nightly manifest has the wrong app label")
+        for name, expected in (("author-signature.xml", author), ("signature1.xml", distributor)):
+            signature = ET.fromstring(package.read(name))
+            chain = signature.findall(".//{http://www.w3.org/2000/09/xmldsig#}X509Certificate")
+            if len(chain) != 1 or base64.b64decode(chain[0].text or "") != expected:
+                raise PackageError(f"{name} does not use the certificate generated for this build")
+
+
+def build_nightly(root: Path, so: Path, label: str, env: dict[str, str]) -> Path:
+    version = check_nightly(label, None, None, env)
+    if so.parent.name not in {"armv7", "x86_64"}:
+        raise PackageError("build the library under tizen/out/<arch> first")
+    out = root / "tizen/out"
+    out.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="nightly-", dir=out) as directory:
+        scratch = Path(directory)
+        host = scratch / "host"
+        host.mkdir()
+        for name in (PROJECT, "Program.cs", "PlxPlayer.cs", "PlayerNative.cs", MANIFEST):
+            shutil.copyfile(root / HOST_DIR / name, host / name)
+        stage(root, so, None, None, host=host, nightly=True)
+        staged_so = host / "lib/libplx.so"
+        if label.encode() not in staged_so.read_bytes():
+            raise PackageError("the staged library does not report this night's label")
+        ET.register_namespace("", MANIFEST_NS[1:-1])
+        tree = ET.parse(host / MANIFEST)
+        tree.getroot().set("version", version)
+        tree.find(f"{MANIFEST_NS}ui-application/{MANIFEST_NS}label").text = NIGHTLY_LABEL
+        tree.write(host / MANIFEST, encoding="utf-8", xml_declaration=True)
+        password = secrets.token_urlsafe(32)
+        author, author_der = throwaway_certificate(scratch, "author", password)
+        distributor, distributor_der = throwaway_certificate(scratch, "distributor", password)
+        signing = dict(zip(SIGNING_VARS, (str(author), password, str(distributor), password)))
+        built = compile_tpk(host, {**env, **signing})
+        verify_tpk(built, staged_so, None, None)
+        verify_nightly(built, version, author_der, distributor_der)
+        output = out / f"plxnative-tizen-v{label}-{so.parent.name}.tpk"
+        built.replace(output)
+    print(f"Nightly package: {output}")
+    return output
 
 
 def verify_tpk(tpk: Path, so: Path, mock: str | None, log: str | None) -> None:
@@ -246,9 +354,12 @@ def verify_tpk(tpk: Path, so: Path, mock: str | None, log: str | None) -> None:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("stage", "tpk"):
+    for name in ("stage", "tpk", "tpk-nightly", "check-nightly"):
         p = sub.add_parser(name)
-        p.add_argument("--so", required=True, type=Path)
+        if name != "check-nightly":
+            p.add_argument("--so", required=True, type=Path)
+        if name in ("tpk-nightly", "check-nightly"):
+            p.add_argument("--label", required=True)
         p.add_argument("--mock-host")
         p.add_argument("--log-host")
     sub.add_parser("check-signing")
@@ -259,9 +370,13 @@ def main(argv: list[str]) -> int:
             print("signing: the four PLX_TIZEN_* variables are set")
         elif args.command == "stage":
             stage(ROOT, args.so, args.mock_host, args.log_host)
+        elif args.command in ("check-nightly", "tpk-nightly"):
+            check_nightly(args.label, args.mock_host, args.log_host, dict(os.environ))
+            if args.command == "tpk-nightly":
+                build_nightly(ROOT, args.so, args.label, dict(os.environ))
         else:
             build_tpk(ROOT, args.so, args.mock_host, args.log_host, dict(os.environ))
-    except PackageError as error:
+    except (PackageError, OSError, ValueError, ET.ParseError, zipfile.BadZipFile, subprocess.CalledProcessError) as error:
         print(f"tizen/package.py: {error}", file=sys.stderr)
         return 1
     return 0

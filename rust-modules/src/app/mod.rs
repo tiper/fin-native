@@ -255,7 +255,7 @@ pub(crate) struct App {
     /// own drop increments, so dropping the `App` drops it whatever the other fields are. A field,
     /// not a static. Read by the hostsim lifecycle tests, which build the `App` the rig needs.
     #[cfg(test)]
-    #[cfg_attr(not(all(feature = "hostsim", feature = "play-feed")), allow(dead_code))]
+    #[cfg_attr(not(all(feature = "sim", feature = "play-feed")), allow(dead_code))]
     drop_probe: exit::DropProbe,
 
     /// The frame plan's GLASS half (spec §8.3): the layer/region source registry, shared chrome
@@ -485,7 +485,7 @@ fn finish_recording(rec: &mut recorder::Recplay, gate: &plx_machine::landgate::G
 }
 
 /// Simulator tooling emits the entire typed contract, never a patched household auth file.
-#[cfg(any(test, feature = "hostsim"))]
+#[cfg(any(test, feature = "sim"))]
 pub fn synthetic_home_initial(seed: u32, port: u16, settings: Option<String>)
     -> Result<String, &'static str> {
     let content = settings.as_deref() == Some("flow12");

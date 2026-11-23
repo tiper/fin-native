@@ -335,7 +335,7 @@ pub fn path(name: &str) -> std::path::PathBuf {
 /// removed afterwards (also when `f` panics).
 ///
 /// **A host test that arms a trigger must not do it in the shared runtime root.** A host test run
-/// resolves that root to the bare `/tmp` (only the `hostsim` feature lets `PLXNATIVE_RUNTIME_DIR`
+/// resolves that root to the bare `/tmp` (only the `sim` feature lets `PLXNATIVE_RUNTIME_DIR`
 /// steer it, [`crate::paths::ENV_STEERABLE`]), and the root is one directory for the whole
 /// machine: every test binary of this `make check`, and of any other checkout's, reads the same
 /// `/tmp/plxnative-*`. `jail_fixture_keeps_repair_open_through_the_screen_tick` armed

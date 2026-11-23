@@ -41,7 +41,7 @@ pub(crate) use plx_shell_sdl::inject::{
 };
 // The byte writers are the loop tests' (they write the bytes a platform would deliver), and the two
 // readers are the hostsim wheel test's (the stock layout's float).
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(all(test, feature = "sim"))]
 pub(crate) use plx_shell_sdl::event::{rd_f32, rd_i32};
 #[cfg(test)]
 pub(crate) use plx_shell_sdl::inject::{encode_key, encode_key_repeat, encode_pointer};
@@ -539,13 +539,13 @@ pub(crate) fn dispatch_remote_token(flavor: SdlFlavor, tok: &str, ps: &plx_media
             RemotePointer::Up => remote_synth_pointer(SDL_MOUSEBUTTONUP, x, y),
         }
         true
-    } else if cfg!(feature = "hostsim") && tok == "shot" {
+    } else if cfg!(feature = "sim") && tok == "shot" {
         // Simulator only. Screenshotting has to be a TOKEN rather than a launch option, because
         // the interesting frame is the one AFTER driving, and `PLXNATIVE_SHOT_FRAME` is fixed
         // before the app starts — worse, presented frames only accrue when something repaints
         // (the idle gate), so no frame number can be predicted from outside. This makes
         // `down down right ok shot` a single composable line.
-        #[cfg(feature = "hostsim")]
+        #[cfg(feature = "sim")]
         crate::shot::request();
         true
     } else if tok == "okdown" || tok == "okup" {

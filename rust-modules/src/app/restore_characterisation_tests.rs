@@ -20,9 +20,9 @@
 //! seat trigger (`bridge::SeatWatch`) restores at every seat change and nowhere else, and the doors
 //! save the seated profile's own record and never the top-level key.
 //!
-//! `hostsim` only, and as a correctness gate: `boot::restore_player_preferences` reads
+//! `sim` only, and as a correctness gate: `boot::restore_player_preferences` reads
 //! `dev::playback_quality_override()`, which reads `/tmp/plxnative-quality`. `PLXNATIVE_RUNTIME_DIR`
-//! is honoured only in a `hostsim` build, so only there can the run promise "no dev override"
+//! is honoured only in a `sim` build, so only there can the run promise "no dev override"
 //! instead of grading whatever file another process left in the shared `/tmp`.
 
 use super::*;

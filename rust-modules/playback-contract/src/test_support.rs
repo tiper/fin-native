@@ -288,4 +288,44 @@ mod tests {
         ]);
         assert!(driver.poll(&mt()).is_empty(), "events are delivered once");
     }
+
+    /// The shared conformance suite over the fake: its native answers are scripted, so this run pins the sequence
+    /// a real driver's events must follow (`uri_conformance`).
+    struct FakeHarness { driver: FakeUriDriver, handle: FakeUriHandle }
+
+    impl FakeHarness {
+        fn started_attempt(&self) -> AttemptId {
+            self.handle.dispatched().iter().rev().find_map(|(attempt, _, op)|
+                matches!(op, Operation::Start { .. }).then_some(*attempt)).expect("a Start was dispatched")
+        }
+    }
+
+    impl crate::uri_conformance::UriHarness for FakeHarness {
+        type Driver = FakeUriDriver;
+        fn driver(&mut self) -> &mut FakeUriDriver { &mut self.driver }
+        fn after_start(&mut self) {
+            self.handle.set_plane_owned(true);
+            self.handle.set_exit_preserved(true);
+        }
+        fn native_prepared(&mut self) {
+            let attempt = self.started_attempt();
+            self.handle.queue([DriverEvent::Observation { attempt, observation: Observation::Playback(
+                crate::Observed { value: crate::Playback::ReadyAwaitPlay,
+                    from: crate::EvidenceSource::BackendReport }) }]);
+        }
+        fn native_closed(&mut self) {
+            let attempt = self.started_attempt();
+            self.handle.set_plane_owned(false);
+            self.handle.set_exit_preserved(false);
+            self.handle.queue([DriverEvent::Release { attempt, status: ReleaseStatus::Released }]);
+        }
+    }
+
+    #[test]
+    fn the_fake_conforms_to_the_shared_uri_suite() {
+        crate::uri_conformance::conforms(|| {
+            let (driver, handle) = FakeUriDriver::new(CAPS);
+            FakeHarness { driver, handle }
+        });
+    }
 }

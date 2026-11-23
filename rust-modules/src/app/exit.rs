@@ -132,7 +132,7 @@ pub(crate) struct DropProbe(std::sync::Arc<AtomicUsize>);
 impl DropProbe {
     /// The counter, to be read after the `App` has gone wherever the test sent it. Only the
     /// hostsim lifecycle tests build an `App` to read it from.
-    #[cfg_attr(not(all(feature = "hostsim", feature = "play-feed")), allow(dead_code))]
+    #[cfg_attr(not(all(feature = "sim", feature = "play-feed")), allow(dead_code))]
     pub(crate) fn counter(&self) -> std::sync::Arc<AtomicUsize> {
         std::sync::Arc::clone(&self.0)
     }
@@ -656,7 +656,7 @@ const _: fn(*const c_char, c_int) -> ! = plex_main;
     }
 
     /// The `App` itself: the rig builds a real one, which only a hostsim build with the Feed has.
-    #[cfg(all(feature = "hostsim", feature = "play-feed"))]
+    #[cfg(all(feature = "sim", feature = "play-feed"))]
     mod app_leak {
         use super::*;
         use crate::app::run::lifecycle_regression_tests::app;

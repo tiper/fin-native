@@ -26,11 +26,11 @@ pub(crate) use plx_media::player::lifecycle::{
 pub(crate) use plx_media::player::transport::{
     resume_if_paused, set_transport_paused, transport_target, viewer_paused_for,
 };
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(all(test, feature = "sim"))]
 pub(crate) use plx_media::player::transport::paused;
 // Only `app::run`'s hostsim lifecycle tests name the machine's state, so a re-export outside
 // them would be an unused import.
-#[cfg(all(test, feature = "hostsim"))]
+#[cfg(all(test, feature = "sim"))]
 pub(crate) use plx_media::player::lifecycle::ForegroundState;
 
 pub(crate) struct PlayerForegroundActuator<'a> {
@@ -83,7 +83,7 @@ impl ForegroundActuator for PlayerForegroundActuator<'_> {
             Some(outcome) => FlightLanding::Landed(outcome),
             // `land_resume` reaped a stale landing first: nothing outstanding means the flight
             // ended (a Back, a newer request) and its ender owns what comes next.
-            None if plx_media::route::resume_flight_outstanding() => FlightLanding::Waiting,
+            None if plx_media::route::resume_flight_outstanding() || self.pa.uri_restore_outstanding() => FlightLanding::Waiting,
             None => FlightLanding::Stale,
         }
     }

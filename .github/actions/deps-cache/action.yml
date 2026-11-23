@@ -2,7 +2,7 @@ name: Cache the pinned downloads
 description: >
   Restore vendor/downloads, the one directory ci/deps.py fetches every pinned archive into
   (FFmpeg, Sentry Native, the libass stack, nanosvg, the webosbrew toolbox, SDL2 and SDL2_ttf for the Tizen library), keyed on the manifest.
-  On a miss the action fetches ALL of them (everything but the NDK, which has its own cache) before
+  On a miss the action fetches ALL of them (except the NDK and the SDK archives used to generate the Tizen ABI inventory) before
   the job ends, so the entry the post step saves is complete whichever job saved it first. A hit
   means an upstream outage (savannah.gnu.org has been unreachable for hours) cannot break the
   build: ci/deps.py re-verifies each cached file against its sha256 and downloads only what is
@@ -31,7 +31,7 @@ runs:
     - name: Fetch every pinned archive on a miss
       if: steps.restore.outputs.cache-hit != 'true'
       shell: bash
-      run: python3 ci/deps.py fetch-all --exclude webos-ndk
+      run: python3 ci/deps.py fetch-all --exclude webos-ndk --exclude tizen60-abi-reference
     - name: Save the complete set
       if: steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

@@ -38,6 +38,10 @@ pub const PLAYER_E_BUSY: i32 = -2;
 pub const PLAYER_E_ARGS: i32 = -3;
 /// `PLX_HOST_PLAYER_E_STALE`: a verb for an epoch that is not the host's current one.
 pub const PLAYER_E_STALE: i32 = -4;
+/// Not an ABI code (the host never returns it and `plx_host.h` has no name for it): the LIBRARY's own answer when its
+/// gate is closed because `plx_host_stop` was called. The host was not asked. `plx_host.h`, STOP: from then on the host
+/// closes its own player (`OnTerminate`), so a CLOSE refused this way is a release the host owns, not one nobody can make.
+pub const PLAYER_E_STOPPING: i32 = -100;
 
 /// `PLX_HOST_EVENT_PAUSE`: `OnPause`, the app went to the background.
 pub const EVENT_PAUSE: u32 = 1;
@@ -58,17 +62,17 @@ pub const EVENT_PLAYER_CLOSED: u32 = 26;
 pub const EVENT_PLAYER_STALL: u32 = 27;
 
 /// `PLX_HOST_PLAYER_FAIL_BASE`: a `PLAYER_ERROR` payload at or above this is a failure of the host, not a native code.
-#[cfg_attr(not(test), allow(dead_code))] // the Tizen URI driver (W10 part B) reads it
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) reads it
 pub const PLAYER_FAIL_BASE: i64 = 2_147_418_112;
 
-/// `PLX_HOST_PLAYER_VERB_*`: `player_verb`'s verbs. The Tizen URI driver (W10 part B) is their caller; the tests use them now.
-#[cfg_attr(not(test), allow(dead_code))]
+/// `PLX_HOST_PLAYER_VERB_*`: `player_verb`'s verbs. The Tizen URI driver (the `uri` feature) is their caller.
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
 pub const VERB_PLAY: u32 = 1;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
 pub const VERB_PAUSE: u32 = 2;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
 pub const VERB_SEEK: u32 = 3;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
 pub const VERB_CLOSE: u32 = 4;
 
 /// What `on_stopped` is: the host's report sink, called exactly once with the process status and whether

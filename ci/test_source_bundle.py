@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from source_bundle import (PRIVATE_KEY_PATTERN, SENTRY_DSN_PATTERN, canonical, digest, read_regular,
+from source_bundle import (PRIVATE_KEY_PATTERN, SENTRY_DSN_PATTERN, allowed, canonical, digest, read_regular,
                            snapshot, validate, write_archive)
 
 
@@ -66,6 +66,14 @@ class BundleTests(unittest.TestCase):
         first = self.path.read_bytes()
         self.write()
         self.assertEqual(first, self.path.read_bytes())
+
+    def test_samsung_source_is_included_and_generated_package_files_stay_out(self):
+        for name in ('tizen/host/PlxHost/Program.cs', 'tizen/package.py', 'tizen/build-sdl.sh', 'mk/platform-tizen.mk'):
+            self.assertTrue(allowed(name), name)
+        for name in ('tizen/out/nightly.tpk', 'tizen/host/PlxHost/bin/PlxHost.dll',
+                     'tizen/host/PlxHost/res/dev-boot.json', 'tizen/host/PlxHost/res/log-host.txt',
+                     'tizen/author.p12', 'tizen/sdl-build/armv7/lib/libSDL2.a'):
+            self.assertFalse(allowed(name), name)
 
     def test_missing_gpl(self):
         del self.contents['LICENSE']

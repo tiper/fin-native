@@ -21,7 +21,7 @@ default = []
 # gates the seven-segment FPS counter in `gfx`, and no lower crate has it.
 devtools = []
 devtriggers = ["plx_base/devtriggers", "plx_machine/devtriggers"]
-hostsim = ["plx_base/hostsim", "plx_machine/hostsim"]
+sim = ["plx_base/sim", "plx_machine/sim"]
 # The `cfg(test)` seams other crates' tests use (see lib.rs) plus the test-mode behaviour that
 # `cfg(test)` alone cannot give a dependent. Enabled from the dependents' `[dev-dependencies]`;
 # never in a shipped build. It enables the lower layers' own `test-support` because the seams here

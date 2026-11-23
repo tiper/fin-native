@@ -4,7 +4,7 @@
 //! They live in the application because they draw: they name `plx_gfx` and the simulator's decoded
 //! picture (`adapters::hostsim`), which a platform crate cannot reach. The platform states WHICH
 //! hooks it runs (`Shell::frame`); the loop (`run::present_and_swap`) owns where they run. A television
-//! states `Present::NONE` instead, so none of this is in its call path. `hostsim` builds only.
+//! states `Present::NONE` instead, so none of this is in its call path. `sim` builds only.
 
 use crate::app::platform::Present;
 
