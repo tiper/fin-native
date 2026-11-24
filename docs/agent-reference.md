@@ -1150,7 +1150,9 @@ and call it settled.
   and the Homebrew Channel. `https://www.webosbrew.org/webos-userland/` additionally publishes
   Doxygen for LG's own headers (`StarfishMediaAPIs.h` among them) — a header, not documentation,
   but often the only public statement of a signature.
-- Also worth searching, in roughly this order of authority: **LG's own published docs**;
+- Also worth searching, in roughly this order of authority: **LG's own published docs and SDK
+  implementation** (start with the [LG SDK references in the URI notes](uri-mode.md#lg-sdk-reference-for-native-media)
+  for native URL playback, window binding, and media events);
   **source of other clients that drive the same API** (Kodi's webOS port is the closest analogue —
   it drives StarfishMediaAPIs in the same `BUFFERSTREAM` mode; jellyfin-webos and Plex's own webOS
   app are NOT analogues, they hand the TV a URL, which is a different pipeline and their results
