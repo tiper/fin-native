@@ -204,13 +204,14 @@ impl LocaleContext {
     /// for the shipped German, Portuguese and Belarusian once the month names are ours), except
     /// where CLDR spells the skeleton with the STAND-ALONE month (`LLL`) and that differs from the
     /// form after a day: Russian and Belarusian write "май 2024 г." where a day makes it "9 мая"
-    /// ([`standalone_abbreviated`]). Every other shipped language's yMMM is `MMM y`, or `LLL y`
-    /// over stand-alone names identical to its format ones (Polish).
+    /// ([`standalone_abbreviated`]). Croatian writes `LLL y.` with a period after the year.
+    /// The remaining languages use `MMM y` or `LLL y` with the same format and stand-alone names.
     pub fn month_year(&self, year: i32, month: u8) -> Option<String> {
         icu_calendar::Date::try_new_gregorian(year, month, 1).ok()?;
         let name = self.month_short(month)?;
         Some(match self.language {
             Language::Hu => format!("{year}. {name}"),
+            Language::Hr => format!("{name} {year}."),
             Language::Ca | Language::Pt => format!("{name} de {year}"),
             Language::Ru | Language::Be => format!("{name} {year}\u{a0}г."),
             _ => format!("{name} {year}"),
@@ -290,6 +291,8 @@ fn month_names(language: Language, width: MonthWidth) -> (&'static [&'static str
         (Language::Hu, MonthWidth::Long) => (&HU_LONG, " "),
         (Language::Nl, MonthWidth::Medium) => (&NL_MEDIUM, " "),
         (Language::Nl, MonthWidth::Long) => (&NL_LONG, " "),
+        (Language::Hr, MonthWidth::Medium) => (&HR_MEDIUM, ". "),
+        (Language::Hr, MonthWidth::Long) => (&HR_GENITIVE, ". "),
     }
 }
 
@@ -430,6 +433,14 @@ const RU_GENITIVE: [&str; 12] = [
 /// format form except "март", "май", "июнь" and "июль", which it spells out.
 const RU_STANDALONE: [&str; 12] = [
     "янв.", "февр.", "март", "апр.", "май", "июнь", "июль", "авг.", "сент.", "окт.", "нояб.", "дек.",
+];
+/// CLDR `hr` format months: abbreviated without dots, full names in the genitive after a day.
+const HR_MEDIUM: [&str; 12] = [
+    "sij", "velj", "ožu", "tra", "svi", "lip", "srp", "kol", "ruj", "lis", "stu", "pro",
+];
+const HR_GENITIVE: [&str; 12] = [
+    "siječnja", "veljače", "ožujka", "travnja", "svibnja", "lipnja", "srpnja", "kolovoza",
+    "rujna", "listopada", "studenoga", "prosinca",
 ];
 
 /// CLDR `hu` abbreviated format months, with their dots.

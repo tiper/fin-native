@@ -472,6 +472,15 @@ fn catalan_month_day_captions_use_format_and_standalone_month_names() {
 }
 
 #[test]
+fn croatian_month_captions_use_the_cldr_date_patterns() {
+    let cx = LocaleContext::resolve(Preference::Hr, None, None, None, None);
+
+    assert_eq!(cx.month_day(10, 12, MonthWidth::Medium).as_deref(), Some("12. lis"));
+    assert_eq!(cx.month_day(10, 12, MonthWidth::Long).as_deref(), Some("12. listopada"));
+    assert_eq!(cx.month_year(2024, 10).as_deref(), Some("lis 2024."));
+}
+
+#[test]
 fn pseudo_locale_month_day_captions_follow_english() {
     let pseudo = LocaleContext::pseudo_for_test();
     assert_eq!(pseudo.month_day(3, 12, MonthWidth::Medium).as_deref(), Some("12 Mar"));
