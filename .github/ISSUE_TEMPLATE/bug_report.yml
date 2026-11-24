@@ -1,6 +1,7 @@
 name: Bug report
 description: Something in PlxNative does not work, for example playback fails, the app closes or sign-in breaks.
-labels: ["bug", "user-report"]
+type: Bug
+labels: ["user-report"]
 body:
   - type: markdown
     attributes:

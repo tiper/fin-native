@@ -1,8 +1,7 @@
 name: Issue labels
 
-# Labels issues as they are filed: one kind (bug / enhancement), the areas it is about,
-# and `user-report` when the author is not a maintainer. The rules, the fallback and what is never
-# added are in ci/label-issue.py. Labels are only added, never removed.
+# Adds area labels and `user-report` according to the rules in ci/label-issue.py.
+# The issue form and maintainers set GitHub's Type field.
 #
 # `edited` is handled only for an issue that still has no labels, so retitling an issue does not
 # keep piling labels on, and a label a maintainer removed stays removed.
@@ -11,7 +10,7 @@ name: Issue labels
 # every open issue that has no labels yet.
 #
 # The issue text is never interpolated into a shell line; the script reads it from the API, and
-# whatever the model answers is filtered down to the repository's own labels before anything is
+# whatever the model answers is filtered down to approved area labels before anything is
 # written. The GitHub token can write issues and nothing else.
 #
 # Claude Haiku picks the labels through the Anthropic API. The job holds no Anthropic key: it signs in with
