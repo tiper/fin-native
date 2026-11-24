@@ -78,7 +78,7 @@ jobs:
         issue: ${{ fromJSON(needs.select.outputs.issues) }}
     permissions:
       contents: read
-      issues: write
+      issues: read
       pull-requests: read
       id-token: write
     uses: ./.github/workflows/triage-issue.yml

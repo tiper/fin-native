@@ -61,7 +61,7 @@ def actor(comment):
 
 def bot_topic(comment):
     user = actor(comment)
-    if user.get("type") != "Bot" or user.get("login") != "github-actions[bot]":
+    if user.get("type") != "Bot" or user.get("login") not in {"github-actions[bot]", "pullfrog[bot]"}:
         return None
     match = MARKER.match(comment.get("body") or "")
     return match[1] if match and match[1] in TOPICS else None
@@ -89,7 +89,8 @@ def meaningful_reply(comment, reporter, seen):
 
 def hands_off(comment, reporter):
     commenter = actor(comment)
-    return ((commenter.get("type") == "Bot" and commenter.get("login") == "pullfrog[bot]")
+    return ((commenter.get("type") == "Bot" and commenter.get("login") == "pullfrog[bot]"
+             and bot_topic(comment) is None)
             or (commenter.get("type") == "User" and commenter.get("id") != reporter
                 and comment.get("author_association") in OPERATOR_ASSOCIATIONS))
 

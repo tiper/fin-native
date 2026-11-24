@@ -24,8 +24,8 @@ def comment(number, body, user=REPORTER, association="NONE"):
     return {"id": number, "body": body, "user": user, "author_association": association}
 
 
-def asked(number, topic):
-    return comment(number, f"<!-- plxnative-support:v1 topic={topic} -->\nQuestion", BOT)
+def asked(number, topic, user=BOT):
+    return comment(number, f"<!-- plxnative-support:v1 topic={topic} -->\nQuestion", user)
 
 
 class Support(unittest.TestCase):
@@ -73,6 +73,14 @@ class Support(unittest.TestCase):
                         comment(2, "Native enrichment", NATIVE)):
             self.assertIsNone(support_turn(REPORT, [prior, handoff, followup], "public", 4))
             self.assertIsNone(support_turn(REPORT, [handoff], "public", 0))
+
+    def test_pullfrog_support_reply_advances_the_thread_without_repeating_topics(self):
+        history = [asked(1, "platform"), asked(2, "playback_events", NATIVE)]
+        followup = comment(3, "The event log ends at the decoder error")
+        self.assertIsNone(support_turn(REPORT, history, "public", 0))
+        turn = support_turn(REPORT, history + [followup], "public", 3)
+        self.assertEqual((turn.phase, turn.replies, turn.available), ("followup", 2, ()))
+        self.assertNotEqual(thread_revision(REPORT, history[:1]), thread_revision(REPORT, history))
 
     def test_reply_budget_allows_one_final_handoff_and_prevents_comment_floods(self):
         history = [asked(1, "platform"), asked(2, "playback_events"), comment(3, "Failure code 100")]

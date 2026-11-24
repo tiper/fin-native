@@ -29,13 +29,16 @@ The Issue labels workflow calls Pullfrog once per eligible turn on GitHub-hosted
 one retry on failure. The same run can classify the issue and select a diagnostic. The pinned
 action gets a read-only GitHub token, no provider secrets and no shell. Issue text and comments
 reach the model as GitHub tool results, which can include media hosted by GitHub. A separate
-Python step owns label and comment writes.
+Python step applies labels and sends public replies as `pullfrog[bot]` with a short-lived
+Pullfrog App token. If that token is unavailable, pending writes are withheld and the run
+reports the failure in Actions.
 
 - In the [Pullfrog console](https://pullfrog.com/console), turn off **Enrich issues** and
   **Label issues** so the workflow owns intake. Keep **Review PRs**, **Address reviews** and
   **Fix CI failures** off for the support pilot. Prefer **No code pushes** and keep mentions
   from non-collaborators off. Discussions stay with maintainers.
-- Leave the GitHub repository variable `PLXNATIVE_ISSUE_SUPPORT` unset for **shadow** mode.
+- Set the GitHub repository variable `PLXNATIVE_ISSUE_SUPPORT` to `shadow` for **shadow** mode.
+  This is also the workflow default.
   Area labels apply normally. Support decisions, related issues and proposed replies appear in
   the Actions summary. That summary is visible on the public repository.
 - After reviewing the shadow results, set the variable to `public` to allow replies, or
@@ -45,8 +48,8 @@ Python step owns label and comment writes.
   [`ci/issue_support.py`](ci/issue_support.py).
 - Public replies are limited to two per issue and use checked-in diagnostic text. The original
   reporter's new replies can advance the thread. A maintainer reply, assignment, lock, close,
-  existing native Pullfrog comment, or a maintainer's `ready` or `needs-info` label hands off to
-  a human. The workflow leaves Type, Status, duplicate handling, and closure to maintainers.
+  Pullfrog comment outside this support workflow, or a maintainer's `ready` or `needs-info`
+  label hands off to a human. Maintainers own Type, Status, duplicate handling, and closure.
 
 To evaluate the pilot, record the number of **maintainer-account requests for missing diagnostics
 before investigation** per report. Compare the next ten eligible reports with ten recent reports

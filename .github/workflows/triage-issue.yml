@@ -89,7 +89,8 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      issues: write
+      issues: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,9 +99,18 @@ jobs:
             ci/label-issue.py
             ci/issue_support.py
           sparse-checkout-cone-mode: false
-      - name: Apply validated labels
+      - name: Get Pullfrog token for issue writes
+        id: pullfrog_write
+        if: inputs.comment_id == 0 || needs.classify.outputs.result != ''
+        # Keep the validated summary available if the token exchange fails.
+        continue-on-error: true
+        uses: pullfrog/pullfrog/get-installation-token@19ed08a1c60d607423b3096ae625ddb70bc161ca # v0.1.142
+        env:
+          PULLFROG_FORCE_LOCAL_CLI: '1'
+      - name: Apply validated triage
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PULLFROG_WRITE_TOKEN: ${{ steps.pullfrog_write.outputs.token }}
           ISSUE: ${{ inputs.number }}
           ONLY_IF_UNLABELED: ${{ inputs.only_if_unlabeled }}
           ISSUE_REVISION: ${{ needs.classify.outputs.revision }}
