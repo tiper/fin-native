@@ -88,6 +88,57 @@ class CacheCleanup(unittest.TestCase):
         self.assertIn("--delete", body)
 
 
+class PullfrogIssueTriage(unittest.TestCase):
+    def test_issue_events_and_manual_backfill_use_sponsored_triage(self):
+        caller = code("issue-labels.yml")
+        self.assertIn("types: [opened, reopened, edited]", caller)
+        self.assertRegex(caller, r"dry_run:\n(?:        .*\n)*?        default: true")
+        self.assertIn('"$DRY_RUN" != true && "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH"', caller)
+        self.assertIn('select "$ISSUE" --only-if-unlabeled', caller)
+        self.assertIn("uses: ./.github/workflows/triage-issue.yml", caller)
+        self.assertIn("issue_comment:\n    types: [created]", caller)
+        self.assertIn("vars.PLXNATIVE_ISSUE_SUPPORT == 'public' && !github.event.issue.pull_request", caller)
+        self.assertIn("github.event.comment.user.id == github.event.issue.user.id", caller)
+        self.assertIn("(vars.PLXNATIVE_ISSUE_SUPPORT || 'shadow')", caller)
+        self.assertNotIn("discussion_comment:", caller)
+        self.assertIn("group: issue-triage-${{ inputs.number }}", code("triage-issue.yml"))
+
+    def test_model_token_is_read_only_and_the_apply_job_cannot_run_in_a_dry_run(self):
+        classify = job_body("triage-issue.yml", "classify")
+        self.assertIn("issues: read", classify)
+        self.assertNotIn("issues: write", classify)
+        self.assertEqual(classify.count("uses: ./.github/actions/classify-issue"), 2)
+        self.assertIn("if: steps.initial.outcome == 'failure'", classify)
+        self.assertIn("revision: ${{ steps.prepare.outputs.revision }}", classify)
+        self.assertIn("conversation: ${{ steps.prepare.outputs.conversation }}", classify)
+        self.assertIn('apply "$ISSUE" --dry-run', classify)
+        apply = job_body("triage-issue.yml", "apply")
+        self.assertIn("!inputs.dry_run && needs.classify.outputs.eligible == 'true'", apply)
+        self.assertIn("issues: write", apply)
+        self.assertIn("ISSUE_REVISION: ${{ needs.classify.outputs.revision }}", apply)
+        self.assertIn("SUPPORT_CONVERSATION: ${{ needs.classify.outputs.conversation }}", apply)
+        self.assertNotIn("classify-issue", apply)
+        self.assertNotIn("id-token: write", apply)
+        action = (ROOT / ".github/actions/classify-issue/action.yml").read_text()
+        self.assertIn("GH_TOKEN: ${{ github.token }}", action)
+        self.assertIn("push: disabled", action)
+        self.assertIn("shell: disabled", action)
+        self.assertNotIn("secrets.", action)
+        self.assertRegex(action, r"uses: pullfrog/pullfrog@[0-9a-f]{40}\b")
+        self.assertIn("PULLFROG_FORCE_LOCAL_CLI: '1'", action)
+
+    def test_console_entry_point_retains_dispatch_without_provider_secrets_or_push_access(self):
+        workflow = code("pullfrog.yml")
+        self.assertRegex(workflow, r"(?m)^on:\n  workflow_dispatch:")
+        self.assertIn("prompt: ${{ inputs.prompt }}", workflow)
+        self.assertIn("push: disabled", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("PULLFROG_FORCE_LOCAL_CLI: '1'", workflow)
+        self.assertNotIn("secrets.", workflow)
+        for ref in re.findall(r"uses: \S+@([^\s]+)", workflow):
+            self.assertRegex(ref, r"^[0-9a-f]{40}$")
+
+
 class SentryUpload(unittest.TestCase):
     def test_only_a_pull_requests_nightly_run_skips_the_upload(self):
         nightly = code("nightly.yml")

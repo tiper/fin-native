@@ -160,6 +160,7 @@ python3 ci/rc.py --selftest
 # The issue labeler's pure logic (.github/workflows/issue-labels.yml): what survives a model
 # answer, dry-run output and `user-report` from the author's association. No network.
 python3 ci/label-issue.py --selftest
+python3 ci/test_issue_support.py
 # The two host-side readers of the back-buffer-wait captures, against synthetic traces/JSONL.
 python3 tools/analyze-sched-trace.py --self-test
 python3 tools/analyze-hwcnt-wait.py --self-test

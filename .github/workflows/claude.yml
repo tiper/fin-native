@@ -47,7 +47,7 @@ name: Claude
 #   organization, and release.yml publishes whatever `v*` tag is pushed.) Its comments are signed
 #   github-actions[bot], and it cannot push the `pr-N` branch the action would otherwise make of a fork.
 #   No `id-token: write`: with a token passed in, the action does not need OIDC, and an OIDC token from
-#   the default branch would satisfy this repository's Anthropic federation rule (issue-labels.yml).
+#   the default branch could satisfy an organization's Anthropic federation rule for this repository.
 #   That is why forks get their own job (`fork`), with permissions no step can widen.
 # - Project hooks are off (`disableAllHooks`): the SessionEnd hook runs `tools/build-gc.sh`, which on a
 #   fork is the contributor's copy. Every hook in `.claude/settings.json` is tooling for the maintainer's

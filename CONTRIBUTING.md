@@ -19,6 +19,42 @@ Use labels for areas such as `playback` and `subtitles`, or signals such as `use
 `needs-info`. The [issue-label workflow](.github/workflows/issue-labels.yml) adds approved area
 labels and `user-report`. Use `is:issue type:Bug` or `is:issue type:Feature` in new saved searches.
 
+If the PlxNative support assistant asks for details, reply in the same issue. Share the requested
+diagnostic only, with tokens, addresses and private identifiers removed. The
+[troubleshooting guide](docs/troubleshooting.md#collecting-logs) explains which log to collect.
+
+### Maintainer support pilot
+
+The Issue labels workflow calls Pullfrog once per eligible turn on GitHub-hosted runners, with
+one retry on failure. The same run can classify the issue and select a diagnostic. The pinned
+action gets a read-only GitHub token, no provider secrets and no shell. Issue text and comments
+reach the model as GitHub tool results, which can include media hosted by GitHub. A separate
+Python step owns label and comment writes.
+
+- In the [Pullfrog console](https://pullfrog.com/console), turn off **Enrich issues** and
+  **Label issues** so the workflow owns intake. Keep **Review PRs**, **Address reviews** and
+  **Fix CI failures** off for the support pilot. Prefer **No code pushes** and keep mentions
+  from non-collaborators off. Discussions stay with maintainers.
+- Leave the GitHub repository variable `PLXNATIVE_ISSUE_SUPPORT` unset for **shadow** mode.
+  Area labels apply normally. Support decisions, related issues and proposed replies appear in
+  the Actions summary. That summary is visible on the public repository.
+- After reviewing the shadow results, set the variable to `public` to allow replies, or
+  `off` for labels alone. Manually dispatch **Issue labels** with issue numbers and dry run
+  selected to preview a case, including a closed one. Manual backfills never send support
+  replies. The supported topics and their exact public wording live in
+  [`ci/issue_support.py`](ci/issue_support.py).
+- Public replies are limited to two per issue and use checked-in diagnostic text. The original
+  reporter's new replies can advance the thread. A maintainer reply, assignment, lock, close,
+  existing native Pullfrog comment, or a maintainer's `ready` or `needs-info` label hands off to
+  a human. The workflow leaves Type, Status, duplicate handling, and closure to maintainers.
+
+To evaluate the pilot, record the number of **maintainer-account requests for missing diagnostics
+before investigation** per report. Compare the next ten eligible reports with ten recent reports
+that had a maintainer response. Also count repeated questions, corrections a maintainer had to
+post, and cases that reached a usable handoff. Check the Actions decision against the issue
+thread. Keep public replies enabled only if the maintainer requests fall without more repetitions
+or corrections.
+
 ## Code and translations
 
 New contributions to PlxNative's own code are offered under GPL-3.0-or-later, without copyright
