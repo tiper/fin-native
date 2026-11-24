@@ -18,6 +18,39 @@ has `DT_NEEDED libplayerAPIs.so.1` and `libAcb.so.1` and imports 19 `StarfishMed
 That topology does not prohibit out-of-process binding: the controlled 2026-11-02 ACB experiment
 displayed its URI fixture on the 4.5 dev set, as recorded below.
 
+## LG SDK reference for native media
+
+Start URI playback and video-window investigations with [LG's Flutter for webOS guide][lg-guide],
+the [player API reference][lg-player-api], and the native implementation at the matching SDK
+revision. LG targets webOS 26 Re:New and later. The Dart API describes what LG exposes to Flutter
+apps. The C++ plugin and matching NDK describe the native calls LG's implementation makes, with
+no published compatibility promise for standalone Rust/C apps found in these sources.
+
+The [native player source][lg-player-native] at plugin revision `3a742bb86b04` uses the NDK's
+`<NDL/NDL_media.h>` and [links `ndlmedia`][lg-player-build]. It initializes a media slot with
+`NDL_MediaInitWithWindowId`, then passes `option.windowId` again to `NDL_MediaLoadWithOption`.
+That corroborates the exported-window load key in our raw Luna URI path and identifies an extra
+initialization step to investigate if binding fails. The plugin ignores empty `sourceInfo`, caches
+early `videoInfo`, unloads the pipeline, and keeps the NDL slot initialized to avoid a
+callback-thread teardown race. The
+documented network API omits HTTP headers. LG's [DRM player API][lg-player-drm] also documents
+audio track selection and subtitles. These are source-based leads for the URI backend. Neither
+player API documents a way to submit our own demuxed packets to the decoder.
+
+When using an SDK finding, cite the guide or pin the source commit and call site in the relevant
+firmware notes. Use the matching NDK header for a proposed native binding, check the symbol and
+library on the target firmware, then use a device run to establish behavior with our SDL window.
+The SDK source alone does not qualify the existing raw Luna backend on webOS 26 or establish
+behavior on older firmware. If our current path fails on 26, compare it against NDL with the same
+clip and window before changing the backend. For a new binding, follow the repository's
+[`bind-tv-lib-abi` workflow](../.agents/skills/bind-tv-lib-abi/SKILL.md).
+
+[lg-guide]: https://webostv.developer.lge.com/develop/guides/flutter-for-webos
+[lg-player-api]: https://github.com/lg-flutter-webos/plugins/blob/3a742bb86b04e261044f0864f9b1f71acf0bbad3/packages/video_player/API_REFERENCE.md
+[lg-player-native]: https://github.com/lg-flutter-webos/plugins/blob/3a742bb86b04e261044f0864f9b1f71acf0bbad3/packages/video_player/webos/webos_player.cc
+[lg-player-build]: https://github.com/lg-flutter-webos/plugins/blob/3a742bb86b04e261044f0864f9b1f71acf0bbad3/packages/video_player/webos/CMakeLists.txt
+[lg-player-drm]: https://github.com/lg-flutter-webos/plugins/blob/3a742bb86b04e261044f0864f9b1f71acf0bbad3/packages/video_player_drm/API_REFERENCE.md
+
 ## Results
 
 | firmware | set | result |

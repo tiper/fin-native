@@ -1666,6 +1666,8 @@ pub struct Plan {
     /// are what a later rebuild that copies the video hands on again.
     pub src_dovi: plx_data::metadata::Dovi,
     pub src_dv_decision: plx_data::metadata::DvDecision,
+    /// [`super::decision::RpuDv`], frozen here: Closed for a file with a record and for a URI Original.
+    pub(super) rpu_dv: super::decision::RpuDv,
     /// Does the direct-played audio track carry Dolby Atmos, for the Load payload's
     /// `contents.immersive` node. Set on the DIRECT-PLAY branch only, for the same reason `dovi`
     /// is: it describes the FILE's own elementary stream.
@@ -2205,6 +2207,11 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             plan.source_decodable = video_dp;
             plan.src_dovi = dovi;
             plan.src_dv_decision = dv_decision;
+            plan.rpu_dv = if dovi.present {
+                super::decision::RpuDv::Closed
+            } else {
+                super::decision::RpuDv::Open { mode: env.dolby_vision_mode }
+            };
             // **Refusing direct play is only half of it.** The transcode query below grants the server
             // `directStream=1` — permission to COPY the video rather than encode it — and PMS takes that
             // permission whenever the source fits the caps the query carries. Those caps are resolution,

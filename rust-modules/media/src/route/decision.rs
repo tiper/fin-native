@@ -509,14 +509,21 @@ pub struct PlaybackSession {
     /// Capability and presentation frozen when `stream_dovi` entered this physical route. An
     /// audio switch, reload, Original recovery and rollback all copy this beside the raw record.
     /// Rewritten only by [`withdraw_dv_presentation`] (#1166), which downgrades the presentation to
-    /// what Dolby Vision Off would have planned and keeps the probed capability.
+    /// what Dolby Vision Off would have planned and keeps the probed capability, and by
+    /// [`declare_rpu_dovi`], which declares the RPUs of a stream whose container has no record.
     stream_dv_decision: plx_data::metadata::DvDecision,
-    /// The FILE's own Dolby Vision record and the declaration it would make as a direct play,
-    /// frozen at the resolve whatever route was taken. `stream_dovi` above is what is being fed;
-    /// a rebuild that copies the video (an audio switch, a seek, Original recovery) hands this on
-    /// again instead of losing it with the first re-encode.
+    /// The FILE's own Dolby Vision record and the declaration it would make as a direct play, set
+    /// at the resolve whatever route was taken. `stream_dovi` above is what is being fed; a rebuild
+    /// that copies the video (an audio switch, a seek, Original recovery) hands this on again
+    /// instead of losing it with the first re-encode, and [`is_no_video_copy`] reads it. Not frozen:
+    /// [`declare_rpu_dovi`] adopts a record found in the RPUs where none was set.
     src_dovi: plx_data::metadata::Dovi,
     src_dv_decision: plx_data::metadata::DvDecision,
+    /// Whether this play may still declare the Dolby Vision the demuxer finds in the RPUs of a stream
+    /// with no configuration record ([`declare_rpu_dovi`]). Set at the resolve and, like `src_dovi`,
+    /// kept outside [`AppliedRouteProjection`], so a rollback (an Original trial that failed) can
+    /// never re-open it.
+    rpu_dv: RpuDv,
     /// **Does the audio elementary stream we are feeding carry Dolby Atmos?** The Load payload's
     /// `contents.immersive` node turns on it ([`crate::player::engine`]).
     ///
@@ -1948,6 +1955,7 @@ impl PlaybackSession {
         stream_dv_decision: plx_data::metadata::DvDecision::NONE,
         src_dovi: plx_data::metadata::Dovi::NONE,
         src_dv_decision: plx_data::metadata::DvDecision::NONE,
+        rpu_dv: RpuDv::Closed,
         stream_immersive: false,
         codec_probe_retried: false,
         title: [0; 128],
@@ -2057,6 +2065,7 @@ impl PlaybackSession {
             stream_dv_decision,
             src_dovi,
             src_dv_decision,
+            rpu_dv,
             stream_immersive,
             codec_probe_retried,
             title,
@@ -2146,6 +2155,7 @@ impl PlaybackSession {
             stream_dv_decision: *stream_dv_decision,
             src_dovi: *src_dovi,
             src_dv_decision: *src_dv_decision,
+            rpu_dv: *rpu_dv,
             stream_immersive: *stream_immersive,
             codec_probe_retried: *codec_probe_retried,
             title: *title,
@@ -7556,7 +7566,7 @@ pub fn stream_audio(ps: &PlaybackSession) -> Option<crate::player::recovery::Str
 /// video codec is declared, and for a raster the server never measured (the width or height is 0,
 /// which names no facet). Beside [`stream_audio`] so the session keeps its fields private.
 pub fn stream_video(ps: &PlaybackSession) -> Option<crate::player::recovery::StreamVideo> {
-    let fed_whole = !is_transcoding(ps) || (ps.cur_contract.remux && !ps.cur_contract.no_video_copy);
+    let fed_whole = !is_transcoding(ps) || (ps.cur_contract.remux && !is_no_video_copy(ps));
     let codec = stream_vcodec(ps);
     let (_, width, height) = ps.cur_src;
     (fed_whole && !codec.is_empty()).then(|| crate::player::recovery::StreamVideo {
@@ -7648,6 +7658,7 @@ pub fn withdraw_dv_presentation(ps: &mut PlaybackSession, why: &str) -> bool {
     }
     let off = dv_off_decision(ps);
     ps.stream_dv_decision = off;
+    ps.rpu_dv = RpuDv::Closed;
     if ps.src_dv_decision.presentation.declared().is_some() {
         ps.src_dv_decision = dv_off_decision_for(ps.src_dv_decision.capability, ps.src_dovi, &ps.stream_vcodec);
     }
@@ -7660,6 +7671,96 @@ pub fn withdraw_dv_presentation(ps: &mut PlaybackSession, why: &str) -> bool {
         off.presentation.label(),
     ));
     true
+}
+
+/// Whether a play may still declare the Dolby Vision the demuxer finds in the RPUs of a stream
+/// whose file has no configuration record ([`declare_rpu_dovi`]). Set once per play at the resolve
+/// and moved only forward, so the report every Load of the stream repeats is answered at most once.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum RpuDv {
+    /// Not declared yet, with the Dolby Vision setting frozen at the resolve: a file with no record
+    /// on the Feed engine.
+    Open { mode: plx_plex::plex::session::DolbyVisionMode },
+    /// Declared from the RPUs.
+    Declared,
+    /// Nothing to declare: the file has a record, the route declined (Dolby Vision Off, a set
+    /// without confirmed support), the declaration was withdrawn, or the play is a URI Original.
+    #[default]
+    Closed,
+}
+
+/// Declare the Dolby Vision the demuxer found in the RPUs of a stream the server reported none for
+/// (`FeedRaw::rpu_dovi`: a remux that dropped the configuration record but kept the RPUs), for the
+/// rest of this play, as if the server had reported it: the record and the decision the setting
+/// frozen at the resolve makes of it with the capability the route froze. Returns whether the
+/// installed route now declares a node, which the caller answers with one reload.
+///
+/// Direct play only: a server remux's `start.mkv` begins at its offset, so the reload's seek would
+/// land wrong, and a rebuild re-derives its declaration from the copy ([`copied_video_dv`]). A report
+/// on a transcoding route changes nothing and leaves the play open, so a later return to direct play
+/// declares. A decline (Dolby Vision Off, no confirmed support) closes it.
+///
+/// The file's own declaration and the stored Auto Original candidate follow when they carry no record
+/// either, so a trip to HLS and back to Original keeps the node, as [`withdraw_dv_presentation`]
+/// keeps it off. The adopted record also makes a Profile 5 forbid a video copy from then on
+/// ([`is_no_video_copy`]), as for a Profile 5 with a record. That keeps the request the same shape,
+/// but it does not make a server route right for an inferred Profile 5: the server has no record
+/// either, so its encode is of the base layer, which no route then declares.
+pub fn declare_rpu_dovi(ps: &mut PlaybackSession, rpu: plx_playback_contract::feed::RpuDovi) -> bool {
+    let RpuDv::Open { mode } = ps.rpu_dv else {
+        return false;
+    };
+    if is_transcoding(ps) {
+        return false;
+    }
+    let dovi = plx_data::metadata::Dovi {
+        present: true,
+        profile: rpu.profile.into(),
+        bl_compat: rpu.bl_compat.into(),
+        bl_present: true,
+        rpu_present: true,
+        ..plx_data::metadata::Dovi::NONE
+    };
+    let decision = frozen_dv_decision(mode, ps.stream_dv_decision.capability, dovi, &ps.stream_vcodec);
+    if decision.presentation.declared().is_none() {
+        ps.rpu_dv = RpuDv::Closed;
+        return false;
+    }
+    ps.rpu_dv = RpuDv::Declared;
+    ps.stream_dovi = dovi;
+    ps.stream_dv_decision = decision;
+    // The record replaces silence only: a slot that carries one keeps it.
+    let adopt = |slot: &mut plx_data::metadata::Dovi, decided: &mut plx_data::metadata::DvDecision, vcodec: &str| {
+        if !slot.present {
+            *slot = dovi;
+            *decided = frozen_dv_decision(mode, decided.capability, dovi, vcodec);
+        }
+    };
+    adopt(&mut ps.src_dovi, &mut ps.src_dv_decision, &ps.stream_vcodec);
+    if let Some(c) = ps.auto_original.as_mut() {
+        adopt(&mut c.dovi, &mut c.dv_decision, &c.vcodec);
+    }
+    crate::player::log(&format!(
+        "dv: capability={} presentation={} (P{} bl_compat={} found in the RPUs; the container has no record)",
+        decision.capability.label(),
+        decision.presentation.label(),
+        rpu.profile,
+        rpu.bl_compat,
+    ));
+    true
+}
+
+/// Open the play to a declaration from the RPUs with `mode` frozen, as the resolve does for a file
+/// with no record (tests).
+#[cfg(any(test, feature = "test-support"))]
+pub fn open_rpu_dovi_for_test(ps: &mut PlaybackSession, mode: plx_plex::plex::session::DolbyVisionMode) {
+    ps.rpu_dv = RpuDv::Open { mode };
+}
+
+/// Whether the play may still declare the Dolby Vision in a stream's RPUs ([`declare_rpu_dovi`]):
+/// a field read, so the pump asks it before anything that takes a lock.
+pub fn rpu_dovi_open(ps: &PlaybackSession) -> bool {
+    matches!(ps.rpu_dv, RpuDv::Open { .. })
 }
 
 /// Is the audio being fed a Dolby Atmos stream? — the Load payload's `contents.immersive` node.
@@ -8381,10 +8482,12 @@ pub fn cur_enhancement_label(ps: &PlaybackSession) -> Option<&'static str> {
         EnhancementOutcome::Refused => Some("refused"),
     }
 }
-/// Did this playback forbid the server a video stream COPY? Read by the seek and audio-switch
-/// rebuilds so the constraint survives them — see [`PlaybackSession::cur_contract`].
-fn is_no_video_copy(ps: &PlaybackSession) -> bool {
-    ps.cur_contract.no_video_copy
+/// Did this playback forbid the server a video stream COPY? Read by every rebuild so the constraint
+/// survives it — see [`PlaybackSession::cur_contract`]. A source whose base layer is unusable
+/// (`src_dovi`: Dolby Vision Profile 5) forbids it whatever the contract says, since a route change
+/// resets the contract; the Original candidate's record is the file's, so this covers it too.
+pub(super) fn is_no_video_copy(ps: &PlaybackSession) -> bool {
+    ps.cur_contract.no_video_copy || ps.src_dovi.base_layer_unusable()
 }
 /// The quality ceiling THIS playback was resolved under — read by the two query rebuilds
 /// ([`plan_rebase`], [`retranscode`]) so a rung picked mid-film cannot reshape the encode
@@ -12024,6 +12127,7 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             stream_dv_decision: plan.dv_decision,
             src_dovi: plan.src_dovi,
             src_dv_decision: plan.src_dv_decision,
+            rpu_dv: plan.rpu_dv,
             stream_immersive: plan.immersive,
             // A landing is a fresh playback: the one-shot probe-retry budget starts unspent.
             codec_probe_retried: false,
@@ -12404,9 +12508,6 @@ fn original_remux_shape(ps: &PlaybackSession) -> bool {
         && ps.cur_contract.ceiling.is_none()
         && cur_delivery(ps) == plx_plex::plex::TranscodeDelivery::ProgressiveMkv
         && !is_no_video_copy(ps)
-        // A direct-played Dolby Vision Profile 5 never set `no_video_copy` (the declaration made
-        // the direct play right); a copy of it, one container down, carries no declaration.
-        && ps.auto_original.as_ref().is_some_and(|c| !c.dovi.base_layer_unusable())
 }
 
 /// The largest Part (whole-file bitrate, kbps) the app reads a second time beside a remux. The
@@ -13198,7 +13299,7 @@ fn live_is_original_burn(ps: &PlaybackSession) -> bool {
         && !ps.cur_contract.remux
         && ps.cur_contract.delivery == plx_plex::plex::TranscodeDelivery::ProgressiveMkv
         && ps.cur_contract.ceiling.is_none()
-        && !ps.cur_contract.no_video_copy
+        && !is_no_video_copy(ps)
         && ps.cur_sub_sid != 0
         && !sidecar_drawn_by_client(ps)
 }
@@ -14015,13 +14116,15 @@ pub fn enhancement_test_session(route: EnhTestFixture) -> (PlaybackSession, Serv
         sample_rate: 0,
         bit_depth: 0,
     });
+    // The candidate's record is the file's, as a resolve plans it.
+    ps.src_dovi = if route.dv_base_unusable {
+        plx_data::metadata::Dovi { present: true, profile: 5, bl_compat: 0, ..plx_data::metadata::Dovi::NONE }
+    } else {
+        plx_data::metadata::Dovi::NONE
+    };
     ps.auto_original = route.base_present.then(|| AutoOriginalCandidate {
         direct: route.remux.is_none(),
-        dovi: if route.dv_base_unusable {
-            plx_data::metadata::Dovi { present: true, profile: 5, bl_compat: 0, ..plx_data::metadata::Dovi::NONE }
-        } else {
-            plx_data::metadata::Dovi::NONE
-        },
+        dovi: ps.src_dovi,
         dv_decision: if route.dv_declared {
             plx_data::metadata::DvDecision {
                 capability: plx_os::devcaps::dv::DvCapability::Supported,
@@ -14596,6 +14699,10 @@ pub(crate) mod flight_rig;
 #[cfg(test)]
 #[path = "decision_trial_flight_tests.rs"]
 mod trial_flight_tests;
+
+#[cfg(test)]
+#[path = "decision_dv_copy_flight_tests.rs"]
+mod dv_copy_flight_tests;
 
 #[cfg(test)]
 #[path = "decision_next_episode_tests.rs"]
