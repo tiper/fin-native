@@ -1437,12 +1437,15 @@ fn a_direct_played_dv_profile_5_never_rebuilds_as_a_plain_remux() {
     let live = Live::start(EnhMode::Honor("ac3"));
     install(&mut ps, &live, Delivery::Direct, a1(), Some(candidate(true, a1(), None)), 0);
     assert!(plain_rebuild_is_remux(&ps), "control: the same route without Dolby Vision stays the remux");
+    let p5 = plx_data::metadata::Dovi { present: true, profile: 5, ..plx_data::metadata::Dovi::NONE };
     let mut cand = candidate(true, a1(), None);
-    cand.dovi = plx_data::metadata::Dovi { present: true, profile: 5, ..plx_data::metadata::Dovi::NONE };
+    cand.dovi = p5;
     ps.auto_original = Some(cand);
+    set_source_declaration_for_test(&mut ps, p5, plx_data::metadata::DvDecision::NONE);
     // a direct-played Profile 5 never set `no_video_copy` on the contract, yet a copy of it is the
-    // wrong picture one container down
-    assert!(!is_no_video_copy(&ps));
+    // wrong picture one container down: the file's record forbids it
+    assert!(!ps.cur_contract.no_video_copy);
+    assert!(is_no_video_copy(&ps));
     assert!(!plain_rebuild_is_remux(&ps));
     live.finish();
     cleanup(&mut ps);
