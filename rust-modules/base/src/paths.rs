@@ -629,7 +629,9 @@ pub mod runtime_file {
     /// behind is a name `dev.rs`'s `DIAG` can list and the erasure sweep can remove.
     pub const A11Y_STATE_TMP: &str = "plxnative-a11y.json.tmp";
 
-    pub const LOGS: [&str; 11] = [
+    pub const CONTROL_STATE: &str = "state.json";
+
+    pub const LOGS: [&str; 12] = [
         EVENTS,
         CRASH,
         STDERR,
@@ -641,6 +643,7 @@ pub mod runtime_file {
         HARDWARE_COUNTERS,
         A11Y_STATE,
         A11Y_STATE_TMP,
+        CONTROL_STATE,
     ];
 }
 

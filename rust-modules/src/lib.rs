@@ -39,7 +39,7 @@ mod lab; // Cloud Lab bridge: pinned diagnostic uploads + optional outbound comm
 #[cfg(test)]
 mod release_line;
 mod remote; // dev/testing remote-control channel: a FIFO the loop drains into synthetic SDL keys
-#[cfg(feature = "sim")]
+#[cfg(any(feature = "sim", feature = "devtriggers"))]
 mod shot; // simulator screenshots: read the frame back and write a PNG (see the module doc)
 mod textinput; // the TV's own on-screen keyboard, via plain SDL_StartTextInput (see the module doc)
 

@@ -1103,7 +1103,7 @@ mod backend_offer_session_tests {
         assert!(!session.quality_pick_carriable());
         assert!(!crate::player::failure_context(&session).quality_carriable,
             "the failure read-out reads the same question: no Change quality either");
-        set_quality(&mut session, Quality::P480);
+        assert!(!set_quality(&mut session, Quality::P480), "a refused pick reports refusal");
         assert_eq!(quality(), Quality::Original, "a refused pick persists nothing");
         assert_eq!((cur_ceiling(&session), cur_delivery(&session)), (ceiling, delivery), "the route contract is untouched");
         assert!(!crate::player::pending_transcode_refresh(), "no Retranscode is queued for a pump that does not exist");
@@ -9613,16 +9613,16 @@ pub fn set_quality_for_retry(q: Quality) {
     let _ = persist_quality_choice(q);
 }
 
-pub fn set_quality(ps: &mut PlaybackSession, q: Quality) {
+pub fn set_quality(ps: &mut PlaybackSession, q: Quality) -> bool {
     if forced_direct_play(ps) {
         let _ = persist_quality_choice(q);
-        return;
+        return true;
     }
     if !ps.quality_pick_carriable() {
         // Before anything is persisted, moved or queued: no composed backend converts, so the playing title keeps playing
         // as it is and the next re-resolve of it is not planned under a ceiling nothing can carry.
         crate::player::log(&format!("quality: {} refused: no composed backend can carry a converted output", q.label()));
-        return;
+        return false;
     }
 
     let q = supported_quality(q);
@@ -9632,7 +9632,7 @@ pub fn set_quality(ps: &mut PlaybackSession, q: Quality) {
     let _edit = (!unchanged).then(|| begin_user_quality_boundary(q));
     let q = persist_quality_choice(q);
     if unchanged {
-        return;
+        return true;
     }
     if original_recovery_pending() {
         // The current Load has not produced a frame yet. Mutating its declaration or publishing
@@ -9657,9 +9657,10 @@ pub fn set_quality(ps: &mut PlaybackSession, q: Quality) {
             }
         }
         crate::player::log("quality: deferred until pending Original handoff is resolved");
-        return;
+        return true;
     }
     apply_quality_choice(ps, q);
+    true
 }
 
 fn apply_quality_choice(ps: &mut PlaybackSession, q: Quality) {

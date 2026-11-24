@@ -115,22 +115,7 @@ pub(crate) fn apply_more_action(ps: &mut plx_media::route::PlaybackSession, pa: 
         // running stream. Not deferred either: `route::set_quality` re-asks the routing question
         // for the playback on screen and reloads only when the answer changed.
         plx_appkit::more_menu::Action::SetQuality(q) => {
-            if plx_media::player::server_stop_applies(ps) {
-                return;
-            }
-            // A terminal Engine never reaches pump's pending-retranscode arm, and a `/decision`
-            // refusal has no Engine at all.  Persist the pick first, then make a fresh playback
-            // request at the same user-visible position.  Selecting the already-active rung is
-            // therefore the promised plain Retry.
-            let failed = matches!(plx_media::player::state(ps), plx_media::player::PlaybackState::Error);
-            if failed {
-                plx_media::route::set_quality_for_retry(q);
-                if retry_failed_playback(ps, pa, bridge.metadata_mut(), None, AttemptOrigin::QualityChange) {
-                    present.note_in_scope(plx_machine::present::Scope::Page, plx_machine::present::PresentEvent::Damage(plx_machine::present::Provenance::Input));
-                }
-            } else {
-                plx_media::route::set_quality(ps, q);
-            }
+            apply_quality(ps, pa, bridge, q, present);
         }
         // A URI speed pick re-resolves the same source for a Feed-capable executor. The common
         // route request owns its new bounded episode; missing clock or pause evidence refuses
@@ -154,6 +139,32 @@ pub(crate) fn apply_more_action(ps: &mut plx_media::route::PlaybackSession, pa: 
         // `perform_hud_command`), never as `PlayerReq::More`.
         plx_appkit::more_menu::Action::Hud(_) | plx_appkit::more_menu::Action::None => {}
     }
+}
+
+pub(super) fn apply_quality(
+    ps: &mut plx_media::route::PlaybackSession,
+    pa: &mut plx_media::player::adapter::PlayerAdapter,
+    bridge: &mut super::bridge::Bridge,
+    quality: plx_media::route::Quality,
+    present: &mut plx_machine::present::Present,
+) -> bool {
+    if plx_media::player::server_stop_applies(ps) {
+        return false;
+    }
+    // A terminal Engine never reaches pump's pending-retranscode arm, and a `/decision`
+    // refusal has no Engine at all.  Persist the pick first, then make a fresh playback
+    // request at the same user-visible position.  Selecting the already-active rung is
+    // therefore the promised plain Retry.
+    let failed = matches!(plx_media::player::state(ps), plx_media::player::PlaybackState::Error);
+    if failed {
+        plx_media::route::set_quality_for_retry(quality);
+        if retry_failed_playback(ps, pa, bridge.metadata_mut(), None, AttemptOrigin::QualityChange) {
+            present.note_in_scope(plx_machine::present::Scope::Page, plx_machine::present::PresentEvent::Damage(plx_machine::present::Provenance::Input));
+        }
+    } else {
+        return plx_media::route::set_quality(ps, quality);
+    }
+    true
 }
 
 /// Replace a terminal attempt with a new resolve of the same Plex item.
@@ -631,7 +642,7 @@ pub(crate) fn commit_track(
     pa: &mut plx_media::player::adapter::PlayerAdapter,
     meta: &mut plx_data::stores::metadata::MetadataStore,
     commit: plx_appkit::track_menu::TrackCommit,
-) {
+) -> bool {
     use plx_appkit::track_menu::TrackCommit;
     match commit {
         TrackCommit::Audio { carried, memo } => {
@@ -639,11 +650,11 @@ pub(crate) fn commit_track(
                 if pa.uri_maps_track(ps, plx_playback_contract::TrackKind::Audio,
                     carried.sid) == Some(false)
                     || !pa.commit_audio_track(ps, carried.clone(), memo.clone()) {
-                    let _ = reconfigure_uri_audio(ps, pa, meta, carried.sid, memo);
+                    return reconfigure_uri_audio(ps, pa, meta, carried.sid, memo);
                 }
-                return;
+                return true;
             }
-            pa.commit_audio_track(ps, carried, memo);
+            return pa.commit_audio_track(ps, carried, memo);
         }
         TrackCommit::AudioEnhancement(a) => {
             if ps.attempt_view().backend() == Some(plx_media::player::attempt_view::Backend::Uri) {
@@ -668,11 +679,11 @@ pub(crate) fn commit_track(
                         sidecar_key.clone(), sidecar_codec.clone(), memo.clone()) {
                     let mode = if stream_id == 0 { plx_media::route::SubMode::Off }
                         else { plx_media::route::SubMode::Track };
-                    let _ = reconfigure_uri_subtitle(ps, pa, meta, stream_id, mode, None, memo);
+                    return reconfigure_uri_subtitle(ps, pa, meta, stream_id, mode, None, memo);
                 }
-                return;
+                return true;
             }
-            pa.commit_subtitle_track(ps, render_ordinal, stream_id, sidecar_key, sidecar_codec, memo);
+            return pa.commit_subtitle_track(ps, render_ordinal, stream_id, sidecar_key, sidecar_codec, memo);
         }
         // Forced only (FO): the panel matched the forced track for the playing audio (or nothing),
         // the route holds the mode and remembers `ForcedOnly { lang }` when it changed, and drops
@@ -684,7 +695,7 @@ pub(crate) fn commit_track(
                         lang: lang.clone() });
                 let _ = reconfigure_uri_subtitle(ps, pa, meta, stream_id,
                     plx_media::route::SubMode::ForcedOnly, Some(lang), memo);
-                return;
+                return true;
             }
             pa.commit_forced_only_track(ps, render_ordinal, stream_id, &lang, changed);
         }
@@ -697,6 +708,7 @@ pub(crate) fn commit_track(
             plx_media::route::persist_subtitle_offset(ps, offset);
         }
     }
+    true
 }
 
 #[derive(Default)]
@@ -840,14 +852,15 @@ pub(crate) fn player_requests(
             }
             // The fall-through a surface cannot perform (`screens::player::overlay`'s module doc):
             // the same toggle the bare transport reaches, with the panel left untouched.
-            PlayerReq::Transport(play) => apply_transport(&mut player.session, pa, play, now, pages),
+            PlayerReq::Transport(play) => { apply_transport(&mut player.session, pa, play, now, pages); }
             PlayerReq::SeekTo(ns) => apply_seek_to(&mut player.session, pa, ns),
             // …and its twin, which does NOT resume: the scrub bar is how a paused film is moved.
             // The pump keeps the pause across it (see `commit_seek`).
             PlayerReq::CommitSeek(ns) => commit_seek(&mut player.session, pa, ns),
             PlayerReq::More(action) => apply_more_action(&mut player.session, pa, bridge, action, &mut pages.present),
-            PlayerReq::CommitTrack(commit) =>
-                commit_track(&mut player.session, pa, bridge.metadata_mut(), commit),
+            PlayerReq::CommitTrack(commit) => {
+                commit_track(&mut player.session, pa, bridge.metadata_mut(), commit);
+            }
             // The failure-read-out's recovery escape (`ChooseQuality`) and the Tracks->Timing hand-off, which
             // present a panel immediately rather than through the row's deferred press. The
             // tabs row is not an asker: it asks `ToggleSection` (Info and Chapters are sections).
@@ -1460,17 +1473,18 @@ pub(crate) fn perform_hud_command(
 /// Perform a [`PlayerReq::Transport`](plx_screens::registry::PlayerReq::Transport): the play/pause toggle (or a one-way PLAY or PAUSE), then keep the
 /// transport up. The one path the keys, OK on the picture, a panel's fall-through and the
 /// `toggle_play` command share.
-fn apply_transport(
+pub(super) fn apply_transport(
     ps: &mut plx_media::route::PlaybackSession,
     pa: &mut plx_media::player::adapter::PlayerAdapter,
     play: Option<bool>,
     now: u32,
     pages: &mut plx_ui::dispatch::Dispatcher<super::bridge::AppHost>,
-) {
+) -> bool {
     let target = super::lifecycle::transport_target(play, super::lifecycle::viewer_paused_for(ps, pa));
-    set_transport_paused(ps, pa, target);
+    let accepted = set_transport_paused(ps, pa, target);
     super::bridge::send_player_message(pages,
         plx_screens::registry::AppMsg::PlayerExtendHud { now, duration_ms: HUD_LINGER_MS });
+    accepted
 }
 
 /// Perform a [`PlayerReq::SeekTo`](plx_screens::registry::PlayerReq::SeekTo): seek, and resume a paused film.

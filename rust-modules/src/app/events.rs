@@ -450,10 +450,12 @@ pub(crate) fn token_is_direct(tok: &str) -> bool {
         return true;
     }
     tok == "shot"
+        || tok == "state" // the command API's snapshot dump (api.rs)
         || tok == "diag"
         || tok == "diagnostics"
         || tok.starts_with("pat:")
         || tok.starts_with("txt:")
+        || tok.starts_with("api:") // the command API's verbs perform on the spot (api.rs)
 }
 
 #[cfg(test)]
@@ -539,13 +541,16 @@ pub(crate) fn dispatch_remote_token(flavor: SdlFlavor, tok: &str, ps: &plx_media
             RemotePointer::Up => remote_synth_pointer(SDL_MOUSEBUTTONUP, x, y),
         }
         true
-    } else if cfg!(feature = "sim") && tok == "shot" {
-        // Simulator only. Screenshotting has to be a TOKEN rather than a launch option, because
-        // the interesting frame is the one AFTER driving, and `PLXNATIVE_SHOT_FRAME` is fixed
-        // before the app starts — worse, presented frames only accrue when something repaints
-        // (the idle gate), so no frame number can be predicted from outside. This makes
-        // `down down right ok shot` a single composable line.
-        #[cfg(feature = "sim")]
+    } else if tok == "shot" && (cfg!(feature = "sim") || plx_base::devtrig::ENABLED) {
+        // The command API's screenshot door (simulator + every devtrig build — the FIFO's own
+        // gate; the stable build has no FIFO, hence no shot). Screenshotting has to be a TOKEN
+        // rather than a launch option, because the interesting frame is the one AFTER driving,
+        // and `PLXNATIVE_SHOT_FRAME` is fixed before the app starts — worse, presented frames
+        // only accrue when something repaints (the idle gate), so no frame number can be
+        // predicted from outside. This makes `down down right ok shot` a single composable
+        // line, and the same token works on the television. `shot.rs` writes `shot-<N>.png`
+        // in the instance root for the agent to fetch.
+        #[cfg(any(feature = "sim", feature = "devtriggers"))]
         crate::shot::request();
         true
     } else if tok == "okdown" || tok == "okup" {

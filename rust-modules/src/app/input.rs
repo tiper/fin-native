@@ -382,6 +382,8 @@ pub(crate) struct MenuPlayAwait {
     /// A miss logs and leaves the stack as it is instead of opening the page: a launch link's key
     /// came from outside the app, so a page for it may not exist (`app::deeplink`).
     stay_on_miss: bool,
+    #[cfg(feature = "devtriggers")]
+    api: bool,
 }
 
 /// Which asynchronous load a [`MenuPlayAwait`] is waiting on. Both phases are polled by the one
@@ -405,6 +407,8 @@ impl MenuPlayAwait {
         Self {
             sid, expect, season_index, hud_ms, deadline: now.wrapping_add(12_000), phase: MenuPlayPhase::Detail,
             open: false, stay_on_miss: false,
+            #[cfg(feature = "devtriggers")]
+            api: false,
         }
     }
 
@@ -412,6 +416,15 @@ impl MenuPlayAwait {
     pub(crate) fn for_link(sid: plx_plex::plex::ServerId, rk: String, open: bool, now: u32) -> Self {
         Self { open, stay_on_miss: true, ..Self::new(sid, rk, None, plx_screens::player::input::HUD_LINGER_MS, now) }
     }
+
+    #[cfg(feature = "devtriggers")]
+    pub(super) fn for_api(sid: plx_plex::plex::ServerId, rk: String, now: u32) -> Self {
+        Self { api: true, hud_ms: plx_screens::player::input::HUD_HEADLESS_MS, ..Self::for_link(sid, rk, false, now) }
+    }
+
+    #[cfg(feature = "devtriggers")]
+    pub(super) fn is_api(&self) -> bool { self.api }
+
 }
 
 /// **What a card ACTIVATION does, once its screen has decided whether the press means PLAY.**
@@ -557,14 +570,20 @@ pub(crate) unsafe fn menu_play_tick(
     let Some(wait) = menu_play_await.clone() else {
         return;
     };
-    let MenuPlayAwait { sid, ref expect, season_index, hud_ms, deadline, phase, open, stay_on_miss } = wait;
+    let MenuPlayAwait { sid, ref expect, season_index, hud_ms, deadline, phase, open, stay_on_miss, .. } = wait;
     // Something else already moved the app onto the player this frame (a different press, an
     // auto-advance) — the wait is moot and must not fire a second Play on top of it.
+    let expired = now.wrapping_sub(deadline) < u32::MAX / 2;
     if super::bridge::player(pages).is_some() {
+        // An explicit replacement has asked the shared exit to pop the old player.
+        // Its navigation commit may still be pending on this frame.
+        #[cfg(feature = "devtriggers")]
+        if wait.is_api() && !expired {
+            return;
+        }
         *menu_play_await = None;
         return;
     }
-    let expired = now.wrapping_sub(deadline) < u32::MAX / 2;
     if let MenuPlayPhase::Season { gen, idx } = phase {
         // The season fetch is still ours only while its generation stands and the item it hangs
         // off is still the loaded one: another season press, a new detail request or a page's
@@ -1737,6 +1756,8 @@ pub(crate) fn delete_all_local_data(meta: &mut plx_data::stores::metadata::Metad
     mut failures: Vec<String>) -> Vec<String> {
     // Retire the writer before the privacy sweep unlinks its log files.
     plx_os::playback_trace::retire();
+    #[cfg(feature = "devtriggers")]
+    super::api::retire_state_file();
     failures.extend(sweep_local_files(
         plx_base::paths::obsolete_last_place_candidates()
             .into_iter()

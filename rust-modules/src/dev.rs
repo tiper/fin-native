@@ -81,7 +81,7 @@ pub(crate) mod framedump;
 // `test` as well as the feature: `any_trigger_present` is the only caller and it is cfg'd out of a
 // release build, but the test below asserts this list's contents and runs with default features.
 #[cfg(any(feature = "devtriggers", test))]
-const DIAG: [&str; 51] = [
+const DIAG: [&str; 53] = [
     "plxnative-diag.log",
     "plxnative-hud-text-metrics",
     "plxnative-hud-text-metrics.json",
@@ -99,6 +99,8 @@ const DIAG: [&str; 51] = [
     "plxnative-cpuprof",
     "plxnative-anim",
     "plxnative-remote",
+    "plxnative-api",
+    "state.json",
     "plxnative-capture",
     "plxnative-noidle",
     // The focus fingerprint ([`crate::focusprobe`]). Diagnostic for `noidle`'s reason and one of
@@ -1003,6 +1005,11 @@ mod tests {
     }
 
     #[cfg(feature = "devtriggers")]
+    #[test]
+    fn control_socket_trigger_does_not_change_interactive_boot() {
+        assert!(super::DIAG.contains(&"plxnative-api"));
+    }
+
     #[test]
     fn storage_diagnostics_is_never_an_armed_trigger() {
         let _serial = plx_base::testlock::serial();
