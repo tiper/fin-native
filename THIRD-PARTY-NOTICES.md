@@ -34,20 +34,20 @@ they no longer do, because the TV's version moves with the firmware (libavformat
 
 | Shipped file | Upstream | Licence |
 |---|---|---|
-| `libavutil-plx.so.61`, `libavcodec-plx.so.63`, `libavformat-plx.so.63` | FFmpeg **9.0.2**, unmodified | LGPL-2.1-or-later |
+| `libavutil-plx.so.61`, `libavcodec-plx.so.63`, `libavformat-plx.so.63` | FFmpeg **9.1**, unmodified | LGPL-2.1-or-later |
 
 **These libraries are covered by the GNU Lesser General Public License, version 2.1 or later.** A
 complete copy of that licence is supplied with this package at `licenses/LGPL-2.1.txt`.
 
 **Complete corresponding source.** The exact upstream tarball these were built from —
-`ffmpeg-9.0.2.tar.xz`, sha256 `8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e`,
+`ffmpeg-9.1.tar.xz`, sha256 `1a4d394ae63d190a526cd052eb4415c156b5c5e2df37efab41a7de0b8fde2433`,
 from <https://ffmpeg.org/releases/> — is attached to every PlxNative release alongside the `.ipk`.
 The sources are **unmodified**: no patches are applied. The complete configure invocation that
 produced them, including every enabled component, is `ci/build-ffmpeg.sh` in the PlxNative
 repository, which is also attached to each release. The attached script takes the version, the
 digest and the tarball from its environment, so it needs no network and none of the manifest
 tooling: from a checkout of the release's tag (or its source bundle), with the attached tarball,
-`FFMPEG_VERSION=9.0.2 FFMPEG_SHA256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e FFMPEG_TARBALL=/path/to/ffmpeg-9.0.2.tar.xz ci/build-ffmpeg.sh`
+`FFMPEG_VERSION=9.1 FFMPEG_SHA256=1a4d394ae63d190a526cd052eb4415c156b5c5e2df37efab41a7de0b8fde2433 FFMPEG_TARBALL=/path/to/ffmpeg-9.1.tar.xz ci/build-ffmpeg.sh`
 (the script also reads the checkout's `ci/arm-cc.py` and `ci/check-link-evidence.py`, which it
 has always done).
 
@@ -631,7 +631,7 @@ of a bundled copy alone does not establish that no obligation applies.
 
 | Library | Version on this build | Licence | Note |
 |---|---|---|---|
-| FFmpeg (libavformat / libavcodec / libavutil) | **9.0.2, shipped in this package** | LGPL-2.1-or-later | See section 1.1 |
+| FFmpeg (libavformat / libavcodec / libavutil) | **9.1, shipped in this package** | LGPL-2.1-or-later | See section 1.1 |
 | GLib | 2.48.2 | LGPL-2.1-or-later | See section 1 |
 | GNU C Library | 2.24 | LGPL-2.1-or-later | See section 1 |
 | SDL2 (LG fork) | 2.0.4 | Zlib | Copyright (C) 1997-2016 Sam Lantinga |
