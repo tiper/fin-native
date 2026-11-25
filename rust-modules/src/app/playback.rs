@@ -461,7 +461,7 @@ pub(super) fn start_playback_with<R: PlaybackResources>(
     bridge: &mut super::bridge::Bridge,
     resources: &mut R,
 ) -> bool {
-    publish_live_banner(ps, bridge.livetv_view().channels);
+    publish_live_banner(ps, bridge.livetv_view().channels, bridge.wall());
     let entering = resources.prepare_start(ps, pa, resume_ns);
     if entering {
         enter_player(pages, bridge, from, ret);
@@ -502,18 +502,23 @@ fn live_channel<'a>(ps: &plx_media::route::PlaybackSession, channels: &'a [plx_d
     channels.iter().enumerate().find(|(_, ch)| ch.sid == sid && ch.dvr == live.dvr && ch.channel == live.channel)
 }
 
-/// Refresh the existing HUD caption from the current guide, including a programme rollover.
-pub(super) fn publish_live_banner(ps: &mut plx_media::route::PlaybackSession, channels: &[plx_data::livetv::Channel]) {
+/// Refresh the existing HUD caption from the current guide, including a programme rollover, and
+/// its time line from the frame's published `wall` time (`Bridge::wall`): the same
+/// `plx_ui::fmt::airing_line` every Live TV surface words an airing with, re-worded when the wall
+/// second changes. No wall time (a replay) is no time line, never a guessed one.
+pub(super) fn publish_live_banner(ps: &mut plx_media::route::PlaybackSession, channels: &[plx_data::livetv::Channel],
+    wall: Option<plx_ui::fmt::Wall>)
+{
     let Some((_, ch)) = live_channel(ps, channels) else {
         plx_media::route::set_live_info(ps, None);
         plx_media::route::set_live_context(ps, "");
         return;
     };
-    if plx_media::route::live_info(ps).is_some_and(|info| &info.channel == ch) { return; }
-    let local_airing = (ch.begins_at > 0 && ch.ends_at > ch.begins_at).then(|| {
-        Some((super::clock::local_end_time(ch.begins_at)?, super::clock::local_end_time(ch.ends_at)?))
-    }).flatten();
-    plx_media::route::set_live_info(ps, Some(plx_media::route::LiveInfo { channel: ch.clone(), local_airing }));
+    let airing_at_s = wall.map_or(0, |wall| wall.unix_s);
+    if plx_media::route::live_info(ps).is_some_and(|info| &info.channel == ch && info.airing_at_s == airing_at_s) { return; }
+    let airing = wall.and_then(|wall| plx_ui::fmt::airing_line(
+        plx_ui::fmt::Airing::Banner, ch.begins_at, ch.ends_at, wall.unix_s, i64::from(wall.utc_offset_s)));
+    plx_media::route::set_live_info(ps, Some(plx_media::route::LiveInfo { channel: ch.clone(), airing, airing_at_s }));
     let context = match (ch.vcn.is_empty(), ch.now.is_empty()) {
         (false, false) => plx_os::i18n::msg::widgets_live_channel_context(&ch.vcn, &ch.now),
         (false, true) => ch.vcn.clone(),

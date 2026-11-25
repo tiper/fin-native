@@ -5,7 +5,11 @@
 //! (`run::publish_frame` -> `Bridge::publish_today`); a screen that words a date ("Today",
 //! "Yesterday") RECEIVES it as `AppViews::today` (`LibraryLike::today`) and reads no clock, the way
 //! a frame's time arrives on a `Tick`. `unix_ms()` is the playback estimate's wall-clock input: it
-//! samples the platform at most every five seconds and advances from monotonic frame ticks. `now()` reads
+//! samples the platform at most every five seconds and advances from monotonic frame ticks. `wall()`
+//! is the loop's one publication of it for the screens (`run::publish_frame` ->
+//! `Bridge::publish_wall` -> `AppViews::wall`, read through `LiveTvLike::wall` / `PlayerLike::wall`):
+//! its Unix second and the OS zone's UTC offset at it, read once a minute, from which every clock
+//! face and "22m left" is derived by the pure functions in `plx_ui::fmt`. `now()` reads
 //! `SDL_GetTicks` — the only call site of it in `app/`
 //! (the §15.2 gate: `SDL_GetTicks(` only in the clock and the instruments) — unless a replay has
 //! set the frame's recorded tick, in which case every read in the frame answers that tick: the
@@ -41,6 +45,8 @@ thread_local! {
     /// A wall-clock Unix sample and its monotonic frame tick; advanced between five-second refreshes.
     static UNIX: Cell<Option<(u32, Option<i64>)>> = const { Cell::new(None) };
     static LOCAL_END: Cell<Option<(i64, Option<[i32; 2]>)>> = const { Cell::new(None) };
+    /// The last read of the OS zone's UTC offset and the minute (of the frame clock) it was read in.
+    static OFFSET: Cell<Option<(u32, Option<i32>)>> = const { Cell::new(None) };
 }
 
 /// The date every replay frame answers: a recording has no calendar of its own, and a fixed one keeps
@@ -98,6 +104,60 @@ pub(crate) fn local_end_time(seconds: i64) -> Option<[i32; 2]> {
     })
 }
 
+/// **The wall time of this frame** for the loop to publish (`run::publish_frame` ->
+/// `Bridge::publish_wall` -> `AppViews::wall`): the Unix second of [`unix_ms`] (the one wall-clock
+/// door, so this frame's value is the one the Live TV store's `now` is taken from) and the OS zone's
+/// UTC offset at it, read at most once a minute of the frame clock ([`now`]) like [`today`]. A clock
+/// change (daylight saving) is therefore noticed within a minute. `None` where [`unix_ms`] answers
+/// none (a replay) or the zone cannot be read: a clock face is never guessed. **Only the loop calls
+/// it**; a screen receives the publication and reads no clock.
+pub(crate) fn wall() -> Option<plx_ui::fmt::Wall> {
+    plx_base::step::assert_io_allowed("app::clock::wall");
+    let unix_s = unix_ms()?.div_euclid(1_000);
+    let minute = now() / 60_000;
+    let utc_offset_s = match OFFSET.with(|c| c.get()) {
+        Some((at, offset)) if at == minute => offset,
+        _ => {
+            let offset = local_utc_offset(unix_s);
+            OFFSET.with(|c| c.set(Some((minute, offset))));
+            offset
+        }
+    }?;
+    Some(plx_ui::fmt::Wall { unix_s, utc_offset_s })
+}
+
+/// **The OS zone's UTC offset at a Unix second**, in seconds east of UTC (daylight saving included),
+/// derived from the two reads the os layer already has: the local hour:minute
+/// ([`plx_os::i18n::local_clock_time`]) minus the UTC one, plus a day when the local calendar date
+/// ([`plx_os::i18n::local_calendar_date`]) is not the UTC one. The date is what tells +13 from -11
+/// and +14 from -10, which an hour:minute alone cannot. Whole-minute offsets only (every zone in
+/// use). Two zone reads: [`wall`] caches the answer for a minute, and nothing else calls this.
+fn local_utc_offset(unix_s: i64) -> Option<i32> {
+    utc_offset_between(unix_s, plx_os::i18n::local_clock_time(unix_s)?, plx_os::i18n::local_calendar_date(unix_s)?)
+}
+
+/// [`local_utc_offset`] from the reads it is made of, so the arithmetic is testable without a zone.
+/// The seconds of the minute are the same in the local and the UTC face, so they cancel. An answer
+/// beyond a day's travel from UTC is a face that cannot belong to `unix_s`: `None`.
+fn utc_offset_between(unix_s: i64, [hour, minute]: [i32; 2], [year, month, day]: [i32; 3]) -> Option<i32> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) { return None; }
+    let utc_second = unix_s.rem_euclid(86_400);
+    let local_second = i64::from(hour) * 3_600 + i64::from(minute) * 60 + utc_second % 60;
+    let local_day = days_from_civil(year, month, day);
+    let offset = (local_day - unix_s.div_euclid(86_400)) * 86_400 + local_second - utc_second;
+    (offset.abs() <= 15 * 3_600).then(|| i32::try_from(offset).ok()).flatten()
+}
+
+/// Days since 1970-01-01 of a proleptic Gregorian civil date (Howard Hinnant's `days_from_civil`).
+fn days_from_civil(year: i32, month: i32, day: i32) -> i64 {
+    let y = i64::from(year) - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let year_of_era = y - era * 400;
+    let day_of_year = (153 * (i64::from(month) + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 /// Advance a sampled wall-clock timestamp by monotonic frame time, or ask for a fresh sample once
 /// the cache is five seconds old. Wrapping subtraction keeps SDL's 32-bit tick rollover safe.
 fn advance_unix_ms(sampled_at: u32, sampled: Option<i64>, tick: u32) -> Option<Option<i64>> {
@@ -142,7 +202,7 @@ mod tests {
         super::set_replay(4242);
         let _allowed = plx_base::task::allow_blocking(const { &plx_base::task::BlockingLabel::new("fixture") });
         let step = plx_base::step::StepScope::enter();
-        for read in [|| { super::now(); }, || { super::unix_ms(); }, || { super::today(); }] {
+        for read in [|| { super::now(); }, || { super::unix_ms(); }, || { super::today(); }, || { super::wall(); }] {
             assert!(std::panic::catch_unwind(read).is_err());
         }
         drop(step);
@@ -200,6 +260,116 @@ mod tests {
         bridge.publish_today(None);
         assert_eq!(seen(&bridge), None, "a publication of nothing is nothing");
         super::REPLAY.with(|c| c.set(None));
+    }
+
+    #[test]
+    fn a_published_wall_time_reaches_a_screen_through_its_views_and_no_clock() {
+        use crate::app::bridge::{AppHost, Bridge};
+        use plx_machine::machine::{EntryId, InputOwner, Tick};
+        use plx_screens::registry::{LiveTvLike, PlayerLike};
+        use plx_ui::dispatch::CxParts;
+        use plx_ui::fmt::Wall;
+        let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+        let mut bridge = owner.bridge();
+        let parts = CxParts { modal: Default::default(), page_image: Default::default(), hold_hint: Default::default(), tick: Tick::default(), press: Default::default(), focus: Default::default(),
+            owner: InputOwner::Entry(EntryId(0)) };
+        // What a screen sees, through both host traits that carry it.
+        let seen = |bridge: &Bridge| {
+            let cx = parts.cx::<AppHost>(
+                bridge.views_with(plx_media::route::idle_session_for_test()), &plx_ui::fixture::FixtureMeasure);
+            (<AppHost as LiveTvLike>::wall(&cx), <AppHost as PlayerLike>::wall(&cx))
+        };
+        let wall = Wall { unix_s: 1_795_649_400, utc_offset_s: 3_600 };
+        assert_eq!(bridge.views().wall, None);
+        assert_eq!(seen(&bridge), (None, None), "before the loop's first publication the host has no time");
+        bridge.publish_wall(Some(wall));
+        assert_eq!(bridge.views().wall, Some(wall));
+        assert_eq!(bridge.wall(), Some(wall));
+        assert_eq!(seen(&bridge), (Some(wall), Some(wall)), "a screen receives the published time");
+        // The host reads no clock for it: a replay (which has no wall clock) changes nothing it answers.
+        super::set_replay(100);
+        assert_eq!(super::unix_ms(), None);
+        assert_eq!(super::wall(), None, "the door itself answers nothing under a replay");
+        assert_eq!(seen(&bridge), (Some(wall), Some(wall)), "the answer is the publication, not the door");
+        bridge.publish_wall(None);
+        assert_eq!(seen(&bridge), (None, None), "a publication of nothing is nothing");
+        super::REPLAY.with(|c| c.set(None));
+    }
+
+    #[test]
+    fn the_utc_offset_is_the_local_face_minus_the_utc_face_with_the_day_difference_kept() {
+        use super::utc_offset_between as offset;
+        // 2026-11-25 23:30:00 UTC.
+        const T: i64 = 1_795_649_400;
+        assert_eq!(offset(T, [23, 30], [2026, 11, 25]), Some(0));
+        assert_eq!(offset(T, [0, 30], [2026, 11, 26]), Some(3_600), "past UTC midnight");
+        assert_eq!(offset(T, [17, 30], [2026, 11, 25]), Some(-6 * 3_600));
+        assert_eq!(offset(T, [5, 0], [2026, 11, 26]), Some(19_800), "a half-hour zone");
+        assert_eq!(offset(T + 15, [5, 0], [2026, 11, 26]), Some(19_800), "the seconds are the same in both");
+        // 2026-11-26 00:10 UTC is still the 25th for the Americas.
+        assert_eq!(offset(1_795_651_800, [19, 10], [2026, 11, 25]), Some(-5 * 3_600));
+        // 2026-01-01 00:00 UTC is the evening of the year's last day there.
+        assert_eq!(offset(1_767_225_600, [19, 0], [2025, 12, 31]), Some(-5 * 3_600));
+        // The zones a day apart from their opposites: +13 is not -11, +14 is not -10.
+        assert_eq!(offset(1_767_268_800, [1, 0], [2026, 1, 2]), Some(13 * 3_600), "2026-01-01 12:00 UTC");
+        assert_eq!(offset(1_767_312_000, [13, 0], [2026, 1, 1]), Some(-11 * 3_600), "2026-01-02 00:00 UTC");
+        assert_eq!(offset(1_767_268_800, [2, 0], [2026, 1, 2]), Some(14 * 3_600));
+        // A face the calendar cannot have, or a day no zone is, is no offset.
+        assert_eq!(offset(T, [0, 30], [2026, 13, 26]), None);
+        assert_eq!(offset(T, [0, 30], [2026, 11, 29]), None, "four days ahead is not a zone");
+    }
+
+    #[test]
+    fn the_utc_offset_follows_the_os_timezone_including_its_clock_changes() {
+        const CHILD: &str = "PLX_LOCAL_UTC_OFFSET_CASE";
+        if let Ok(zone) = std::env::var(CHILD) {
+            let hours = |h: i32| h * 3_600;
+            let cases: &[(i64, i32)] = match zone.as_str() {
+                "UTC" => &[(1_795_649_400, 0)],
+                // Spring-forward: 01:59:59 CET (+1) is followed by 03:00 CEST (+2); fall-back at 01:00 UTC.
+                "Europe/Madrid" => &[(1_774_745_999, hours(1)), (1_774_746_000, hours(2)), (1_792_889_999, hours(2)), (1_792_890_000, hours(1))],
+                "Asia/Kolkata" => &[(1_795_649_400, 19_800)],
+                "America/Los_Angeles" => &[(1_795_651_800, hours(-8))],
+                "Pacific/Auckland" => &[(1_767_268_800, hours(13))],
+                "Pacific/Pago_Pago" => &[(1_767_312_000, hours(-11))],
+                "Pacific/Kiritimati" => &[(1_767_268_800, hours(14))],
+                other => panic!("no cases for {other}"),
+            };
+            for &(at, want) in cases {
+                assert_eq!(super::local_utc_offset(at), Some(want), "{zone} at {at}");
+            }
+            assert_eq!(super::local_utc_offset(0), None);
+            assert_eq!(super::local_utc_offset(i64::MAX), None);
+            return;
+        }
+        let name = format!("{}::the_utc_offset_follows_the_os_timezone_including_its_clock_changes",
+            module_path!().split_once("::").unwrap().1);
+        for zone in ["UTC", "Europe/Madrid", "Asia/Kolkata", "America/Los_Angeles", "Pacific/Auckland", "Pacific/Pago_Pago", "Pacific/Kiritimati"] {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &name, "--test-threads=1"])
+                .env("TZ", zone).env(CHILD, zone).output().unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && stdout.contains("1 passed"),
+                "the UTC offset failed under {zone}:\n{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+
+    #[test]
+    fn the_wall_door_pairs_the_wall_second_with_an_offset_read_once_a_minute() {
+        super::REPLAY.with(|c| c.set(None));
+        super::UNIX.with(|c| c.set(Some((0, Some(1_795_649_400_999)))));
+        super::OFFSET.with(|c| c.set(None));
+        let live = super::wall().expect("a platform clock and zone");
+        assert_eq!(live.unix_s, 1_795_649_400, "whole seconds of the frame's wall clock");
+        assert_eq!(live.utc_offset_s, super::local_utc_offset(1_795_649_400).unwrap());
+        super::OFFSET.with(|c| c.set(Some((0, Some(-4_500)))));
+        assert_eq!(super::wall().map(|w| w.utc_offset_s), Some(-4_500), "within the minute the zone is not read again");
+        super::OFFSET.with(|c| c.set(Some((7, Some(-4_500)))));
+        assert_eq!(super::wall().map(|w| w.utc_offset_s), Some(live.utc_offset_s), "a new minute reads it again");
+        super::UNIX.with(|c| c.set(Some((0, None))));
+        assert_eq!(super::wall(), None, "no wall clock, no wall time");
+        super::OFFSET.with(|c| c.set(None));
+        super::UNIX.with(|c| c.set(None));
     }
 
     #[test]

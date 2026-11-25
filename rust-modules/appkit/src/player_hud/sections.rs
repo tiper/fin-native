@@ -119,9 +119,7 @@ pub(super) fn text_of(f: &Frame<'_>, bind: &str) -> Option<String> {
 fn live_summary(info: &plx_media::route::LiveInfo) -> String {
     let mut lines = Vec::new();
     if !info.channel.now.is_empty() { lines.push(info.channel.now.clone()); }
-    if let Some(([start_h, start_m], [end_h, end_m])) = info.local_airing {
-        lines.push(format!("{start_h:02}:{start_m:02} – {end_h:02}:{end_m:02}"));
-    }
+    if let Some(airing) = &info.airing { lines.push(airing.clone()); }
     if !info.channel.now_summary.is_empty() { lines.push(info.channel.now_summary.clone()); }
     lines.join("\n")
 }

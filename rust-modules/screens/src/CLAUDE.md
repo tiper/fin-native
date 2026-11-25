@@ -296,7 +296,11 @@ episode view's cards are 4 columns wide, wider than a poster, so no value gains 
 input, not a read:** a screen reads no clock and fetches no date; the application's loop publishes the
 calendar date once per frame (`Bridge::publish_today`, read from the platform at most once a minute through
 `app::clock::today`, the loop its one caller) and `LibraryLike::today` hands it in from the frame's views,
-and `CaptionCache` keys its labels on it so "Today" rebuilds at midnight. The Under posters page's picture
+and `CaptionCache` keys its labels on it so "Today" rebuilds at midnight. **The time of day is the same kind of
+input:** the loop publishes the wall-clock second and the zone's UTC offset once per frame
+(`Bridge::publish_wall`, from `app::clock::wall`), a page receives them as `LiveTvLike::wall`, the player's banner as
+`PlayerLike::wall`, and every clock face, "22m left" and progress fraction is derived from them by the pure
+`plx_ui::fmt::airing_line` / `left` / `frac` (`None` under a replay: no clock face, never a guessed one). The Under posters page's picture
 illustrates the mode as a library sorted by Year while the Sort value row has focus: each sample's own year
 (through `registry::sort_info::year_value`, the Year sort's own wording) replaces its caption lines (`RootPicture::sorted`; the details pickers never preview it). The picture never adds sort choices.
 

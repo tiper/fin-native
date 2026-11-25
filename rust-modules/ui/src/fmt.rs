@@ -164,6 +164,95 @@ pub fn footer_left_minutes_in(cx: &LocaleContext, mins: i64) -> String {
     if h > 0 { msg::core_footer_left_hours_in(cx, h, m) } else { msg::core_footer_left_minutes_in(cx, m) }
 }
 
+/// **Wall-clock time as one frame's publication**: Unix seconds and the viewer's UTC offset in
+/// seconds, the pair every clock face, "22m left" and progress fraction is derived from. The app
+/// publishes it once per iteration (`AppViews::wall`) from its one wall-clock door; a screen
+/// receives it and reads no clock, the way it receives `today`. Whole-minute offsets only, which
+/// is every zone in use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Wall {
+    pub unix_s: i64,
+    pub utc_offset_s: i32,
+}
+
+/// Which surface an airing's line is worded for: the two shapes differ in what a recent start says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Airing {
+    /// A Recent-channels tile's label: "Started 4 min ago · 1h 18m left", else "21:00–22:00 · 22m left".
+    Tile,
+    /// The player banner's time line: "21:37–22:39 · Started 1 min ago", else "21:00–22:00 · 22m left".
+    Banner,
+}
+
+/// Minutes after its start a programme still counts as "just started" (whole minutes: the tenth
+/// minute lasts until the eleventh begins).
+const JUST_STARTED_MINUTES: i64 = 10;
+
+/// Whether the guide gave a programme an airing at all: both ends known and in order.
+fn has_airing(begin: i64, end: i64) -> bool {
+    begin > 0 && end > begin
+}
+
+/// How far into its airing `now` is, `0.0..=1.0`: the amber bar's and the banner progress's input.
+/// `None` for an airing the guide does not have.
+pub fn frac(begin: i64, end: i64, now: i64) -> Option<f32> {
+    has_airing(begin, end).then(|| (now.clamp(begin, end) - begin) as f32 / (end - begin) as f32)
+}
+
+/// **Time left of an airing**, in the form that follows a middle dot ([`footer_left_minutes_in`], the
+/// `core.footer_left_*` strings: an airing's line says it after "21:00–22:00 ·", where the caption
+/// wording of [`time_left_minutes_in`] is sentence-initial in several languages, "Noch 22 min"):
+/// "22m left", "1h 18m left" (never "1h 18m" zero-padded), rounded up to the next whole minute. `None` once `now` has reached `end`:
+/// a programme that is over has no time left, and the guide re-read replaces it within seconds.
+pub fn left_in(cx: &LocaleContext, end: i64, now: i64) -> Option<String> {
+    let remaining = end.checked_sub(now).filter(|r| *r > 0)?;
+    Some(footer_left_minutes_in(cx, remaining.saturating_add(59) / 60))
+}
+
+/// [`left_in`] in the thread's locale.
+pub fn left(end: i64, now: i64) -> Option<String> {
+    left_in(plx_os::i18n::current(), end, now)
+}
+
+/// A Unix instant as the viewer's clock face (`offset_s` seconds east of UTC), in the television's
+/// clock style: "21:00" or "9:00 PM".
+fn face_in(cx: &LocaleContext, unix_s: i64, offset_s: i64) -> Option<String> {
+    let second_of_day = unix_s.checked_add(offset_s)?.rem_euclid(86_400);
+    cx.time_of_day([i32::try_from(second_of_day / 3_600).ok()?, i32::try_from(second_of_day % 3_600 / 60).ok()?])
+}
+
+/// **The one line that words an airing against the clock**, for either surface ([`Airing`]):
+/// within ten minutes of the start it says how long ago it started, otherwise the clock times
+/// and how long is left. `begin`/`end`/`now` are Unix seconds and `offset_s` the viewer's UTC offset
+/// (all four from the frame's [`Wall`] and the guide); the function reads no clock. `None` for an
+/// airing the guide does not have. Both clock times use the one offset published for `now`, so an airing
+/// that spans a daylight-saving change draws its far end an hour off (stated in the plan, D1). At and after `end` there is no time left, so the line is the
+/// clock times alone.
+pub fn airing_line_in(cx: &LocaleContext, surface: Airing, begin: i64, end: i64, now: i64, offset_s: i64) -> Option<String> {
+    if !has_airing(begin, end) {
+        return None;
+    }
+    // The generated accessor takes its arguments in name order: end, then start.
+    let range = msg::core_airing_range_in(cx, &face_in(cx, end, offset_s)?, &face_in(cx, begin, offset_s)?);
+    let started = now.checked_sub(begin).filter(|s| *s >= 0).map(|s| s / 60).filter(|m| *m <= JUST_STARTED_MINUTES);
+    let ago = started.map(|minutes| msg::core_airing_started_in(cx, minutes));
+    let left = left_in(cx, end, now);
+    let pair = |first: String, second: Option<String>| match second {
+        Some(second) => msg::core_airing_pair_in(cx, &first, &second),
+        None => first,
+    };
+    Some(match (surface, ago) {
+        (Airing::Tile, Some(ago)) => pair(ago, left),
+        (Airing::Banner, Some(ago)) => pair(range, Some(ago)),
+        (_, None) => pair(range, left),
+    })
+}
+
+/// [`airing_line_in`] in the thread's locale.
+pub fn airing_line(surface: Airing, begin: i64, end: i64, now: i64, offset_s: i64) -> Option<String> {
+    airing_line_in(plx_os::i18n::current(), surface, begin, end, now, offset_s)
+}
+
 /// **The episode tag that leads a still's footer line**, with its trailing middle dot: `"S2 E4 ·"`
 /// (`core.footer_tag`, so a language spells the letters and the order itself). A number that is not
 /// positive is no number ([`episode_address_in`]'s rule), so an episode with only one of the two
@@ -666,5 +755,166 @@ pub fn rating_suffix(scale: RatingScale) -> &'static str {
     match scale {
         RatingScale::OutOfTen => "/10",
         RatingScale::Percent => "",
+    }
+}
+
+#[cfg(test)]
+mod airing_tests {
+    use super::{airing_line_in, footer_left_minutes_in, frac, left_in, time_left_minutes_in, Airing};
+    use plx_os::i18n::{LocaleContext, Preference};
+
+    /// English on a 24-hour television clock, whatever this host's own locale says.
+    fn en24() -> LocaleContext { LocaleContext::resolve(Preference::En, None, None, Some("24"), None) }
+
+    /// 2026-11-25 21:00:00 UTC.
+    const NINE_PM: i64 = 1_795_640_400;
+    const MIN: i64 = 60;
+
+    fn line(surface: Airing, begin: i64, end: i64, now: i64, offset: i64) -> Option<String> {
+        airing_line_in(&en24(), surface, begin, end, now, offset)
+    }
+
+    #[test]
+    fn the_tile_caption_counts_from_the_start_for_ten_minutes_then_reads_the_clock() {
+        let (begin, end) = (NINE_PM, NINE_PM + 82 * MIN);
+        for (after, want) in [
+            (0, "Started 0 min ago \u{b7} 1h 22m left"),
+            (1, "Started 1 min ago \u{b7} 1h 21m left"),
+            (10, "Started 10 min ago \u{b7} 1h 12m left"),
+            (11, "21:00\u{2013}22:22 \u{b7} 1h 11m left"),
+            (60, "21:00\u{2013}22:22 \u{b7} 22m left"),
+        ] {
+            assert_eq!(line(Airing::Tile, begin, end, begin + after * MIN, 0).as_deref(), Some(want), "{after} min in");
+        }
+        // The seconds of the tenth minute still read as ten; the eleventh is the clock.
+        assert_eq!(line(Airing::Tile, begin, end, begin + 10 * MIN + 59, 0).as_deref(), Some("Started 10 min ago \u{b7} 1h 12m left"));
+    }
+
+    #[test]
+    fn the_banner_line_says_when_it_started_and_then_how_long_is_left() {
+        let (begin, end) = (NINE_PM + 37 * MIN, NINE_PM + 99 * MIN);
+        for (after, want) in [
+            (0, "21:37\u{2013}22:39 \u{b7} Started 0 min ago"),
+            (1, "21:37\u{2013}22:39 \u{b7} Started 1 min ago"),
+            (10, "21:37\u{2013}22:39 \u{b7} Started 10 min ago"),
+            (11, "21:37\u{2013}22:39 \u{b7} 51m left"),
+        ] {
+            assert_eq!(line(Airing::Banner, begin, end, begin + after * MIN, 0).as_deref(), Some(want), "{after} min in");
+        }
+        let (begin, end) = (NINE_PM, NINE_PM + 60 * MIN);
+        assert_eq!(line(Airing::Banner, begin, end, begin + 38 * MIN, 0).as_deref(), Some("21:00\u{2013}22:00 \u{b7} 22m left"));
+    }
+
+    #[test]
+    fn time_left_is_hours_and_minutes_from_an_hour_and_whole_minutes_rounded_up_below_it() {
+        let cx = en24();
+        let end = NINE_PM + 3_600;
+        assert_eq!(left_in(&cx, end, end - 22 * MIN).as_deref(), Some("22m left"));
+        assert_eq!(left_in(&cx, end, end - 22 * MIN + 1).as_deref(), Some("22m left"), "rounded up to the next minute");
+        assert_eq!(left_in(&cx, end, end - 60 * MIN).as_deref(), Some("1h 0m left"));
+        assert_eq!(left_in(&cx, end, end - 61 * MIN).as_deref(), Some("1h 1m left"));
+        assert_eq!(left_in(&cx, end, end - 1).as_deref(), Some("1m left"));
+        assert_eq!(left_in(&cx, end, end), None, "nothing is left of a programme at its end");
+        assert_eq!(left_in(&cx, end, end + 5), None);
+    }
+
+    /// The "left" part sits after a middle dot, so it is the language's footer wording
+    /// (`core.footer_left_*`), not the sentence-initial caption wording ("Noch 22 min", "Осталось 22 мин"),
+    /// in every shipped language: the tail of the line is that locale's `footer_left` for the same minutes,
+    /// and differs from `time_left` wherever the two wordings differ.
+    #[test]
+    fn the_left_part_after_the_dot_is_the_footer_wording_of_each_language() {
+        let (begin, end) = (NINE_PM, NINE_PM + 82 * MIN);
+        let mut differing = 0;
+        for pref in plx_os::i18n::SHIPPED {
+            let tag = pref.tag();
+            let cx = LocaleContext::resolve(pref, None, None, Some("24"), None);
+            // (surface, minutes into the airing, minutes still left)
+            for (surface, into, left) in [(Airing::Tile, 2, 80), (Airing::Tile, 60, 22), (Airing::Banner, 21, 61)] {
+                let line = airing_line_in(&cx, surface, begin, end, begin + into * MIN, 0).expect(tag);
+                let tail = line.rsplit_once(" \u{b7} ").map(|(_, tail)| tail).unwrap_or_else(|| panic!("{tag}: no dot in {line:?}"));
+                assert_eq!(tail, footer_left_minutes_in(&cx, left), "{tag}: {surface:?} {into} min in: {line:?}");
+                let caption = time_left_minutes_in(&cx, left);
+                if caption != tail {
+                    differing += 1;
+                    assert!(!line.ends_with(&caption), "{tag}: {line:?} ends in the caption wording {caption:?}");
+                }
+            }
+        }
+        assert!(differing > 0, "no shipped language words the footer differently from the caption: the test would pin nothing");
+    }
+
+    /// The footer wording itself, pinned for the two languages whose caption form differs most from it.
+    #[test]
+    fn the_footer_wording_of_german_and_russian_is_pinned() {
+        let (begin, end) = (NINE_PM, NINE_PM + 82 * MIN);
+        for (tag, started, minutes, hours) in [
+            ("de", "Vor 2 Min. gestartet \u{b7} noch 1 Std. 20 Min.", "21:00\u{2013}22:22 \u{b7} noch 22 Min.", "21:00\u{2013}22:22 \u{b7} noch 1 Std. 1 Min."),
+            ("ru", "Началось 2 мин назад \u{b7} осталось 1 ч 20 мин", "21:00\u{2013}22:22 \u{b7} осталось 22 мин", "21:00\u{2013}22:22 \u{b7} осталось 1 ч 1 мин"),
+        ] {
+            let pref = plx_os::i18n::SHIPPED.into_iter().find(|l| l.tag() == tag).expect(tag);
+            let cx = LocaleContext::resolve(pref, None, None, Some("24"), None);
+            assert_eq!(airing_line_in(&cx, Airing::Tile, begin, end, begin + 2 * MIN, 0).as_deref(), Some(started), "{tag}");
+            assert_eq!(airing_line_in(&cx, Airing::Tile, begin, end, begin + 60 * MIN, 0).as_deref(), Some(minutes), "{tag}");
+            assert_eq!(airing_line_in(&cx, Airing::Banner, begin, end, begin + 21 * MIN, 0).as_deref(), Some(hours), "{tag}");
+        }
+    }
+
+    #[test]
+    fn at_the_end_the_line_is_the_clock_alone() {
+        let (begin, end) = (NINE_PM, NINE_PM + 3_600);
+        for surface in [Airing::Tile, Airing::Banner] {
+            assert_eq!(line(surface, begin, end, end, 0).as_deref(), Some("21:00\u{2013}22:00"), "{surface:?}");
+            assert_eq!(line(surface, begin, end, end + 30, 0).as_deref(), Some("21:00\u{2013}22:00"), "{surface:?}");
+        }
+    }
+
+    #[test]
+    fn an_airing_the_guide_does_not_have_has_no_line_and_no_fraction() {
+        for (begin, end) in [(0, 0), (NINE_PM, 0), (0, NINE_PM), (NINE_PM, NINE_PM), (NINE_PM + 60, NINE_PM)] {
+            for surface in [Airing::Tile, Airing::Banner] {
+                assert_eq!(line(surface, begin, end, NINE_PM + 5, 0), None, "{begin}..{end}");
+            }
+            assert_eq!(frac(begin, end, NINE_PM + 5), None, "{begin}..{end}");
+        }
+    }
+
+    #[test]
+    fn the_clock_is_the_published_offset_across_midnight_in_both_directions() {
+        // 2026-11-25 23:30:00 UTC, an hour long.
+        let begin = NINE_PM + 150 * MIN;
+        let end = begin + 3_600;
+        let now = begin + 30 * MIN;
+        assert_eq!(line(Airing::Banner, begin, end, now, 3_600).as_deref(), Some("00:30\u{2013}01:30 \u{b7} 30m left"), "UTC+1 reads past midnight");
+        assert_eq!(line(Airing::Banner, begin, end, now, 0).as_deref(), Some("23:30\u{2013}00:30 \u{b7} 30m left"), "the airing itself crosses midnight");
+        assert_eq!(line(Airing::Banner, begin, end, now, -6 * 3_600).as_deref(), Some("17:30\u{2013}18:30 \u{b7} 30m left"));
+        // Before the epoch's first midnight the day count is negative; the clock still reads right.
+        assert_eq!(line(Airing::Banner, 3_600, 7_200, 5_000, -2 * 3_600).as_deref(), Some("23:00\u{2013}00:00 \u{b7} 37m left"));
+        // A half-hour zone.
+        assert_eq!(line(Airing::Banner, begin, end, now, 19_800).as_deref(), Some("05:00\u{2013}06:00 \u{b7} 30m left"));
+    }
+
+    #[test]
+    fn the_fraction_is_how_far_into_the_airing_now_is_and_stays_in_range() {
+        let (begin, end) = (NINE_PM, NINE_PM + 3_600);
+        assert_eq!(frac(begin, end, begin), Some(0.0));
+        assert_eq!(frac(begin, end, begin + 900), Some(0.25));
+        assert_eq!(frac(begin, end, end), Some(1.0));
+        assert_eq!(frac(begin, end, begin - 100), Some(0.0), "before it starts");
+        assert_eq!(frac(begin, end, end + 100), Some(1.0), "after it ends");
+    }
+
+    #[test]
+    fn every_shipped_language_words_the_line_and_keeps_its_own_left() {
+        for language in plx_os::i18n::SHIPPED {
+            let _g = plx_os::i18n::language_on_this_thread_for_test(language);
+            let tag = language.tag();
+            let (begin, end) = (NINE_PM, NINE_PM + 3_600);
+            let started = super::airing_line(Airing::Tile, begin, end, begin + 2 * MIN, 0).expect(tag);
+            assert!(started.contains(" \u{b7} ") && !started.contains('{'), "{tag}: {started:?}");
+            assert!(started.contains('2'), "{tag}: the minutes are said: {started:?}");
+            let later = super::airing_line(Airing::Banner, begin, end, begin + 38 * MIN, 0).expect(tag);
+            assert!(later.ends_with(&super::left(end, begin + 38 * MIN).unwrap()), "{tag}: {later:?}");
+        }
     }
 }

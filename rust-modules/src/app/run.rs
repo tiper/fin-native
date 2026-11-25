@@ -388,10 +388,13 @@ fn poll_player_release(app: &mut App) {
 /// which this call is the one caller of: it answers [`clock::REPLAY_DATE`] under a replay (the
 /// recorded tick is set at the top of the iteration) and the platform's date, read at most once a
 /// minute, otherwise. A screen then receives the date through `AppViews::today` and reads no clock.
+/// The wall-clock time ([`super::bridge::Bridge::publish_wall`], from [`clock::wall`], this call
+/// being that door's one caller too) goes out the same way as `AppViews::wall`: nothing under a replay.
 fn publish_frame(bridge: &mut super::bridge::Bridge, session: &plx_media::route::PlaybackSession,
     was_player: bool, viewer_paused: Option<bool>) {
     bridge.publish_playback(session, was_player || plx_media::route::is_preview(session), viewer_paused);
     bridge.publish_today(clock::today());
+    bridge.publish_wall(clock::wall());
 }
 
 /// **The frame's clock and the click's spring** (spec §3.3 step 3's head).
@@ -831,7 +834,7 @@ fn begin_product_frame(app: &mut App) -> Frame {
 /// Current transport/marker facts before the dispatcher's input/Tick, refreshed again for draw.
 fn publish_player_model(app: &mut App) {
     let bridge = app.runtime.bridge(&mut app.bridge);
-    super::playback::publish_live_banner(&mut app.player.session, bridge.livetv_view().channels);
+    super::playback::publish_live_banner(&mut app.player.session, bridge.livetv_view().channels, bridge.wall());
     let mut model = hud_model(&app.player.session, bridge.metadata_view(),
         app.adapters.player.backend_viewer_paused().unwrap_or(false),
         matches!(app.rec, super::recorder::Recplay::Off) && !bridge.is_controlled_replay()

@@ -11009,7 +11009,13 @@ pub fn live_request(ps: &PlaybackSession) -> Option<(ServerId, &LiveTune)> {
 /// Guide facts the app publishes for the channel this player is tuned to.
 pub struct LiveInfo {
     pub channel: plx_data::livetv::Channel,
-    pub local_airing: Option<([i32; 2], [i32; 2])>,
+    /// The banner's time line for this airing ("21:37–22:39 · Started 1 min ago"), worded by the
+    /// app from the frame's published wall time (`plx_ui::fmt::airing_line`); `None` where the
+    /// guide gave no airing or there is no wall time (a replay).
+    pub airing: Option<String>,
+    /// The wall-clock second `airing` was worded for (0 when there was no wall time), so the app
+    /// words it again when the second changes and not on every frame.
+    pub airing_at_s: i64,
 }
 
 pub fn live_info(ps: &PlaybackSession) -> Option<&LiveInfo> {
