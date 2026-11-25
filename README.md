@@ -205,6 +205,26 @@ hardware I most need help with. Feature ideas go to [Discussions >
 Ideas](https://github.com/plxnative/plx-native/discussions/categories/ideas). Security issues go
 through [`SECURITY.md`](SECURITY.md) rather than a public issue.
 
+## Building on PlxNative
+
+Clients for other servers and other kinds of television app have been built from this code, and
+that is welcome. If you do the same:
+
+- **Licence.** Your app is a derived work under [GPL-3.0-or-later](LICENSE): publish the matching
+  source next to every binary you ship ([`LICENSING.md`](LICENSING.md) has the details).
+- **Your own name.** Ship it under your own name, icon and splash; the PlxNative name and artwork
+  are not part of the grant ([`TRADEMARKS.md`](TRADEMARKS.md)).
+- **Credit.** Say in your README that it is built on PlxNative, with a link back here, and keep
+  the copyright and third-party notices.
+- **Where the reusable parts are.** The UI stack is the `base`, `machine`, `os`, `gfx` and `ui`
+  crates under `rust-modules/`. [`docs/module-layers.md`](docs/module-layers.md) says what each
+  layer holds, and [`rust-modules/ui/src/CLAUDE.md`](rust-modules/ui/src/CLAUDE.md) is the guide
+  to the widgets, focus and motion.
+- **No stable API.** These crates are this app's internals. They are not published, carry no
+  version, and change whenever the app needs them to, so build from a commit you have pinned.
+- **Support.** I can't debug derived apps. A fix that also applies here is welcome as a pull
+  request.
+
 ## Acknowledgements
 
 Error monitoring for PlxNative is sponsored by [Sentry](https://sentry.io/for/good/).
