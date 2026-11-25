@@ -1214,7 +1214,7 @@ impl BrowseState {
                     return true;
                 }
             }
-            if source.machine_id != machine_of(keys, source.sid) { return true; }
+            if source.machine_id != keys.machine_of(source.sid).unwrap_or("") { return true; }
             if let Some(facts) = keys.facts(source.sid).and_then(|facts| facts.described) {
                 if (source.name.is_empty() && !facts.name.is_empty())
                     || source.handle != facts.handle || source.owned != facts.owned
@@ -2790,7 +2790,7 @@ impl BrowseState {
                         reclassified = true;
                         changes += 1;
                     }
-                    let machine_id = machine_of(keys, sid);
+                    let machine_id = keys.machine_of(sid).unwrap_or("");
                     if source.machine_id != machine_id {
                         source.machine_id.clear();
                         source.machine_id.push_str(machine_id);
@@ -2816,7 +2816,7 @@ impl BrowseState {
                     self.sources.push(BrowseSource {
                         sid,
                         client_key: keys.key(sid),
-                        machine_id: machine_of(keys, sid).to_owned(),
+                        machine_id: keys.machine_of(sid).unwrap_or("").to_owned(),
                         owned, home, owner_id,
                         household: owned
                             || (home && !input.session.home_users.iter().any(|user| user.id != 0))
@@ -3877,23 +3877,6 @@ pub const TAB_KINDS: [SecKind; 2] = [SecKind::Movie, SecKind::Show];
 // to honour it — `install_pms` calls [`reset`], discovery re-runs, and [`resolve_pins_from`] reads the
 // NEW profile's record — which is exactly why the resolve is a whole-table function rather than a
 // per-row default applied once at append.
-
-/// **The current profile's persisted answer, as last read from disk** — the half of the selection
-/// the section table cannot express.
-///
-/// The table only ever holds sources that have answered, while Home/Library/Search/Onboard
-/// enumerate the granted roster asynchronously. During that window a share can have no row here;
-/// `pms::feeds_home` must still recover its recorded answer by machine identity.
-/// Their answer is on disk keyed by machine, which is exactly the join that settles it.
-///
-/// `None` means "nothing has been read yet", never "nothing was recorded" — the same distinction
-/// [`library_pins`] and `Session::home_pins` both turn on. Written by [`resolve_pins_from`] and
-/// [`record_pins_from`], cleared by [`reset`]; never read from the file per frame.
-
-/// One source's `machineIdentifier` as the registry knows it, `""` while nobody has learned it.
-fn machine_of(keys: &ClientKeys, sid: ServerId) -> &str {
-    keys.facts(sid).map_or("", |facts| facts.machine_id.as_str())
-}
 
 /// The section table as the pin rules see it, in table order.
 // ---- the Sources list's data, projected ------------------------------------------------------

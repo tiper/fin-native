@@ -1,8 +1,7 @@
 //! The physical owner of the Live TV model. Its outbox is drained in the same call that steps it.
 use crate::livetv::{LiveTvState, LiveTvView};
-pub use crate::livetv::LiveTvCmd;
+pub use crate::livetv::{LiveTvCmd, LiveTvInput};
 use plx_machine::machine::{Cx, Effects, Handled, Host, Machine};
-use plx_plex::plex::ClientKeys;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 #[derive(Default)]
@@ -21,13 +20,19 @@ impl LiveTvStore {
         self.notice_dirty.swap(false, Ordering::Relaxed).then(|| self.gen())
     }
     pub fn view(&self) -> LiveTvView<'_> { self.state.view() }
-    pub fn run(&mut self, cmd: LiveTvCmd, gate: &plx_machine::landgate::Gate, keys: &ClientKeys, now: i64) -> bool {
-        let changed = self.state.run(cmd, gate, keys, now);
+    pub fn run(&mut self, cmd: LiveTvCmd, gate: &plx_machine::landgate::Gate, input: &LiveTvInput<'_>) -> bool {
+        let changed = self.state.run(cmd, gate, input);
         if changed { self.bump(); }
         changed
     }
-    pub fn pump(&mut self, gate: &plx_machine::landgate::Gate, keys: &ClientKeys, now: i64) -> bool {
-        let changed = self.state.pump(gate, keys, now);
+    pub fn pump(&mut self, gate: &plx_machine::landgate::Gate, input: &LiveTvInput<'_>) -> bool {
+        let changed = self.state.pump(gate, input);
+        if changed { self.bump(); }
+        changed
+    }
+    /// A tune with nobody seated, for the session's Recent ([`LiveTvState::note_unseated`]).
+    pub fn note_unseated(&mut self, key: crate::livetv::RecentKey, input: &LiveTvInput<'_>) -> bool {
+        let changed = self.state.note_unseated(key, input);
         if changed { self.bump(); }
         changed
     }

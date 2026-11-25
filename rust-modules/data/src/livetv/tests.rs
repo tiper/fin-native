@@ -5,6 +5,11 @@ fn sid(n: u16) -> ServerId { ServerId::from_raw(n) }
 fn keys(n: u16) -> ClientKeys {
     ClientKeys::from_keys((0..n).map(|n| (sid(n), ClientKey { instance: n as u32 + 1, token: 1, grant: 1 })))
 }
+fn input(keys: &ClientKeys, now: i64) -> LiveTvInput<'_> {
+    LiveTvInput { keys, now: Some(now), recent: RecentSeat::Unseated }
+}
+fn pump(stores: &mut Stores, keys: &ClientKeys, now: i64) -> bool { stores.livetv_pump(&input(keys, now)) }
+fn run(stores: &mut Stores, cmd: LiveTvCmd, keys: &ClientKeys, now: i64) -> bool { stores.livetv_run(cmd, &input(keys, now)) }
 fn take(stores: &mut Stores) -> (Job<LiveTvReq>, LiveTvPort) {
     let mut jobs = stores.take_jobs_of(StoreId::LiveTv);
     assert_eq!(jobs.len(), 1);
@@ -29,7 +34,7 @@ fn answer(stores: &mut Stores, result: Option<Vec<Guide>>) {
 fn livetv_initial_job_and_ready_publication_keep_the_whole_sorted_lineup() {
     let mut stores = Stores::default();
     let keys = keys(2);
-    assert!(!stores.livetv_pump(&keys, 100));
+    assert!(!pump(&mut stores, &keys, 100));
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Loading);
     let jobs = stores.take_jobs_of(StoreId::LiveTv);
     assert_eq!(jobs.len(), 2, "every registered server is asked, independently of Home");
@@ -44,7 +49,7 @@ fn livetv_initial_job_and_ready_publication_keep_the_whole_sorted_lineup() {
         let numbers: Vec<_> = (1..=30).rev().map(|n| (n + sid.raw() as i32 * 30).to_string()).collect();
         finish_with(&port, job.addr, job.req, |_| Some(complete(vec![guide(&numbers.iter().map(String::as_str).collect::<Vec<_>>(), 200)])));
     }
-    assert!(stores.livetv_pump(&keys, 100));
+    assert!(pump(&mut stores, &keys, 100));
     let view = stores.livetv_view();
     assert_eq!(view.status, LiveTvStatus::Ready);
     assert_eq!(view.channels.len(), 60, "no 24-card cap on the lineup");
@@ -57,7 +62,7 @@ fn livetv_initial_job_and_ready_publication_keep_the_whole_sorted_lineup() {
     assert_eq!(channel_name_of(&view.tiles[0]), Some("Channel"));
     let revision = view.revision();
     assert!(stores.take_notices().iter().any(|(id, _)| *id == StoreId::LiveTv));
-    assert!(!stores.livetv_pump(&keys, 100));
+    assert!(!pump(&mut stores, &keys, 100));
     assert_eq!(stores.livetv_view().revision(), revision);
     assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty());
     assert!(stores.take_notices().is_empty());
@@ -66,20 +71,20 @@ fn livetv_initial_job_and_ready_publication_keep_the_whole_sorted_lineup() {
 #[test]
 fn livetv_subchannel_numbers_publish_in_guide_order() {
     let mut stores = Stores::default(); let keys = keys(1);
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     answer(&mut stores, Some(vec![guide(&["10.1", "2.1", "2"], 200)]));
-    assert!(stores.livetv_pump(&keys, 100));
+    assert!(pump(&mut stores, &keys, 100));
     assert_eq!(stores.livetv_view().channels.iter().map(|c| c.vcn.as_str()).collect::<Vec<_>>(), ["2", "2.1", "10.1"]);
 }
 
 #[test]
 fn livetv_answered_no_dvr_is_empty_and_does_not_retry() {
     let mut stores = Stores::default(); let keys = keys(1);
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     answer(&mut stores, Some(Vec::new()));
-    assert!(stores.livetv_pump(&keys, 100));
+    assert!(pump(&mut stores, &keys, 100));
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Empty);
-    for _ in 0..RETRY_FRAMES + 1 { stores.livetv_pump(&keys, 500); }
+    for _ in 0..RETRY_FRAMES + 1 { pump(&mut stores, &keys, 500); }
     assert!(!stores.has_jobs());
 }
 
@@ -87,28 +92,28 @@ fn livetv_answered_no_dvr_is_empty_and_does_not_retry() {
 fn livetv_failure_and_refusal_back_off_and_retry_once() {
     for refusal in [false, true] {
         let mut stores = Stores::default(); let keys = keys(1);
-        stores.livetv_pump(&keys, 100);
+        pump(&mut stores, &keys, 100);
         let (job, port) = take(&mut stores);
         if refusal { port.refused(job.addr); } else { finish_with(&port, job.addr, job.req, |_| None); }
-        assert!(stores.livetv_pump(&keys, 100));
+        assert!(pump(&mut stores, &keys, 100));
         assert_eq!(stores.livetv_view().status, LiveTvStatus::Failed);
         for _ in 0..RETRY_FRAMES - 1 {
-            stores.livetv_pump(&keys, 100);
+            pump(&mut stores, &keys, 100);
             assert!(!stores.has_jobs(), "no per-frame launch loop");
         }
-        stores.livetv_pump(&keys, 100);
+        pump(&mut stores, &keys, 100);
         let (job, port) = take(&mut stores);
         assert!(matches!(job.req.work, Work::Discover));
         port.refused(job.addr);
         // A second failure in a row waits twice as long before the next read.
         for _ in 0..2 * RETRY_FRAMES {
-            stores.livetv_pump(&keys, 100);
+            pump(&mut stores, &keys, 100);
             assert!(!stores.has_jobs(), "the wait doubles after a second failure");
         }
-        stores.livetv_pump(&keys, 100);
+        pump(&mut stores, &keys, 100);
         let (job, port) = take(&mut stores);
         finish_with(&port, job.addr, job.req, |_| Some(complete(vec![guide(&["1"], 200)])));
-        stores.livetv_pump(&keys, 100);
+        pump(&mut stores, &keys, 100);
         assert_eq!(stores.livetv_view().status, LiveTvStatus::Ready);
     }
 }
@@ -118,38 +123,38 @@ fn livetv_missing_key_marks_failed_without_emitting_or_spinning() {
     let mut keys = ClientKeys::default();
     keys.refill_roster(ServerId::UNSET, 1, 1, [sid(0)], |_| None, |_| None, |_| None);
     let mut stores = Stores::default();
-    assert!(stores.livetv_pump(&keys, 100));
+    assert!(pump(&mut stores, &keys, 100));
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Failed);
-    for _ in 0..RETRY_FRAMES { stores.livetv_pump(&keys, 100); assert!(!stores.has_jobs()); }
+    for _ in 0..RETRY_FRAMES { pump(&mut stores, &keys, 100); assert!(!stores.has_jobs()); }
 }
 
 #[test]
 fn livetv_airing_end_emits_one_grid_only_refresh_and_failure_keeps_lineup() {
     let mut stores = Stores::default(); let keys = keys(1);
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     answer(&mut stores, Some(vec![guide(&["10", "2"], 200)]));
-    stores.livetv_pump(&keys, 199);
+    pump(&mut stores, &keys, 199);
     assert!(!stores.has_jobs());
-    stores.livetv_pump(&keys, 200);
+    pump(&mut stores, &keys, 200);
     let (job, port) = take(&mut stores);
     assert!(matches!(&job.req.work, Work::Grid(g) if g.dvr == "7" && g.channels.len() == 2));
     assert_eq!(job.req.now, 200);
-    for _ in 0..5 { stores.livetv_pump(&keys, 210); assert!(!stores.has_jobs()); }
+    for _ in 0..5 { pump(&mut stores, &keys, 210); assert!(!stores.has_jobs()); }
     finish_with(&port, job.addr, job.req, |_| None);
     let previous = stores.livetv_view().channels.to_vec();
     let revision = stores.livetv_view().revision();
-    stores.livetv_pump(&keys, 210);
+    pump(&mut stores, &keys, 210);
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Ready);
     assert_eq!(stores.livetv_view().channels, previous);
     assert_eq!(stores.livetv_view().revision(), revision);
-    for _ in 0..RETRY_FRAMES - 1 { stores.livetv_pump(&keys, 210); assert!(!stores.has_jobs()); }
-    stores.livetv_pump(&keys, 210);
+    for _ in 0..RETRY_FRAMES - 1 { pump(&mut stores, &keys, 210); assert!(!stores.has_jobs()); }
+    pump(&mut stores, &keys, 210);
     let (job, port) = take(&mut stores);
     assert!(matches!(job.req.work, Work::Grid(_)));
     let mut next = guide(&["10", "2"], 300);
     next.channels[0].now = "Next show".into();
     finish_with(&port, job.addr, job.req, |_| Some(complete(vec![next])));
-    assert!(stores.livetv_pump(&keys, 211));
+    assert!(pump(&mut stores, &keys, 211));
     assert!(stores.livetv_view().revision() > revision);
     assert_eq!(stores.livetv_view().channels.len(), 2);
     assert!(stores.livetv_view().channels.iter().any(|c| c.now == "Next show"));
@@ -162,45 +167,45 @@ fn livetv_airing_end_emits_one_grid_only_refresh_and_failure_keeps_lineup() {
 #[test]
 fn livetv_consecutive_grid_failures_double_the_wait_and_a_good_read_resets_it() {
     let mut stores = Stores::default(); let keys = keys(1);
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     answer(&mut stores, Some(vec![guide(&["10"], 200)]));
-    stores.livetv_pump(&keys, 200);
+    pump(&mut stores, &keys, 200);
     // Each failed read lands on one pump, then waits `frames` pumps for the next job.
     let fail_then_wait = |stores: &mut Stores, frames: u32, now: i64| {
         let (job, port) = take(stores);
         assert!(matches!(job.req.work, Work::Grid(_)));
         finish_with(&port, job.addr, job.req, |_| None);
-        stores.livetv_pump(&keys, now);
+        pump(stores, &keys, now);
         for _ in 0..frames - 1 {
-            stores.livetv_pump(&keys, now);
+            pump(stores, &keys, now);
             assert!(!stores.has_jobs(), "the grid is not asked again inside {frames} frames");
         }
-        stores.livetv_pump(&keys, now);
+        pump(stores, &keys, now);
     };
     fail_then_wait(&mut stores, RETRY_FRAMES, 210);
     fail_then_wait(&mut stores, 2 * RETRY_FRAMES, 210);
     fail_then_wait(&mut stores, 4 * RETRY_FRAMES, 210);
     for _ in 0..RETRY_DOUBLINGS { let (job, port) = take(&mut stores); port.refused(job.addr);
-        for _ in 0..=RETRY_FRAMES << RETRY_DOUBLINGS { stores.livetv_pump(&keys, 210); } }
+        for _ in 0..=RETRY_FRAMES << RETRY_DOUBLINGS { pump(&mut stores, &keys, 210); } }
     let (job, port) = take(&mut stores);
     port.refused(job.addr);
-    stores.livetv_pump(&keys, 210);
+    pump(&mut stores, &keys, 210);
     for _ in 0..(RETRY_FRAMES << RETRY_DOUBLINGS) - 1 {
-        stores.livetv_pump(&keys, 210);
+        pump(&mut stores, &keys, 210);
         assert!(!stores.has_jobs(), "the wait is capped, not shortened");
     }
-    stores.livetv_pump(&keys, 210);
+    pump(&mut stores, &keys, 210);
     // The good read goes through the production `read`, whose own answer starts the count over: a
     // hand-built guide here would carry `strikes: 0` whatever `read` did.
     let io = Script::new();
     execute(&mut stores, &io);
     assert_eq!(io.calls.borrow().as_slice(), ["grid:tv.plex.providers.epg.xmltv:7:210"]);
-    stores.livetv_pump(&keys, 210);
+    pump(&mut stores, &keys, 210);
     assert!(!stores.has_jobs(), "a good read is not retried");
     // Past whatever the good read scheduled, the grid is due again; its next failure waits the
     // first step, not the cap it had reached.
     const LATER: i64 = 1_000_000;
-    stores.livetv_pump(&keys, LATER);
+    pump(&mut stores, &keys, LATER);
     fail_then_wait(&mut stores, RETRY_FRAMES, LATER);
     assert!(stores.has_jobs());
 }
@@ -210,7 +215,7 @@ fn livetv_fanout_bounds_requests_and_eventually_asks_every_registered_server() {
     let mut stores = Stores::default(); let keys = keys(11);
     let mut seen = Vec::new();
     for _ in 0..4 {
-        stores.livetv_pump(&keys, 100);
+        pump(&mut stores, &keys, 100);
         let jobs = stores.take_jobs_of(StoreId::LiveTv);
         assert!(jobs.len() <= crate::stores::fanout::WIDTH);
         for job in jobs {
@@ -227,21 +232,21 @@ fn livetv_fanout_bounds_requests_and_eventually_asks_every_registered_server() {
 #[test]
 fn livetv_panicking_worker_answers_failure_and_reset_orphans_the_old_port() {
     let mut stores = Stores::default(); let keys = keys(1);
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     let (job, port) = take(&mut stores);
     finish_with(&port, job.addr, job.req, |_| panic!("read panicked"));
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Failed);
-    stores.livetv_run(LiveTvCmd::Retry, &keys, 100);
+    run(&mut stores, LiveTvCmd::Retry, &keys, 100);
     let (old, old_port) = take(&mut stores);
-    stores.livetv_run(LiveTvCmd::Reset, &keys, 100);
+    run(&mut stores, LiveTvCmd::Reset, &keys, 100);
     let (new, new_port) = take(&mut stores);
     assert_ne!(old_port, new_port);
     finish_with(&old_port, old.addr, old.req, |_| Some(complete(vec![guide(&["1"], 200)])));
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Loading);
     finish_with(&new_port, new.addr, new.req, |_| Some(complete(Vec::new())));
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Empty);
 }
 
@@ -286,16 +291,16 @@ fn execute(stores: &mut Stores, io: &Script) {
 fn livetv_missing_initial_grid_preserves_lineup_and_retries_only_the_grid() {
     let mut stores = Stores::default(); let keys = keys(1); let io = Script::new();
     io.fail_grid.set(true);
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     execute(&mut stores, &io);
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Ready);
     assert_eq!(stores.livetv_view().channels[0].now, "");
     assert_eq!(stores.livetv_view().channels[0].now_thumb, "/logo");
     io.fail_grid.set(false); io.calls.borrow_mut().clear();
-    for _ in 0..RETRY_FRAMES { stores.livetv_pump(&keys, 101); }
+    for _ in 0..RETRY_FRAMES { pump(&mut stores, &keys, 101); }
     execute(&mut stores, &io);
-    stores.livetv_pump(&keys, 101);
+    pump(&mut stores, &keys, 101);
     assert_eq!(io.calls.borrow().as_slice(), ["grid:tv.plex.providers.epg.xmltv:7:101"]);
     assert_eq!(stores.livetv_view().channels[0].now, "Programme");
     assert_eq!(stores.livetv_view().channels[0].now_thumb, "/programme");
@@ -305,9 +310,9 @@ fn livetv_missing_initial_grid_preserves_lineup_and_retries_only_the_grid() {
 fn livetv_empty_successful_grid_is_sampled_again_when_programming_can_begin() {
     let mut stores = Stores::default(); let keys = keys(1); let mut io = Script::new();
     io.empty_grid = true;
-    stores.livetv_pump(&keys, 100); execute(&mut stores, &io); stores.livetv_pump(&keys, 100);
-    stores.livetv_pump(&keys, 159); assert!(!stores.has_jobs());
-    stores.livetv_pump(&keys, 160);
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    pump(&mut stores, &keys, 159); assert!(!stores.has_jobs());
+    pump(&mut stores, &keys, 160);
     let (job, port) = take(&mut stores);
     assert!(matches!(job.req.work, Work::Grid(_)));
     port.refused(job.addr);
@@ -317,31 +322,31 @@ fn livetv_empty_successful_grid_is_sampled_again_when_programming_can_begin() {
 fn livetv_one_failed_dvr_lineup_does_not_drop_the_dvr_that_answered() {
     let mut stores = Stores::default(); let keys = keys(1); let mut io = Script::new();
     io.second_dvr = true; io.fail_lineup.set(true);
-    stores.livetv_pump(&keys, 100); execute(&mut stores, &io); stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Ready);
     assert_eq!(stores.livetv_view().channels.len(), 1);
     assert_eq!(stores.livetv_view().channels[0].dvr, "7");
     io.fail_lineup.set(false);
-    for _ in 0..RETRY_FRAMES { stores.livetv_pump(&keys, 101); }
-    execute(&mut stores, &io); stores.livetv_pump(&keys, 101);
+    for _ in 0..RETRY_FRAMES { pump(&mut stores, &keys, 101); }
+    execute(&mut stores, &io); pump(&mut stores, &keys, 101);
     assert_eq!(stores.livetv_view().channels.len(), 2);
 }
 
 #[test]
 fn livetv_refreshes_the_earliest_expired_dvr_and_reset_removal_notifies() {
     let mut stores = Stores::default(); let keys = keys(1);
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     let first = guide(&["10"], 250);
     let mut earlier = guide(&["2"], 200); earlier.dvr = "8".into();
     earlier.channels[0].dvr = "8".into(); earlier.provider = "tv.plex.providers.epg.xmltv:8".into();
-    answer(&mut stores, Some(vec![first, earlier])); stores.livetv_pump(&keys, 100);
-    stores.livetv_pump(&keys, 300);
+    answer(&mut stores, Some(vec![first, earlier])); pump(&mut stores, &keys, 100);
+    pump(&mut stores, &keys, 300);
     let (job, port) = take(&mut stores);
     assert!(matches!(&job.req.work, Work::Grid(g) if g.dvr == "8"));
     port.refused(job.addr);
     stores.take_notices();
     let revision = stores.livetv_view().revision();
-    assert!(stores.livetv_run(LiveTvCmd::Reset, &keys, 300));
+    assert!(run(&mut stores, LiveTvCmd::Reset, &keys, 300));
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Loading);
     assert!(stores.livetv_view().channels.is_empty());
     assert!(stores.livetv_view().revision() > revision);
@@ -351,10 +356,10 @@ fn livetv_refreshes_the_earliest_expired_dvr_and_reset_removal_notifies() {
 #[test]
 fn livetv_reset_with_no_keys_clears_the_publication_and_notifies() {
     let mut stores = Stores::default(); let keys = keys(1);
-    stores.livetv_pump(&keys, 100); answer(&mut stores, Some(vec![guide(&["2"], 200)]));
-    stores.livetv_pump(&keys, 100); stores.take_notices();
+    pump(&mut stores, &keys, 100); answer(&mut stores, Some(vec![guide(&["2"], 200)]));
+    pump(&mut stores, &keys, 100); stores.take_notices();
     let revision = stores.livetv_view().revision();
-    assert!(stores.livetv_run(LiveTvCmd::Reset, &ClientKeys::default(), 101));
+    assert!(run(&mut stores, LiveTvCmd::Reset, &ClientKeys::default(), 101));
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Loading);
     assert!(stores.livetv_view().channels.is_empty());
     assert!(stores.livetv_view().revision() > revision);
@@ -364,16 +369,16 @@ fn livetv_reset_with_no_keys_clears_the_publication_and_notifies() {
 #[test]
 fn livetv_a_failed_grid_does_not_starve_another_expired_dvr() {
     let mut stores = Stores::default(); let keys = keys(1);
-    stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100);
     let first = guide(&["1"], 200);
     let mut second = guide(&["2"], 250); second.dvr = "8".into();
     second.channels[0].dvr = "8".into();
-    answer(&mut stores, Some(vec![first, second])); stores.livetv_pump(&keys, 100);
-    stores.livetv_pump(&keys, 300);
+    answer(&mut stores, Some(vec![first, second])); pump(&mut stores, &keys, 100);
+    pump(&mut stores, &keys, 300);
     let (job, port) = take(&mut stores);
     assert!(matches!(&job.req.work, Work::Grid(g) if g.dvr == "7"));
     finish_with(&port, job.addr, job.req, |_| None);
-    stores.livetv_pump(&keys, 300);
+    pump(&mut stores, &keys, 300);
     let (job, port) = take(&mut stores);
     assert!(matches!(&job.req.work, Work::Grid(g) if g.dvr == "8"));
     port.refused(job.addr);
@@ -383,11 +388,11 @@ fn livetv_a_failed_grid_does_not_starve_another_expired_dvr() {
 fn livetv_a_successful_empty_lineup_retires_channels_during_partial_discovery() {
     let mut stores = Stores::default(); let keys = keys(1); let mut io = Script::new();
     io.second_dvr = true; io.fail_lineup.set(true);
-    stores.livetv_pump(&keys, 100); execute(&mut stores, &io); stores.livetv_pump(&keys, 100);
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
     assert_eq!(stores.livetv_view().channels.len(), 1);
     io.empty_lineup = true;
-    for _ in 0..RETRY_FRAMES { stores.livetv_pump(&keys, 101); }
-    execute(&mut stores, &io); stores.livetv_pump(&keys, 101);
+    for _ in 0..RETRY_FRAMES { pump(&mut stores, &keys, 101); }
+    execute(&mut stores, &io); pump(&mut stores, &keys, 101);
     assert!(stores.livetv_view().channels.is_empty());
 }
 
@@ -395,8 +400,8 @@ fn livetv_a_successful_empty_lineup_retires_channels_during_partial_discovery() 
 fn livetv_partial_discovery_does_not_block_an_expired_known_guide() {
     let mut stores = Stores::default(); let keys = keys(1); let mut io = Script::new();
     io.second_dvr = true; io.fail_lineup.set(true);
-    stores.livetv_pump(&keys, 100); execute(&mut stores, &io); stores.livetv_pump(&keys, 100);
-    stores.livetv_pump(&keys, 151);
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    pump(&mut stores, &keys, 151);
     let (job, port) = take(&mut stores);
     assert!(matches!(&job.req.work, Work::Grid(g) if g.dvr == "7"));
     port.refused(job.addr);
@@ -418,10 +423,10 @@ fn an_armed_landing_gate_asks_no_live_tv_lineup() {
     let mut stores = Stores::default();
     stores.landgate.arm_recording();
     let keys = keys(2);
-    assert!(!stores.livetv_pump(&keys, 100));
+    assert!(!pump(&mut stores, &keys, 100));
     assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty());
     assert!(stores.livetv_view().channels.is_empty());
     stores.landgate.disarm();
-    assert!(!stores.livetv_pump(&keys, 100));
+    assert!(!pump(&mut stores, &keys, 100));
     assert_eq!(stores.take_jobs_of(StoreId::LiveTv).len(), 2);
 }

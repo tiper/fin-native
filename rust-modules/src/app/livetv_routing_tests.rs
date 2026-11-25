@@ -115,6 +115,169 @@ fn channel_requests_wrap_the_lineup_and_keep_the_original_return_entry() {
     assert!(!plx_media::route::is_live(&app.player.session));
 }
 
+/// The server admits the tune the rig's plan resolution never makes: the session holds a live session
+/// and the landing notes it, as `run`'s `pump_play` arm does for a real tune.
+fn admit(app: &mut App) {
+    plx_media::route::mark_live_for_test(&mut app.player.session);
+    app.runtime.bridge(&mut app.bridge).note_live_tune(&app.player.session);
+}
+
+/// **Asking for a tune is not noting it.** The rig has no PMS, so no plan ever lands here: a play and
+/// a zap through the real loop's requests note nothing. (A tune the server refuses is the loop test
+/// `a_live_plan_landing_without_an_admitted_tune_notes_nothing`'s, which lands one.)
+#[test]
+fn a_tune_the_server_did_not_admit_joins_no_recent() {
+    let _serial = plx_base::testlock::serial();
+    let _session = plx_plex::plex::session::TempSession::new("livetv-recent-refused");
+    plx_plex::plex::reset_servers_for_test();
+    let mut app = app();
+    let mut now = 0;
+    open_live(&mut app, &mut now);
+    start_channel(&mut app, &mut now);
+    app.repause_at = 50;
+    player_request(&mut app, now, plx_screens::registry::PlayerReq::Channel(1));
+    settle(&mut app, &mut now);
+    assert!(app.runtime.bridge(&mut app.bridge).livetv_view().recent.is_empty(), "nothing was admitted");
+}
+
+/// A live play and every zap are noted in Recent once admitted: the first tune joins, a channel tuned
+/// again does not move, and the newest is at the front. A run with nobody seated keeps the row for
+/// the session only (the memory door refuses the write).
+#[test]
+fn an_admitted_live_play_and_every_zap_are_noted_without_moving_a_known_channel() {
+    let _serial = plx_base::testlock::serial();
+    let _session = plx_plex::plex::session::TempSession::new("livetv-recent-noted");
+    plx_plex::plex::reset_servers_for_test();
+    let mut app = app();
+    let mut now = 0;
+    open_live(&mut app, &mut now);
+    let mut other = channel("101", "Other server");
+    other.sid = plx_plex::plex::ServerId::from_raw(1);
+    app.runtime.bridge(&mut app.bridge).stores.livetv.install_for_test(vec![channel("101", "Family Channel"), channel("102", "Cartoons"), other]);
+    assert!(app.runtime.bridge(&mut app.bridge).livetv_view().recent.is_empty(), "nothing tuned yet");
+    start_channel(&mut app, &mut now);
+    admit(&mut app);
+    for direction in [1, 1, 1, -1] {
+        app.repause_at = 50;
+        player_request(&mut app, now, plx_screens::registry::PlayerReq::Channel(direction));
+        settle(&mut app, &mut now);
+        admit(&mut app);
+    }
+    let bridge = app.runtime.bridge(&mut app.bridge);
+    let row: Vec<_> = bridge.livetv_view().recent.iter().map(|c| (c.sid.raw(), c.name.as_str())).collect();
+    assert_eq!(row, [(1, "Other server"), (0, "Cartoons"), (0, "Family Channel")],
+        "first tuned in the order Family, Cartoons, Other; going back round to Family and Other changes nothing");
+}
+
+/// **The seated profile's Recent survives a restart under another slot assignment.** A tune is
+/// written to the memory door under the server's machine identifier; a later run, whose registry
+/// numbered the servers the other way round, reads the same channel back from the stored list.
+#[test]
+fn recent_is_stored_by_machine_and_read_back_under_another_slot_assignment() {
+    use plx_plex::plex::session::prefs::RecentChannelEntry;
+    let _serial = plx_base::testlock::serial();
+    let session = plx_plex::plex::session::TempSession::new("livetv-recent-persist");
+    session.seated("", "acct");
+    plx_media::route::seed_memory_for_test::<RecentChannelEntry>(&plx_plex::plex::session::Session {
+        client_id: "cid-1".into(), account_token: "acct".into(), ..Default::default() });
+
+    plx_plex::plex::reset_servers_for_test();
+    let a = plx_plex::plex::register_for_test("machine-a", "127.0.0.1", 9, "synthetic", "fixture");
+    {
+        let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+        let mut bridge = owner.bridge();
+        bridge.seat_recent_for_test();
+        bridge.note_recent_for_test(a, "7", "C101");
+    }
+    assert_eq!(plx_media::route::recall_all::<RecentChannelEntry>(""), [RecentChannelEntry::new("machine-a", "7", "C101")],
+        "stored by machine identifier, never by slot");
+
+    // A new run: its registry numbers the servers the other way round, and its store starts empty.
+    plx_plex::plex::reset_servers_for_test();
+    let filler = plx_plex::plex::register_for_test("machine-filler", "127.0.0.1", 10, "synthetic", "fixture");
+    let moved = plx_plex::plex::register_for_test("machine-a", "127.0.0.1", 9, "synthetic", "fixture");
+    assert_ne!(moved, a, "the same server holds another slot");
+    let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+    let mut bridge = owner.bridge();
+    bridge.seat_recent_for_test();
+    bridge.clock_for_test(1_000);
+    bridge.livetv_pump();
+    let mut on_moved = channel("101", "Family Channel");
+    on_moved.sid = moved;
+    on_moved.channel = "C101".into();
+    let mut decoy = on_moved.clone();
+    decoy.sid = filler;
+    bridge.stores.livetv.install_for_test(vec![decoy, on_moved]);
+    bridge.livetv_pump();
+    let row: Vec<_> = bridge.livetv_view().recent.iter().map(|c| c.sid).collect();
+    assert_eq!(row, [moved], "the channel is the one on machine-a, not whatever now holds the old slot");
+}
+
+/// **One list, one cap.** The door's list is the only one: `[A1, A2, A3, B1, B2]` is stored (oldest
+/// first) and server B is not registered, so the row is `[A3, A2, A1]`; tuning A4 makes the door
+/// drain A1 (a hidden entry counts toward the door's five), and the row, right then, is what a
+/// restart would show. The store used to keep a second list of the REGISTERED servers' channels
+/// under its own cap, so it still held A1 after the tune and lost it at the next restore.
+#[test]
+fn a_tune_and_a_restart_show_the_same_row_when_a_server_is_hidden() {
+    use plx_plex::plex::session::prefs::{MemoryEntry, RecentChannelEntry};
+    let _serial = plx_base::testlock::serial();
+    let session = plx_plex::plex::session::TempSession::new("livetv-recent-one-cap");
+    session.seated("", "acct");
+    plx_media::route::seed_memory_for_test::<RecentChannelEntry>(&plx_plex::plex::session::Session {
+        client_id: "cid-1".into(), account_token: "acct".into(), ..Default::default() });
+    plx_plex::plex::reset_servers_for_test();
+    let a = plx_plex::plex::register_for_test("machine-a", "127.0.0.1", 9, "synthetic", "fixture");
+    for (machine, channel) in [("a", "1"), ("a", "2"), ("a", "3"), ("b", "1"), ("b", "2")] {
+        let entry = RecentChannelEntry::new(&format!("machine-{machine}"), "7", &format!("C{machine}{channel}"));
+        plx_media::route::remember::<RecentChannelEntry>("", entry.key(), entry.noted());
+    }
+    let lineup = |bridge: &mut crate::app::bridge::Bridge| {
+        let mut channels = Vec::new();
+        for n in ["1", "2", "3", "4"] {
+            let mut ch = channel(n, &format!("Channel a{n}"));
+            ch.sid = a;
+            ch.channel = format!("Ca{n}");
+            channels.push(ch);
+        }
+        bridge.stores.livetv.install_for_test(channels);
+    };
+    let names = |bridge: &crate::app::bridge::Bridge| -> Vec<String> {
+        bridge.livetv_view().recent.iter().map(|c| c.vcn.clone()).collect()
+    };
+    let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+    let mut bridge = owner.bridge();
+    bridge.seat_recent_for_test();
+    bridge.clock_for_test(1_000);
+    bridge.livetv_pump();
+    lineup(&mut bridge);
+    bridge.livetv_pump();
+    assert_eq!(names(&bridge), ["3", "2", "1"], "server B is hidden, not forgotten");
+    bridge.note_recent_for_test(a, "7", "Ca4");
+    bridge.livetv_pump();
+    assert_eq!(names(&bridge), ["4", "3", "2"], "the door's five are [A2, A3, B1, B2, A4]: A1 went at the tune");
+    let tuned = names(&bridge);
+    drop(bridge);
+    drop(owner);
+    // A restart reads the list from the session record, not from this process's mirror: let the queued
+    // write land in the record, forget the mirror and seed it again from the record, as the handoff's
+    // restore does at the next boot.
+    plx_base::storage_worker::drain_for_test();
+    plx_media::route::unseed_memory_for_test::<RecentChannelEntry>();
+    assert!(plx_media::route::recall_all::<RecentChannelEntry>("").is_empty(), "the mirror is forgotten");
+    plx_media::route::restore_install_rows(&plx_plex::plex::session::peek());
+    assert_eq!(plx_media::route::recall_all::<RecentChannelEntry>("").len(), 5, "the record held the door's five");
+
+    let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+    let mut bridge = owner.bridge();
+    bridge.seat_recent_for_test();
+    bridge.clock_for_test(1_000);
+    bridge.livetv_pump();
+    lineup(&mut bridge);
+    bridge.livetv_pump();
+    assert_eq!(names(&bridge), tuned, "a restart shows the row the tune showed");
+}
+
 #[test]
 fn channel_request_on_nonlive_and_an_empty_or_single_lineup_keeps_the_session() {
     let _serial = plx_base::testlock::serial();

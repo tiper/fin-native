@@ -246,12 +246,16 @@ pub fn person_run(&mut self, cmd: person::PersonCmd, input: &crate::person::Pers
         self.collection.view()
     }
 
-    pub fn livetv_run(&mut self, cmd: livetv::LiveTvCmd, keys: &plx_plex::plex::ClientKeys, now: i64) -> bool {
-        self.livetv.run(cmd, &self.landgate, keys, now)
+    pub fn livetv_run(&mut self, cmd: livetv::LiveTvCmd, input: &livetv::LiveTvInput<'_>) -> bool {
+        self.livetv.run(cmd, &self.landgate, input)
     }
 
-    pub fn livetv_pump(&mut self, keys: &plx_plex::plex::ClientKeys, now: i64) -> bool {
-        self.livetv.pump(&self.landgate, keys, now)
+    pub fn livetv_pump(&mut self, input: &livetv::LiveTvInput<'_>) -> bool {
+        self.livetv.pump(&self.landgate, input)
+    }
+
+    pub fn livetv_note_unseated(&mut self, key: crate::livetv::RecentKey, input: &livetv::LiveTvInput<'_>) -> bool {
+        self.livetv.note_unseated(key, input)
     }
 
     pub fn livetv_view(&self) -> crate::livetv::LiveTvView<'_> { self.livetv.view() }

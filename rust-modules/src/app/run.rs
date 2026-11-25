@@ -388,13 +388,14 @@ fn poll_player_release(app: &mut App) {
 /// which this call is the one caller of: it answers [`clock::REPLAY_DATE`] under a replay (the
 /// recorded tick is set at the top of the iteration) and the platform's date, read at most once a
 /// minute, otherwise. A screen then receives the date through `AppViews::today` and reads no clock.
-/// The wall-clock time ([`super::bridge::Bridge::publish_wall`], from [`clock::wall`], this call
-/// being that door's one caller too) goes out the same way as `AppViews::wall`: nothing under a replay.
+/// The clock reading ([`super::bridge::Bridge::publish_clock`], from [`clock::reading`], this call
+/// being that door's one caller too) goes out the same way, once: the `AppViews::wall` and the Live TV
+/// store's `now` are both taken from it, and it is nothing under a replay.
 fn publish_frame(bridge: &mut super::bridge::Bridge, session: &plx_media::route::PlaybackSession,
     was_player: bool, viewer_paused: Option<bool>) {
     bridge.publish_playback(session, was_player || plx_media::route::is_preview(session), viewer_paused);
     bridge.publish_today(clock::today());
-    bridge.publish_wall(clock::wall());
+    bridge.publish_clock(clock::reading());
 }
 
 /// **The frame's clock and the click's spring** (spec §3.3 step 3's head).
@@ -3007,6 +3008,10 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
                     finish_landed_play(app, matches!(outcome, plx_media::player::ResumeOutcome::Prepared));
                 }
                 if let Some(r) = plx_media::route::pump_play(&mut app.player.session, app.runtime.metadata_mut()) {
+                    // A live channel's plan landing joins the profile's Recent. `pump_play` hands back a
+                    // start only for a plan the server admitted, so a refused tune (all tuners busy, a
+                    // failed one) never gets here: this arm is the gate, and the note has none of its own.
+                    app.runtime.bridge(&mut app.bridge).note_live_tune(&app.player.session);
             app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);
                     app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);
                     // The resolved URI locator is an owned IO result. Install it against the

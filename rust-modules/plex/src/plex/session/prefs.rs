@@ -5,8 +5,8 @@
 //! falling back to the frozen install-wide key beside it, see [`profile_prefs`]), and since A5
 //! every other preference key of the
 //! session (`auto_sign_in`, `last_hero_blur`, `ui_resolution`, `hold_hint_taught`, the two Account-scope lists, the
-//! two per-profile library lists and the two memory-door lists, `track_memory` and
-//! `subtitle_offsets`), that used to be spelled, field for field, in
+//! two per-profile library lists and the three memory-door lists, `track_memory`,
+//! `subtitle_offsets` and `recent_channels`), that used to be spelled, field for field, in
 //! [`Session`] AND in the canonical (DB8) preference record: the struct field, the manual
 //! `Default`, the copy in and out of the canonical form, the getter and a `with_<x>` builder, ten
 //! sites per setting. The one key that remains outside it is `language` (its two forms differ on
@@ -33,8 +33,9 @@
 //! remembered audio and subtitle picks per show ([`TrackMemoryEntry`], in the memory door below).
 //! It is a [`Row`] only, so it has no whole-list `items_mut`: its writes go through
 //! [`ProfileMemory::upsert_with`], which merges, prunes and budgets, never through a `Vec`
-//! assignment. `subtitle_offsets` is the other tenant of the door and is declared the same way
-//! ([`SubtitleOffsetsPref`]).
+//! assignment. `subtitle_offsets` and `recent_channels` (Live TV's per-profile Recent row,
+//! [`RecentChannelEntry`]) are the other tenants of the door and are declared the same way
+//! ([`SubtitleOffsetsPref`], [`RecentChannelsPref`]).
 use super::{
     MarkerSkipMode, DolbyVisionMode, InstantDpadSeeking, UriEngine, DeckPress, DirectPlayMode, HdrOverlayBrightness, LastLibrary, LibraryViews, NativeAudioRefusal, NextEpisodeMode, OpaqueExtensions,
     PlaintextConsent, HoldHintTaught, PlaybackQuality, ServerKeyPin, Session, SkipInterval, SubtitleOffsetEntry, SubtitleOffsets, SubtitlePosition,
@@ -46,6 +47,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 mod profile_prefs;
 #[cfg(test)]
 mod profile_prefs_tests;
+mod recent_channels;
+#[cfg(test)]
+mod recent_channels_tests;
 mod track_memory;
 #[cfg(test)]
 mod track_memory_document_tests;
@@ -55,6 +59,7 @@ pub use profile_prefs::{
     effective, effective_hud, own_prefs, persist_profile_hud, persist_profile_pref, put_own_hud, stored_effective_hud, put_own, stored_effective, ProfilePrefs, ProfilePrefsPref,
     ProfilePrefsRecord, ProfileSetting, ProfileWrite,
 };
+pub use recent_channels::{RecentChannelEntry, RecentChannelsPref, MAX_RECENT};
 pub use track_memory::{
     AudioMemo, SubtitleMemo, SubtitleTrackMemo, TrackMemoryEntry, TrackMemoryPref, CAP as TRACK_MEMORY_CAP,
 };
@@ -340,6 +345,12 @@ pub struct Preferences {
     /// [`ProfileMemory::upsert_with`], which prunes foreign stamps and holds the household budget.
     #[serde(default, deserialize_with = "super::de_soft_vec", skip_serializing_if = "Vec::is_empty")]
     pub track_memory: Vec<ProfileList<TrackMemoryEntry>>,
+    /// **Each profile's Recent channels in Live TV, at most [`MAX_RECENT`]** — see
+    /// [`RecentChannelEntry`]. The Plex server has no such source, so it is kept on this
+    /// television, per profile; never a write to the Plex account. Oldest first, a tenant of the
+    /// memory door like `track_memory` (account-bound, soft-parsed per element, skipped while empty).
+    #[serde(default, deserialize_with = "super::de_soft_vec", skip_serializing_if = "Vec::is_empty")]
+    pub recent_channels: Vec<ProfileList<RecentChannelEntry>>,
     /// **The sync-timing correction a profile last tuned for an item**, per profile, keyed by
     /// (machine id, ratingKey) — never a track id: within one playback a track CHANGE still zeros
     /// the live offset (`route::commit_subtitle_selection`'s own doc), so by the time this is
@@ -713,6 +724,7 @@ pub const DESCRIPTORS: &[Descriptor] = &[
     Descriptor::of::<ProfilePrefsPref>(),
     // The memory-door tenants (lists with no value API).
     Descriptor::of::<TrackMemoryPref>(),
+    Descriptor::of::<RecentChannelsPref>(),
     Descriptor::of::<SubtitleOffsetsPref>(),
 ];
 
@@ -733,10 +745,10 @@ impl Session {
 // ---- the memory door: per-profile, per-item lists ---------------------------------------------
 
 /// **One profile's remembered entries of one kind**, oldest first: the record shape a per-profile
-/// list shares (`subtitle_offsets` and `track_memory`). `{user, items, extensions}` is
+/// list shares (`subtitle_offsets`, `track_memory` and `recent_channels`). `{user, items, extensions}` is
 /// exactly what `subtitle_offsets` was on disk before the door, so a file is read and written
 /// byte for byte as before; `account` is the stamp of an account-bound list and is skipped while
-/// empty. `subtitle_offsets` and `track_memory` are the two tenants, and both are account-bound, so
+/// empty. `subtitle_offsets`, `track_memory` and `recent_channels` are the three tenants, and all are account-bound, so
 /// every record they write carries the stamp. A `subtitle_offsets` file written before it was bound
 /// holds records with none, which the list adopts ([`MemoryEntry::ADOPTS_UNSTAMPED`]) and so stamps
 /// at its next write; a `track_memory` record without one is nobody's.

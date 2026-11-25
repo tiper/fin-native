@@ -506,7 +506,7 @@ a dead source is **absent** from Home and states itself in its own library secti
   at sign-out like every `ACCOUNT_BOUND = true` row in `prefs::DESCRIPTORS`, but their records carry no
   account stamp, so the one login that is not a sign-out, a stored session that could not be activated
   in `app/boot.rs`, would leave them to the next account: `replace_after_reauthentication_guarded_with_outcome`
-  clears both, and the Home pins and recent searches, when the login's owner identity (`owner_identity`, the roster admin's plex.tv id; never the token, which every sign-in mints anew) differs from the stored one or either is unknown), and the two memory-door lists `track_memory` and `subtitle_offsets`), flattened (`#[serde(flatten)] prefs`) into BOTH on-disk
+  clears both, and the Home pins and recent searches, when the login's owner identity (`owner_identity`, the roster admin's plex.tv id; never the token, which every sign-in mints anew) differs from the stored one or either is unknown), and the three memory-door lists `track_memory`, `subtitle_offsets` and `recent_channels`, Live TV's per-profile Recent row), flattened (`#[serde(flatten)] prefs`) into BOTH on-disk
   forms — the legacy file's `Session` and the canonical preference record — declared before each
   form's own `extensions`, so the flatten takes its keys first and the unknown-key map still sees
   only keys nobody models. A new key of that kind is a `Preferences` field (its serde attributes
@@ -539,8 +539,9 @@ a dead source is **absent** from Home and states itself in its own library secti
   the table to the struct (T-fields), to the os layer's `ACCOUNT_BOUND_PREFERENCES` (T-account) and to
   each row's parse policy (T-parse), both ways; a field with no row, or a row with no field, fails
   there.
-  The two memory-door lists (`track_memory`: each profile's remembered audio and subtitle picks per
-  show, `prefs/track_memory.rs`; `subtitle_offsets`) have no `Copy` value and no whole-list accessor:
+  The three memory-door lists (`track_memory`: each profile's remembered audio and subtitle picks per
+  show, `prefs/track_memory.rs`; `subtitle_offsets`; `recent_channels`: Live TV's Recent row, capped
+  at `MAX_RECENT`, written by `Bridge::note_live_tune` through `route::remember`) have no `Copy` value and no whole-list accessor:
   their markers implement `Row` only (not `ListRow`), and they are written only through
   `ProfileMemory::upsert_with`. `track_memory` is account-bound (no stamp, no write; a write prunes
   every other account's record), its entry strings are bounded (an over-long one reads as absent, a
