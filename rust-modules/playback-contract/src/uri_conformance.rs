@@ -61,13 +61,15 @@ pub fn conforms<H: UriHarness>(make: impl Fn() -> H) {
 }
 
 /// A URI driver answers `capabilities(Uri)` with a progressive, pausable, seekable set that asks for no
-/// packet feed and no track disable (the shapes `UriBackend::new` asserts), and answers nothing for the
-/// Feed; its display evidence is internally consistent.
+/// packet feed and no audio disable, and answers nothing for the Feed; its display evidence is internally
+/// consistent. `subtitle_off` is the driver's to state: a pipeline that never selects a text track carries
+/// Off by construction (the Tizen driver), one that shows a default subtitle by itself does not (the webOS
+/// `UriBackend`, whose `new` asserts it false).
 pub fn states_what_it_can_call<H: UriHarness>(harness: &mut H) {
     let driver = harness.driver();
     let caps = driver.capabilities(BackendKind::Uri).expect("a URI driver answers for the URI backend");
     assert!(caps.progressive_uri && caps.pause && caps.seek, "{caps:?}");
-    assert!(!caps.packet_feed && !caps.audio_off && !caps.subtitle_off, "{caps:?}");
+    assert!(!caps.packet_feed && !caps.audio_off, "{caps:?}");
     assert_eq!(driver.capabilities(BackendKind::Feed), None);
     let display: DisplayEvidence = driver.display();
     assert_eq!(display.is_ready(), matches!(display.readiness, crate::uri::DisplayReadiness::Ready));

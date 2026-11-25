@@ -201,7 +201,7 @@ set (H6 stays OPEN: the library's thread, the overlay beneath an alpha window, p
 `rust-modules/platform-tizen/src/player/` holds `TizenUriDriver`, a Sans-IO `DriverSet` + `UriDriver` over a `HostPlayer` port that `hosted` implements: it
 starts no worker and reads no global, its requests go out as `Hosted::player_open` / `player_verb` and every answer returns as one addressed event
 through `drain_player`. Every request and event carries the epoch, and an event of any other epoch (a completion after a stop) is dropped and counted.
-The driver states `progressive_uri`, `pause`, `seek` and `audio_track`, and no HLS, packet feed, subtitle track, audio-off or subtitle-off. `audio_track` has a narrow
+The driver states `progressive_uri`, `pause`, `seek`, `audio_track` and `subtitle_off`, and no HLS, packet feed, subtitle track or audio-off. `subtitle_off` holds by construction: the host never gives the player a subtitle (no `player_set_subtitle_path`, no text-track selection, no subtitle callback), and a `SelectTrack(Subtitle, Off)` is settled without a host call; "Subtitles off" (below) is the emulator run behind it. `audio_track` has a narrow
 meaning: the host ABI has no track verb, and which audio stream the retail player starts on when a source has several is unmeasured, so the qualifier certifies only a
 source with ONE audio stream (`!has_multiple_audio_tracks`, the webOS precedent `ManyAudioTracksExported`); the planner needs the flag because it issues a `SelectTrack`
 for any title whose server-selected audio stream is stated, and the driver settles that request for the one stream **by construction** (there was nothing to choose between), not
@@ -212,7 +212,7 @@ output (`qualify_pms` is Unknown); the codec table behind Standard is still `Cap
 (`player::MEDIA`) replaces `host::NO_MEDIA` in a `uri` build; it installs the driver only when the host's table offers a player and the run is not a controlled
 one, and returns the resolver only when the adapter accepted the driver. It names no LG binding and publishes no default backend.
 
-**The refusal set.** Before the Tizen qualifier is asked, the planner's own preflight (`ResolvePort::refusal`, final for the play) refuses an original for: a selected rate other than 1x; a quality ceiling or Direct play rule; a Plex relay; Auto on a link not known to be local; Boost Dialog or Normalize Loudness (`audio_contract.any()`); a burned subtitle; a client-drawn (sidecar) subtitle; and, most often, **`SubtitleOff`**: the planner sets `subtitle_choice = Off` whenever the item has ANY subtitle stream and none is selected (`plan.rs`), and no driver here can switch the native player's default subtitle off. A selected embedded subtitle fails the driver's `subtitle_track: false`. With no Feed and `qualify_pms` Unknown, each of these ends as the planner's typed `NoQualifiedBackend` refusal, not as a play. So a title plays through this driver only if it has no subtitle streams (or none that the planner treats as unselected), one audio stream, a container and codecs Standard direct-plays, local Auto or a fixed quality, and no audio enhancement. A resolver test pins `subtitle_choice: Off` to `SubtitleOff` and the others to their reasons. **Open measurement:** whether Tizen's native player renders an embedded subtitle when none is set (which would decide whether `SubtitleOff` could be allowed); until it is measured it is NOT allowed.
+**The refusal set.** Before the Tizen qualifier is asked, the planner's own preflight (`ResolvePort::refusal`, final for the play) refuses an original for: a selected rate other than 1x; a quality ceiling or Direct play rule; a Plex relay; Auto on a link not known to be local; Boost Dialog or Normalize Loudness (`audio_contract.any()`); a burned subtitle; and a client-drawn (sidecar) subtitle. `SubtitleOff` (the item has subtitle streams and none is selected, `subtitle_choice = Off` in `plan.rs`) is refused only where the driver's evidence cannot carry Off, so it no longer stops a Tizen play: that refusal ended every title with subtitles on the first retail report (a 2023 UA65CU7700, discussion #1460), and the one title there without subtitle streams played. A selected embedded subtitle still fails (`SubtitleNotCarried`: the driver states no `subtitle_track`, and nothing here draws one), so a profile whose subtitle preference picks a track gets the refusal until a subtitle render exists. With no Feed and `qualify_pms` Unknown, each refusal ends as the planner's typed `NoQualifiedBackend`, not as a play. So a title plays through this driver if it has no selected subtitle, one audio stream, a container and codecs Standard direct-plays, local Auto or a fixed quality, and no audio enhancement. The resolver tests pin Off to a certified start and the others to their reasons.
 
 **A pick the driver cannot carry does not replace the playing title.** Picking another audio or subtitle track mid-play on a URI attempt that cannot switch natively used to re-plan the play, which retires the playing item first and, here, can only end in `NoQualifiedBackend`. The shared door (`route::request_viewer_reconfigure`) now asks `PlaybackSession::source_track_change_carriable()` first: true with a Feed (webOS) or when the URI resolver's provider says it can certify such an output (`OriginalQualifier::carries_source_track_change`, default true; `TizenQualifier` says false), and a pick nothing can carry is refused with `ViewerReconfigureRefusal::NoBackendCarriesTrack` before anything is retired or spent. **The Quality ladder is the same kind of request** (a rung asks the server to convert, and `request_transcode_refresh` only queues a `Retranscode` that the Feed engine's pump consumes): `PlaybackSession::quality_pick_carriable()` (the same provider flag) makes the More menu not offer the Quality rows and `set_quality` refuse a rung before it persists it or moves the route contract; unrefused, the pick left the title playing unchanged and the next re-resolve of it (a Home restore, a stall retry) planned under the new ceiling and ended in `NoQualifiedBackend`.
 
@@ -351,6 +351,27 @@ In the receiver, in order (the host's lines are fixed by `Program.cs`; the libra
 
 State plainly what was not seen. The log is the evidence. A host-side window capture of the emulator does show the GL UI (a Windows
 `PrintWindow` capture showed Home, the detail page and the focus ring), so a capture is a record of the screen to attach beside the log.
+
+## Subtitles off (emulator run, 2026-11-25)
+
+The first retail report (discussion #1460: a 2023 UA65CU7700, Tizen 9.0 platform) logged `uri original: the file has subtitle
+streams and none is selected` for every title that had a subtitle stream; the one title without subtitle streams played (Prepared,
+`VideoSize 1920x1026`, Started, an advancing position, a clean Stop and Closed, twice). The question that rule left open was whether
+the native player draws an embedded subtitle when the app sets none. On the Windows machine's Tizen TV 10.0 emulator, against
+`tests/mock_pms.py --movies 0 --extra-media-video-only` with two video-only 180 s clips, each carrying ONE embedded English subtitle
+flagged `default` (a `mov_text` track in an MP4 and a SubRip track in an MKV) whose cue covers 0.5 s to 179 s, and with the mock's
+selection cleared (`PUT /library/parts/<id>?subtitleStreamID=0`, the state the retail log's `select streams: ... sub=0` shows):
+
+- Before the change, the MP4 play ended in `uri original: the file has subtitle streams and none is selected`, and with the shared
+  refusal lifted but `UriSource::can_supply` still answering `false` for Off, in `the certified source did not match this play`.
+- After it, both clips played through this driver (Buffering, Prepared, `VideoSize 1280x720`, Started, the timeline advancing; the
+  MP4 to 45 s, then a clean Stop and Closed), and captures of the panel at 1.3 s and 25 s (MP4) and at 7.4 s and 15.4 s (MKV) show
+  the test pattern with no subtitle text on it.
+
+So on the emulator the native player draws no embedded subtitle the app did not set, including a default-flagged one, and the
+driver states `subtitle_off`. **The retail set is not measured**: the next nightly asks the tester to confirm that a title with
+subtitles shows none. A selected embedded subtitle is still refused (`SubtitleNotCarried`), and the emulator has no audio path, so
+sound is not determinable here.
 
 ## The system keyboard (emulator run, 2026-11-25)
 

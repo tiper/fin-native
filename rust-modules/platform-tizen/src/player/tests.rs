@@ -602,7 +602,8 @@ fn the_capabilities_are_progressive_pause_and_seek_and_the_display_rests_on_the_
     assert_eq!(driver.capabilities(BackendKind::Uri), Some(CAPS));
     assert_eq!(driver.capabilities(BackendKind::Feed), None);
     assert!(CAPS.progressive_uri && CAPS.pause && CAPS.seek);
-    assert!(!CAPS.hls_uri && !CAPS.packet_feed && !CAPS.subtitle_track && !CAPS.audio_off && !CAPS.subtitle_off);
+    assert!(!CAPS.hls_uri && !CAPS.packet_feed && !CAPS.subtitle_track && !CAPS.audio_off);
+    assert!(CAPS.subtitle_off, "the host player is given no subtitle, so Off holds by construction");
     assert_eq!(driver.display().tag, DISPLAY_TAG);
     assert!(driver.display().is_ready() && !driver.display().preview_rectangle);
     fake.with(|s| s.unavailable = Some("no player"));
@@ -913,18 +914,40 @@ fn a_video_only_source_is_certified_and_started_with_no_track_to_settle() {
     assert_eq!(dispatch(&mut driver, attempt(1), 1, start), DispatchResult::Queued);
 }
 
-/// **The refusal set that keeps most real titles from reaching the driver.** The planner sets `subtitle_choice: Off`
-/// whenever the item has ANY subtitle stream and none is selected, and the resolver refuses that play
-/// (`SubtitleOff`, final for the play) before the qualifier is asked, because no driver here can switch the native
-/// player's default subtitle off; a client-drawn subtitle, an audio enhancement, a non-local Auto link and a relay
-/// are refused the same way. With no Feed these end as `NoQualifiedBackend`. Whether Tizen's player renders an
-/// embedded subtitle when none is set (which would decide whether `SubtitleOff` could be allowed) is unmeasured, so
-/// it is NOT allowed.
+/// **A title with subtitle streams and none selected plays.** The planner sets `subtitle_choice: Off` whenever the item has
+/// ANY subtitle stream and none is selected, which on a real library is most titles: the first retail report (a 2023
+/// UA65CU7700) logged that refusal for every title but the one without subtitles. The host player is never given a
+/// subtitle, so the driver states `subtitle_off` ([`CAPS`]) and the resolver lets Off through: the offer certifies it,
+/// and the driver starts it and settles the startup `SelectTrack(Subtitle, Off)` without a host call. The other viewer
+/// refusals still end the play before the qualifier is asked.
 #[test]
-fn a_title_with_subtitle_streams_and_none_selected_is_refused_before_the_qualifier_is_asked() {
+fn a_title_with_subtitle_streams_and_none_selected_is_certified_and_started() {
     let mut off_choice = request(plays(), 31342, Some(0));
     off_choice.subtitle_choice = TrackChoice::Off;
-    assert!(matches!(resolver().qualify(&off(), off_choice), Verdict::Refused(UriDecline::SubtitleOff)));
+    let Verdict::Known(known) = resolver().qualify(&off(), off_choice) else { panic!("subtitles off is certified") };
+    assert_eq!(known.requirements.subtitle_track, TrackChoice::Off);
+    assert!(CAPS.subtitle_off && CAPS.supports(known.requirements));
+    let (mut driver, fake) = rig();
+    let a = attempt(1);
+    let key = SourceKey::new(1);
+    assert_eq!(driver.stage_source(a, key, known.source), Ok(()));
+    let start = Operation::Start { source: key, requirements: known.requirements };
+    assert_eq!(dispatch(&mut driver, a, 1, start), DispatchResult::Queued);
+    let off_pick = Operation::SelectTrack { kind: TrackKind::Subtitle, choice: TrackChoice::Off };
+    assert_eq!(dispatch(&mut driver, a, 2, off_pick), DispatchResult::Refused(Failure::Busy), "not before PREPARED");
+    fake.post(fake.epoch(), PlayerKind::Prepared, 1_000, 0);
+    poll(&mut driver);
+    assert_eq!(dispatch(&mut driver, a, 3, off_pick), DispatchResult::Queued);
+    assert_eq!(poll(&mut driver), [
+        DriverEvent::TrackSettled { attempt: a, command: cmd(3), kind: TrackKind::Subtitle, choice: TrackChoice::Off },
+    ]);
+    assert!(!fake.verbs().iter().any(|v| !matches!(v, Verb::Play)), "no subtitle verb was asked of the host: {:?}", fake.verbs());
+}
+
+/// The viewer refusals that still end a play before the qualifier is asked: with no Feed these end as
+/// `NoQualifiedBackend`.
+#[test]
+fn the_viewer_refusals_end_the_play_before_the_qualifier_is_asked() {
     for (name, tweak, why) in [
         ("client subtitle", (|r: &mut OriginalRequest| r.requires_client_subtitle = true) as fn(&mut OriginalRequest),
             UriDecline::ClientSubtitle),
