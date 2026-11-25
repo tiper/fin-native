@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 
+import issue_support
 from issue_support import (
     GUIDE, has_exposed_credential, provided_fields, support_preview, support_turn, thread_revision,
 )
@@ -60,10 +61,11 @@ class Support(unittest.TestCase):
             [prior, newest, comment(5, "Only at 4 Mbps")],
         ):
             self.assertIsNone(support_turn(REPORT, bad, "public", 4), bad)
-        self.assertIsNone(support_turn(REPORT, [prior, newest], "shadow", 4))
-        turn = support_turn(REPORT, [prior, newest], "public", 4)
-        self.assertEqual((turn.phase, turn.replies, turn.reporter_comment), ("followup", 1, 4))
-        self.assertNotIn("platform", turn.available)
+        for mode in ("shadow", "public"):
+            turn = support_turn(REPORT, [prior, newest], mode, 4)
+            self.assertEqual((turn.phase, turn.replies, turn.reporter_comment), ("followup", 1, 4), mode)
+            self.assertNotIn("platform", turn.available)
+        self.assertIsNone(support_turn(REPORT, [prior, newest], "off", 4))
         self.assertIsNone(support_turn(REPORT, [prior, newest, asked(5, "playback_events")], "public", 4))
 
     def test_maintainer_or_native_reply_takes_ownership(self):
@@ -87,9 +89,14 @@ class Support(unittest.TestCase):
         turn = support_turn(REPORT, history, "public", 3)
         self.assertEqual(turn.available, ())
         self.assertEqual(support_preview(turn, {"outcome": "ask", "topic": "reproduction"}, [])["reply"], "")
-        self.assertIsNone(support_turn(REPORT, history + [comment(4, "It happens only when seeking")], "public", 4))
+        spent = support_turn(REPORT, history + [comment(4, "It happens only when seeking")], "public", 4)
+        self.assertEqual((spent.phase, spent.available, spent.reporter_comment), ("exhausted", (), 4))
         first = [asked(1, "platform"), comment(2, "Version 1"), comment(3, "Build 2"), comment(4, "Only in HDR")]
-        self.assertIsNone(support_turn(REPORT, first, "public", 4))
+        spent = support_turn(REPORT, first, "public", 4)
+        self.assertEqual((spent.phase, spent.available, spent.reporter_comment), ("exhausted", (), 4))
+        # Only the comment that exhausted the thread is a turn: an older one is stale.
+        self.assertIsNone(support_turn(REPORT, first, "public", 3))
+        self.assertIsNone(support_turn(REPORT, first, "off", 4))
 
     def test_only_vetted_public_text_can_escape_a_model_decision(self):
         turn = support_turn(REPORT, [], "public", 0)
@@ -119,6 +126,73 @@ class Support(unittest.TestCase):
         self.assertFalse(has_exposed_credential(REPORT, original))
         self.assertTrue(has_exposed_credential(REPORT, [comment(2, "X-Plex-Token=abcdefgh12345678")]))
         self.assertTrue(has_exposed_credential(dict(REPORT, body="Authorization: Bearer abcdefgh12345678"), []))
+
+    def test_a_handoff_label_ends_all_bot_activity(self):
+        prior = asked(1, "platform")
+        handed = dict(REPORT, labels=[{"name": "user-report"}, {"name": issue_support.HANDOFF_LABEL}])
+        self.assertIn(issue_support.HANDOFF_LABEL, issue_support.HUMAN_HANDOFF_LABELS)
+        for mode in ("shadow", "public"):
+            self.assertIsNotNone(support_turn(REPORT, [prior, comment(4, "webOS 25")], mode, 4))
+            self.assertIsNone(support_turn(handed, [prior, comment(4, "webOS 25")], mode, 4), mode)
+            self.assertIsNone(support_turn(handed, [], mode, 0), mode)
+
+    def test_a_repeated_short_answer_after_a_new_question_is_not_discarded(self):
+        thread = [asked(1, "platform"), comment(2, "No"), asked(3, "playback_scope"), comment(4, "no.")]
+        turn = support_turn(REPORT, thread, "public", 4)
+        self.assertEqual((turn.phase, turn.replies, turn.reporter_comment), ("followup", 2, 4))
+        # Within one question a repeat is still the same answer.
+        self.assertIsNone(support_turn(REPORT, [asked(1, "platform"), comment(2, "No"), comment(4, "no.")],
+                                       "public", 4))
+
+    def test_a_renamed_topic_still_counts_as_a_support_reply(self):
+        old = "<!-- plxnative-support:v1 topic=retired_topic -->\nQuestion"
+        for bot in (BOT, NATIVE):
+            reply = comment(2, old, bot)
+            self.assertEqual(issue_support.bot_topic(reply), "retired_topic")
+            self.assertFalse(issue_support.hands_off(reply, REPORTER["id"]), bot)
+            turn = support_turn(REPORT, [reply, comment(4, "webOS 25")], "public", 4)
+            self.assertEqual((turn.phase, turn.replies), ("followup", 1), bot)
+            self.assertEqual(turn.available, support_turn(REPORT, [], "public", 0).available)
+        # A malformed marker, or a human, is not a support reply; native Pullfrog stays a handoff.
+        self.assertIsNone(issue_support.bot_topic(comment(2, old.replace("v1", "v2"), BOT)))
+        self.assertIsNone(issue_support.bot_topic(comment(2, old, MAINTAINER)))
+        self.assertTrue(issue_support.hands_off(comment(2, "Native enrichment", NATIVE), REPORTER["id"]))
+
+    def test_state_change_follows_the_turn_and_never_repeats_a_label(self):
+        change = issue_support.support_state_change
+        turn = support_turn(REPORT, [], "public", 0)
+        waiting, handoff = issue_support.WAITING_LABEL, issue_support.HANDOFF_LABEL
+        carrying = lambda *names: dict(REPORT, labels=[{"name": name} for name in names])
+        self.assertEqual(change(REPORT, [], turn, {"outcome": "ask"}, "reply")["add"], [waiting])
+        self.assertIsNone(change(carrying(waiting), [], turn, {"outcome": "ask"}, "reply"))
+        self.assertIsNone(change(REPORT, [], turn, {"outcome": "quiet"}, ""))
+        swap = change(carrying(waiting), [], turn, {"outcome": "handoff"}, "")
+        self.assertEqual((swap["add"], swap["remove"]), ([handoff], [waiting]))
+        spent = issue_support.Turn("exhausted", (), 2, 4)
+        self.assertEqual(change(REPORT, [], spent, {}, "")["add"], [handoff])
+        self.assertIsNone(change(carrying(handoff), [], spent, {}, ""))
+        for owned, thread in ((dict(carrying(waiting), assignees=[MAINTAINER]), []),
+                              (dict(carrying(waiting), locked=True), []),
+                              (carrying(waiting, "ready"), []),
+                              (carrying(waiting), [comment(2, "Looking", MAINTAINER, "MEMBER")]),
+                              (carrying(waiting), [comment(2, "Native", NATIVE)])):
+            self.assertEqual(change(owned, thread, None, {}, "")["add"], [handoff])
+        # Ownership is only a transition for a thread the bot has worked.
+        self.assertIsNone(change(dict(REPORT, assignees=[MAINTAINER]), [], None, {}, ""))
+        self.assertIsNone(change(REPORT, [comment(2, "Looking", MAINTAINER, "MEMBER")], None, {}, ""))
+
+    def test_a_maintainer_signal_sticks_on_a_thread_the_bot_has_worked(self):
+        change = issue_support.support_state_change
+        handoff = issue_support.HANDOFF_LABEL
+        looking = comment(2, "Looking", MAINTAINER, "MEMBER")
+        # The handoff already removed the waiting label; a maintainer then removed the handoff label.
+        # The bot's marker still shows it worked the thread, so the maintainer comment hands it off again.
+        worked = [asked(1, "platform"), looking, comment(3, "webOS 25")]
+        swap = change(REPORT, worked, None, {}, "")
+        self.assertEqual((swap["add"], swap["reason"]), ([handoff], "human_owned"))
+        self.assertIsNone(change(dict(REPORT, labels=[{"name": handoff}]), worked, None, {}, ""))
+        # A thread with no marker and no waiting label was never the bot's.
+        self.assertIsNone(change(REPORT, [looking, comment(3, "webOS 25")], None, {}, ""))
 
 
 if __name__ == "__main__":

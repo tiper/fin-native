@@ -98,9 +98,18 @@ class PullfrogIssueTriage(unittest.TestCase):
         self.assertIn("uses: ./.github/workflows/triage-issue.yml", caller)
         self.assertNotIn("issues: write", caller)
         self.assertIn("issue_comment:\n    types: [created]", caller)
-        self.assertIn("vars.PLXNATIVE_ISSUE_SUPPORT == 'public' && !github.event.issue.pull_request", caller)
+        # A reporter's follow-up runs in shadow too, including while the variable is unset (an unset
+        # variable is shadow); only `off` skips it and only public posts (ci/label-issue.py).
+        self.assertRegex(caller, r"\(vars\.PLXNATIVE_ISSUE_SUPPORT != 'off' &&\s+"
+                                 r"!github\.event\.issue\.pull_request")
+        self.assertNotIn("== 'shadow' ||", caller)
+        self.assertNotIn("&& 'public'", caller)
         self.assertIn("github.event.comment.user.id == github.event.issue.user.id", caller)
-        self.assertIn("(vars.PLXNATIVE_ISSUE_SUPPORT || 'shadow')", caller)
+        support_mode = re.search(r"support_mode: >-\n(.*?)\n      comment_id:", caller, re.S).group(1)
+        self.assertEqual(support_mode.count("(vars.PLXNATIVE_ISSUE_SUPPORT || 'shadow')"), 2)
+        self.assertIn("github.event_name == 'issue_comment' && (vars.PLXNATIVE_ISSUE_SUPPORT || 'shadow')", support_mode)
+        self.assertIn("(github.event.action == 'opened' || github.event.action == 'edited')", support_mode)
+        self.assertNotIn("reopened", support_mode)
         self.assertNotIn("discussion_comment:", caller)
         self.assertIn("group: issue-triage-${{ inputs.number }}", code("triage-issue.yml"))
 
@@ -124,7 +133,12 @@ class PullfrogIssueTriage(unittest.TestCase):
         self.assertIn("id-token: write", apply)
         self.assertRegex(apply, r"uses: pullfrog/pullfrog/get-installation-token@[0-9a-f]{40}\b")
         self.assertIn("PULLFROG_FORCE_LOCAL_CLI: '1'", apply)
-        self.assertIn("if: inputs.comment_id == 0 || needs.classify.outputs.result != ''", apply)
+        self.assertIn("if: inputs.comment_id == 0 || needs.classify.outputs.result != '' || "
+                      "needs.classify.outputs.model == 'false'", apply)
+        self.assertIn("CURRENT_SUPPORT_MODE: ${{ vars.PLXNATIVE_ISSUE_SUPPORT }}", apply)
+        self.assertIn("model: ${{ steps.prepare.outputs.model }}", classify)
+        self.assertRegex(classify, r"if: steps\.prepare\.outputs\.eligible == 'true' && "
+                                   r"steps\.prepare\.outputs\.sensitive != 'true' && steps\.prepare\.outputs\.model == 'true'")
         self.assertIn("PULLFROG_WRITE_TOKEN: ${{ steps.pullfrog_write.outputs.token }}", apply)
         action = (ROOT / ".github/actions/classify-issue/action.yml").read_text()
         self.assertIn("GH_TOKEN: ${{ github.token }}", action)

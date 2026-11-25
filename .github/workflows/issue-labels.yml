@@ -2,6 +2,8 @@ name: Issue labels
 
 # The same Pullfrog run classifies and handles first-line issue support.
 # Shadow is the default. Turn off native Enrich and Label before choosing public.
+# An opened, edited or reporter-comment run evaluates support in the variable's mode;
+# only public posts replies and writes the support:* labels (ci/label-issue.py).
 on:
   issues:
     types: [opened, reopened, edited]
@@ -25,7 +27,8 @@ jobs:
     name: select issues
     if: >-
       github.event_name != 'issue_comment' ||
-      (vars.PLXNATIVE_ISSUE_SUPPORT == 'public' && !github.event.issue.pull_request &&
+      (vars.PLXNATIVE_ISSUE_SUPPORT != 'off' &&
+      !github.event.issue.pull_request &&
       github.event.issue.state == 'open' && github.event.comment.user.type == 'User' &&
       github.event.comment.user.id == github.event.issue.user.id)
     runs-on: ubuntu-latest
@@ -87,7 +90,8 @@ jobs:
       only_if_unlabeled: ${{ matrix.issue.only_if_unlabeled }}
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
       support_mode: >-
-        ${{ github.event_name == 'issue_comment' && 'public' ||
-        github.event_name == 'issues' && github.event.action == 'opened' && (vars.PLXNATIVE_ISSUE_SUPPORT || 'shadow') ||
+        ${{ github.event_name == 'issue_comment' && (vars.PLXNATIVE_ISSUE_SUPPORT || 'shadow') ||
+        github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'edited') &&
+        (vars.PLXNATIVE_ISSUE_SUPPORT || 'shadow') ||
         github.event_name == 'workflow_dispatch' && inputs.dry_run && 'preview' || 'off' }}
       comment_id: ${{ github.event.comment.id || 0 }}

@@ -36,7 +36,10 @@ FORM_FIELDS = {
     "install_method": "How you installed PlxNative",
 }
 OPERATOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
-HUMAN_HANDOFF_LABELS = {"ready", "needs-info", "duplicate", "invalid", "wontfix"}
+# The support state of a thread is two labels. A maintainer removes HANDOFF_LABEL to give it back.
+WAITING_LABEL = "support:waiting-reporter"
+HANDOFF_LABEL = "support:handoff"
+HUMAN_HANDOFF_LABELS = {"ready", "needs-info", "duplicate", "invalid", "wontfix", HANDOFF_LABEL}
 MAX_SUPPORT_REPLIES = 2
 MAX_REPORTER_UPDATES = 2
 MARKER = re.compile(r"^<!-- plxnative-support:v1 topic=([a-z_]+) -->\n")
@@ -64,7 +67,8 @@ def bot_topic(comment):
     if user.get("type") != "Bot" or user.get("login") not in {"github-actions[bot]", "pullfrog[bot]"}:
         return None
     match = MARKER.match(comment.get("body") or "")
-    return match[1] if match and match[1] in TOPICS else None
+    # A topic renamed or retired since the reply was posted is still that bot's support reply.
+    return match[1] if match else None
 
 
 def provided_fields(body):
@@ -87,6 +91,10 @@ def meaningful_reply(comment, reporter, seen):
     return True
 
 
+def label_names(issue):
+    return {label["name"] for label in issue.get("labels", [])}
+
+
 def hands_off(comment, reporter):
     commenter = actor(comment)
     return ((commenter.get("type") == "Bot" and commenter.get("login") == "pullfrog[bot]"
@@ -95,8 +103,20 @@ def hands_off(comment, reporter):
                 and comment.get("author_association") in OPERATOR_ASSOCIATIONS))
 
 
+def human_owned(issue, comments):
+    """A maintainer, assignment, lock or human label has taken the thread."""
+    reporter = (issue.get("user") or {}).get("id")
+    return bool(issue.get("locked") or issue.get("assignees")
+                or HUMAN_HANDOFF_LABELS.intersection(label_names(issue))
+                or any(hands_off(comment, reporter) for comment in comments))
+
+
 def support_turn(issue, comments, mode, comment_id):
-    """Return the eligible turn of this thread, independent of the model's answer."""
+    """Return the eligible turn of this thread, independent of the model's answer.
+
+    An `exhausted` turn means a reporter comment arrived after the reply budget ran out. It
+    needs no model: the caller hands the thread to a human instead of going silent.
+    """
     if mode == "off":
         return None
     history = [topic for comment in comments if (topic := bot_topic(comment))]
@@ -106,32 +126,33 @@ def support_turn(issue, comments, mode, comment_id):
         return Turn("preview", available, len(history))
     user = issue.get("user") or {}
     issue_type = (issue.get("type") or {}).get("name")
-    if (issue.get("state") != "open" or issue.get("locked") or issue.get("assignees")
-            or user.get("type") != "User" or issue.get("author_association") in OPERATOR_ASSOCIATIONS
-            or issue_type in {"Feature", "Task"}
-            or HUMAN_HANDOFF_LABELS.intersection(label["name"] for label in issue.get("labels", []))):
+    if (issue.get("state") != "open" or user.get("type") != "User"
+            or issue.get("author_association") in OPERATOR_ASSOCIATIONS
+            or issue_type in {"Feature", "Task"} or human_owned(issue, comments)):
         return None
     reporter = user.get("id")
-    if any(hands_off(comment, reporter) for comment in comments):
-        return None
     if not comment_id:
         return Turn("intake", available, 0) if not history else None
-    if mode != "public":
+    if mode not in {"shadow", "public"}:
         return None
 
     seen = set()
     replies = []
     for comment in comments:
         if bot_topic(comment):
+            # An answer is only a repeat within one question: "No" may answer the next one too.
             replies.clear()
+            seen.clear()
         elif meaningful_reply(comment, reporter, seen):
             replies.append(comment["id"])
-    if not replies or replies[-1] != comment_id or len(replies) > MAX_REPORTER_UPDATES:
+    if not replies or replies[-1] != comment_id:
         return None
+    if len(replies) > MAX_REPORTER_UPDATES:
+        return Turn("exhausted", (), len(history), comment_id)
     if len(history) >= MAX_SUPPORT_REPLIES:
         # One final update can produce a handoff summary after the last public question.
         if len(replies) != 1:
-            return None
+            return Turn("exhausted", (), len(history), comment_id)
         available = ()
     return Turn("followup" if history else "intake", available, len(history), comment_id)
 
@@ -147,6 +168,37 @@ def thread_revision(issue, comments):
 def has_exposed_credential(issue, comments):
     bodies = [issue.get("title"), issue.get("body"), *(comment.get("body") for comment in comments)]
     return any(EXPOSED_CREDENTIAL.search(body or "") for body in bodies)
+
+
+def support_state_change(issue, comments, turn, decision, reply):
+    """The label transition this thread's support state calls for, or None.
+
+    `reply` is the public text this turn would post. Only public mode writes the transition;
+    shadow and preview report it.
+    """
+    labels = label_names(issue)
+    if HANDOFF_LABEL in labels:
+        return None
+    waiting = WAITING_LABEL in labels
+
+    def handoff(reason):
+        return {"add": [HANDOFF_LABEL], "remove": [WAITING_LABEL], "reason": reason}
+
+    # A thread the bot has worked keeps a human signal: after a handoff removed `waiting`, a maintainer
+    # who removes HANDOFF_LABEL while their comment still stands gets it back. Threads the bot never
+    # touched (no label, no marker) are left to their maintainers.
+    worked = waiting or any(bot_topic(comment) for comment in comments)
+    if worked and human_owned(issue, comments):
+        return handoff("human_owned")
+    if turn is None:
+        return None
+    if turn.phase == "exhausted":
+        return handoff("exhausted")
+    if decision.get("outcome") == "handoff":
+        return handoff("handoff")
+    if reply and not waiting:
+        return {"add": [WAITING_LABEL], "remove": [], "reason": "reply"}
+    return None
 
 
 def support_preview(turn, decision, related):

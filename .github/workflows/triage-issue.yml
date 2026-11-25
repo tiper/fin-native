@@ -35,6 +35,7 @@ jobs:
       id-token: write
     outputs:
       eligible: ${{ steps.prepare.outputs.eligible }}
+      model: ${{ steps.prepare.outputs.model }}
       revision: ${{ steps.prepare.outputs.revision }}
       conversation: ${{ steps.prepare.outputs.conversation }}
       sensitive: ${{ steps.prepare.outputs.sensitive }}
@@ -59,7 +60,8 @@ jobs:
           if [[ "$DRY_RUN" == true ]]; then args+=(--dry-run); fi
           python3 ci/label-issue.py prepare "$ISSUE" "${args[@]}" > "$RUNNER_TEMP/issue-triage.txt"
       - name: Classify and triage with Pullfrog
-        if: steps.prepare.outputs.eligible == 'true' && steps.prepare.outputs.sensitive != 'true'
+        # An exhausted or human-owned thread is handed off without a model call.
+        if: steps.prepare.outputs.eligible == 'true' && steps.prepare.outputs.sensitive != 'true' && steps.prepare.outputs.model == 'true'
         id: initial
         continue-on-error: true
         uses: ./.github/actions/classify-issue
@@ -101,7 +103,7 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Get Pullfrog token for issue writes
         id: pullfrog_write
-        if: inputs.comment_id == 0 || needs.classify.outputs.result != ''
+        if: inputs.comment_id == 0 || needs.classify.outputs.result != '' || needs.classify.outputs.model == 'false'
         # Keep the validated summary available if the token exchange fails.
         continue-on-error: true
         uses: pullfrog/pullfrog/get-installation-token@19ed08a1c60d607423b3096ae625ddb70bc161ca # v0.1.142
@@ -116,6 +118,8 @@ jobs:
           ISSUE_REVISION: ${{ needs.classify.outputs.revision }}
           SUPPORT_CONVERSATION: ${{ needs.classify.outputs.conversation }}
           SUPPORT_MODE: ${{ inputs.support_mode }}
+          # Replies and support labels also need the variable to still be public when this runs.
+          CURRENT_SUPPORT_MODE: ${{ vars.PLXNATIVE_ISSUE_SUPPORT }}
           SUPPORT_COMMENT_ID: ${{ inputs.comment_id }}
           TRIAGE_SENSITIVE: ${{ needs.classify.outputs.sensitive }}
           PULLFROG_RESULT: ${{ needs.classify.outputs.result }}
