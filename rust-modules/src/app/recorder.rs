@@ -241,24 +241,22 @@ pub(crate) fn state_fp_v11() -> u64 {
 }
 
 #[cfg(test)]
-fn historical_census() -> &'static Value {
+fn historical_census() -> &'static [Value] {
     static CENSUS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
     CENSUS.get_or_init(|| serde_json::from_str(include_str!("fixtures/session-codec-v5/current-base-fingerprints.json")).expect("frozen census"))
+        ["prior_vector"].as_array().expect("historical census vector")
 }
 
 #[cfg(test)]
 fn historical_input_shape() -> &'static str {
-    historical_census()["prior_vector"][1].as_str().expect("historical Input shape")
+    historical_census()[1].as_str().expect("historical Input shape")
 }
 
-/// Older profiles keep their menu argument shape when the current menu grows.
+/// The screen census starts at AppArg and is the suffix of the reviewed historical vector.
 #[cfg(test)]
 fn historical_screen_shapes() -> impl Iterator<Item = &'static str> {
-    use plx_screens::registry::{ARG_SHAPE, SCREEN_SHAPES};
-    let old_arg = historical_census()["prior_vector"].as_array().expect("historical census vector").iter()
-        .filter_map(Value::as_str).find(|shape| shape.starts_with("AppArg{"))
-        .expect("historical AppArg shape");
-    SCREEN_SHAPES.iter().copied().map(move |shape| if shape == ARG_SHAPE { old_arg } else { shape })
+    historical_census().iter().map(|value| value.as_str().expect("historical shape"))
+        .skip_while(|shape| !shape.starts_with("AppArg{"))
 }
 
 #[cfg(test)]
@@ -2868,7 +2866,7 @@ mod tests {
         // `ProductResolutionV2` (the by-id `Id` resolution row, a11y-ids D6) moves the full census
         // from 0xea74_3865_5115_46c5, which `the_pre_content_navigation_recording_shape_is_refused`
         // keeps refused at the shape boundary like every older value.
-        assert_eq!(state_fp(), 0xdefa_d3fd_102e_439d, "current V13 producer census");
+        assert_eq!(state_fp(), 0x7410_4747_8858_9e13, "current V13 producer census");
         assert_ne!(state_fp(), 0x7f1d_280c_909c_8603, "the census before Filmography's Watchlist menu");
         assert_ne!(state_fp(), 0xea74_3865_5115_46c5, "the census without the `Id` resolution row");
         assert_ne!(state_fp(), 0x3ed9_2e0f_25bd_7f8e, "V12 cannot describe captured positive-swap presentation inputs");

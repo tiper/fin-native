@@ -37,6 +37,8 @@ pub struct HudModel {
     pub skip_progress: Option<f32>,
     /// The playing metadata is a genuine episode, independent of queue neighbours.
     pub is_episode: bool,
+    /// The source is a channel with no seek bar or library-only controls.
+    pub is_live: bool,
     /// The projected local wall-clock finish time, supplied by the app for this frame.
     pub end_time: Option<[i32; 2]>,
     /// `plx_media::player::TX.scrub_ns.load(Relaxed)`: the live scrub preview's target, -1 when no
@@ -95,6 +97,7 @@ impl Default for HudModel {
             paused: false,
             marker_prefs: Default::default(), playback_id: 0, advancing: false, seeking: false, covered: false, skip_progress: None,
             is_episode: false,
+            is_live: false,
             end_time: None,
             scrub_ns: -1,
             playpos_ns: 0,

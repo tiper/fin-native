@@ -88,7 +88,7 @@ pub(crate) struct Frame {
 }
 
 impl Frame {
-    fn begin(ps: &plx_media::route::PlaybackSession, meta: plx_data::metadata::MetadataView<'_>) -> Frame {
+    pub(crate) fn begin(ps: &plx_media::route::PlaybackSession, meta: plx_data::metadata::MetadataView<'_>) -> Frame {
         Frame {
             ctrl: plx_appkit::player_hud::slot(ps, meta),
             now: 0,
@@ -750,7 +750,10 @@ fn hud_model(
         || plx_media::player::seek_pending(ps).is_some();
     let scrub_ns = plx_media::player::TX.scrub_ns.load(Relaxed);
     let advancing = plx_media::player::state(ps) == plx_media::player::PlaybackState::Playing;
-    let (is_episode, is_movie) = meta.now_playing().map_or((false, false), |n| (n.is_real_episode, n.is_movie));
+    let is_live = plx_media::route::is_live(ps);
+    let (is_episode, is_movie) = if is_live { (false, false) } else {
+        meta.now_playing().map_or((false, false), |n| (n.is_real_episode, n.is_movie))
+    };
     let projected_end_time = if plx_appkit::player_hud::model::end_time_is_eligible(
         plx_appkit::player_hud::model::EndTimeEligibility {
             enabled: live_clock_and_lane && plx_media::route::hud_end_time(),
@@ -781,6 +784,7 @@ fn hud_model(
         covered: false,
         skip_progress: None,
         is_episode,
+        is_live,
         end_time: projected_end_time,
         scrub_ns,
         playpos_ns,
@@ -792,8 +796,8 @@ fn hud_model(
         sub_tone: plx_media::player::subtitle_tone(),
         sub_sel: plx_media::player::desired_sub_idx(),
         controls: plx_appkit::player_hud::Controls::now(ps),
-        chapters: plx_appkit::chapters_panel::has_chapters(meta),
-        detail: plx_appkit::info_panel::detail_rk(meta).is_some(),
+        chapters: !is_live && plx_appkit::chapters_panel::has_chapters(meta),
+        detail: !is_live && plx_appkit::info_panel::detail_rk(meta).is_some(),
         skip_secs: u32::try_from(plx_media::route::skip_interval().ns() / 1_000_000_000).unwrap_or(10),
         stats: crate::app::diagnostics::enabled(),
         bitmap_key: plx_media::player::active_bitmap_key(playpos_ns),
@@ -827,6 +831,7 @@ fn begin_product_frame(app: &mut App) -> Frame {
 /// Current transport/marker facts before the dispatcher's input/Tick, refreshed again for draw.
 fn publish_player_model(app: &mut App) {
     let bridge = app.runtime.bridge(&mut app.bridge);
+    super::playback::publish_live_banner(&mut app.player.session, bridge.livetv_view().channels);
     let mut model = hud_model(&app.player.session, bridge.metadata_view(),
         app.adapters.player.backend_viewer_paused().unwrap_or(false),
         matches!(app.rec, super::recorder::Recplay::Off) && !bridge.is_controlled_replay()
@@ -1328,6 +1333,12 @@ unsafe fn host_background(app: &mut App, fr: &mut Frame, edge: Lifecycle, playin
     // left Abandoning, and a preview session is never parked for the foreground reload —
     // that reload would bring the trailer back as ordinary playback.
     super::content::halt_preview_now(&mut app.player.session, &mut app.adapters.player);
+    if plx_media::route::is_live(&app.player.session) {
+        log("livetv: background ends the channel");
+        super::playback::exit_player(&mut app.player, &mut app.adapters.player,
+            &mut app.repause_at, &mut app.refresh_hubs, &mut app.pages);
+        return;
+    }
     // A second background while the foreground restore waits on its flight (the resume's rebuild,
     // an Original rollback): drop the flight — its landing is discarded and only the replacement
     // it registered is stopped — and park the session back where the first suspend left it.
@@ -3140,6 +3151,7 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
         super::bridge::execute_endpoint_outcomes(&mut app.pages, upgrades);
         app.runtime.bridge(&mut app.bridge).person_pump();
         app.runtime.bridge(&mut app.bridge).collection_pump();
+        app.runtime.bridge(&mut app.bridge).livetv_pump();
         // …and the Detail pages whose item, season or show it just spoke about: re-read from the
         // server's word, wherever on the stack they are (`content::reconcile_details`).
         let landed = app.runtime.bridge(&mut app.bridge).take_landed_views();
@@ -8404,6 +8416,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
     }
 
     include!("run_uri_boot_tests.rs");
+    include!("run_livetv_tests.rs");
 
     // ---- track memory: what the viewer picked on one episode is what the next episode plays -----
 

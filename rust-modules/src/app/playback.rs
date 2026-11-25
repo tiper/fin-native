@@ -461,6 +461,7 @@ pub(super) fn start_playback_with<R: PlaybackResources>(
     bridge: &mut super::bridge::Bridge,
     resources: &mut R,
 ) -> bool {
+    publish_live_banner(ps, bridge.livetv_view().channels);
     let entering = resources.prepare_start(ps, pa, resume_ns);
     if entering {
         enter_player(pages, bridge, from, ret);
@@ -492,6 +493,71 @@ pub(super) fn start_playback_with<R: PlaybackResources>(
     #[cfg(feature = "play-feed")]
     plx_media::player::commit_paused(ps, pa, false);
     entering
+}
+
+fn live_channel<'a>(ps: &plx_media::route::PlaybackSession, channels: &'a [plx_data::livetv::Channel])
+    -> Option<(usize, &'a plx_data::livetv::Channel)>
+{
+    let (sid, live) = plx_media::route::live_request(ps)?;
+    channels.iter().enumerate().find(|(_, ch)| ch.sid == sid && ch.dvr == live.dvr && ch.channel == live.channel)
+}
+
+/// Refresh the existing HUD caption from the current guide, including a programme rollover.
+pub(super) fn publish_live_banner(ps: &mut plx_media::route::PlaybackSession, channels: &[plx_data::livetv::Channel]) {
+    let Some((_, ch)) = live_channel(ps, channels) else {
+        plx_media::route::set_live_info(ps, None);
+        plx_media::route::set_live_context(ps, "");
+        return;
+    };
+    if plx_media::route::live_info(ps).is_some_and(|info| &info.channel == ch) { return; }
+    let local_airing = (ch.begins_at > 0 && ch.ends_at > ch.begins_at).then(|| {
+        Some((super::clock::local_end_time(ch.begins_at)?, super::clock::local_end_time(ch.ends_at)?))
+    }).flatten();
+    plx_media::route::set_live_info(ps, Some(plx_media::route::LiveInfo { channel: ch.clone(), local_airing }));
+    let context = match (ch.vcn.is_empty(), ch.now.is_empty()) {
+        (false, false) => plx_os::i18n::msg::widgets_live_channel_context(&ch.vcn, &ch.now),
+        (false, true) => ch.vcn.clone(),
+        (true, _) => ch.now.clone(),
+    };
+    plx_media::route::set_live_context(ps, &context);
+}
+
+fn change_live_channel(
+    player: &mut plx_media::player::machine::Player,
+    pa: &mut plx_media::player::adapter::PlayerAdapter,
+    repause_at: &mut i64,
+    direction: i32,
+    pages: &mut plx_ui::dispatch::Dispatcher<super::bridge::AppHost>,
+    bridge: &mut super::bridge::Bridge,
+) {
+    if !matches!(direction, -1 | 1) { return; }
+    let channels = bridge.livetv_view().channels;
+    let Some((index, _)) = live_channel(&player.session, channels) else {
+        // The channel on screen is not one the lineup lists (an unloaded or a redacted store), so
+        // there is no neighbour to walk to. The device log is the only place this is visible.
+        log(&format!("livetv: channel change ignored — direction {direction} on a channel the lineup does not list"));
+        return;
+    };
+    if channels.len() < 2 {
+        log("livetv: channel change ignored — one channel in the lineup");
+        return;
+    }
+    let next = if direction < 0 { index.checked_sub(1).unwrap_or(channels.len() - 1) } else { (index + 1) % channels.len() };
+    let ch = &channels[next];
+    let play = plx_screens::registry::PlayIntent::Live {
+        sid: ch.sid, dvr: ch.dvr.clone(), channel: ch.channel.clone(), title: ch.name.clone(),
+    };
+    // Read while the lineup is still borrowed: the bridge is borrowed mutably further down.
+    let refused = format!("livetv: channel change refused — the route took no live request for {} {}", ch.vcn, ch.dvr);
+    stop_player_resources(player, pa, repause_at, pages);
+    *repause_at = -1;
+    if super::content::request_play_intent(&mut player.session, bridge.metadata_mut(), &play) {
+        start_playback(&mut player.session, pa, 0, Origin::Here, HUD_LINGER_MS, None, pages, bridge);
+    } else {
+        // The retune took no request (a resolve still in flight, or a route that refused it): the
+        // old channel has already been stopped, so this is a failed change, not an ignored one.
+        log(&refused);
+    }
 }
 
 /// Legacy card launches resolve media data without creating an invisible Detail screen.
@@ -853,6 +919,7 @@ pub(crate) fn player_requests(
             // The fall-through a surface cannot perform (`screens::player::overlay`'s module doc):
             // the same toggle the bare transport reaches, with the panel left untouched.
             PlayerReq::Transport(play) => { apply_transport(&mut player.session, pa, play, now, pages); }
+            PlayerReq::Channel(direction) => change_live_channel(player, pa, repause_at, direction, pages, bridge),
             PlayerReq::SeekTo(ns) => apply_seek_to(&mut player.session, pa, ns),
             // …and its twin, which does NOT resume: the scrub bar is how a paused film is moved.
             // The pump keeps the pause across it (see `commit_seek`).
@@ -865,6 +932,7 @@ pub(crate) fn player_requests(
             // present a panel immediately rather than through the row's deferred press. The
             // tabs row is not an asker: it asks `ToggleSection` (Info and Chapters are sections).
             PlayerReq::OpenOverlay(kind) => {
+                if plx_media::route::is_live(&player.session) { continue; }
                 seed_menu_anchor(pages, bridge, kind);
                 super::bridge::open_player_overlay(&mut player.session, bridge.metadata_view(), pages, kind);
             }
@@ -957,6 +1025,19 @@ pub(crate) fn exit_player(
     refresh_hubs: &mut bool,
     pages: &mut plx_ui::dispatch::Dispatcher<super::bridge::AppHost>,
 ) {
+    stop_player_resources(player, pa, repause_at, pages);
+    // Return to the original container entry, retaining its focus and page memory.
+    return_from_player(pages);
+    *refresh_hubs = true;
+}
+
+/// A channel switch retires the same resources as Exit while retaining the mounted return path.
+fn stop_player_resources(
+    player: &mut plx_media::player::machine::Player,
+    pa: &mut plx_media::player::adapter::PlayerAdapter,
+    repause_at: &mut i64,
+    pages: &mut plx_ui::dispatch::Dispatcher<super::bridge::AppHost>,
+) {
     // The foreground machine hears the exit FIRST: a restore parked or refused behind this exit
     // is retired here (`Superseded(Exit)`), not left standing for the next play to release.
     let _ = drive_foreground(
@@ -979,15 +1060,6 @@ pub(crate) fn exit_player(
     // lives on `ps.jail_load_blocked`, and `cancel_play` at the top of this function clears it
     // via `clear_play_verdict` the same way it clears a `/decision` refusal — see that function's
     // doc for why a verdict left standing described the item the user walked away from.
-    // **The return is a `PopTo` of the ORIGIN ENTRY** (§5.1) — the page that was on top when the
-    // push was asked for, captured at the player's own mount and read back off the instance. It
-    // replaces `App.play_from: Node` plus `enter_node` plus `Trail::ensure`, which between them
-    // said "re-derive a page from a remembered description, then make the history agree". An
-    // entry needs no re-deriving and there is no second history to reconcile. A stale entry falls
-    // through `nav_pop_to`'s Home floor; a live Content entry with no identity takes the explicit
-    // Home floor in `return_from_player`, preserving `return_page`'s old anti-strand contract.
-    return_from_player(pages);
-    *refresh_hubs = true;
 }
 
 /// **Home appears already correct** (layer-1 view state, owner decision 2): when the page being
@@ -1432,6 +1504,7 @@ pub(crate) fn perform_hud_command(
     use plx_appkit::player_hud::command::HudCommand;
     use plx_media::route::QueueStep;
     use plx_screens::player::overlay::OverlayKind;
+    if plx_media::route::is_live(&player.session) && !command.shown_live() { return; }
     match command {
         HudCommand::TogglePlay | HudCommand::Seek(_) => {
             super::bridge::send_player_message(pages,

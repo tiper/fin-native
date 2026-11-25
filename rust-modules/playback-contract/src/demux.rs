@@ -8,6 +8,29 @@ use crate::subtitle::{Anchor, CaptionRetention, DecodeKind, Manifest, RawCue, Tr
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// The feed HLS reader accepts H.264 video and optional AAC audio. `None` also checks video alone.
+pub fn hls_accepts_codecs(video: &str, audio: Option<&str>) -> bool {
+    video.eq_ignore_ascii_case("h264") && audio.is_none_or(|codec| codec.eq_ignore_ascii_case("aac"))
+}
+
+#[test]
+fn hls_reader_accepts_only_h264_and_optional_aac() {
+    for (video, audio, accepted) in [
+        ("h264", Some("aac"), true),
+        ("H264", Some("AAC"), true),
+        ("h264", None, true),
+        ("h264", Some("ac3"), false),
+        ("h264", Some("eac3"), false),
+        ("hevc", Some("aac"), false),
+        ("hevc", None, false),
+        ("mpeg2video", Some("aac"), false),
+        ("", Some("aac"), false),
+        ("h264", Some(""), false),
+    ] {
+        assert_eq!(hls_accepts_codecs(video, audio), accepted, "{video}/{audio:?}");
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PauseLane { Hls, Original }
 
@@ -142,6 +165,11 @@ pub enum DemuxEffect {
     FailFault(DemuxFault),
     IoFailed,
     Failed,
+    /// A live playlist brought nothing new for its whole no-progress allowance and the read gave
+    /// up. Published BEFORE the failure flag that ends the session ([`Self::IoFailed`] or
+    /// [`Self::FailFault`]), which it explains: the recording has no input, so the player reads it
+    /// out instead of converting the same recording ([`crate::feed::FeedRaw::live_stalled`]).
+    LiveStalled,
     NoVideo,
     /// The codec the file ACTUALLY carries, in the `dg_load_v` / `dg_load_a` code spaces, published
     /// only when the demuxer refuses a Load whose bytes disagree with its declared codec. The

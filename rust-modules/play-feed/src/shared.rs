@@ -356,6 +356,10 @@ pub struct Shared {
     /// Unlike `demux_failed`, this is not gated on a zero-frame start: a truncated live transfer
     /// is an error rather than a successful early EOF.
     pub demux_io_failed: AtomicBool,
+    /// The failure flag raised beside it is a live playlist that stopped advancing
+    /// (`DemuxEffect::LiveStalled`), stored before that flag; cleared with the flags by the
+    /// session reset.
+    pub hls_live_stalled: AtomicBool,
     /// WHY the demuxer found nothing to feed, when the answer is "the stream itself": the server
     /// delivered audio streams and no video stream. Issue #22's whole shape — a transcode target
     /// the server cannot honour makes PMS drop the video track, and `ff: no video stream` alone
@@ -771,6 +775,7 @@ impl Shared {
             speed_audio_verdict: AtomicU8::new(0),
             demux_failed: AtomicBool::new(false),
             demux_io_failed: AtomicBool::new(false),
+            hls_live_stalled: AtomicBool::new(false),
             demux_no_video: AtomicBool::new(false),
             load_failed: AtomicBool::new(false),
             load_timed_out: AtomicBool::new(false),
@@ -1143,6 +1148,7 @@ impl Shared {
         self.speed_audio_verdict.store(SPEED_AUDIO_UNKNOWN, Ordering::Relaxed);
         self.demux_failed.store(false, Ordering::Relaxed);
         self.demux_io_failed.store(false, Ordering::Relaxed);
+        self.hls_live_stalled.store(false, Ordering::Relaxed);
         self.demux_no_video.store(false, Ordering::Relaxed);
         self.load_failed.store(false, Ordering::Relaxed);
         self.load_timed_out.store(false, Ordering::Relaxed);

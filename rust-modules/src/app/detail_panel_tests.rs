@@ -253,6 +253,7 @@ impl plx_ui::dispatch::Tap<AppHost> for PickTap {
             self.last = Some(match app {
                 AppFx::Content(ContentReq::Play { play, .. }) => Asked::Play(match play {
                     PlayIntent::Item { version, .. } | PlayIntent::Movie { version, .. } => *version,
+                    PlayIntent::Live { .. } => unreachable!("a detail action cannot tune a channel"),
                 }),
                 AppFx::Content(ContentReq::Present(ContentArg::Detail { sid, rk })) => Asked::Present(*sid, rk.clone()),
                 AppFx::Content(ContentReq::PreviewStart { .. }) => Asked::Other("content:PreviewStart"),

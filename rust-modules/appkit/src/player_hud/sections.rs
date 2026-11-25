@@ -77,6 +77,12 @@ pub(super) fn image(f: &Frame<'_>, q: Painter, rect: Rect, bind: &str, radius: f
     if bind != "info.still" {
         return;
     }
+    if f.model.is_live {
+        if let Some(info) = plx_media::route::live_info(f.ps) {
+            still(q, rect, radius, info.channel.sid.raw(), &info.channel.now_thumb, plx_ui::placeholder::Reason::InfoPanelStill);
+        }
+        return;
+    }
     let Some(c) = info_content(f.meta) else { return };
     still(q, rect, radius, plx_media::route::item_sid(plx_media::route::cur_sid(f.ps)).raw(), &c.thumb, plx_ui::placeholder::Reason::InfoPanelStill);
 }
@@ -98,12 +104,26 @@ pub(super) fn text_of(f: &Frame<'_>, bind: &str) -> Option<String> {
     match bind {
         "title.main" => Some(f.meta.now_playing().filter(|n| n.is_real_episode).map_or_else(|| words(plx_media::route::title_cptr(f.ps)), |n| n.title.clone())),
         "title.kicker" => Some(f.meta.now_playing().filter(|n| n.is_real_episode).map_or_else(|| words(plx_media::route::ctxline_cptr(f.ps)), |n| plx_ui::fmt::episode_kicker(n.season, n.index, &n.ep_title))),
+        "info.title" if f.model.is_live => Some(plx_media::route::live_info(f.ps).map_or_else(
+            || words(plx_media::route::title_cptr(f.ps)),
+            |info| format!("{} {}", info.channel.vcn, info.channel.name).trim().to_owned())),
+        "info.summary" if f.model.is_live => plx_media::route::live_info(f.ps).map(live_summary),
         "info.title" => info_content(f.meta).map(|c| c.title),
         "info.summary" => info_content(f.meta).map(|c| c.summary),
         "label.info" => tab_labels(false)[0].map(str::to_owned),
         "label.chapters" => tab_labels(true)[1].map(str::to_owned),
         _ => None,
     }
+}
+
+fn live_summary(info: &plx_media::route::LiveInfo) -> String {
+    let mut lines = Vec::new();
+    if !info.channel.now.is_empty() { lines.push(info.channel.now.clone()); }
+    if let Some(([start_h, start_m], [end_h, end_m])) = info.local_airing {
+        lines.push(format!("{start_h:02}:{start_m:02} – {end_h:02}:{end_m:02}"));
+    }
+    if !info.channel.now_summary.is_empty() { lines.push(info.channel.now_summary.clone()); }
+    lines.join("\n")
 }
 
 /// Whether `bind` is one of the section text binds [`text`] draws.
@@ -169,6 +189,7 @@ pub(super) fn facts_run(
     bold: &Live<bool>,
     ink: &Live<Rgba>,
 ) -> Option<FactsRun> {
+    if f.model.is_live { return None; }
     let c = info_content(f.meta)?;
     let (order, badges): (Vec<&str>, Vec<&str>) = (order.iter().map(String::as_str).collect(), badges.iter().map(String::as_str).collect());
     let shape = FactsShape {

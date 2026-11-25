@@ -2926,7 +2926,7 @@ fn a_show_trailer_disc_plays_the_extra_not_the_on_deck_episode() {
             assert_ne!(part.as_str(), "/library/parts/trailer");
             assert_ne!(context.as_str(), plx_data::metadata::TRAILER_CONTEXT);
         }
-        (PlayIntent::Movie { .. }, _) => {}
+        (PlayIntent::Movie { .. } | PlayIntent::Live { .. }, _) => {}
     }
     clear();
 }
@@ -5727,6 +5727,7 @@ fn a_picked_version_plays_it_resuming_like_play() {
                 assert_eq!(*version, Some(pick), "{kind}");
             }
             PlayIntent::Movie { .. } => panic!("{kind}: the loaded item, not a hub row"),
+            PlayIntent::Live { .. } => panic!("{kind}: the loaded item, not a live channel"),
         }
         assert_eq!(resume_ns, plx_data::metadata::resume_ns(600_000, 6_000_000), "{kind} resumes");
         let (_, effects) = step(&mut screen, &ScreenEvent::Activate(hero::ELEM_PLAY), Some(hero::ELEM_PLAY));
@@ -5900,6 +5901,7 @@ fn a_hero_controls_subject_is_the_rating_key_its_activation_acts_on() {
     let played = match play_item(&effects) {
         Some((PlayIntent::Item { rk, .. }, _)) => rk.clone(),
         Some((PlayIntent::Movie { item, .. }, _)) => item.rk.clone(),
+        Some((PlayIntent::Live { .. }, _)) => panic!("Detail cannot tune a channel"),
         None => panic!("Play pushes a play request"),
     };
     assert_eq!(subject(&screen, "hero.play").as_deref(), Some(played.as_str()));
@@ -5923,6 +5925,7 @@ fn a_hero_controls_subject_is_the_rating_key_its_activation_acts_on() {
     let played = match play_item(&effects) {
         Some((PlayIntent::Movie { item, .. }, _)) => item.rk.clone(),
         Some((PlayIntent::Item { rk, .. }, _)) => rk.clone(),
+        Some((PlayIntent::Live { .. }, _)) => panic!("Detail cannot tune a channel"),
         None => panic!("Play pushes a play request"),
     };
     assert_eq!(played, "card");

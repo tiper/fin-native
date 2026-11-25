@@ -127,6 +127,72 @@ pub struct MediaContainer {
     /// (`serverinfo.rs`); every other endpoint simply omits it.
     #[serde(default)]
     pub version: String,
+    /// `GET /livetv/dvrs` only — the server's DVRs (`docs/pms-api.md` §10, `livetv.rs`).
+    #[serde(rename = "Dvr", default, deserialize_with = "de_vec")]
+    pub dvr: Vec<Dvr>,
+    /// `GET /{epg}/lineups/dvr/channels` only — a DVR's guide lineup (`livetv.rs`).
+    #[serde(rename = "Channel", default, deserialize_with = "de_vec")]
+    pub channel: Vec<EpgChannel>,
+    /// `GET /media/providers` only — the media providers this token may use, Live TV's among them
+    /// (`livetv.rs`).
+    #[serde(rename = "MediaProvider", default, deserialize_with = "de_vec")]
+    pub media_provider: Vec<MediaProvider>,
+}
+
+/// One row of `/media/providers`: what this token may read, not what the server holds. A Live TV
+/// provider names itself in `protocols` and its `identifier` is the guide path prefix
+/// (`tv.plex.providers.epg.xmltv:5`), the same string `/livetv/dvrs` calls `epgIdentifier`
+/// (`docs/pms-api.md` §10). This read is what a non-admin user CAN see: `/livetv/dvrs` answers that
+/// token with 403.
+#[derive(Deserialize, Default, Clone, Debug)]
+pub struct MediaProvider {
+    #[serde(default, deserialize_with = "de_str")]
+    pub identifier: String,
+    /// The protocols the provider serves for this token; `livetv` is the one Live TV is found by.
+    #[serde(default, deserialize_with = "de_str")]
+    pub protocols: String,
+    #[serde(default, deserialize_with = "de_str")]
+    pub title: String,
+}
+
+/// One DVR on `/livetv/dvrs`: a tuner the server owns plus the EPG provider that names its
+/// channels (`docs/pms-api.md` §10).
+#[derive(Deserialize, Default, Clone, Debug)]
+pub struct Dvr {
+    #[serde(default, deserialize_with = "de_str")]
+    pub key: String,
+    /// The guide's provider id, `tv.plex.providers.epg.xmltv:7` — the path prefix of its lineup
+    /// and grid reads.
+    #[serde(rename = "epgIdentifier", default, deserialize_with = "de_str")]
+    pub epg_identifier: String,
+    #[serde(rename = "Device", default, deserialize_with = "de_vec")]
+    pub device: Vec<DvrDevice>,
+}
+
+/// A tuner behind a [`Dvr`]. `status` is `"alive"` or `"dead"` as the server last saw it on a
+/// device discovery, which runs at server start: a tuner that was not answering then reads
+/// `dead` until the next discovery, however healthy it is now.
+#[derive(Deserialize, Default, Clone, Debug)]
+pub struct DvrDevice {
+    #[serde(default, deserialize_with = "de_str")]
+    pub key: String,
+    #[serde(default, deserialize_with = "de_str")]
+    pub status: String,
+}
+
+/// One channel of a DVR's guide lineup. `title` carries the number in front
+/// (`"101 Family Channel"`); `thumb` is a URL on the TUNER's host, which only the server is
+/// sure to reach.
+#[derive(Deserialize, Default, Clone, Debug)]
+pub struct EpgChannel {
+    #[serde(rename = "gridKey", default, deserialize_with = "de_str")]
+    pub grid_key: String,
+    #[serde(default, deserialize_with = "de_str")]
+    pub vcn: String,
+    #[serde(default, deserialize_with = "de_str")]
+    pub title: String,
+    #[serde(default, deserialize_with = "de_str")]
+    pub thumb: String,
 }
 
 /// Doubles as the generic `Directory[]` row: a library section ({key,type,title}), a secondary
@@ -675,6 +741,16 @@ pub struct Media {
     pub video_profile: String,
     #[serde(rename = "Part", default)]
     pub part: Vec<MediaPart>,
+    /// Live TV guide airings only (`/{epg}/grid`): the channel this airing is on and its slot in
+    /// Unix seconds. Empty / 0 on every library item.
+    #[serde(rename = "channelVcn", default, deserialize_with = "de_str")]
+    pub channel_vcn: String,
+    #[serde(rename = "channelIdentifier", default, deserialize_with = "de_str")]
+    pub channel_identifier: String,
+    #[serde(rename = "beginsAt", default, deserialize_with = "de_i64")]
+    pub begins_at: i64,
+    #[serde(rename = "endsAt", default, deserialize_with = "de_i64")]
+    pub ends_at: i64,
 }
 
 #[derive(Deserialize, Default)]
