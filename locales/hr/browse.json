@@ -285,5 +285,6 @@
     "one": "TV se nije povezao s plex.tv pa poslužitelji nisu provjereni. Pokušali smo jednom. Pokušajte opet nakon provjere internetske veze.",
     "few": "TV se nije povezao s plex.tv pa poslužitelji nisu provjereni. Pokušali smo {count} puta. Pokušajte opet nakon provjere internetske veze.",
     "other": "TV se nije povezao s plex.tv pa poslužitelji nisu provjereni. Pokušali smo {count} puta. Pokušajte opet nakon provjere internetske veze."
-  }
+  },
+  "browse.server_security.notice": "Potrebno je sigurnosno ažuriranje: ažurirajte Plex poslužitelj {name}."
 }
