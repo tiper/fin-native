@@ -1235,7 +1235,7 @@ Ecore names to `remote_token_key` pairs".
   shared; thread-affine state (window, GL context, the Ecore handles) lives only in a `Surface` that
   `Shell::open(&self, &MainThread, &OpenAsk)` returns on the loop thread and that the app owns inside `App`.
 - Events. The platform reports input through `EventSink` (`key(Option<Action>, Option<RawKey>, Edge) -> bool`, `text`,
-  `pointer`, `wheel`, `lifecycle`, `quit`); the APP converts to its private `HostEvent` (a private `HostQueue`, the
+  `keyboard_dismissed`, `pointer`, `wheel`, `lifecycle`, `quit`); the APP converts to its private `HostEvent` (a private `HostQueue`, the
   one place), so the owner's decision that the event API stays private holds. `Action`, `RawKey` and `Edge` are
   lower-layer types: `RawKey` moved to `plx_ui::consts` beside `raw_pair` and `action_of` (a `pub(crate) use` keeps
   the app's old path). `Surface::deliver(&self, &mut dyn EventSink)` is ADDITIVE, beside `Surface::poll`: `deliver` is

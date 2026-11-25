@@ -247,6 +247,7 @@ impl Window {
             window.destroy();
             return Err(code);
         }
+        crate::ime::bind_window(window.window);
         Ok(window)
     }
 
@@ -392,6 +393,8 @@ impl Window {
             return;
         }
         self.initialised = false;
+        // The keyboard's context goes before the window it types into.
+        crate::ime::release();
         // SAFETY: handles made by `create`, each cleared after use; the tables were live to make them.
         unsafe {
             for handler in self.handlers.drain(..) {
@@ -558,6 +561,12 @@ fn on_key(down: bool, event: *mut c_void) {
         let ev = &*event.cast::<EcoreEventKey>();
         (text_of(ev.keyname).or_else(|| text_of(ev.key)), ev.keycode)
     };
+    // The panel's Done: delivered as OK only while our panel is up (`ime::Panel::done`), since its HIDE can
+    // arrive first and dismiss the field.
+    if name.as_deref() == Some("Select") && !crate::ime::admit_done(down) {
+        log(&format!("key: {} name=\"Select\" code={code} -> the panel's Done after it closed, dropped", if down { "down" } else { "up" }));
+        return;
+    }
     let mut decoder = DECODER.lock().unwrap_or_else(|e| e.into_inner());
     keys::feed(&mut decoder, name.as_deref().unwrap_or(""), code, down, |action, edge| {
         // A full queue or a stopped library drops the press: nothing here may wait.

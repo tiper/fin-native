@@ -352,6 +352,36 @@ In the receiver, in order (the host's lines are fixed by `Program.cs`; the libra
 State plainly what was not seen. The log is the evidence. A host-side window capture of the emulator does show the GL UI (a Windows
 `PrintWindow` capture showed Home, the detail page and the focus ring), so a capture is a record of the screen to attach beside the log.
 
+## The system keyboard (emulator run, 2026-11-25)
+
+Search's field raises the television's own on-screen keyboard through Ecore IMF (`platform-tizen/src/ime.rs`). The
+platform's `Shell` states `keyboard_available` / `show_keyboard` / `hide_keyboard`, which `textinput` calls where an SDL
+shell calls SDL. Every IMF call runs on the host's main thread (`run_on_host`). The sequence is flutter-tizen's
+`tizen_input_method_context.cc`: a context from `ecore_imf_context_default_id_get`, the window as its client by
+`ecore_wl2_window_id_get`, then `focus_in` + `input_panel_show` to raise it and `input_panel_hide` + `focus_out` to dismiss it.
+
+Measured on the TV 10.0 emulator against `tests/mock_pms.py`:
+
+- **Raise.** OK on the field logs `keyboard: start support=1`, `ime: context_add(wayland)`, `ime: panel show` and
+  `ime: panel state Show`. The Samsung keyboard is drawn over the lower part of the window.
+- **Typing.** While the panel is up the remote's arrows and OK move and press inside the panel. They do not reach the window.
+  Each letter arrives as one COMMIT (`ime: commit (1 bytes)`; the text is never logged) and the query follows it.
+- **Keys the panel sends to the window.** Three of the panel's keys arrive as ordinary key events, now in `keys.rs` as
+  measured rows:
+  - Its delete key is `BackSpace` (code 22) and deletes one character.
+  - Done is `Select` (code 0). It is bound to OK, so the field commits the query and closes the panel. Done also
+    hides the panel, and its HIDE and its key can arrive in either order; `ime::Panel::done` makes them one decision. A
+    `Select` while the panel is up is the OK and the HIDE behind it is the library's own; a `Select` after the HIDE
+    already dismissed the field is dropped, so it cannot raise the panel again.
+  - Back is `Cancel` (code 231). It has no action, because the panel closes itself.
+- **Closed on the panel.** After Back, the panel's STATE callback reports HIDE and the library pushes
+  `Input::KeyboardDismissed` (`ime: panel state Hide (closed on the panel)`). The loop turns it into the same
+  `SystemKeyboard(false)` the background edge sends, so the field stops owning a keyboard that has gone, and OK on the
+  field raises the panel again. A HIDE after the library's own `hide` is not counted as the viewer's (`ime::Panel`).
+
+Not measured: a retail set, other layouts and languages (the `globe` key), the panel's arrows `<` / `>`, and the
+`filter_event` forwarding flutter-tizen does while the panel is up, which this emulator did not need.
+
 ## Known gaps seen on the emulator (2026-11-21)
 
 - The Home hero's Play looks enabled; pressing it opens the player route ("Playback failed / The server cannot play or convert this file", footer `decision_refused`) and logs no decision line. That route clears to `(0, 0, 0, 0)` over a translucent window: the emulator shows black behind the read-out (above); a retail set is unmeasured (H6).

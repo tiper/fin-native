@@ -47,10 +47,14 @@ const LOOP_STACK_BYTES: usize = 8 << 20;
 pub const STOP_DEADLINE: Duration = Duration::from_secs(5);
 
 /// One input the host side queued for the loop.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Input {
     /// A key with an action, and its edge.
     Key(Action, Edge),
+    /// A commit from the system keyboard (`ime`'s COMMIT callback).
+    Text(String),
+    /// The viewer closed the system keyboard on its panel (`ime`'s STATE callback).
+    KeyboardDismissed,
     /// `OnPause`.
     Pause,
     /// `OnResume`.
@@ -316,6 +320,8 @@ impl Hosted {
                 Input::Key(action, edge) => {
                     sink.key(Some(action), None, edge);
                 }
+                Input::Text(text) => sink.text(&text),
+                Input::KeyboardDismissed => sink.keyboard_dismissed(),
                 Input::Pause => {
                     // One transition is one DID edge: the application works and logs once per edge, and DID
                     // alone is complete. A pause while paused is no transition.
@@ -640,6 +646,9 @@ pub(crate) mod testing {
         }
         fn text(&mut self, text: &str) {
             self.seen.push(format!("text {text}"));
+        }
+        fn keyboard_dismissed(&mut self) {
+            self.seen.push("keyboard dismissed".into());
         }
         fn pointer(&mut self, _x: f32, _y: f32, _edge: PointerEdge) {
             self.seen.push("pointer".into());
@@ -1316,5 +1325,19 @@ mod tests {
             ["key Some(Right) None Down", "key Some(Right) None Up", "lifecycle DidBackground", "key Some(Back) None Down"]
         );
         plx_base::task::watchdog::arm();
+    }
+
+    /// **The system keyboard's commits and its dismissal reach the application in the order queued among the
+    /// keys**: a commit as `EventSink::text`, the viewer closing the panel as `keyboard_dismissed`.
+    #[test]
+    fn keyboard_commits_and_the_panels_dismissal_reach_the_application_in_order() {
+        let w = World::new();
+        w.hosted.running.store(true, Ordering::SeqCst);
+        for input in [Input::Key(Action::Ok, Edge::Down), Input::Text("wal".into()), Input::Text("l".into()), Input::KeyboardDismissed] {
+            w.hosted.push(input).unwrap();
+        }
+        let mut rec = Rec::default();
+        w.hosted.deliver(&mut rec);
+        assert_eq!(rec.seen, ["key Some(Ok) None Down", "text wal", "text l", "keyboard dismissed"]);
     }
 }

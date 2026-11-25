@@ -737,7 +737,8 @@ pub(crate) unsafe fn construct(
     // The system on-screen keyboard, PROBED — see `crate::textinput`'s module doc. Both facts
     // on this line are preconditions that fail in complete silence, and nothing in this tree
     // had ever read either of them:
-    //   support= `SDL_HasScreenKeyboardSupport` — does this firmware's SDL have a panel at all.
+    //   support= `Shell::keyboard_available` — does this platform have a panel at all (SDL's
+    //            `SDL_HasScreenKeyboardSupport` on an SDL shell).
     //   focus=   `SDL_WINDOW_INPUT_FOCUS` — `SDL_StartTextInput` shows the panel only
     //            `if (SDL_GetKeyboardFocus())`. Clear, and it enables text events, returns
     //            void, and no panel appears.
@@ -759,9 +760,11 @@ pub(crate) unsafe fn construct(
     // this window, and the window is created here, a long way from where BACK is decided.
     platform.shell.bind_window(win);
     let keyboard = plx_shell_sdl::text::keyboard_probe(win);
+    // `support=` is the platform's answer (`Shell::keyboard_available`): SDL's own on an SDL shell, so the
+    // same number as before there, and Ecore IMF's on Tizen, whose keyboard is not SDL's.
     log(&format!(
         "keyboard: support={} active={} focus={} winflags=0x{:x}",
-        keyboard.support,
+        i32::from(platform.shell.keyboard_available()),
         keyboard.active,
         i32::from(keyboard.wflags & SDL_WINDOW_INPUT_FOCUS != 0),
         keyboard.wflags

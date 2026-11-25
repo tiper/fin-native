@@ -139,6 +139,21 @@ impl Shell for TizenShell {
     fn frame(&self) -> &'static FrameSeam {
         &FrameSeam::NONE
     }
+    /// Ecore IMF's keyboard ([`crate::ime`]), not SDL's: the library loads and the window was bound.
+    fn keyboard_available(&self) -> bool {
+        crate::ime::available()
+    }
+    /// Queued to the host's main thread, where every Ecore IMF call is made.
+    fn show_keyboard(&self) {
+        if !self.hosted.on_host(Box::new(crate::ime::show)) {
+            log("surface: the keyboard show was not queued (the host is stopping or refused it)");
+        }
+    }
+    fn hide_keyboard(&self) {
+        if !self.hosted.on_host(Box::new(crate::ime::hide)) {
+            log("surface: the keyboard hide was not queued (the host is stopping or refused it)");
+        }
+    }
 }
 
 /// The open window: the EGL context the loop presents through, and the native window it was made for.

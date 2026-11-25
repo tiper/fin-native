@@ -251,6 +251,9 @@ fn an_event_sink_is_implementable_from_outside_and_receives_a_surfaces_events_in
         fn text(&mut self, text: &str) {
             self.0.push(format!("text {text}"));
         }
+        fn keyboard_dismissed(&mut self) {
+            self.0.push("keyboard dismissed".into());
+        }
         fn pointer(&mut self, x: f32, y: f32, edge: PointerEdge) {
             self.0.push(format!("pointer {x} {y} {edge:?}"));
         }

@@ -3480,7 +3480,7 @@ impl Rig<AppHost> for Bridge<'_> {
         #[cfg(test)]
         self.retained.keyboard_calls.push(up);
         #[cfg(not(test))]
-        if up { crate::textinput::start(); } else { crate::textinput::stop(); }
+        if up { crate::textinput::start(self.shell()); } else { crate::textinput::stop(self.shell()); }
     }
     fn adopt_system_keyboard(&mut self) {
         #[cfg(test)]

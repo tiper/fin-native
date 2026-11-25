@@ -1126,7 +1126,7 @@ unsafe fn ingress_token(app: &mut App, fr: &mut Frame, token: &str) -> bool {
         // commits frames after it opened.
         if !drained && super::bridge::text_owner(&app.pages) { drain_sdl(app, fr); }
         if super::bridge::text_owner(&app.pages) {
-            let panel = super::bridge::text_panel_edge(&app.pages, crate::textinput::available());
+            let panel = super::bridge::text_panel_edge(&app.pages, crate::textinput::available(app.platform.shell));
             ingest_text(app, &text.replace('+', " "), panel, plx_machine::machine::Source::RemoteFifo);
             return true;
         }
@@ -1247,7 +1247,7 @@ unsafe fn ingest_host_event(app: &mut App, fr: &mut Frame, event: HostEvent,
             HostEvent::Lifecycle(Lifecycle::WillForeground) => {}
             // The tape owns logical ingress; a real key, text commit, pointer or wheel event must not
             // be counted a second time.
-            HostEvent::Key(_) | HostEvent::Text(_) | HostEvent::Pointer { .. } | HostEvent::Wheel { .. } => {}
+            HostEvent::Key(_) | HostEvent::Text(_) | HostEvent::KeyboardDismissed | HostEvent::Pointer { .. } | HostEvent::Wheel { .. } => {}
         }
         return;
     }
@@ -1257,6 +1257,13 @@ unsafe fn ingest_host_event(app: &mut App, fr: &mut Frame, event: HostEvent,
     match event {
         HostEvent::Key(press) => ingest_key(app, press),
         HostEvent::Text(text) => ingest_text_commit(app, text),
+        // The viewer closed the platform's keyboard on its panel: the same keyboard drop the background edge
+        // asks for (`host_background`), behind whatever this batch delivered before it, so the field stops
+        // owning a keyboard that has gone and the next OK raises it again.
+        HostEvent::KeyboardDismissed => app.inputs.push(plx_machine::machine::InputEvent {
+            at: plx_machine::machine::Tick { ms: fr.now, dt_us: 0 }, source: plx_machine::machine::Source::Sdl,
+            kind: plx_machine::machine::InputKind::SystemKeyboard(false),
+        }),
         HostEvent::Pointer { x, y, edge } => ingest_pointer(app, x, y, edge),
         HostEvent::Wheel { dy } => ingest_wheel(app, dy),
         // Nothing is torn down here: the loop ends, then `shutdown` releases what is held.
@@ -1768,7 +1775,7 @@ unsafe fn ingest_key(app: &mut App, press: KeyPress) {
 /// `MAX_PENDING` bounds a queue nobody drains. An empty commit is ignored by both.
 fn ingest_text_commit(app: &mut App, text: String) {
     if super::bridge::text_owner(&app.pages) {
-        let panel = super::bridge::text_panel_edge(&app.pages, crate::textinput::available());
+        let panel = super::bridge::text_panel_edge(&app.pages, crate::textinput::available(app.platform.shell));
         ingest_text(app, &text, panel, plx_machine::machine::Source::Sdl);
     } else {
         crate::textinput::queue(text);
@@ -4726,7 +4733,23 @@ pub(in crate::app) mod lifecycle_regression_tests {
             HostEvent::Key(_) | HostEvent::Text(_) | HostEvent::Pointer { .. } | HostEvent::Wheel { .. } => {
                 panic!("a key, a text commit, a pointer event and a wheel tick arrive as their own bytes, not as a type code")
             }
+            HostEvent::KeyboardDismissed => panic!("only a hosted platform reports its keyboard closed; SDL never does"),
         }
+    }
+
+    /// **The platform closing its keyboard on the panel is the keyboard drop the background edge asks for**:
+    /// one `SystemKeyboard(false)` input, queued behind what the batch delivered before it, so a field stops
+    /// owning a keyboard that has gone (else `textinput::start` stays latched and the next OK raises nothing).
+    #[test]
+    fn a_keyboard_the_platform_closed_queues_the_keyboard_drop() {
+        use plx_machine::machine::InputKind;
+        let _serial = plx_base::testlock::serial();
+        let mut app = app();
+        let mut fr = Frame::begin(&app.player.session, app.runtime.metadata_view());
+        let before = app.inputs.len();
+        deliver(&mut app, &mut fr, true, HostEvent::KeyboardDismissed);
+        let kinds: Vec<_> = app.inputs[before..].iter().map(|e| e.kind.clone()).collect();
+        assert!(matches!(kinds.as_slice(), [InputKind::SystemKeyboard(false)]), "{kinds:?}");
     }
 
     /// Deliver `event` the SDL way (`hosted` false: its bytes through `ingest_sdl_event`) or the
