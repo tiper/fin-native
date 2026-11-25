@@ -19,10 +19,10 @@
 //! `plx_shell_sdl::text` and the application's `textinput`.
 //!
 //! Everything SDL-shaped that [`Shell`] asks for is a stated no-op: there is no SDL window to bind, no
-//! surface to release, no opaque region to route (the window is translucent from its creation,
-//! [`crate::ecore::WINDOW_ALPHA`], so the video plane shows through wherever the frame clears to alpha 0
+//! surface to release, no opaque region to route (the window's mode is set once at its creation,
+//! [`crate::ecore::WindowMode`], so the video plane shows through wherever the frame clears to alpha 0
 //! and there is nothing to switch per frame; the player route clears that way whether or not a plane is
-//! bound, which the `WINDOW_ALPHA` note measures) and no platform bus to pump. The drawable size is not probed: the window is the screen's size, which
+//! bound) and no platform bus to pump. The drawable size is not probed: the window is the screen's size, which
 //! [`crate::ecore`] logs, and anything other than 1920x1080 is UNHANDLED (the renderer's canvas is that).
 use crate::ecore::Window;
 use crate::egl::Egl;
@@ -124,7 +124,7 @@ impl Shell for TizenShell {
         false
     }
     fn arm_opaque_region(&self) {}
-    /// Nothing to route: the window is translucent for good ([`crate::ecore::WINDOW_ALPHA`]), and whether the
+    /// Nothing to route: the window's mode is fixed at creation ([`crate::ecore::WindowMode`]), and whether the
     /// video shows is the frame's own alpha (the player route's clear, which the loop makes on that route whether
     /// or not a plane is bound), so `_player` has no second effect here.
     fn opaque_route(&self, _player: bool) {}

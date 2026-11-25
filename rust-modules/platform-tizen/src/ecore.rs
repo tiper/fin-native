@@ -81,6 +81,16 @@ plx_base::dynlib! {
 }
 
 plx_base::dynlib! {
+    /// Tizen's own `ecore_wl2_window_video_has` (`TIZEN_ONLY`, public since 6.0): it sends `tizen_policy.has_video`,
+    /// and the compositor then puts a (0, 0, 0, 0) COPY rectangle under an OPAQUE window and blends its buffer's
+    /// alpha, so the frame's alpha-0 pixels reach the video plane while the windows below stay hidden. A table of
+    /// its own: an image without it keeps the translucent window ([`WindowMode::of`]).
+    ecore_wl2_video: ["libecore_wl2.so.1"] {
+        fn ecore_wl2_window_video_has(window: *mut c_void, has: u8);
+    }
+}
+
+plx_base::dynlib! {
     /// The options only the embedder sets (position, the geometry aux hint, the rotations): their presence
     /// on the emulator image is unrecorded, so they are a table of their own and a missing one costs only
     /// these three, not the two above.
@@ -120,23 +130,49 @@ plx_base::dynlib! {
 /// upstream header, not from a device: UNVERIFIED.
 const WINDOW_TYPE_TOPLEVEL: c_int = 1;
 
-/// **The window is translucent: this platform's frames go over a video plane.** The `alpha` argument of
-/// `ecore_wl2_window_alpha_set`, which the window gets at creation and keeps for the process (a flag of the
-/// window, so there is nothing to route per frame and `Shell::opaque_route` has no work). Measured on the TV 10.0
-/// emulator (2026-11-22): with it ON the native player's overlay video shows only through the pixels the frame
-/// clears to (0, 0, 0, 0) and the UI around them is intact. With it OFF (what this crate set before) the window
-/// is opaque and no video can show.
+/// **How the window lets the video plane show: an opaque window that has video, or, failing that, a translucent one.**
 ///
-/// **Which frames clear to (0, 0, 0, 0).** The pages with a ground clear to an opaque colour (Home, detail,
-/// library, search: `frame_clear`), so they are as opaque as before. The PLAYER ROUTE clears to (0, 0, 0, 0)
-/// whenever `fr.player` is set, bound plane or not (`app/run.rs`), and `PlayerScreen` paints no ground, so its
-/// spinner and its "Playback failed" read-out are drawn over a transparent clear even when no plane is bound.
-/// Measured on the emulator at `3d56d35b2` (no URI driver yet, so the plane is never bound): hero Play opens the
-/// read-out, and behind it the emulator shows exactly (0, 0, 0) black (5778 of 5784 samples; the rest is the
-/// footer text), unchanged from +0.49 s to +6.86 s, with the text and pills drawn cleanly and Back returning to an
-/// opaque Home. The caveat: the EMULATOR's compositor had nothing under the window. What a retail set composites
-/// under a (0, 0, 0, 0) clear with no player is unmeasured and belongs to H6.
-pub const WINDOW_ALPHA: u8 = 1;
+/// The frames of the player route (and the detail trailer preview) clear to (0, 0, 0, 0) so the native player's
+/// OVERLAY video shows through them (`app/run.rs`, `gfx::frame_clear_through`); the other pages clear to an opaque
+/// colour. What the compositor puts under those alpha-0 pixels is the window's mode:
+///
+/// - **Translucent** (`ecore_wl2_window_alpha_set(win, 1)`, what this crate did from 2026-11-22). The call sends a
+///   null opaque region, so the compositor reads the window as ARGB, and an ARGB window never hides the windows
+///   below it (E20's visibility walk, `e_client.c`). On the TV 10.0 emulator nothing was below and the video showed
+///   through. On the first retail set (discussion #1460, 2026-11-25, two photos) the TV's own home screen showed
+///   through every alpha-0 pixel: in the letterbox bars, and over the whole screen when no picture was up.
+/// - **Opaque with video** (alpha left off, then [`ecore_wl2_video`]'s `has_video`). `alpha_set(win, 0)` sends
+///   nothing on a window that never had alpha (EFL returns early on an unchanged value): the window is opaque
+///   because E20 starts every client non-ARGB and no null opaque region is ever sent. It hides what is below
+///   it, and the compositor puts a (0, 0, 0, 0) COPY rectangle under it and blends its buffer's alpha
+///   (`e_comp_wl_subsurface.c`, `_e_comp_wl_subsurface_check_below_bg_rectangle`), so alpha 0 reaches the plane
+///   and nothing else. This is the mode whenever the image has the call.
+///
+/// Opaque WITHOUT video is never chosen on purpose: with alpha off and no `has_video` the emulator showed no video at
+/// all. It can still happen by accident: EFL sends `has_video` only when the compositor's `tizen_policy` is version 7
+/// or later (and not at all without one), and the version is not readable from here, so an image that exports the
+/// symbol over an older compositor gets an opaque window with no hole. The symbol and the v7 request came together
+/// (6.0), so this is not expected; a retail set is unmeasured.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowMode {
+    OpaqueWithVideo,
+    Translucent,
+}
+
+impl WindowMode {
+    /// The mode for an image that has (`true`) or lacks `ecore_wl2_window_video_has`.
+    pub fn of(video_has: bool) -> WindowMode {
+        if video_has { WindowMode::OpaqueWithVideo } else { WindowMode::Translucent }
+    }
+
+    /// The `alpha` argument of `ecore_wl2_window_alpha_set`.
+    pub fn alpha(self) -> u8 {
+        match self {
+            WindowMode::OpaqueWithVideo => 0,
+            WindowMode::Translucent => 1,
+        }
+    }
+}
 
 /// Load one table, saying why when it does not load; `true` when it is live.
 pub(crate) fn loaded(what: &str, result: Loaded) -> bool {
@@ -341,7 +377,15 @@ impl Window {
         unsafe {
             if loaded("ecore_wl2_opts", ecore_wl2_opts::load(None)) {
                 ecore_wl2_window_type_set(self.window, WINDOW_TYPE_TOPLEVEL);
-                ecore_wl2_window_alpha_set(self.window, WINDOW_ALPHA);
+                let mode = WindowMode::of(loaded("ecore_wl2_video", ecore_wl2_video::load(None)));
+                ecore_wl2_window_alpha_set(self.window, mode.alpha());
+                if mode == WindowMode::OpaqueWithVideo {
+                    // `window_new` made the window's `wl_surface`, and `open` succeeding means a compositor answered (EFL
+                    // passes the surface to the request unchecked). The compositor reads the flag at the next commit, and
+                    // sends it only on a `tizen_policy` of version 7 or later.
+                    ecore_wl2_window_video_has(self.window, 1);
+                }
+                log(&format!("ecore: window mode {mode:?} (alpha {})", mode.alpha()));
             }
             if loaded("ecore_wl2_opts_extra", ecore_wl2_opts_extra::load(None)) {
                 let hint = CString::new("wm.policy.win.user.geometry").unwrap_or_default();
@@ -605,16 +649,25 @@ unsafe extern "C" fn focus_cb(data: *mut c_void, _kind: c_int, _event: *mut c_vo
 mod tests {
     use super::*;
 
-    /// **The window is created translucent, and by the named value.** The video plane shows through a window
-    /// whose alpha is on (E-measurement 2026-11-22, `docs/tizen.md`); the call is made in `set_options`, from
-    /// [`WINDOW_ALPHA`], and not from a literal that could read 0 again.
+    /// **The window is opaque and has video wherever the image allows** (discussion #1460: a translucent window
+    /// shows the TV's home screen through every alpha-0 pixel), and translucent only where it cannot have video,
+    /// because an opaque window without video shows no video at all. The call site takes its alpha from the mode.
     #[test]
-    fn the_window_is_created_translucent_from_the_named_value() {
-        assert_eq!(WINDOW_ALPHA, 1, "alpha ON: the overlay video shows through a (0, 0, 0, 0) clear");
+    fn the_window_is_opaque_with_video_and_translucent_only_without_the_call() {
+        assert_eq!(WindowMode::of(true), WindowMode::OpaqueWithVideo);
+        assert_eq!(WindowMode::of(true).alpha(), 0, "an opaque window hides the windows below it");
+        assert_eq!(WindowMode::of(false), WindowMode::Translucent);
+        assert_eq!(WindowMode::of(false).alpha(), 1, "never opaque without the video hole");
         let src = include_str!("ecore.rs");
         let call = "ecore_wl2_window_alpha_set"; // built apart, so this test's own text is not what it finds
-        assert_eq!(src.matches(&format!("{call}(self.window, WINDOW_ALPHA);")).count(), 1);
-        assert!(!src.contains(&format!("{call}(self.window, 0);")), "no opaque window");
+        assert_eq!(src.matches(&format!("{call}(self.window, mode.alpha());")).count(), 1);
+        assert_eq!(src.matches(&format!("{call}(self.window,")).count(), 1, "one alpha call, from the mode");
+        // The hole itself: one `has_video`, and only inside the opaque arm (an opaque window without it shows no video).
+        let video = format!("{}(self.window, 1);", "ecore_wl2_window_video_has");
+        assert_eq!(src.matches(&video).count(), 1);
+        let arm = src.find("if mode == WindowMode::OpaqueWithVideo {").expect("the opaque arm");
+        let at = src.find(&video).expect("the call");
+        assert!(at > arm && !src[arm..at].contains('}'), "the call sits directly inside the opaque arm");
     }
 
     /// **No Ecore, no window, no crash**: on a host without `libecore_wl2` (every host this runs on) the window

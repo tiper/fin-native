@@ -152,13 +152,16 @@ was enough. With the window's alpha on the UI draws unchanged, and a picture sho
 Measured on the TV 10.0 x86_64 emulator, 2026-11-22 (a scratch probe; emulator only, no retail set):
 
 - With the window's alpha **on** (`ecore_wl2_window_alpha_set(win, 1)`; this crate set 0 until part B2) the native player's OVERLAY video shows
-  **only through the pixels the frame clears to (0, 0, 0, 0)**; the UI around it is intact. The window is therefore created translucent and stays so
-  (`plx_platform_tizen::ecore::WINDOW_ALPHA`): it is a flag of the window, so nothing is routed per frame and the Tizen shell's `opaque_route` has no
+  **only through the pixels the frame clears to (0, 0, 0, 0)**; the UI around it is intact. With it off and nothing else, no video shows.
+  **Superseded on 2026-11-26 (next section):** a translucent window shows the TV's home screen through those pixels on a retail set, so the window
+  is now opaque and states `has_video` (`plx_platform_tizen::ecore::WindowMode`), and is translucent only on an image without that call. Either
+  way the mode is a flag of the window set at creation, so nothing is routed per frame and the Tizen shell's `opaque_route` has no
   work. The pages with a ground clear to an opaque colour, so only the player route and the detail trailer preview (`frame_clear_through`) open the
   hole, the same shared chain webOS uses. **The player route's clear is keyed on the route, not on the plane**: the loop clears to `(0, 0, 0, 0)`
   whenever the player route is up (`fr.player`), bound or not, and `PlayerScreen` has no ground, so its spinner and its "Playback failed" read-out sit
   on a transparent clear even with no plane bound. The straighten pass and the capture skip are the ones keyed on `Player::video_plane_bound`.
-- The **video plane mixes STRAIGHT alpha** (pixel-exact: a straight (255, 255, 255, 128) strip is a 50 % veil over the video) while window-over-window
+- The **video plane mixes STRAIGHT alpha** (measured with the window TRANSLUCENT; not re-taken since the window became opaque with
+  `has_video`, whose compositor path is a different one, so it is unverified there; pixel-exact: a straight (255, 255, 255, 128) strip is a 50 % veil over the video) while window-over-window
   composition is premultiplied: the split webOS has, which `plx_gfx` already handles. Over the bound plane the loop's last draw is the straighten pass
   (`gfx/straighten.rs`), which divides the frame's premultiplied colour by its alpha; off the plane the frame goes out premultiplied, which is what the
   window compositor wants.
@@ -192,7 +195,7 @@ Measured on the TV 10.0 x86_64 emulator, 2026-11-22 (a scratch probe; emulator o
 
 At the time of this run the player was not yet bound, so `PauseForHome` and `ResumeAfterHome` had not been exercised with a player open: the first run of part B1's driver (at `126d1f04c`, below) did, and found that Home with a player open never resumed (fixed since in code, re-run pending). Still UNVERIFIED: a picture through the
 real URI driver (part B1, which calls `Hosted::player_open`; the later emulator runs drove it against the mock, and no reading of the picture was taken), and anything on a retail
-set (H6 stays OPEN: the library's thread, the overlay beneath an alpha window, privileges, firmware differences). The C# is built by no CI job
+set (H6 stays OPEN: the library's thread, the overlay beneath an opaque `has_video` window, or an alpha window where the symbol is missing, privileges, firmware differences). The C# is built by no CI job
 (`.github/workflows/tizen.yml` runs `tizen-abi` and `tizen-so`, which links the Rust library and never builds `PlxHost`); it is compiled by a
 `make PLATFORM=tizen tizen-tpk` on a machine with the .NET SDK (the run above did that for this tree).
 
@@ -373,6 +376,35 @@ driver states `subtitle_off`. **The retail set is not measured**: the next night
 subtitles shows none. A selected embedded subtitle is still refused (`SubtitleNotCarried`), and the emulator has no audio path, so
 sound is not determinable here.
 
+## The window is opaque and has video (retail report and emulator run, 2026-11-26)
+
+The first retail set (discussion #1460) played video with the translucent window above and sent two photos. The TV's own
+home screen (Smart Hub) showed through every pixel the frame cleared to (0, 0, 0, 0): in the letterbox bars above and below
+a wide picture, and over the whole screen, under the player's controls, when no picture was up. The emulator never showed
+this because nothing was below its window.
+
+The compositor's source explains it (Tizen's E20, read from a 2019 mirror; the TV's current compositor was not read):
+
+- `ecore_wl2_window_alpha_set(win, 1)` sends a null opaque region, which marks the window ARGB, and E20's visibility walk
+  (`e_client.c`) never lets an ARGB window hide the windows below it.
+- `ecore_wl2_window_video_has(win, 1)` (Tizen-only, public since 6.0) sends `tizen_policy.has_video`. For a window that is
+  NOT ARGB the compositor then puts a (0, 0, 0, 0) COPY rectangle under it and blends its buffer's alpha
+  (`e_comp_wl_subsurface.c`, `_e_comp_wl_subsurface_check_below_bg_rectangle`). The window's alpha-0 pixels reach the video
+  plane, and the windows below stay hidden.
+
+So `ecore::WindowMode` makes the window opaque (alpha 0) and calls `video_has` after the surface exists. It falls back to the
+translucent window only where the symbol is missing, because an opaque window without `has_video` shows no video at all.
+
+Measured on the TV 10.0 emulator against `tests/mock_pms.py`:
+
+- The log reads `ecore: ecore_wl2_video bound` and `ecore: window mode OpaqueWithVideo (alpha 0)`.
+- A 1280x720 clip plays (Prepared, `VideoSize 1280x720`, Started) and its picture fills the panel.
+- The controls draw over the picture.
+- Home and the detail page are opaque, before playback and after Back.
+
+**Not measured:** a retail set. Whether Smart Hub stays hidden, and what the letterbox bars show (the plane's own background,
+expected black), is the tester's next nightly.
+
 ## The system keyboard (emulator run, 2026-11-25)
 
 Search's field raises the television's own on-screen keyboard through Ecore IMF (`platform-tizen/src/ime.rs`). The
@@ -405,7 +437,7 @@ Not measured: a retail set, other layouts and languages (the `globe` key), the p
 
 ## Known gaps seen on the emulator (2026-11-21)
 
-- The Home hero's Play looks enabled; pressing it opens the player route ("Playback failed / The server cannot play or convert this file", footer `decision_refused`) and logs no decision line. That route clears to `(0, 0, 0, 0)` over a translucent window: the emulator shows black behind the read-out (above); a retail set is unmeasured (H6).
+- The Home hero's Play looks enabled; pressing it opens the player route ("Playback failed / The server cannot play or convert this file", footer `decision_refused`) and logs no decision line. That route clears to `(0, 0, 0, 0)`: the emulator shows black behind the read-out (above). The retail set showed its home screen there while the window was translucent; since the window is opaque with video ("The window is opaque and has video", above), what it shows is unmeasured.
 - (Fixed in part B2.) `shader compile FAILED: 0:37(1): error: syntax error, unexpected NEW_IDENTIFIER` on YaGL, followed by `straighten: no program`, was seen on 2026-11-21. Part B2 gave the copy variant a source of its own ("The video plane", above) and the 2026-11-22 run at `3d56d35b2` logs `straighten: no framebuffer fetch - the pass copies the frame` instead.
 - webOS-only lines are still printed: `devcaps: ... assuming the 49SM9000PLA profile`, the player footer `webOS unknown — os_info.json unreadable · unknown set`, and three `ff: ... MISSING ... reinstall the package` lines, whose advice does not apply to this package.
 - Closing the app logs `surface: the host asked the library to stop, so the window teardown is not requested; it lives until the process ends`.
