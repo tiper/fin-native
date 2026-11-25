@@ -1515,11 +1515,6 @@ pub trait PlayerLike: AppLike<Memory = PageMemory> + ScreenInputsLike + Sized {
     fn session<'a>(cx: &Cx<'a, Self>) -> &'a plx_media::route::PlaybackSession;
     /// Viewer pause intent sampled by the host at this frame's Tick boundary.
     fn transport_paused(cx: &Cx<'_, Self>) -> bool;
-    /// This frame's wall-clock time, as [`LiveTvLike::wall`] says it: what the live banner's time
-    /// line and progress are derived from. `None` is "no clock" and the banner draws none.
-    fn wall(_cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> {
-        None
-    }
 }
 
 pub trait SearchLike: AppLike<Memory = PageMemory> + ScreenInputsLike + Sized {

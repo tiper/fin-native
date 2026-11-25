@@ -561,6 +561,13 @@ impl PlayerScreen {
         if hud_up {
             mix(pos.unwrap_or(0) as u64);
             mix(self.model.end_time.map_or(0, |[hour, minute]| 1 + (hour * 60 + minute) as u64));
+            // The live info panel's airing line ("21:00-22:00 · 22m left") changes when the airing's
+            // phase does (a minute counted up or down, just started becoming running, its end) or the
+            // zone does, never with the second: its stamp is the term, so no line is worded to compare.
+            if let (true, Some(info), Some(wall)) = (self.model.is_live, plx_media::route::live_info(ps), self.model.wall) {
+                mix(plx_ui::fmt::phase(info.channel.begins_at, info.channel.ends_at, wall.unix_s()).stamp());
+                mix(i64::from(wall.utc_offset_s) as u64);
+            }
             mix(plx_media::player::seek_display_ns(ps).unwrap_or(-1) as u64);
             mix(plx_media::player::TX.scrub_ns.load(Relaxed) as u64);
             // the scrub's fades, card and knob clock: a frame is owed for as long as one runs
@@ -860,7 +867,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Machine<H> for PlayerScreen 
                 Handled::Yes
             }
             ScreenEvent::App(AppMsg::PlayerModel(model)) => {
-                self.set_model(model.clone());
+                self.set_model(*model);
                 Handled::Yes
             }
             ScreenEvent::App(AppMsg::PlayerCompiled(compiled)) => {
@@ -3735,6 +3742,63 @@ pub(crate) mod step_ladder_tests {
         assert_ne!(expired, shown, "the notice lapsing is a change");
         assert_eq!(expired, quiet, "and nothing else moved");
         plx_media::player::sidecar::reset();
+    }
+
+    /// **A live airing's words changing owes a frame.** The info panel's "22m left" is worded at draw
+    /// from the model's wall time, and nothing else on the screen moves when the minute turns, so the
+    /// fingerprint follows the airing's phase: it moves when a minute counts down (not with the second
+    /// inside it), when just-started becomes running and when the airing ends, and not at all for an
+    /// ordinary playback or a model with no wall time.
+    #[test]
+    fn a_live_airing_changing_its_words_changes_the_clock_fingerprint() {
+        let _g = plx_base::testlock::serial();
+        const BEGIN: i64 = 1_795_640_400;
+        let channel = plx_data::livetv::Channel {
+            sid: plx_plex::plex::ServerId::from_raw(0), dvr: "7".into(), channel: "C101.242.ersatztv.org".into(),
+            vcn: "101".into(), name: "Family Channel".into(), thumb: String::new(), now: "Family Show".into(),
+            now_thumb: String::new(), now_summary: String::new(), begins_at: BEGIN, ends_at: BEGIN + 3_600,
+        };
+        let mut ps = plx_media::route::PlaybackSession::IDLE;
+        plx_media::route::mark_live_channel_for_test(&mut ps, channel);
+        let mut page = PlayerScreen::new(ENTRY, plx_appkit::player_hud::loaded::classic_for_test());
+        page.hud.until = 5_000;
+        let at = |page: &mut PlayerScreen, ps: &plx_media::route::PlaybackSession, unix_s: Option<i64>, offset: i32| {
+            page.set_model(HudModel { is_live: true, wall: unix_s.map(|unix_s| plx_ui::fmt::Wall::from_secs(unix_s, offset)), ..Default::default() });
+            assert!(page.hud_up(ps, 1_000), "the transport is up");
+            page.clock_fingerprint(ps, 1_000)
+        };
+        let started = at(&mut page, &ps, Some(BEGIN + 20 * 60), 0);
+        assert_eq!(started, at(&mut page, &ps, Some(BEGIN + 20 * 60 + 30), 0), "the seconds inside a minute owe nothing");
+        let next = at(&mut page, &ps, Some(BEGIN + 21 * 60), 0);
+        assert_ne!(started, next, "a minute counted down");
+        assert_ne!(next, at(&mut page, &ps, Some(BEGIN + 3_600), 0), "the airing ended");
+        assert_ne!(started, at(&mut page, &ps, Some(BEGIN + 20 * 60), 3_600), "the zone changed: the clock times moved");
+        assert_ne!(started, at(&mut page, &ps, None, 0), "a replay's no-time is a change from a time");
+        // An ordinary playback has no airing: the wall time moves nothing.
+        let idle = plx_media::route::idle_session_for_test();
+        let (a, b) = (at(&mut page, idle, Some(BEGIN + 20 * 60), 0), at(&mut page, idle, Some(BEGIN + 21 * 60), 0));
+        assert_eq!(a, b);
+    }
+
+    /// The wall time arrives on the model the app sends and is what the screen keeps: it has no second
+    /// route to it, so a model without one leaves the screen with none.
+    #[test]
+    fn the_screen_keeps_the_wall_time_the_model_carries() {
+        let _g = plx_base::testlock::serial();
+        let mut page = PlayerScreen::new(ENTRY, plx_appkit::player_hud::loaded::classic_for_test());
+        let cx = cx();
+        let wall = plx_ui::fmt::Wall::from_secs(1_795_640_400, 3_600);
+        let step = |page: &mut PlayerScreen, wall| {
+            super::overlay_tests::publish_presentation_fixture(page.presentation.clone());
+            let mut out = Vec::new();
+            let mut present = plx_machine::present::Present::new();
+            let model = HudModel { wall, ..Default::default() };
+            page.step(&ScreenEvent::App(AppMsg::PlayerModel(model)), &cx, &mut Effects::new(&mut out, MachineId::Instance(INST), &mut present));
+        };
+        step(&mut page, Some(wall));
+        assert_eq!(page.model.wall, Some(wall));
+        step(&mut page, None);
+        assert_eq!(page.model.wall, None, "a replay's publication of nothing is nothing");
     }
 
     /// A text cue appearing or clearing reaches the frame gate through libass's own fingerprint

@@ -756,19 +756,6 @@ mod catalog_tests;
 #[cfg(test)]
 mod tests;
 
-/// **Today's calendar date in the operating system's timezone** — the ONE wall-clock read for
-/// calendar display, here in the os layer and never in a machine (`screens/`, `ui/`,
-/// `data/src/stores`). It reads `SystemTime::now`, so a machine that called it would be reading the
-/// clock, and the `wall` gate does not cover it: that pattern (`Instant::now`, `SystemTime::now`,
-/// `.elapsed()`) names the raw reads and is not run over this crate, so a call to THIS function from
-/// a machine passes it. Its one caller is the application's clock door (`app::clock::today`), which
-/// the loop calls once per frame (the door reads this at most once a minute) and publishes the
-/// date to the screens as an input, the way a frame's time arrives on a `Tick`.
-pub fn local_calendar_today() -> Option<[i32; 3]> {
-    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-    local_calendar_date(i64::try_from(seconds).ok()?)
-}
-
 /// The current Unix wall-clock timestamp for the application's playback clock. Only
 /// app::clock::unix_ms should call this; machines and screens receive time as frame data.
 pub fn unix_timestamp_ms() -> Option<i64> {
@@ -786,17 +773,21 @@ pub fn local_calendar_date(seconds: i64) -> Option<[i32; 3]> {
     civil_date_of(libc::time_t::try_from(seconds).ok()?)
 }
 
-/// The local wall-clock hour and minute for a Unix timestamp, using the operating system's
-/// timezone rules (including daylight-saving transitions). A value outside this television's
-/// `time_t` range, or a timestamp the C library cannot convert, remains unknown.
-pub fn local_clock_time(seconds: i64) -> Option<[i32; 2]> {
+/// The operating system's UTC offset at a Unix timestamp, in seconds east of UTC (daylight saving
+/// included), as the C library's own conversion reports it (`tm_gmtoff` of `localtime_r`, present
+/// in the television's glibc and the libc crate's `tm` for it). The ONE answer to "what zone is
+/// this", so no caller derives it from two faces of the clock. A timestamp outside this
+/// television's `time_t` range, one the C library cannot convert, or one at or before the epoch
+/// remains unknown, like [`local_calendar_date`]. Like it, this is the os layer's
+/// read of the zone: the application's clock door is its caller and publishes the answer.
+pub fn local_utc_offset(seconds: i64) -> Option<i32> {
     if seconds <= 0 { return None; }
     let stamp = libc::time_t::try_from(seconds).ok()?;
     let mut out = std::mem::MaybeUninit::<libc::tm>::uninit();
     // SAFETY: both pointers are valid for localtime_r; the result is read only on success.
     if unsafe { libc::localtime_r(&stamp, out.as_mut_ptr()) }.is_null() { return None; }
     let local = unsafe { out.assume_init() };
-    Some([local.tm_hour, local.tm_min])
+    i32::try_from(local.tm_gmtoff).ok()
 }
 
 /// The civil date `stamp` falls on in the operating system's timezone, for any `time_t` (a stamp

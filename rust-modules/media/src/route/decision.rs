@@ -10995,6 +10995,20 @@ pub fn mark_live_for_test(ps: &mut PlaybackSession) {
         key: "/livetv/sessions/9b9fe727-0000-46db-b94c-ef512e3e61d2".into(), rating_key: String::new() });
 }
 
+/// Make `ps` a playback of `channel`, tuned and with its guide facts published (what the app's
+/// `publish_live_banner` leaves), for a case that reads [`live_info`].
+#[cfg(any(test, feature = "test-support"))]
+pub fn mark_live_channel_for_test(ps: &mut PlaybackSession, channel: plx_data::livetv::Channel) {
+    mark_live_for_test(ps);
+    ps.request = Some(PlaybackRequest {
+        sid: channel.sid, rk: String::new(), part: String::new(), vcodec: String::new(), acodec: String::new(),
+        title: channel.name.clone(), ctx: String::new(), preview: false,
+        live: Some(LiveTune { dvr: channel.dvr.clone(), channel: channel.channel.clone() }),
+        version: None, show_rk: String::new(),
+    });
+    set_live_info(ps, Some(LiveInfo { channel }));
+}
+
 /// This playback watches a Live TV channel: there is no timeline to seek in and nothing to resume.
 pub fn is_live(ps: &PlaybackSession) -> bool {
     ps.cur_live.is_some() || ps.request.as_ref().is_some_and(|r| r.live.is_some())
@@ -11006,16 +11020,11 @@ pub fn live_request(ps: &PlaybackSession) -> Option<(ServerId, &LiveTune)> {
     Some((request.sid, request.live.as_ref()?))
 }
 
-/// Guide facts the app publishes for the channel this player is tuned to.
+/// Guide facts the app publishes for the channel this player is tuned to. Raw facts only: the
+/// airing's clock times and "22m left" are worded at draw from `channel.begins_at` / `ends_at` and
+/// the HUD model's wall time (`plx_ui::fmt::airing_line`), never cached here.
 pub struct LiveInfo {
     pub channel: plx_data::livetv::Channel,
-    /// The banner's time line for this airing ("21:37–22:39 · Started 1 min ago"), worded by the
-    /// app from the frame's published wall time (`plx_ui::fmt::airing_line`); `None` where the
-    /// guide gave no airing or there is no wall time (a replay).
-    pub airing: Option<String>,
-    /// The wall-clock second `airing` was worded for (0 when there was no wall time), so the app
-    /// words it again when the second changes and not on every frame.
-    pub airing_at_s: i64,
 }
 
 pub fn live_info(ps: &PlaybackSession) -> Option<&LiveInfo> {

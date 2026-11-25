@@ -151,11 +151,10 @@ fn live_banner_uses_the_existing_caption_and_tracks_the_airing() {
         ch.now_summary = format!("About {programme}");
         ch.begins_at = 1_792_523_168;
         ch.ends_at = 1_792_524_417;
-        let wall = plx_ui::fmt::Wall { unix_s: 1_792_523_168 + 2 * 60, utc_offset_s: 7_200 };
-        crate::app::playback::publish_live_banner(&mut app.player.session, &[ch], Some(wall));
+        crate::app::playback::publish_live_banner(&mut app.player.session, &[ch]);
         let info = plx_media::route::live_info(&app.player.session).expect("the tuned channel's facts");
         assert_eq!(info.channel.now_summary, format!("About {programme}"));
-        assert!(info.airing.as_deref().is_some_and(|line| line.contains(&plx_os::i18n::msg::core_airing_started(2))), "{:?}", info.airing);
+        assert_eq!((info.channel.begins_at, info.channel.ends_at), (1_792_523_168, 1_792_524_417), "the raw airing, worded at draw");
         // SAFETY: the session owns the NUL-terminated banner for this assertion.
         assert_eq!(unsafe { std::ffi::CStr::from_ptr(plx_media::route::ctxline_cptr(&app.player.session)) }.to_str().unwrap(), expected);
     }
@@ -163,35 +162,35 @@ fn live_banner_uses_the_existing_caption_and_tracks_the_airing() {
 }
 
 #[test]
-fn the_banner_time_line_is_the_shared_airing_line_of_the_published_wall_time() {
+fn an_unchanged_channel_is_not_republished_and_a_rollover_is() {
     let _serial = plx_base::testlock::serial();
-    let _session = plx_plex::plex::session::TempSession::new("livetv-banner-wall");
+    let _session = plx_plex::plex::session::TempSession::new("livetv-banner-republish");
     plx_plex::plex::reset_servers_for_test();
     let mut app = app();
     let mut now = 0;
     open_live(&mut app, &mut now);
     start_channel(&mut app, &mut now);
-    let (begin, end) = (1_792_523_168, 1_792_526_768);
     let mut ch = channel("101", "Family Channel");
     ch.channel = "C101.242.ersatztv.org".into();
     ch.now = "Family Show".into();
-    ch.begins_at = begin;
-    ch.ends_at = end;
-    let line_at = |app: &App| plx_media::route::live_info(&app.player.session).expect("the tuned channel's facts").airing.clone();
-    let wall = |unix_s| Some(plx_ui::fmt::Wall { unix_s, utc_offset_s: 7_200 });
-    let shared = |now_s| plx_ui::fmt::airing_line(plx_ui::fmt::Airing::Banner, begin, end, now_s, 7_200);
-    // The line is the shared one, wording the published second and zone.
-    crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch), wall(begin + 120));
-    assert_eq!(line_at(&app), shared(begin + 120));
-    assert!(line_at(&app).is_some());
-    // Later in the programme the same channel is worded again; within the same second it is not.
-    crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch), wall(begin + 40 * 60));
-    assert_eq!(line_at(&app), shared(begin + 40 * 60));
-    assert_ne!(line_at(&app), shared(begin + 120));
-    // A replay publishes no wall time: the banner has no time line, and does not guess one.
-    crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch), None);
-    assert_eq!(line_at(&app), None);
-    assert_eq!(plx_media::route::live_info(&app.player.session).unwrap().channel.now, "Family Show");
+    ch.begins_at = 1_792_523_168;
+    ch.ends_at = 1_792_526_768;
+    let info_at = |app: &App| plx_media::route::live_info(&app.player.session).expect("the tuned channel's facts") as *const plx_media::route::LiveInfo;
+    crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch));
+    let first = info_at(&app);
+    // Frame after frame the same guide row is the same published info: nothing is rebuilt per frame
+    // (the airing's words are the HUD's, from the raw begin and end, at draw).
+    for _ in 0..3 {
+        crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch));
+    }
+    assert_eq!(info_at(&app), first, "an unchanged channel keeps its info");
+    // A programme rollover is a different row and is published.
+    ch.now = "Next Show".into();
+    ch.begins_at = ch.ends_at;
+    ch.ends_at += 3_600;
+    crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch));
+    let info = plx_media::route::live_info(&app.player.session).unwrap();
+    assert_eq!((info.channel.now.as_str(), info.channel.begins_at), ("Next Show", 1_792_526_768));
     player_request(&mut app, now, plx_screens::registry::PlayerReq::Exit);
 }
 
