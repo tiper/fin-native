@@ -71,7 +71,7 @@ use plx_machine::machine::{
 };
 use plx_machine::present::Present;
 use plx_ui::screen::{
-    At, FocusSource, ReturnState, Screen, ScreenEvent,
+    At, FocusSource, Focusable, ReturnState, Screen, ScreenEvent,
 };
 
 struct LibraryPageVisit {
@@ -1892,6 +1892,13 @@ impl Bridge<'_> {
         parts.owner = plx_machine::machine::InputOwner::Entry(entry);
         parts.focus.current = ret.focus;
         let cx = parts.cx::<AppHost>(self.views(), &self.retained.measure);
+        if let Some(page) = screen.downcast_ref::<plx_screens::filmography::FilmographyScreen>() {
+            let hex = page.watchlist_hex(ret.focus)?;
+            let focus = ret.focus?;
+            let rect = Focusable::<AppHost>::place(page, &focus.elem, &cx, At::Drawn)?.rect;
+            return Some(strip_menu_arg(plx_plex::plex::ServerId::UNSET, "",
+                ItemMenuKind::WatchlistAdd { hex }, entry, ret.focus, Some(rect)));
+        }
         if let Some(page) = screen.downcast_ref::<plx_screens::detail::DetailScreen>() {
             let sid = match &e.arg { AppArg::Content(ContentArg::Detail { sid, .. }) => *sid, _ => return None };
             let rect = page.focused_rect::<AppHost>(ret.focus, &cx, At::Drawn);

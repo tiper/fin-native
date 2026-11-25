@@ -240,12 +240,25 @@ pub(crate) fn state_fp_v11() -> u64 {
     plx_ui::rec::state_fp(&["ControlledHomeInitV11", "ControlledInstallLanguageV1{install_language:Preference};ControlledRunningLanguageV1{running_language:Preference};PlayerPresentation:unsupported_domain_neutral_no_ambient;NativePreview:controlled_port_unavailable", &state_fp_v10().to_string()])
 }
 
-/// The reviewed historical census owns these bytes, not today's changing InputMachine.
 #[cfg(test)]
-fn historical_input_shape() -> &'static str {
+fn historical_census() -> &'static Value {
     static CENSUS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
     CENSUS.get_or_init(|| serde_json::from_str(include_str!("fixtures/session-codec-v5/current-base-fingerprints.json")).expect("frozen census"))
-        ["prior_vector"][1].as_str().expect("historical Input shape")
+}
+
+#[cfg(test)]
+fn historical_input_shape() -> &'static str {
+    historical_census()["prior_vector"][1].as_str().expect("historical Input shape")
+}
+
+/// Older profiles keep their menu argument shape when the current menu grows.
+#[cfg(test)]
+fn historical_screen_shapes() -> impl Iterator<Item = &'static str> {
+    use plx_screens::registry::{ARG_SHAPE, SCREEN_SHAPES};
+    let old_arg = historical_census()["prior_vector"].as_array().expect("historical census vector").iter()
+        .filter_map(Value::as_str).find(|shape| shape.starts_with("AppArg{"))
+        .expect("historical AppArg shape");
+    SCREEN_SHAPES.iter().copied().map(move |shape| if shape == ARG_SHAPE { old_arg } else { shape })
 }
 
 #[cfg(test)]
@@ -280,7 +293,7 @@ pub(crate) fn state_fp_v7() -> u64 {
     shapes.push(RESOLUTION_SHAPE_V1);
     shapes.push("CaptureReadinessV2{before_dispatch:pending:bool,text:bool}");
     shapes.push("MeasurementV1{query:Width(text:bytes,sz:i32,bold:bool)|Cap(sz:i32)|Line(sz:i32),answer:f32bits:u32}");
-    shapes.extend_from_slice(plx_screens::registry::SCREEN_SHAPES);
+    shapes.extend(historical_screen_shapes());
     plx_ui::rec::state_fp(&shapes)
 }
 
@@ -295,7 +308,7 @@ fn session_app_prior_vector() -> Vec<&'static str> {
     shapes.push(RESOLUTION_SHAPE_V1);
     shapes.push("CaptureReadinessV2{before_dispatch:pending:bool,text:bool}");
     shapes.push("MeasurementV1{query:Width(text:bytes,sz:i32,bold:bool)|Cap(sz:i32)|Line(sz:i32),answer:f32bits:u32}");
-    shapes.extend_from_slice(plx_screens::registry::SCREEN_SHAPES);
+    shapes.extend(historical_screen_shapes());
     shapes
 }
 
@@ -2855,7 +2868,8 @@ mod tests {
         // `ProductResolutionV2` (the by-id `Id` resolution row, a11y-ids D6) moves the full census
         // from 0xea74_3865_5115_46c5, which `the_pre_content_navigation_recording_shape_is_refused`
         // keeps refused at the shape boundary like every older value.
-        assert_eq!(state_fp(), 0x7f1d_280c_909c_8603, "current V13 producer census");
+        assert_eq!(state_fp(), 0xdefa_d3fd_102e_439d, "current V13 producer census");
+        assert_ne!(state_fp(), 0x7f1d_280c_909c_8603, "the census before Filmography's Watchlist menu");
         assert_ne!(state_fp(), 0xea74_3865_5115_46c5, "the census without the `Id` resolution row");
         assert_ne!(state_fp(), 0x3ed9_2e0f_25bd_7f8e, "V12 cannot describe captured positive-swap presentation inputs");
     }
