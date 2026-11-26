@@ -1051,7 +1051,7 @@ impl Backend for Shared {
     fn tune(&self, _off: &plx_base::task::OffFrame, _dvr: &str, channel: &str, playback: &str) -> plx_plex::plex::livetv::TuneOutcome {
         use plx_plex::plex::livetv::TuneOutcome;
         let Some(c) = self.0.client() else { return TuneOutcome::Failed { status: None } };
-        let profile = livetv::live_profile(audio_encode_target(&plx_os::devcaps::caps()));
+        let profile = livetv::live_profile();
         match c.tune_channel(channel, playback, &profile) {
             Some(session) => TuneOutcome::Tuned { session, status: 200 },
             None => TuneOutcome::Failed { status: None },

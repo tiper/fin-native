@@ -56,16 +56,22 @@ pub fn airing_of(c: &BaseItemDto) -> Option<Metadata> {
     })
 }
 
-/// The device profile for a live play: HLS in H.264 and one audio codec the TV decodes, nothing
-/// the server could send as it is. A source in other codecs is converted, which is what the
-/// route's declaration (`vcodec`, `acodec`) then says it receives.
-pub fn live_profile(audio: &str) -> Value {
+/// What a live play arrives as: H.264 and AAC stereo. The profile allows nothing else, so a
+/// source in other codecs is converted to them, and the route's declaration is these names rather
+/// than whatever the server's URL happens to list.
+pub const VIDEO_CODEC: &str = "h264";
+pub const AUDIO_CODEC: &str = "aac";
+const AUDIO_CHANNELS: i64 = 2;
+
+/// The device profile for a live play: HLS in [`VIDEO_CODEC`] and [`AUDIO_CODEC`], nothing the
+/// server could send as it is.
+pub fn live_profile() -> Value {
     json!({
         "Name": "FinNative Live TV",
         "DirectPlayProfiles": [],
         "TranscodingProfiles": [
             {"Type": "Video", "Container": "ts", "Protocol": "hls", "Context": "Streaming",
-             "VideoCodec": "h264", "AudioCodec": audio, "MinSegments": 1, "BreakOnNonKeyFrames": true,
+             "VideoCodec": VIDEO_CODEC, "AudioCodec": AUDIO_CODEC, "MinSegments": 1, "BreakOnNonKeyFrames": true,
              "EnableSubtitlesInManifest": false}
         ],
         "CodecProfiles": [],
@@ -89,12 +95,9 @@ pub fn tuned(channel_id: &str, r: &Response) -> Option<Tuned> {
     let source = r.media_sources.iter().find(|s| s.transcoding_url.as_deref().is_some_and(|u| !u.is_empty()))?;
     let url = source.transcoding_url.as_deref()?;
     let part = paths::without_param(&paths::without_param(url, "api_key"), "PlaySessionId");
-    let codec = |key: &str| {
-        paths::query_value(url, key).and_then(|v| v.split(',').next()).unwrap_or_default().to_ascii_lowercase()
-    };
     Some(Tuned {
         session: LiveSession { key: source.live_stream_id.clone().unwrap_or_default(), rating_key: channel_id.to_owned() },
-        play: LivePlay { part, vcodec: codec("VideoCodec"), acodec: codec("AudioCodec"), width: 0, height: 0, channels: 0 },
+        play: LivePlay { part, vcodec: VIDEO_CODEC.into(), acodec: AUDIO_CODEC.into(), width: 0, height: 0, channels: AUDIO_CHANNELS },
     })
 }
 
@@ -128,20 +131,20 @@ mod tests {
 
     #[test]
     fn a_tune_keeps_the_stream_to_close_and_the_playlist_without_the_servers_credentials() {
-        let r: Response = serde_json::from_str(r#"{"MediaSources":[{"Id":"s","LiveStreamId":"ls9","TranscodingUrl":"/videos/ab12/master.m3u8?DeviceId=d&VideoCodec=h264&AudioCodec=AC3&PlaySessionId=srv&api_key=secret&LiveStreamId=ls9"}]}"#).unwrap();
+        let r: Response = serde_json::from_str(r#"{"MediaSources":[{"Id":"s","LiveStreamId":"ls9","TranscodingUrl":"/videos/ab12/master.m3u8?DeviceId=d&VideoCodec=h264&AudioCodec=ac3&PlaySessionId=srv&api_key=secret&LiveStreamId=ls9"}]}"#).unwrap();
         let t = tuned("ab12", &r).unwrap();
         assert_eq!((t.session.key.as_str(), t.session.rating_key.as_str()), ("ls9", "ab12"));
-        assert_eq!((t.play.vcodec.as_str(), t.play.acodec.as_str()), ("h264", "ac3"));
+        assert_eq!((t.play.vcodec.as_str(), t.play.acodec.as_str(), t.play.channels), ("h264", "aac", 2));
         assert!(!t.play.part.contains("secret") && !t.play.part.contains("srv"));
         assert!(t.play.part.contains("LiveStreamId=ls9"));
         assert!(tuned("ab12", &Response::default()).is_none());
     }
 
     #[test]
-    fn the_profile_asks_for_hls_in_the_one_audio_codec_given() {
-        let p = live_profile("ac3");
+    fn the_profile_asks_for_hls_in_h264_and_aac_only() {
+        let p = live_profile();
         assert_eq!(p["TranscodingProfiles"][0]["Protocol"], "hls");
-        assert_eq!(p["TranscodingProfiles"][0]["AudioCodec"], "ac3");
+        assert_eq!(p["TranscodingProfiles"][0]["AudioCodec"], "aac");
         assert_eq!(p["DirectPlayProfiles"].as_array().unwrap().len(), 0);
     }
 }
