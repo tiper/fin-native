@@ -9054,6 +9054,11 @@ const BTN_RAIL_W: f32 = 64.0;
 const BTN_RAIL_H: f32 = 6.0;
 /// Total horizontal air a pill carries around its icon+label run.
 pub const BTN_PILL_AIR: f32 = 68.0;
+/// Total horizontal air of the inline-progress pill ([`Button::inline_progress`]), measured to the
+/// leading glyph's INK and the label: half of it each side. Tighter than [`BTN_PILL_AIR`] because a
+/// pill floored at a minimum width (Home's Resume) hands its slack to the rail rather than to the
+/// ends, so the glyph, rail and time fill the capsule instead of floating in it.
+const BTN_PROGRESS_AIR: f32 = 48.0;
 /// [`ControlStyle::Keyline`]'s stroke width (the design's 1.5 — same weight as [`keyline_chip`]'s).
 const BTN_KEYLINE_W: f32 = 1.5;
 
@@ -9206,27 +9211,50 @@ impl<'a> Button<'a> {
     }
 
     fn pill_w_from_advance(advance: f32, sz: c_int, icon: bool, trailing: Option<crate::icons::Icon>) -> f32 {
-        HStack::new(&Self::run_items(advance, sz, icon, trailing, false), BTN_ICON_GAP, StackAlign::Leading(0.0)).width()
+        HStack::new(&Self::run_items(advance, sz, icon, trailing), BTN_ICON_GAP, StackAlign::Leading(0.0)).width()
             + BTN_PILL_AIR
     }
 
     /// The pill's one run, which `draw` places and `pill_w_*` sizes: the leading icon's box, the
     /// label, and the trailing accessory standing by its INK. An accessory the pill does not carry
-    /// is ABSENT, so it leaves neither its width nor its gap.
-    fn run_items(advance: f32, sz: c_int, icon: bool, trailing: Option<crate::icons::Icon>, rail: bool) -> [HItem; 4] {
+    /// is ABSENT, so it leaves neither its width nor its gap. Slot 1 is the inline-progress rail's
+    /// ([`Button::progress_items`]), absent here, so `draw` reads both runs by the same indices.
+    fn run_items(advance: f32, sz: c_int, icon: bool, trailing: Option<crate::icons::Icon>) -> [HItem; 4] {
         let box_w = sz as f32 * BTN_ICON_RATIO;
         [
             if icon { HItem::new(box_w) } else { HItem::absent() },
-            if rail { HItem::new(BTN_RAIL_W) } else { HItem::absent() },
+            HItem::absent(),
             HItem::new(advance),
             trailing.map_or_else(HItem::absent, |acc| HItem::glyph(acc, box_w)),
         ]
     }
 
-    /// Width of the Play glyph, inline progress rail, and duration at this type size.
-    pub fn progress_pill_width(measure: &dyn plx_machine::machine::Measure, label: &std::ffi::CStr, sz: c_int) -> f32 {
-        let items = Self::run_items(measure.width(label, sz, true), sz, true, None, true);
-        HStack::new(&items, BTN_ICON_GAP, StackAlign::Leading(0.0)).width() + BTN_PILL_AIR
+    /// The natural width of the inline-progress pill: `icon` (placed by its ink), the rail at its
+    /// least width [`BTN_RAIL_W`], and the label, plus [`BTN_PROGRESS_AIR`]. A caller may floor it
+    /// at a minimum; [`Button::draw`] then stretches the rail, so the air stays this one value.
+    pub fn progress_pill_width(measure: &dyn plx_machine::machine::Measure, label: &std::ffi::CStr, sz: c_int,
+        icon: crate::icons::Icon) -> f32 {
+        let items = Self::progress_items(measure.width(label, sz, true), sz, Some(icon), BTN_RAIL_W);
+        HStack::new(&items, BTN_ICON_GAP, StackAlign::Leading(0.0)).width() + BTN_PROGRESS_AIR
+    }
+
+    /// The inline-progress pill's run: the leading glyph by its INK when it is a named icon (an SVG
+    /// has no ink table, so it stands by its box), the rail `rail_w` wide, and the label.
+    fn progress_items(advance: f32, sz: c_int, icon: Option<crate::icons::Icon>, rail_w: f32) -> [HItem; 4] {
+        let box_w = sz as f32 * BTN_ICON_RATIO;
+        [
+            icon.map_or_else(|| HItem::new(box_w), |i| HItem::glyph(i, box_w)),
+            HItem::new(rail_w),
+            HItem::new(advance),
+            HItem::absent(),
+        ]
+    }
+
+    /// The rail width that makes the progress run fill `frame_w` less [`BTN_PROGRESS_AIR`], never
+    /// under [`BTN_RAIL_W`]: the slack a minimum-width floor adds goes to the rail, not the ends.
+    fn progress_rail_w(frame_w: f32, advance: f32, sz: c_int, icon: Option<crate::icons::Icon>) -> f32 {
+        let run = HStack::new(&Self::progress_items(advance, sz, icon, BTN_RAIL_W), BTN_ICON_GAP, StackAlign::Leading(0.0)).width();
+        BTN_RAIL_W + (frame_w - BTN_PROGRESS_AIR - run).max(0.0)
     }
 
     /// Place a playback progress rail between the leading glyph and the label.
@@ -9410,11 +9438,19 @@ impl View for Button<'_> {
         // sizing the pill without the chevron and then drawing one would push the label off-centre.
         // The accessory stands by its INK, so the pill's right pad is measured to the mark itself.
         let isz = self.sz as f32 * BTN_ICON_RATIO;
-        let items = Self::run_items(tw, self.sz, self.icon.is_some() || self.svg.is_some(), self.trailing, self.inline_progress.is_some());
+        // The progress pill's run is its own: the glyph stands by its ink and the rail takes the
+        // frame's slack (`progress_rail_w`). The rail is sized off the LAID-OUT frame, so the pop
+        // grows the plate around a run that holds still, as every other pill's does.
+        let items = if self.inline_progress.is_some() {
+            let icon = if self.svg.is_some() { None } else { self.icon };
+            Self::progress_items(tw, self.sz, icon, Self::progress_rail_w(self.frame.w, tw, self.sz, icon))
+        } else {
+            Self::run_items(tw, self.sz, self.icon.is_some() || self.svg.is_some(), self.trailing)
+        };
         for span in HStack::new(&items, BTN_ICON_GAP, StackAlign::Centre(r.cx())).placed() {
             match span.i {
                 0 => {
-                    let rect = Rect::new(span.x, r.y + (r.h - isz) * 0.5, isz, isz);
+                    let rect = Rect::new(span.box_x, r.y + (r.h - isz) * 0.5, isz, isz);
                     if let Some(svg) = self.svg {
                         crate::icons::draw_svg(p, svg, rect, ink);
                     } else if let Some(icon) = self.icon {
@@ -9422,7 +9458,7 @@ impl View for Button<'_> {
                     }
                 }
                 1 => {
-                    let rail = Rect::new(span.x, r.cy() - BTN_RAIL_H * 0.5, BTN_RAIL_W, BTN_RAIL_H);
+                    let rail = Rect::new(span.x, r.cy() - BTN_RAIL_H * 0.5, span.w, BTN_RAIL_H);
                     let rad = BTN_RAIL_H * 0.5;
                     p.rrect(rail, rad, rad, theme::with_a(ink, 0.22));
                     let w = rail.w * self.inline_progress.unwrap_or_default();
