@@ -222,9 +222,10 @@ shows the television's own Home screen, with the app still running (§5.9).
 
 ### 5.1 Splash
 
-A 1920×1080 PNG (`splash.png`), shown by the platform while the app starts. Its black point is
-lifted and its ground is the app's own surface colour, so it matches the first frame the app itself
-draws rather than cutting to it. (LG's guidance is explicit that the splash should not be black.)
+A 1920×1080 PNG (`splash.png`), shown by the platform while the app starts. Its ground is pure
+#000000 so an OLED panel keeps those pixels switched off; only the logo lights. (LG's guidance asks
+for a splash that is not black, but nothing enforces it and Apple TV's own splash is 99.5 % black;
+`docs/distribution.md` §10.2.)
 
 ### 5.2 Sign in
 
