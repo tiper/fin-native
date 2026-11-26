@@ -318,6 +318,10 @@ pub struct Shared {
     // the in-place seek's target content-ns, for the feed's rebase guard (drop stale drifted
     // keyframes). Distinct from seek_to_ns, which the demuxer consumes as it seeks. -1 = none.
     pub seek_target_ns: AtomicI64,
+    // The Dolby Vision guard acts for this Engine on a splitter that takes only an IDR first, so the
+    // demuxer's seek looks backward for one (`idr_snap`). Set at the Engine's construction, cleared
+    // when the guard stands down.
+    pub dv_idr_snap: AtomicBool,
     // UI loading state: true from a seek request until playback resumes at the new position (prime→
     // Play). The HUD shows a spinner + freezes the playhead at `seek_display_ns` so it doesn't
     // wobble through the seek/rebase. -1 display = not loading.
@@ -764,6 +768,7 @@ impl Shared {
             disp_base: AtomicI64::new(0),
             seek_to_ns: AtomicI64::new(-1),
             seek_target_ns: AtomicI64::new(-1),
+            dv_idr_snap: AtomicBool::new(false),
             seeking: AtomicBool::new(false),
             seek_display_ns: AtomicI64::new(-1),
             seek_epoch: AtomicU32::new(0),

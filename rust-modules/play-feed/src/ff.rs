@@ -2982,6 +2982,117 @@ impl Keyframe {
     }
 }
 
+/// What a length-prefixed HEVC NAL (first header byte `b0`) says about its picture: only an IDR (19, 20)
+/// is [`Keyframe::Clean`]; a CRA or BLA (16 to 18, 21) and the reserved IRAP types (22, 23) are not,
+/// because a Dolby Vision splitter may take only an IDR as its first picture.
+fn hevc_nal_class(b0: u8) -> Keyframe {
+    match (b0 >> 1) & 0x3f {
+        19 | 20 => Keyframe::Clean,
+        t @ (16..=18 | 21..=23) => Keyframe::HevcIrapNotIdr(t),
+        _ => Keyframe::No,
+    }
+}
+
+/// The first header byte of each NAL of a length-prefixed HEVC access unit, up to its first malformed one.
+fn hevc_nal_headers(d: &[u8], nls: usize) -> impl Iterator<Item = u8> + '_ {
+    let mut i = 0usize;
+    std::iter::from_fn(move || {
+        if i + nls > d.len() {
+            return None;
+        }
+        let nl = d[i..i + nls].iter().fold(0usize, |n, &b| (n << 8) | b as usize);
+        i += nls;
+        nal_end(i, nl, d.len())?;
+        let b0 = d[i];
+        i += nl;
+        Some(b0)
+    })
+}
+
+/// The class of a length-prefixed HEVC access unit's picture: the first IRAP NAL names it.
+fn hevc_au_class(d: &[u8], nls: usize) -> Keyframe {
+    hevc_nal_headers(d, nls).map(hevc_nal_class).find(|c| c.is_key()).unwrap_or(Keyframe::No)
+}
+
+/// Is this length-prefixed HEVC access unit a RASL picture (NAL 8, 9): a leading picture of a CRA or BLA
+/// that predicts from pictures before it, which a decoder started on the CRA never had?
+fn hevc_au_is_rasl(d: &[u8], nls: usize) -> bool {
+    hevc_nal_headers(d, nls).map(|b0| (b0 >> 1) & 0x3f).find(|&t| t < 32).is_some_and(|t| matches!(t, 8 | 9))
+}
+
+/// More than a GOP of packets with no video keyframe is a stream the seek probes cannot read.
+const READS_PER_LANDING: u32 = 4_000;
+
+/// Seek to `ts` (backward) and hand `read` the first video keyframe packet and its pts (`None` when the
+/// packet carries none) from there; whatever else the packets are is dropped.
+unsafe fn read_first_video_key<R>(
+    fmt: *mut AVFormatContext,
+    vi: c_int,
+    ts: i64,
+    read: impl FnOnce(&[u8], Option<i64>) -> Option<R>,
+) -> Option<R> {
+    if av_seek_frame(fmt, vi, ts, AVSEEK_FLAG_BACKWARD) < 0 {
+        return None;
+    }
+    let mut pkt = av_packet_alloc();
+    if pkt.is_null() {
+        return None;
+    }
+    let mut out = None;
+    for _ in 0..READS_PER_LANDING {
+        if av_read_frame(fmt, pkt) < 0 {
+            break;
+        }
+        if (*pkt).stream_index == vi && (*pkt).flags & AV_PKT_FLAG_KEY != 0 && !(*pkt).data.is_null() {
+            let d = std::slice::from_raw_parts((*pkt).data, (*pkt).size.max(0) as usize);
+            let pts = [(*pkt).pts, (*pkt).dts].into_iter().find(|&t| t != AV_NOPTS_VALUE);
+            out = read(d, pts);
+            av_packet_unref(pkt);
+            break;
+        }
+        av_packet_unref(pkt);
+    }
+    av_packet_free(&mut pkt);
+    out
+}
+
+/// The video's first IDR access unit as the pipeline is fed it (Annex B with the parameter sets), read
+/// from the start of the file: the primer a landing on a CRA is preceded by, so the Dolby Vision
+/// splitter's first-IDR latch is set. `None` when the file's first keyframe is not an IDR or cannot be read.
+unsafe fn read_primer(
+    fmt: *mut AVFormatContext,
+    vi: c_int,
+    start_ts: i64,
+    nls: usize,
+    dv_p7: bool,
+    area: &mut DvActiveArea,
+    param: &[u8],
+) -> Option<Vec<u8>> {
+    read_first_video_key(fmt, vi, start_ts, |d, _| {
+        let mut au = Vec::new();
+        let class = packet_to_annexb(d.as_ptr(), d.len(), nls, true, dv_p7, area, true, param, &mut au);
+        matches!(class, Keyframe::Clean).then_some(au)
+    })
+}
+
+/// [`idr_snap::Probe`] over the demux thread's format context.
+struct SeekProbe {
+    fmt: *mut AVFormatContext,
+    vi: c_int,
+    nls: usize,
+}
+
+impl crate::idr_snap::Probe for SeekProbe {
+    fn land(&mut self, ts: i64) -> Option<crate::idr_snap::Found> {
+        unsafe {
+            read_first_video_key(self.fmt, self.vi, ts, |d, pts| {
+                let class = hevc_au_class(d, self.nls);
+                class.is_key().then_some(crate::idr_snap::Found { pts: pts?, idr: matches!(class, Keyframe::Clean) })
+            })
+        }
+    }
+}
+
 /// Convert one length-prefixed video packet to Annex-B (4-byte start codes) into `out` (a packet
 /// that carries start codes already is `annexb_h264_access_unit`'s: see [`NalInput`]),
 /// prepending `param` (VPS/SPS/PPS) when the AU is a keyframe (H264 IDR type 5, or a non-IDR
@@ -3038,11 +3149,7 @@ pub unsafe fn packet_to_annexb(
             // names the picture. Only an IDR (19, 20) is `Clean`: a CRA or BLA (16 to 18, 21) and the
             // reserved IRAP types (22, 23) are not, because a Dolby Vision splitter may take only an
             // IDR as its first picture.
-            match (b0 >> 1) & 0x3f {
-                19 | 20 => Keyframe::Clean,
-                t @ (16..=18 | 21..=23) => Keyframe::HevcIrapNotIdr(t),
-                _ => Keyframe::No,
-            }
+            hevc_nal_class(b0)
         } else {
             in_band_sps |= (b0 & 0x1f) == 7;
             Keyframe::of(h264_is_rap(&d[i..i + nl], container_key || in_band_sps))
@@ -7457,6 +7564,11 @@ pub fn demux(
                 }
 
                 let mut anchor_taken = false;
+                // The Dolby Vision seek's priming (`idr_snap::Snap::Prime`): the file's first IDR, read on the
+                // first seek that needs it; a landing on a CRA is preceded by it and its leading pictures dropped.
+                let mut primer: Option<Vec<u8>> = None;
+                let mut prime_pending = false;
+                let mut drop_rasl = false;
                 // The video lane's pre-audio headroom (`PreAudioHeadroom`): granted at the first
                 // video push that WOULD PARK at the base cap with no audio yet, held until the
                 // engine's audio lead-in has been pushed, then released as the consumer drains.
@@ -7503,7 +7615,37 @@ pub fn demux(
                         }
                         // Content time to the stream's own clock: a rebased stream's clock starts at
                         // `origin_ns`, so a seek to 0 lands on its first packet, not before it.
-                        let ts = av_rescale_q(seek_ns.saturating_add(origin_ns), NS_TB, stream_time_base(vst));
+                        let mut ts = av_rescale_q(seek_ns.saturating_add(origin_ns), NS_TB, stream_time_base(vst));
+                        // A Dolby Vision play on a splitter that takes only an IDR first: land on an IDR
+                        // if one is within reach, so the declaration survives the seek (`idr_snap`).
+                        prime_pending = false;
+                        drop_rasl = false;
+                        if is_hevc && nal_input != NalInput::StartCodes && session.clock().dv_idr_snap() {
+                            let tb = stream_time_base(vst);
+                            let ms = |n: i64| av_rescale_q(n * 1_000_000, NS_TB, tb);
+                            let mut probe = SeekProbe { fmt, vi, nls: nal_len_size };
+                            match crate::idr_snap::snap(&mut probe, ts, ts.saturating_sub(ms(crate::idr_snap::BACK_REACH_MS)), ms(100)) {
+                                crate::idr_snap::Snap::To(idr) => {
+                                    session.media().record(&format!(
+                                        "ff: dv seek snap: IDR {}ms before the target",
+                                        av_rescale_q(ts - idr, tb, NS_TB) / 1_000_000
+                                    ));
+                                    ts = idr;
+                                }
+                                crate::idr_snap::Snap::Stay => session.media().record("ff: dv seek snap: the landing is an IDR"),
+                                crate::idr_snap::Snap::Prime => {
+                                    if primer.is_none() {
+                                        let start = av_rescale_q(origin_ns, NS_TB, tb);
+                                        primer = read_primer(fmt, vi, start, nal_len_size, dv_p7, &mut dv_area, &param_blob);
+                                    }
+                                    prime_pending = primer.is_some();
+                                    session.media().record(&format!(
+                                        "ff: dv seek snap: no IDR in reach, {}",
+                                        if prime_pending { "the file's first IDR primes the landing" } else { "no first IDR to prime with, the landing stands" }
+                                    ));
+                                }
+                            }
+                        }
                         // Fence completed renders from the old position before new packets arrive.
                         session.subtitle().seek(ass_generation);
                         // Image packets held for a later selection belong to the old position too.
@@ -7696,6 +7838,29 @@ pub fn demux(
                                 session.media().publish(DemuxEffect::IoFailed);
                                 av_packet_unref(pkt);
                                 break;
+                            }
+                        }
+                        if is_key {
+                            drop_rasl = false;
+                        } else if drop_rasl && hevc_au_is_rasl(pkt_bytes, nal_len_size) {
+                            av_packet_unref(pkt);
+                            continue;
+                        }
+                        if prime_pending && is_key {
+                            prime_pending = false;
+                            if let (Some(au), Keyframe::HevcIrapNotIdr(_)) = (primer.as_ref(), kf) {
+                                // One millisecond ahead of the landing: the sink clips it against the
+                                // segment, and the splitter has latched on an IDR when the CRA follows.
+                                let pushed = crate::aq::aq_push_with_drain(
+                                    aq_p, au.as_ptr(), au.len() as c_int, pts.saturating_sub(1_000_000), crate::aq::AU_KEY, 1,
+                                    || state.drain_wire(),
+                                );
+                                if pushed != 0 {
+                                    av_packet_unref(pkt);
+                                    break;
+                                }
+                                drop_rasl = true;
+                                session.media().record("ff: dv seek snap: primer IDR queued ahead of the landing CRA");
                             }
                         }
                         let pushed = crate::aq::aq_push_with_drain(

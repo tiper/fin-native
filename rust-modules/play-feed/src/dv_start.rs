@@ -10,6 +10,10 @@
 //! same landings (no node, no splitter), and a Profile 8.1 base layer is HDR10, so the answer is to
 //! withdraw the declaration for the rest of the play and reload once.
 //!
+//! A seek first tries to avoid the withdrawal: with the guard acting on an IDR-only splitter, the demuxer
+//! looks backward for an IDR to land on ([`crate::idr_snap`]), and only a file with none in reach lands
+//! on its CRA and meets this guard.
+//!
 //! Two triggers, one rule: a landing keyframe fed and then no picture.
 //! - **The row** (`devcaps::DvFirstPicture::IdrOnly`, per firmware in `devcaps::EXCLUSIONS`): the
 //!   landing keyframe is not an IDR ([`crate::aq::hevc_irap_not_idr`] on the access unit's `key`), so

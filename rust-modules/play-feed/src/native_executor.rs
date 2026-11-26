@@ -520,6 +520,9 @@ pub fn launch_native_open(
             (armed >= 0).then_some(armed)
         }),
     };
+    // A seek's landing must be an IDR for a splitter that takes only one first: tell the demuxer to look
+    // backward for it (`idr_snap`). Only a guard that acts has a rung when none is in reach.
+    shared.dv_idr_snap.store(dv_landing.mode == plx_playback_contract::feed::DvLandingMode::Act && dv_landing.idr_first, Ordering::Relaxed);
     // Select this session's direct-play seek mode (`SeekMode`, seek.rs, whose SCOPE note argues why
     // it is per session). `feed_stream` can downgrade it to `Reload` mid-session (the pipeline was
     // unreachable, or LG refused a `Seek`), and that is a fact about the StarfishMediaAPIs object
