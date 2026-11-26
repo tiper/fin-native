@@ -27,9 +27,12 @@ pub struct InheritedAuth {
     token_pair: String,
 }
 
+/// The query names a server's route credential travels under: Plex's token, and the `ApiKey` an
+/// alternative backend's stream URL carries (FinNative, Jellyfin).
 fn is_token_pair(pair: &str) -> bool {
-    pair.split_once('=')
-        .is_some_and(|(name, _)| name.eq_ignore_ascii_case("X-Plex-Token"))
+    pair.split_once('=').is_some_and(|(name, _)| {
+        name.eq_ignore_ascii_case("X-Plex-Token") || name.eq_ignore_ascii_case("ApiKey")
+    })
 }
 
 impl fmt::Debug for InheritedAuth {
@@ -48,7 +51,7 @@ impl InheritedAuth {
         let mut found = query.split('&').filter(|pair| is_token_pair(pair));
         let token_pair = found
             .next()
-            .filter(|pair| pair.len() > "X-Plex-Token=".len())
+            .filter(|pair| pair.split_once('=').is_some_and(|(_, value)| !value.is_empty()))
             .ok_or(Error::MissingCredential)?;
         if found.next().is_some() {
             return Err(Error::MultipleCredentials);
@@ -528,7 +531,7 @@ impl fmt::Display for Error {
                 write!(f, "segment {sequence} appeared after ENDLIST")
             }
             Self::StaleEndList => f.write_str("ENDLIST came from a playlist older than the cursor"),
-            Self::MissingCredential => f.write_str("HLS master URL has no Plex credential"),
+            Self::MissingCredential => f.write_str("HLS master URL has no route credential"),
             Self::MultipleCredentials => {
                 f.write_str("HLS master URL has multiple Plex credentials")
             }
@@ -1614,6 +1617,19 @@ mod tests {
             )),
             Err(Error::MultipleCredentials)
         );
+    }
+
+    #[test]
+    fn an_api_key_stream_url_is_inherited_like_a_plex_token() {
+        let master = source("/videos/ab/master.m3u8?LiveStreamId=l&ApiKey=top-secret");
+        let auth = InheritedAuth::capture(&master).unwrap();
+        let child = master.resolve("main.m3u8?LiveStreamId=l").unwrap();
+        assert_eq!(auth.request_path(&child).unwrap(), "/videos/ab/main.m3u8?LiveStreamId=l&ApiKey=top-secret");
+        assert_eq!(
+            auth.request_path(&source("/seg0.ts?ApiKey=other")),
+            Err(Error::CredentialChanged)
+        );
+        assert_eq!(InheritedAuth::capture(&source("/m.m3u8?ApiKey=")).err(), Some(Error::MissingCredential));
     }
 
     #[test]
