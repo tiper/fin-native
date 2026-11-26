@@ -1987,11 +1987,11 @@ mod tests {
         let off = super::profile_for_delivery_with(&caps, TranscodeDelivery::ProgressiveMkv, false);
         let on = super::profile_for_delivery_with(&caps, TranscodeDelivery::ProgressiveMkv, true);
         assert_eq!(list_of(&off, "audioCodec="), ["aac", "ac3", "eac3"]);
-        assert_eq!(list_of(&on, "audioCodec="), ["aac", "ac3", "eac3", "truehd", "flac", "alac", "opus", "vorbis", "pcm"]);
+        assert_eq!(list_of(&on, "audioCodec="), ["aac", "ac3", "eac3", "truehd", "flac", "alac", "opus", "vorbis", "pcm", "dca"]);
         assert_eq!(target_of(&on), target_of(&off));
         assert!(!on.contains("scopeName=truehd"), "{on}");
         assert_eq!(list_of(&super::forced_direct_profile_with(&caps, true), "audioCodec="),
-            ["aac", "ac3", "eac3", "truehd", "flac", "alac", "opus", "vorbis", "pcm"]);
+            ["aac", "ac3", "eac3", "truehd", "flac", "alac", "opus", "vorbis", "pcm", "dca"]);
     }
 
     /// The forced profile is the engine's own formats with no device limits: its literal is

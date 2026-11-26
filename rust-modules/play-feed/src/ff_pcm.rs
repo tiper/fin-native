@@ -34,6 +34,15 @@ pub use plx_media_codecs::pcm::*;
 /// where `core_only` lives) too. A value FFmpeg has not changed since the flag was added.
 const AV_OPT_SEARCH_CHILDREN: c_int = 1;
 
+/// Ask a DTS decoder for the core only (the `core_only` option: the XLL, XBR and X96 extensions are
+/// costly). Best-effort: false when the decoder has no such option, which still decodes the core.
+///
+/// # Safety
+/// `ctx` is a live, not yet opened `AVCodecContext`.
+pub(crate) unsafe fn request_core_only(ctx: *mut std::ffi::c_void) -> bool {
+    plx_media_codecs::ffi::av_opt_set(ctx, c"core_only".as_ptr(), c"1".as_ptr(), AV_OPT_SEARCH_CHILDREN) >= 0
+}
+
 
 pub struct PcmDecoder {
     ctx: *mut AVCodecContext,
@@ -102,9 +111,7 @@ impl PcmDecoder {
             // DTS: the 5.1 core only. The extensions (XLL, XBR, X96) are costly and the output is
             // stereo anyway; best-effort, so an FFmpeg without the option still decodes the core.
             // MP3, Vorbis and TrueHD have no such option: `av_opt_set` fails, `core_only` stays false.
-            core_only = plx_media_codecs::ffi::av_opt_set(
-                ctx as *mut std::ffi::c_void, c"core_only".as_ptr(), c"1".as_ptr(), AV_OPT_SEARCH_CHILDREN,
-            ) >= 0;
+            core_only = request_core_only(ctx as *mut std::ffi::c_void);
         }
         let r = if r < 0 { r } else { plx_media_codecs::ffi::avcodec_open2(ctx, codec, std::ptr::null_mut()) };
         if r < 0 {

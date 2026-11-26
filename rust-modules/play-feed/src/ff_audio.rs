@@ -180,15 +180,17 @@ pub(crate) fn ac3_pts_ns(anchor_ns: i64, samples_before: i64, sample_rate: c_int
 }
 
 /// Whether the pipeline takes this FFmpeg codec name itself, so it is fed as it is and never
-/// converted: the four `engine::audio_payload_codec` knows.
+/// converted. DTS is not here: this is asked only while the Load declared AC3 (`set_convert_audio`),
+/// and a DTS track under that declaration (the recovery after the pipeline refused it) is converted
+/// like any other the pipeline cannot take.
 pub(crate) fn fed_natively(codec_name: &str) -> bool {
-    matches!(codec_name, "aac" | "ac3" | "eac3" | "dts")
+    matches!(codec_name, "aac" | "ac3" | "eac3")
 }
 
 /// The decoders "Convert audio: on the TV" needs, by FFmpeg name: one per codec it offers
 /// (`devcaps::TV_CONVERTED_AUDIO_CODECS`), and the PCM layouts Matroska and MP4 carry most.
-const NEEDED_DECODERS: [&std::ffi::CStr; 7] =
-    [c"truehd", c"flac", c"alac", c"opus", c"vorbis", c"pcm_s16le", c"pcm_s24le"];
+const NEEDED_DECODERS: [&std::ffi::CStr; 8] =
+    [c"truehd", c"flac", c"alac", c"opus", c"vorbis", c"pcm_s16le", c"pcm_s24le", c"dca"];
 
 /// Can the FFmpeg this app loaded convert at all: the `ac3` encoder and every needed decoder are in
 /// it. `ff::boot` asks once and hands the answer to `devcaps`, so a build whose component list lost
@@ -201,7 +203,7 @@ pub(crate) fn converter_available() -> bool {
             .map(|n| n.to_str().unwrap_or("?"))
             .collect();
         if missing.is_empty() {
-            plx_base::eventlog::log("ff: audio converter ready (TrueHD, FLAC, ALAC, Opus, Vorbis, PCM -> AC3)");
+            plx_base::eventlog::log("ff: audio converter ready (TrueHD, FLAC, ALAC, Opus, Vorbis, PCM, DTS -> AC3)");
             true
         } else {
             plx_base::eventlog::log(&format!("ff: no audio converter: the bundled FFmpeg lacks {}", missing.join(", ")));
@@ -315,6 +317,12 @@ impl AudioConverter {
         };
         if conv.dec.is_null() || conv.frame.is_null() || conv.pkt.is_null() {
             return None;
+        }
+        // DTS: the core only, as the PCM path decodes it (`ff_pcm`): the extensions (XLL, XBR, X96)
+        // are costly and the AC3 target is 5.1 at most. Best-effort: an FFmpeg without the option
+        // still decodes the core.
+        if name == "dts" {
+            crate::ff_pcm::request_core_only(conv.dec as *mut c_void);
         }
         // The decoder places its frames by the packets' timestamps, in the stream's time base.
         let tb_str = CString::new(format!("{}/{}", tb.num, tb.den)).unwrap();

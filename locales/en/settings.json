@@ -817,7 +817,7 @@
   },
   "settings.playback.audio_conversion": {
     "value": "Convert audio",
-    "description": "Settings row title and picker title: where audio this television cannot decode itself (Dolby TrueHD, FLAC, ALAC, Opus, Vorbis, PCM) is converted into a format it plays."
+    "description": "Settings row title and picker title: where audio this television cannot decode itself (Dolby TrueHD, FLAC, ALAC, Opus, Vorbis, PCM, and DTS where the set refuses it) is converted into a format it plays."
   },
   "settings.playback.audio_conversion.server": {
     "value": "On the server",

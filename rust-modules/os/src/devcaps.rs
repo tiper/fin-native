@@ -355,7 +355,7 @@ pub fn app_decode_mixes_down(channels: i64) -> bool {
 /// and re-encodes to AC3 (`plx_media`'s `ff_audio.rs`) when the viewer picked that, spelled as PMS's
 /// profile and `Stream.codec` spell them. None is in [`DP_AUDIO_CODECS`]: they are exactly what the
 /// pipeline cannot take, so by default the server converts the file.
-pub const TV_CONVERTED_AUDIO_CODECS: &str = "truehd,flac,alac,opus,vorbis,pcm";
+pub const TV_CONVERTED_AUDIO_CODECS: &str = "truehd,flac,alac,opus,vorbis,pcm,dts";
 
 /// The FFmpeg the app ships can convert: `ff::boot` found the `ac3` encoder and the decoders.
 /// False until it has looked, which is every host test.
@@ -385,7 +385,7 @@ pub fn tv_audio_conversion() -> bool {
 /// One of [`TV_CONVERTED_AUDIO_CODECS`], in any case. PCM is matched in FFmpeg's `pcm_<format>`
 /// spellings too (`pcm_s24le`, `pcm_bluray`), which is how a Jellyfin server names it.
 pub fn tv_convertible(codec: &str) -> bool {
-    let codec = codec.to_ascii_lowercase();
+    let codec = audio_codec_id(codec);
     TV_CONVERTED_AUDIO_CODECS.split(',').any(|c| c == codec) || codec.starts_with("pcm_")
 }
 
@@ -2196,9 +2196,12 @@ mod tests {
         assert!(converted_with(&refused, true, "OPUS", 2, 48_000), "any spelling");
         assert!(!converted_with(&refused, false, "opus", 2, 48_000), "the server converts when the setting is off");
 
+        // DTS is one: the set refused it (type=18 num=601), so the app converts it.
+        let no_dts = base.without(&facet("dts", 6));
+        assert!(converted_with(&no_dts, true, "dts", 6, 48_000));
         // A codec the app does not convert stays with the server after its refusal.
-        let no_dts = base.without(&facet("dts", 2));
-        assert!(!converted_with(&no_dts, true, "dts", 2, 48_000));
+        let no_aac = base.without(&facet("aac", 2));
+        assert!(!converted_with(&no_aac, true, "aac", 2, 48_000));
     }
 
     /// `native_set()` on a firmware whose Dolby Vision splitter takes only an IDR first: the one
@@ -3149,16 +3152,42 @@ mod tests {
         for codec in ["truehd", "TrueHD", "flac", "alac", "opus", "vorbis", "pcm", "pcm_s24le", "pcm_bluray"] {
             assert!(tv_convertible(codec), "{codec}");
         }
-        for codec in ["aac", "ac3", "eac3", "dts", "mp3", "", "pcmx"] {
+        for codec in ["aac", "ac3", "eac3", "mp3", "", "pcmx"] {
             assert!(!tv_convertible(codec), "{codec}");
         }
-        // Opus is both: the TV decodes it in stereo and the app converts the wider tracks
-        // (`converted_with` asks the set about the track first).
-        for codec in DP_AUDIO_CODECS.split(',').filter(|&c| c != "opus") {
+        // Opus and DTS are both: the TV decodes them (Opus in stereo, DTS up to its table's channel
+        // count) and the app converts the tracks the set does not take (`converted_with` asks the
+        // set about the track first).
+        for codec in ["dts", "DTS", "dca"] {
+            assert!(tv_convertible(codec), "{codec}");
+        }
+        for codec in DP_AUDIO_CODECS.split(',').filter(|&c| c != "opus" && c != "dts") {
             assert!(!TV_CONVERTED_AUDIO_CODECS.split(',').any(|c| c == codec), "{codec} is the TV's own");
         }
         assert_eq!(direct_play_audio("aac,ac3,eac3", false), "aac,ac3,eac3");
-        assert_eq!(direct_play_audio("aac,ac3,eac3", true), "aac,ac3,eac3,truehd,flac,alac,opus,vorbis,pcm");
+        assert_eq!(direct_play_audio("aac,ac3,eac3", true), "aac,ac3,eac3,truehd,flac,alac,opus,vorbis,pcm,dts");
+        assert_eq!(direct_play_audio("aac,ac3,eac3,dts", true), "aac,ac3,eac3,dts,truehd,flac,alac,opus,vorbis,pcm");
+    }
+
+    /// A DTS track the set does not take (its table has no DTS row, or a recovery narrowed the
+    /// attempt after the pipeline refused the Load) is the app's to convert to AC3 under "Convert
+    /// audio: on the TV", at 5.1; one the set takes stays the set's, and with the setting off nothing
+    /// changes.
+    #[test]
+    fn a_dts_track_the_set_does_not_take_is_converted_on_the_tv() {
+        let without_row = Caps { audio: "aac,ac3,eac3".into(), ..Caps::assumed() };
+        assert!(converted_with(&without_row, true, "dts", 6, 48_000));
+        assert!(converted_with(&without_row, true, "dca", 6, 48_000), "PMS spells DTS `dca`");
+        assert!(!converted_with(&without_row, false, "dts", 6, 48_000), "the server converts when the setting is off");
+        let with_row = Caps {
+            audio: "aac,ac3,eac3,dts".into(),
+            audio_channels: [("dts".into(), 6)].into(),
+            ..Caps::assumed()
+        };
+        assert!(!converted_with(&with_row, true, "dts", 6, 48_000), "a set that takes DTS 5.1 keeps it");
+        assert!(track_converted(&without_row, true, "dts", 6, None, false));
+        assert!(!track_converted(&with_row, true, "dts", 6, None, false));
+        assert!(track_converted(&with_row, true, "dts", 6, None, true), "after a refusal narrowed it out of the attempt");
     }
 
     /// The merge is per-AXIS min, not a pick of the smaller row: a table whose duplicate rows

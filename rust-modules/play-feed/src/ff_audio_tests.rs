@@ -72,11 +72,13 @@ fn a_converted_track_is_not_also_claimed_by_the_app_pcm_decoders() {
 }
 
 #[test]
-fn the_four_codecs_the_pipeline_decodes_are_never_converted() {
-    for codec in ["aac", "ac3", "eac3", "dts"] {
+fn the_codecs_the_pipeline_takes_whole_are_never_converted() {
+    for codec in ["aac", "ac3", "eac3"] {
         assert!(fed_natively(codec), "{codec}");
     }
-    for codec in ["truehd", "mlp", "flac", "alac", "opus", "vorbis", "pcm_s16le", "pcm_s24le", "pcm_bluray"] {
+    // DTS is the pipeline's own on a set that takes the track, but a Load that declared AC3 for it
+    // (a refused open, or a set with no DTS row) is converted: the bytes must match the declaration.
+    for codec in ["dts", "truehd", "mlp", "flac", "alac", "opus", "vorbis", "pcm_s16le", "pcm_s24le", "pcm_bluray"] {
         assert!(!fed_natively(codec), "{codec}");
     }
 }

@@ -23,8 +23,13 @@ mod audio;
 pub use audio::set_convert_audio;
 
 fn audio_declaration_mismatch(declared: u8, actual: u8) -> bool {
-    // PCM describes decoded output; the container still carries the compressed input.
-    declared != 0 && declared != 5 && actual != 0 && declared != actual
+    // PCM describes decoded output; the container still carries the compressed input. So does the
+    // AC3 the app encodes ("Convert audio: On the TV"): the converter takes whatever the track is.
+    declared != 0
+        && declared != 5
+        && declared != plx_playback_contract::feed::DG_LOAD_A_CONVERTED_AC3
+        && actual != 0
+        && declared != actual
 }
 
 #[test]
@@ -36,6 +41,18 @@ fn pcm_output_does_not_mismatch_the_compressed_source() {
     }
     assert!(audio_declaration_mismatch(2, 3));
     assert!(!audio_declaration_mismatch(0, 3));
+}
+
+/// "Convert audio: On the TV": a Load that declared the AC3 the app encodes
+/// (`DG_LOAD_A_CONVERTED_AC3`) is honoured whatever the source is: DTS, TrueHD or any other track
+/// the converter decodes. Refusing it as a stale declaration sent a converted DTS film into a
+/// reload loop that ended on the error screen.
+#[test]
+fn a_converted_ac3_declaration_matches_any_source() {
+    let converted = plx_playback_contract::feed::DG_LOAD_A_CONVERTED_AC3;
+    for actual in [0, 1, 2, 3, 4] {
+        assert!(!audio_declaration_mismatch(converted, actual), "source code {actual}");
+    }
 }
 
 /// Captured by the media composition and moved into one demux worker. Authorization is checked
