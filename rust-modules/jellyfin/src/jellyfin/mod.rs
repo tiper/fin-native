@@ -38,6 +38,7 @@ pub mod ids;
 pub mod image_tags;
 pub mod languages;
 pub mod live;
+pub mod livetv;
 pub mod paths;
 pub mod playback_info;
 pub mod qrpng;

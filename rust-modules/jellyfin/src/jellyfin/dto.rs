@@ -190,6 +190,10 @@ pub struct BaseItemDto {
     pub premiere_date: Option<String>,
     /// A person's date of death (a series' last air date).
     pub end_date: Option<String>,
+    /// Live TV only: the channel's number (`"101"`), a programme's start, and the programme a channel airs now.
+    pub channel_number: Option<String>,
+    pub start_date: Option<String>,
+    pub current_program: Option<Box<BaseItemDto>>,
     pub date_created: Option<String>,
     pub run_time_ticks: Option<i64>,
     pub community_rating: Option<f64>,

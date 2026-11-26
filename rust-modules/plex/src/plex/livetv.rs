@@ -365,6 +365,7 @@ impl Client {
     /// Answers `(status, dvrs)`: the status of the read that produced the answer, and the DVRs
     /// (`None` when neither read produced one, i.e. the transport or the server refused).
     pub fn live_tv_dvrs(&self) -> (Option<i32>, Option<Vec<Dvr>>) {
+        crate::alt!(b => b.live_tv_dvrs());
         if let JsonStatusOutcome::Response { status, parsed: Some(container) } = self.get_json_status(PROVIDERS_PATH) {
             return (Some(status), Some(live_tv_providers(&container.media_provider)));
         }
@@ -376,6 +377,7 @@ impl Client {
 
     /// `GET /{epg}/lineups/dvr/channels` — one DVR's mapped channels, with the read's status.
     pub fn epg_channels(&self, epg: &str) -> (Option<i32>, Option<Vec<EpgChannel>>) {
+        crate::alt!(b => b.epg_channels(epg));
         if !is_provider_id(epg) {
             return (None, None);
         }
@@ -387,6 +389,7 @@ impl Client {
 
     /// `GET /{epg}/grid` bounded to the airings on at `now` (Unix seconds).
     pub fn epg_on_now(&self, epg: &str, now: i64) -> Option<Vec<Metadata>> {
+        crate::alt!(b => b.epg_on_now(epg, now));
         if !is_provider_id(epg) {
             return None;
         }
@@ -399,6 +402,7 @@ impl Client {
     /// session id is required: without one PMS answers 400 "A session identifier is required for
     /// this request" before it looks at the channel (measured on the TV, 2026-10-21).
     pub fn tune(&self, _off: &plx_base::task::OffFrame, dvr: &str, channel: &str, playback: &str) -> TuneOutcome {
+        crate::alt!(b => b.tune(_off, dvr, channel, playback));
         let Some(path) = tune_path(dvr, channel) else {
             return TuneOutcome::Failed { status: None };
         };
@@ -417,6 +421,7 @@ impl Client {
     /// for protocol hls, with container mpegts" — and then refuses the session's own playlist
     /// ("doesn't allow direct play"). Both measured on the TV, 2026-10-21.
     pub fn live_part(&self, _off: &plx_base::task::OffFrame, session: &LiveSession, playback: &str) -> Option<LivePlay> {
+        crate::alt!(b => b.live_part(_off, session, playback));
         let header = format!("X-Plex-Session-Identifier: {playback}");
         let q = QueryBuilder::new(live_decision_path(session, playback))
             .str("X-Plex-Client-Profile-Name", "Generic")
@@ -439,6 +444,7 @@ impl Client {
     /// `POST /:/timeline` for a live session: `time`/`duration` stay 0 as the official client sends
     /// them. `Stopped` is the request that ends the recording and frees the tuner.
     pub fn live_timeline(&self, session: &LiveSession, state: TimelineState, watched_ms: i64, playback: &str) -> bool {
+        crate::alt!(b => b.live_timeline(session, state, watched_ms, playback));
         let q = QueryBuilder::new("/:/timeline")
             .str("key", &session.key)
             .opt_str("ratingKey", &session.rating_key)

@@ -205,6 +205,32 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    // ---- Live TV ([`crate::plex::livetv`]); the defaults read as "this server has no Live TV" ----
+    /// `Client::live_tv_dvrs`: the tuner sources the server offers, with the read's status.
+    fn live_tv_dvrs(&self) -> (Option<i32>, Option<Vec<crate::plex::Dvr>>) {
+        (None, None)
+    }
+    /// `Client::epg_channels`: one source's channels, with the read's status.
+    fn epg_channels(&self, epg: &str) -> (Option<i32>, Option<Vec<crate::plex::EpgChannel>>) {
+        (None, None)
+    }
+    /// `Client::epg_on_now`: the airings on at `now` (Unix seconds), one per channel.
+    fn epg_on_now(&self, epg: &str, now: i64) -> Option<Vec<Metadata>> {
+        None
+    }
+    /// `Client::tune`: start a channel. `playback` is the session id this client reports under.
+    fn tune(&self, off: &plx_base::task::OffFrame, dvr: &str, channel: &str, playback: &str) -> crate::plex::livetv::TuneOutcome {
+        crate::plex::livetv::TuneOutcome::Failed { status: None }
+    }
+    /// `Client::live_part`: what to play for a tuned session.
+    fn live_part(&self, off: &plx_base::task::OffFrame, session: &crate::plex::livetv::LiveSession, playback: &str) -> Option<crate::plex::livetv::LivePlay> {
+        None
+    }
+    /// `Client::live_timeline`: a live session's state; `Stopped` frees the tuner.
+    fn live_timeline(&self, session: &crate::plex::livetv::LiveSession, state: crate::plex::TimelineState, watched_ms: i64, playback: &str) -> bool {
+        false
+    }
+
     // ---- favourites ([`crate::plex::favorite_mark`]) ----
     /// `rating_key`'s favourite mark, as last read or pressed; `None` for a server that keeps none.
     fn favorite_mark(&self, rating_key: &str) -> Option<bool> {

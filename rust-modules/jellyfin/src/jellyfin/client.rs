@@ -165,6 +165,8 @@ pub struct JfClient {
     started: Mutex<HashSet<String>>,
     /// Play sessions the server is transcoding, which report as `Transcode` rather than `DirectPlay`.
     transcoding: Mutex<HashSet<String>>,
+    /// Live channels tuned and not yet closed: the playlist each stream (by its id) is read from.
+    live: Mutex<std::collections::HashMap<String, plx_plex::plex::livetv::LivePlay>>,
     /// The item [`Self::metadata`] read last, and when: starting a playback asks for the same item
     /// at each step (the decision, the queue, a transcode's plan), seconds after its page did.
     /// Forgotten by every write this client makes about an item ([`Self::forget_recent`]).
@@ -177,6 +179,7 @@ pub struct JfClient {
     recent_user: Recent<Arc<serde_json::Value>, PreferenceError>,
     /// The user's libraries as last listed ([`Self::libraries_recent`]).
     recent_libraries: Recent<Arc<QueryResult<BaseItemDto>>, ()>,
+    recent_channels: Recent<Arc<Vec<BaseItemDto>>, ()>,
     /// This app's server-side display preferences, where the dismissed Next Up episodes are kept
     /// (`display_prefs`): read once per [`RECENT_CONFIG`], and replaced by this client's own write.
     recent_prefs: Recent<Arc<serde_json::Value>, ()>,
@@ -184,6 +187,8 @@ pub struct JfClient {
 }
 
 /// How long the item [`JfClient::metadata`] read is reused for a playback's next step.
+/// How long one read of the channel list answers the questions of a single discovery.
+const RECENT_CHANNELS: Duration = Duration::from_secs(5);
 const RECENT_ITEM: Duration = Duration::from_secs(30);
 /// How long the user's Home settings are reused by a library page's shelves; Home reads them anew.
 const RECENT_CONFIG: Duration = Duration::from_secs(5 * 60);
@@ -264,10 +269,12 @@ impl JfClient {
             sections: SectionIds::new(),
             started: Mutex::new(HashSet::new()),
             transcoding: Mutex::new(HashSet::new()),
+            live: Mutex::new(std::collections::HashMap::new()),
             recent_item: Mutex::new(None),
             queue: Mutex::new((0, Vec::new())),
             recent_user: Recent::default(),
             recent_libraries: Recent::default(),
+            recent_channels: Recent::default(),
             recent_prefs: Recent::default(),
             transport,
         }
@@ -497,6 +504,7 @@ pub fn base_path(base: &str) -> &str {
 
 mod browse;
 mod items;
+mod livetv;
 mod playback;
 mod signin;
 

@@ -678,3 +678,26 @@ mod tests {
         assert_eq!(quick_connect_authenticate_body("s"), r#"{"Secret":"s"}"#);
     }
 }
+
+/// `GET`: the user's Live TV channels, each with the programme on now.
+pub fn live_channels(user_id: &str) -> String {
+    format!(
+        "/LiveTv/Channels?userId={}&addCurrentProgram=true&enableUserData=false&enableImages=true&enableImageTypes=Primary&imageTypeLimit=1",
+        enc(user_id)
+    )
+}
+
+/// `POST`: tune a channel. The server opens its live stream with the play and answers the source
+/// with the stream's id and, for the profile's HLS target, the playlist.
+pub fn live_playback_info(user_id: &str, channel_id: &str) -> String {
+    format!(
+        "/Items/{}/PlaybackInfo?userId={}&isPlayback=true&autoOpenLiveStream=true",
+        enc(channel_id),
+        enc(user_id)
+    )
+}
+
+/// `POST`: release a live stream's tuner.
+pub fn close_live_stream(live_stream_id: &str) -> String {
+    format!("/LiveStreams/Close?liveStreamId={}", enc(live_stream_id))
+}
