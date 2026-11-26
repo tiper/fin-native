@@ -10721,6 +10721,7 @@ impl ResolveEnv {
             dolby_vision_mode: dolby_vision_mode(),
             uri_engine: uri_engine(),
             dv_capability: plx_os::devcaps::dv::capability(),
+            audio_conversion: plx_os::devcaps::tv_audio_conversion(),
             caps: ps.attempt_caps(),
             backends: ps.backends,
             uri_preflight_port: ps.uri_preflight_port.clone(),

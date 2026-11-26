@@ -29,8 +29,8 @@ use std::sync::atomic::Ordering;
 
 use super::decision::{
     measure_remote_original, measure_remote_remux, put_selection, resolve_playqueue,
-    server_decision, forced_server_decision, ActiveEncoderState, AutomaticRouteIntent, MdeVerdict, PlayerControl, QueueInfo,
-    ENCODER_GENERATION,
+    server_decision, forced_server_decision, audio_direct_plays_or_converted, ActiveEncoderState, AutomaticRouteIntent,
+    MdeVerdict, PlayerControl, QueueInfo, ENCODER_GENERATION,
 };
 
 /// The selected source Part and streams before any executor chooses a playable wire recipe.
@@ -1444,6 +1444,10 @@ pub struct ResolveEnv {
     /// the mode so the worker never reads the process cache. A regression sets it directly: no
     /// test mutates the production `OnceLock` or makes the whole host a DV set.
     pub dv_capability: plx_os::devcaps::dv::DvCapability,
+    /// "Convert audio: on the TV" (`devcaps::tv_audio_conversion`), read once at the request with
+    /// the modes above so the worker never reads the process cell: a track only the app converts
+    /// counts as direct play when it is on.
+    pub audio_conversion: bool,
     /// **The capability value this attempt plans from**, copied off the session
     /// ([`PlaybackSession::attempt_caps`]) beside the quality and the mode, so the worker never reads the
     /// process-wide capability answer: every direct-play gate, the audio pick and the transcode
@@ -2351,7 +2355,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                 audio_natively_plays_with(&env.caps, env.direct_play_mode, codec, channels, rate)
             };
             let eligible = |codec: &str, channels: i64, rate: i64| {
-                audio_direct_plays_with(&env.caps, env.direct_play_mode, codec, channels, rate)
+                audio_direct_plays_or_converted(&env.caps, env.audio_conversion, env.direct_play_mode, codec, channels, rate)
             };
             let copy_blocked = forced || no_video_copy;
             let pick_audio = |stand_in: StandIn, plays: &dyn Fn(&str, i64, i64) -> bool| {
@@ -2380,10 +2384,15 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             };
             if forced && audio_sel.is_none() {
                 audio_sel = pick_audio(StandIn::SameKind, &eligible);
-                if let Some((_, raw, _)) = &audio_sel {
+                if let Some((i, raw, _)) = &audio_sel {
+                    let converted = usize::try_from(*i).ok().and_then(|i| tracks.get(i)).is_some_and(|t| {
+                        plx_os::devcaps::converted_with(&env.caps, env.audio_conversion, &t.codec, t.channels, t.sampling_rate)
+                    });
                     crate::player::log(&format!(
-                        "playback_policy: Force Direct Play decodes audio codec {raw} ({}) in the app, stereo",
-                        plx_data::metadata::friendly_codec(raw)
+                        "playback_policy: Force Direct Play {} audio codec {raw} ({}) {}",
+                        if converted { "converts" } else { "decodes" },
+                        plx_data::metadata::friendly_codec(raw),
+                        if converted { "to AC3 on the TV" } else { "in the app, stereo" },
                     ));
                 }
             }
