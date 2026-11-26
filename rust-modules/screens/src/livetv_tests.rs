@@ -623,3 +623,50 @@ fn focusing_on_now_with_channels_below_does_not_scroll_the_page() {
     }
     assert!(screen.stack.scroll().abs() < 0.01, "unfocused, the page is home: {}", screen.stack.scroll());
 }
+
+/// The `Enter::Fresh` seats an event pushed, as the elements they name.
+fn seated_elems(out: &[Stamped<TestHost>]) -> Vec<u32> {
+    out.iter().filter_map(|s| match &s.fx {
+        Fx::Deliver(_, Delivery::Screen(ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::Elem(key) }))) => Some(key.elem),
+        _ => None,
+    }).collect()
+}
+
+fn left(channel: &str) -> ScreenEvent<TestHost> {
+    ScreenEvent::App(crate::registry::AppMsg::LiveTvSeat { sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: channel.into() })
+}
+
+/// **BACK from the live player lands on the channel left, not the card that was pressed.** The player's exit tells the
+/// covered page; on its restore it seats that channel's Recent tile, else the row the channel belongs to.
+#[test]
+fn the_restored_page_seats_the_channel_the_player_left() {
+    let (store, mut screen) = seeded();
+    // 101 and 102 are on now; 103 has no programme. Recent holds 102 only.
+    let recent = [channel("102", "Cartoons")];
+    let view = with_recent(&store, &recent);
+    step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+    for (left_channel, want, why) in [
+        ("C102", FIRST_CARD_ELEM + 2, "a Recent channel: its Recent tile (even)"),
+        ("C101", FIRST_CARD_ELEM + 1, "a channel only On now holds: its poster (odd)"),
+        ("C103", FIRST_CARD_ELEM + 4, "a channel with no programme and not in Recent: the Channels shelf's tile (even)"),
+    ] {
+        let mut screen = LiveTvScreen::new(ENTRY);
+        step(&mut screen, view, None, &ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(RECENT_GROUP) }));
+        assert!(step(&mut screen, view, None, &left(left_channel)).is_empty(), "the message only remembers");
+        let out = step(&mut screen, view, Some(FIRST_CARD_ELEM), &ScreenEvent::Enter(Enter::Restored));
+        assert_eq!(seated_elems(&out), vec![want], "{why}");
+        // spent: a second restore seats nothing
+        assert!(seated_elems(&step(&mut screen, view, Some(want), &ScreenEvent::Enter(Enter::Restored))).is_empty());
+    }
+}
+
+/// A restore with nobody told, or told of a channel the lineup no longer lists, keeps the focus the engine restored.
+#[test]
+fn a_restore_with_no_left_channel_seats_nothing() {
+    let (store, mut screen) = seeded();
+    let recent = [channel("102", "Cartoons")];
+    let view = with_recent(&store, &recent);
+    assert!(seated_elems(&step(&mut screen, view, Some(FIRST_CARD_ELEM), &ScreenEvent::Enter(Enter::Restored))).is_empty());
+    step(&mut screen, view, None, &left("C999"));
+    assert!(seated_elems(&step(&mut screen, view, Some(FIRST_CARD_ELEM), &ScreenEvent::Enter(Enter::Restored))).is_empty());
+}

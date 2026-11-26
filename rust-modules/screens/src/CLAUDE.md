@@ -351,3 +351,40 @@ plan no longer holds is seated on the first band with films (`RailPart::reconcil
   grid's card is in, none when the card is among the items the sort leaves without a value, which lie before the first
   band or after the last) `TEXT_PRIMARY`, and the focused band wears the white focus pill (38 high, built with
   `widgets::focus_pill`, filled as the letters' disc is). There is no position bar or marker.
+
+## The live player: banner, debounced zap, BACK to the channel left (Live TV PR4)
+
+A live channel has **no transport**. `PlayerScreen::hud_drawn` and `hud_up` are `false` on a live session, so the
+scrubber, the control row, Info, Chapters and the track menus are not drawn and cannot be reached; what is drawn is the
+art ground and the banner (`player/live.rs`), and what a key does is `PlayerScreen::live_key`, ahead of the VOD ladder:
+Up, Down, CH+ and CH- step the zap; Left, Right and OK only raise the banner; BACK and STOP leave in ONE press at every phase
+(the debounce, buffering, playing: the VOD transport's hide-first BACK never sees a live channel), and drop a zap still pending so no tune follows the exit; Play/Pause, the digits
+and EXIT fall through to the ladder as before (number entry is the next PR's). A failure read-out still owns the frame
+first, as on any playback. VOD input is untouched: every VOD player test passes unmodified.
+
+The decisions are three named phases in `player/zap.rs`, pure, stepped from keys, the Tick and the app's addressed words
+(`Live::press`, `reveal`, `started`, `refused`, `leave`, `tick`; no clock read, no session read): **`Zap`** (`Idle`,
+`Pending` while presses are collected, `Tuning` after the ask until the session shows the target's first frame) with a
+600 ms debounce (`DEBOUNCE_MS`) and ONE `PlayerReq::Tune` per run of presses, named by the channel's identity. Its events
+are `Step`, `Tick`, `Session`, `Refused` and `Cancel`, all in the table at the top of `zap.rs`: a window that closes on
+the channel already playing (Up then Down, or a full lap) ends in `Idle` and asks for nothing; a tune the app took no
+request for ends the zap on **`AppMsg::LiveTuneRefused`** (sent by `app::playback::tune_live_channel`'s refusal arm), never
+on an inference from timing; BACK / STOP are `Cancel`. **`Art`** is driven by one `ArtEvent` a frame (`Zapping`, `NoFrame`,
+`Frame`): `Waiting` before anything is known, `Covering` from the first press and while the stream has shown no frame yet,
+`Fading` once one exists, then `Settled`: a later stall or rebuffer never brings the art back, only a zap does. It is drawn by
+`plx_ui::art_ground` (the target programme's art over the video plane's hole, scaled 1.08 at 0.85 brightness: one textured quad of a blurred copy made once per
+image (`art_fit::BackdropSpec`, requested with the art, `tex::resolve_art_on`), never the live glass, so it is as soft over a
+bound video plane as anywhere; art with a clear ground stands on the app's flat ground: never black). **`Banner`** (`Entering`,
+`Shown { until }`) is raised on every stream the app starts (`AppMsg::PlayerStart`, through `Live::started`), on every press, and on
+Left, Right and OK; `Entering` is the page's first state, before it has a clock (the `PlayerStart` of the first mount is
+sent before the page exists), and its first frame stamps the deadline. It is held while a zap is in flight or no picture
+is there, fading .35 s after four seconds: `appkit::player_hud::live::SHOW_MS` / `FADE_MS`, declared values of the banner, not
+`LINGER_MS`. The lineup the zap steps through is `PlayerLike::lineup` (a provided method; the app answers it with the store's
+view) and the banner's placement is the HUD package's `layout.live` (`Compiled::live`, format 1.2). The page's one
+live predicate is `plx_media::route::is_live(ps)`; `HudModel` carries no live flag. The tests are `player/live_tests.rs`,
+`zap.rs`'s own and, through the real loop, `src/app/livetv_routing_tests.rs`.
+
+**BACK lands on the channel left.** `app::playback::exit_player` names the channel the session was tuned to before it
+stops it and tells the page the player was launched from (`bridge::seat_live_channel`, `AppMsg::LiveTvSeat`, a covered
+page still receives an addressed command); `LiveTvScreen` keeps it and, on `Enter::Restored`, seats that channel's card:
+its Recent tile, else its On now poster, else its Channels tile (`left_elem`). OK on that card tunes it again.

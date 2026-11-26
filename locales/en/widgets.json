@@ -1144,5 +1144,16 @@
       "number": "str",
       "programme": "str"
     }
+  },
+  "widgets.live.badge": {
+    "value": "LIVE",
+    "description": "The player banner's badge on a live channel: a short all-caps state word on a red chip (MICRO, bold, tracked). Keep it to one or two short words."
+  },
+  "widgets.live.next_at": {
+    "value": "Next at {time}",
+    "description": "The player banner's last line on a live channel: when the next programme starts. {time} is the clock time in the viewer's format, for example 22:39.",
+    "args": {
+      "time": "str"
+    }
   }
 }

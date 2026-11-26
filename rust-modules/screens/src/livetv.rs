@@ -30,7 +30,7 @@ use plx_ui::fmt::{self, Airing, AiringPhase, Wall};
 use plx_ui::tile::Resume;
 use plx_ui::widgets::{AmbientWash, Art, PageGround, StatusKind, StatusOverlay};
 use plx_ui::{Env, Rect};
-use crate::registry::{captions, tile_facts, AppFx, ContentReq, HomeReq, HomeTab, LiveTvLike, PlayIntent};
+use crate::registry::{captions, tile_facts, AppFx, AppMsg, ContentReq, HomeReq, HomeTab, LiveTvLike, PlayIntent};
 
 #[cfg(test)]
 pub(crate) mod cards_harness;
@@ -423,13 +423,16 @@ pub struct LiveTvScreen {
     own_enters: u8,
     /// How many of those were queued before the reader acted.
     stale_enters: u8,
+    /// **The channel the player left**, told by the player's exit while this page is covered (`AppMsg::LiveTvSeat`),
+    /// seated when the page is restored and then forgotten: server, DVR and key.
+    left: Option<(plx_plex::plex::ServerId, String, String)>,
 }
 
 impl LiveTvScreen {
     /// The heartbeat word, byte-identical to the route word.
     pub const WORD: &'static str = "livetv";
 
-    pub const SHAPE: &'static str = "LiveTvScreen{entry:u32,status:u32,channels:[{sid:u32,rk:str}],airings:[u32],recent:[u32],stack:Stack{scroll:{pos:f32,vel:f32},target:f32,sections:[Shelf{row,pop},Shelf{row,pop},Shelf{row,pop}]},handoff:Handoff{tucked:bool,chrome:f32,capsule:f32}}";
+    pub const SHAPE: &'static str = "LiveTvScreen{entry:u32,status:u32,channels:[{sid:u32,rk:str}],airings:[u32],recent:[u32],stack:Stack{scroll:{pos:f32,vel:f32},target:f32,sections:[Shelf{row,pop},Shelf{row,pop},Shelf{row,pop}]},handoff:Handoff{tucked:bool,chrome:f32,capsule:f32},left:Option<(u32,str,str)>}";
 
     pub fn new(entry: EntryId) -> Self {
         Self {
@@ -454,6 +457,7 @@ impl LiveTvScreen {
             seat: None,
             own_enters: 0,
             stale_enters: 0,
+            left: None,
         }
     }
 
@@ -509,6 +513,19 @@ impl LiveTvScreen {
         let Some(seated) = self.seat else { return };
         if seated != self.page.regions().first_seat() {
             self.seat_first(fx);
+        }
+    }
+
+    /// **The card of the channel the player left**: its Recent tile (a tuned channel joins Recent at admission), else the
+    /// row it belongs to, On now's poster or the Channels shelf's tile. `None` for a channel the lineup no longer lists.
+    fn left_elem<H: LiveTvLike>(&mut self, left: &(plx_plex::plex::ServerId, String, String), cx: &Cx<'_, H>) -> Option<u32> {
+        self.page.sync(H::livetv(cx));
+        let index = H::livetv(cx).channels.iter().position(|c| c.sid == left.0 && c.dvr == left.1 && c.channel == left.2)?;
+        let base = FIRST_CARD_ELEM + index as u32 * 2;
+        if self.page.recent.contains(&index) || self.page.rest.contains(&index) {
+            Some(base)
+        } else {
+            self.page.airings.contains(&index).then_some(base + 1)
         }
     }
 
@@ -593,6 +610,7 @@ impl LogicalState for LiveTvScreen {
         for &i in &self.page.recent { c.u32(i as u32); }
         self.stack.write(c);
         self.page.handoff.write(c);
+        c.option(self.left.as_ref(), |c, (sid, dvr, channel)| { c.u32(u32::from(sid.raw())).str(dvr).str(channel); });
     }
 
     fn probe(&self, out: &mut String) {
@@ -650,9 +668,17 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
                     Enter::Restored => {
                         self.seat = None;
                         self.stale_enters = self.own_enters;
+                        // the player was left on a channel: the card of that channel, not the one that was pressed
+                        if let Some(elem) = self.left.take().and_then(|left| self.left_elem(&left, cx)) {
+                            self.seat_own(FocusTarget::Elem(FocusKey { entry: self.page.entry, elem }), fx);
+                        }
                     }
                 }
                 fx.invalidate(Provenance::Nav);
+                Handled::Yes
+            }
+            ScreenEvent::App(AppMsg::LiveTvSeat { sid, dvr, channel }) => {
+                self.left = Some((*sid, dvr.clone(), channel.clone()));
                 Handled::Yes
             }
             ScreenEvent::Uncover => {

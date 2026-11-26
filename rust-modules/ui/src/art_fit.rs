@@ -34,8 +34,10 @@
 //! ARMv7 (the strided reads miss the cache more than the arithmetic costs), once per image.
 //!
 //! **A request asks for the copy** ([`BackdropSpec`], carried by the request that names the art:
-//! [`crate::tex::Source::probe`]), so only art a row declares it will contain pays for one: never a
-//! logo, a still, a backdrop or a headshot, and not a Cover row's poster. The copy rides in
+//! [`crate::tex::Source::probe`]), so only art whose request declares a copy pays for one: a poster
+//! under a fit that contains ([`ArtFit::copy_request`]) and the Live TV art ground's programme still
+//! ([`crate::art_ground::SPEC`], a full-screen copy it draws as one quad). Never a logo or a headshot on a row, a
+//! backdrop, or a Cover row's poster. The copy rides in
 //! [`crate::tex::Decoded::backdrop`], is uploaded with the image and lives and dies in the same
 //! cache entry ([`crate::tex::TexCache`]); drawing a tile is two textured quads (one pass when
 //! focused: [`crate::Painter::tex_carded_inset`]) and no render pass. The GPU upscales the copy
@@ -110,6 +112,16 @@ pub struct BackdropSpec {
     /// The blur of a mark on a clear ground is a grey wash, so the policy is the request's, not the
     /// blur's.
     pub ground: Option<[u8; 3]>,
+    /// The brightness the blurred copy keeps, in percent of the picture's own colours (baked into the copy when it
+    /// is made, so the tile draws it with no tint): a poster's backdrop sits under the contained picture at
+    /// [`theme::ART_BACKDROP_DIM`]; another surface asks for the brightness that suits it. A flat ground is
+    /// drawn as it is, whatever this says.
+    pub dim: u8,
+}
+
+/// `fraction` (0 to 1) as a whole percent, for [`BackdropSpec::dim`].
+pub const fn percent(fraction: f32) -> u8 {
+    (fraction * 100.0 + 0.5) as u8
 }
 
 impl BackdropSpec {
@@ -120,6 +132,7 @@ impl BackdropSpec {
         short_side: POSTER_BACKDROP_SIDE,
         skip_shape: Some((2, 3)),
         ground: Some(theme::CHANNEL_PLATE_RGB8),
+        dim: percent(theme::ART_BACKDROP_DIM),
     };
 
     /// Does a `w` x `h` picture get a copy under this spec?
@@ -214,7 +227,7 @@ pub fn attach_backdrop(mut picture: Decoded, spec: BackdropSpec) -> Decoded {
         picture.backdrop = if is_see_through(&picture) {
             spec.ground.map(ground_copy)
         } else {
-            backdrop_of(&picture, spec.short_side as usize)
+            backdrop_of(&picture, spec.short_side as usize, spec.dim)
         }
         .map(Box::new);
     }
@@ -230,10 +243,10 @@ pub fn attach_backdrop(mut picture: Decoded, spec: BackdropSpec) -> Decoded {
 /// picture on the main thread, and would need the buffer copied into its `Rgba`), and one 3 x 3 box
 /// pass (edges clamped) smooths the result. The picture is taken as OPAQUE: alpha is ignored, because
 /// a picture with transparency is never blurred ([`attach_backdrop`] gives it a flat ground instead).
-/// The copy is dimmed to [`theme::ART_BACKDROP_DIM`] (so the tile draws it with no tint), opaque, and
+/// The copy is dimmed to `dim` percent ([`BackdropSpec::dim`]: so the tile draws it with no tint), opaque, and
 /// keeps the picture's aspect, so the tile's cover window ([`Placement::Contained::backdrop_uv`])
 /// addresses it as it addresses the picture.
-pub fn backdrop_of(d: &Decoded, short: usize) -> Option<Decoded> {
+pub fn backdrop_of(d: &Decoded, short: usize, dim: u8) -> Option<Decoded> {
     let (w, h) = (d.w as usize, d.h as usize);
     // A copy is smaller than its picture or it is not a blur of it: a thumbnail this small is its own.
     if short == 0 || w <= short || h <= short || d.rgba.len() < w * h * 4 {
@@ -272,7 +285,7 @@ pub fn backdrop_of(d: &Decoded, short: usize) -> Option<Decoded> {
                     }
                 }
             }
-            let k = theme::ART_BACKDROP_DIM / m[3];
+            let k = (dim as f32 / 100.0) / m[3];
             rgba.extend([m[0] * k, m[1] * k, m[2] * k].map(|c| c.round().clamp(0.0, 255.0) as u8));
             rgba.push(255);
         }
@@ -285,6 +298,7 @@ mod tests {
     use super::*;
     use plx_gfx::gfx::UV_FULL;
 
+    const POSTER_DIM: u8 = BackdropSpec::POSTER.dim;
     const TILE: Rect = Rect { x: 100.0, y: 200.0, w: 250.0, h: 375.0 };
 
     fn near(a: f32, b: f32) -> bool { (a - b).abs() < 1e-3 }
@@ -346,7 +360,7 @@ mod tests {
         assert!(!spec.wanted_for(72, 100) && spec.wanted_for(73, 100), "wide edge");
         assert!(!spec.wanted_for(920, 1500) && spec.wanted_for(919, 1500), "narrow edge");
         assert!(!spec.wanted_for(250, 375) && spec.wanted_for(375, 375) && spec.wanted_for(667, 375));
-        let any = BackdropSpec { short_side: 16, skip_shape: None, ground: None };
+        let any = BackdropSpec { short_side: 16, skip_shape: None, ground: None, dim: POSTER_DIM };
         assert!(any.wanted_for(250, 375), "a spec with no shape to skip wants every picture");
         assert_eq!(ArtFit::Cover.copy_request(), None);
         assert_eq!(ArtFit::ContainOnBlur.copy_request(), Some(BackdropSpec::POSTER));
@@ -371,15 +385,15 @@ mod tests {
 
     #[test]
     fn the_backdrop_of_a_square_and_a_16_by_9_is_tiny_and_keeps_the_aspect() {
-        let sq = backdrop_of(&px(375, 375, |_, _| [200, 100, 50, 255]), 16).expect("a square needs one");
+        let sq = backdrop_of(&px(375, 375, |_, _| [200, 100, 50, 255]), 16, POSTER_DIM).expect("a square needs one");
         assert_eq!((sq.w, sq.h), (16, 16));
-        let wide = backdrop_of(&px(667, 375, |_, _| [200, 100, 50, 255]), 16).expect("16:9 needs one");
+        let wide = backdrop_of(&px(667, 375, |_, _| [200, 100, 50, 255]), 16, POSTER_DIM).expect("16:9 needs one");
         assert_eq!((wide.w, wide.h), (28, 16));
         assert_eq!(wide.rgba.len(), 28 * 16 * 4);
         assert!(wide.backdrop.is_none());
-        let tall = backdrop_of(&px(200, 600, |_, _| [9, 9, 9, 255]), 16).expect("1:3 needs one");
+        let tall = backdrop_of(&px(200, 600, |_, _| [9, 9, 9, 255]), 16, POSTER_DIM).expect("1:3 needs one");
         assert_eq!((tall.w, tall.h), (16, 48));
-        let pano = backdrop_of(&px(2000, 100, |_, _| [9, 9, 9, 255]), 16).expect("a panorama needs one");
+        let pano = backdrop_of(&px(2000, 100, |_, _| [9, 9, 9, 255]), 16, POSTER_DIM).expect("a panorama needs one");
         assert_eq!((pano.w, pano.h), (64, 16), "the long side is capped");
     }
 
@@ -387,23 +401,23 @@ mod tests {
     fn a_malformed_or_tiny_picture_has_no_backdrop() {
         let mut short = px(300, 300, |_, _| [1, 2, 3, 255]);
         short.rgba = vec![0; 100].into_boxed_slice();
-        assert!(backdrop_of(&short, 16).is_none(), "a buffer shorter than w*h*4");
-        assert!(backdrop_of(&px(0, 0, |_, _| [0; 4]), 16).is_none(), "no size");
-        assert!(backdrop_of(&px(2, 2, |_, _| [1, 2, 3, 255]), 16).is_none(), "a copy no smaller than the picture is no blur of it");
-        assert!(backdrop_of(&px(16, 30, |_, _| [1, 2, 3, 255]), 16).is_none(), "the short side is already the copy's");
-        assert!(backdrop_of(&px(17, 30, |_, _| [1, 2, 3, 255]), 16).is_some(), "one texel more is a picture to reduce");
-        assert!(backdrop_of(&px(300, 300, |_, _| [1, 2, 3, 255]), 0).is_none(), "a copy of no texels");
+        assert!(backdrop_of(&short, 16, POSTER_DIM).is_none(), "a buffer shorter than w*h*4");
+        assert!(backdrop_of(&px(0, 0, |_, _| [0; 4]), 16, POSTER_DIM).is_none(), "no size");
+        assert!(backdrop_of(&px(2, 2, |_, _| [1, 2, 3, 255]), 16, POSTER_DIM).is_none(), "a copy no smaller than the picture is no blur of it");
+        assert!(backdrop_of(&px(16, 30, |_, _| [1, 2, 3, 255]), 16, POSTER_DIM).is_none(), "the short side is already the copy's");
+        assert!(backdrop_of(&px(17, 30, |_, _| [1, 2, 3, 255]), 16, POSTER_DIM).is_some(), "one texel more is a picture to reduce");
+        assert!(backdrop_of(&px(300, 300, |_, _| [1, 2, 3, 255]), 0, POSTER_DIM).is_none(), "a copy of no texels");
     }
 
     /// The size is the request's: another consumer asks for its own, and the long side keeps its ratio.
     #[test]
     fn the_copy_size_is_the_requests() {
         let d = px(667, 375, |_, _| [5, 6, 7, 255]);
-        let big = backdrop_of(&d, 32).expect("a 32-texel copy");
+        let big = backdrop_of(&d, 32, POSTER_DIM).expect("a 32-texel copy");
         assert_eq!((big.w, big.h), (57, 32));
-        let small = backdrop_of(&d, 8).expect("an 8-texel copy");
+        let small = backdrop_of(&d, 8, POSTER_DIM).expect("an 8-texel copy");
         assert_eq!((small.w, small.h), (14, 8));
-        let pano = backdrop_of(&px(3000, 100, |_, _| [5, 6, 7, 255]), 8).unwrap();
+        let pano = backdrop_of(&px(3000, 100, |_, _| [5, 6, 7, 255]), 8, POSTER_DIM).unwrap();
         assert_eq!((pano.w, pano.h), (32, 8), "the long side is at most 4x the short");
     }
 
@@ -416,7 +430,7 @@ mod tests {
         let square = attach_backdrop(px(375, 375, |_, _| [1, 2, 3, 255]), BackdropSpec::POSTER);
         let copy = square.backdrop.as_deref().expect("a square gets a copy");
         assert_eq!((copy.w, copy.h), (16, 16));
-        let any = attach_backdrop(px(250, 375, |_, _| [1, 2, 3, 255]), BackdropSpec { short_side: 16, skip_shape: None, ground: None });
+        let any = attach_backdrop(px(250, 375, |_, _| [1, 2, 3, 255]), BackdropSpec { short_side: 16, skip_shape: None, ground: None, dim: POSTER_DIM });
         assert!(any.backdrop.is_some());
     }
 
@@ -470,11 +484,11 @@ mod tests {
 
     #[test]
     fn the_backdrop_is_the_blurred_mean_not_a_crop() {
-        let flat = backdrop_of(&px(300, 300, |_, _| [200, 100, 50, 255]), 16).unwrap();
+        let flat = backdrop_of(&px(300, 300, |_, _| [200, 100, 50, 255]), 16, POSTER_DIM).unwrap();
         let k = theme::ART_BACKDROP_DIM;
         let dimmed = |c: f32| (c * k).round() as u8;
         assert!(flat.rgba.chunks(4).all(|p| p == [dimmed(200.0), dimmed(100.0), dimmed(50.0), 255]), "a flat image blurs to itself, dimmed, opaque");
-        let split = backdrop_of(&px(320, 320, |x, _| if x < 160 { [255, 0, 0, 255] } else { [0, 0, 255, 255] }), 16).unwrap();
+        let split = backdrop_of(&px(320, 320, |x, _| if x < 160 { [255, 0, 0, 255] } else { [0, 0, 255, 255] }), 16, POSTER_DIM).unwrap();
         let row = |x: usize| split.rgba[(8 * 16 + x) * 4..][..3].to_vec();
         assert_eq!(row(0)[0], dimmed(255.0), "far left stays red");
         assert_eq!(row(15)[2], dimmed(255.0), "far right stays blue");

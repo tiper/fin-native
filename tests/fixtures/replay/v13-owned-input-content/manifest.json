@@ -72,8 +72,8 @@
         "address": "127.0.0.1",
         "machine_id": "",
         "name": "",
-        "origin": "http://127.0.0.1:32685",
-        "port": 32685,
+        "origin": "http://127.0.0.1:32691",
+        "port": 32691,
         "tier": "local",
         "token": "s00000002"
        }
@@ -222,11 +222,11 @@
    },
    "version": 1
   },
-  "hash": 3154899762591686593,
+  "hash": 14566628070289946852,
   "probe": "controlled=home version=1"
  },
  "schema": 3,
- "state_fp": 14642991569603421247,
+ "state_fp": 5605084147580227429,
  "triggers": [
   "plxnative-app-init",
   "plxnative-rec",

@@ -787,7 +787,6 @@ fn hud_model(
         covered: false,
         skip_progress: None,
         is_episode,
-        is_live,
         end_time: projected_end_time,
         // The frame's published wall time: the live airing line is worded from it at draw, and the
         // screen's clock fingerprint follows it.

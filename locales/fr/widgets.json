@@ -258,5 +258,7 @@
   "widgets.failure.change_quality": "Changer la qualité",
   "widgets.watch.intro": "Regarder le générique",
   "widgets.verdict.tuners_busy": "Tous les tuners sont occupés",
-  "widgets.live.channel_context": "{number} · {programme}"
+  "widgets.live.channel_context": "{number} · {programme}",
+  "widgets.live.badge": "EN DIRECT",
+  "widgets.live.next_at": "Ensuite à {time}"
 }

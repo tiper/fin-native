@@ -338,8 +338,11 @@ pub enum PlayerReq {
     /// and the panel stays up. `true` = the key was PLAY, `false` = PAUSE; a PLAYPAUSE toggle is
     /// neither and is carried as `None`.
     Transport(Option<bool>),
-    /// CH+/CH−: +1 is the next higher channel in the lineup, −1 the next lower. The app only tunes a Live TV request.
-    Channel(i32),
+    /// **Tune this Live TV channel** (Live TV PR4): the live player's zap, asked once the debounce has closed on
+    /// the channel the presses landed on (`player::zap`). The app retires the playing stream and starts the
+    /// channel's, so one run of presses opens one Plex session. Named by identity (server, DVR, key), never by a
+    /// number or an offset from the channel playing, which the lineup may have moved since the screen read it.
+    Tune { sid: plx_plex::plex::ServerId, dvr: String, channel: String, title: String },
     /// Seek to this position in ns and resume if paused — the Chapters strip's OK, and OK or PLAY
     /// taking the scrub's pending key target (a playing film simply seeks and plays on).
     SeekTo(i64),
@@ -1601,6 +1604,14 @@ pub trait PlayerLike: AppLike<Memory = PageMemory> + ScreenInputsLike + Sized {
     fn session<'a>(cx: &Cx<'a, Self>) -> &'a plx_media::route::PlaybackSession;
     /// Viewer pause intent sampled by the host at this frame's Tick boundary.
     fn transport_paused(cx: &Cx<'_, Self>) -> bool;
+    /// **The Live TV lineup, in number order**: what the live player zaps through (Up, Down, CH+, CH-). Empty where
+    /// a host has none, and a live channel then steps nowhere.
+    ///
+    /// CONTRACT FREEZE: a provided method so every existing host compiles; `AppHost` (`src/app/bridge.rs`) answers
+    /// it with the store's view.
+    fn lineup<'a>(_cx: &Cx<'a, Self>) -> &'a [plx_data::livetv::Channel] {
+        &[]
+    }
 }
 
 pub trait SearchLike: AppLike<Memory = PageMemory> + ScreenInputsLike + Sized {
@@ -1768,6 +1779,13 @@ pub enum AppMsg {
     PlayerStart { now: u32, hud_ms: u32 },
     PlayerPinHud { now: u32, duration_ms: u32, tab: Option<i32> },
     PlayerSlot { slot: plx_appkit::player_hud::ControlSlot, primary: bool },
+    /// **Seat the Live TV page on the channel the player left** (Live TV PR4), delivered to the page the player was
+    /// launched from, which is covered while the player is up. The page keeps it and seats the channel's card when it
+    /// is restored: its Recent tile, else the row it belongs to. Named by identity (server, DVR, key).
+    LiveTvSeat { sid: plx_plex::plex::ServerId, dvr: String, channel: String },
+    /// **The app took no request for the tune the player asked for** (`PlayerReq::Tune`): its zap ends on this word, not
+    /// on an inference from timing.
+    LiveTuneRefused,
     PlayerFollowRow { slot: plx_appkit::player_hud::ControlSlot, now: u32 },
     PlayerCancelNext { decline: bool },
     PlayerHudCommand { command: plx_appkit::player_hud::command::HudCommand, now: u32 },
@@ -3180,7 +3198,9 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // Library order adds `SettingsPage::LibraryOrder` (ScreenId 122) to the Settings family's arg shape, and
 // `TableView::MOTION_SHAPE` gains the lift and glide springs (`library::menu::SHAPE[1]` and
 // `alt_sources::SHAPE[1]` carry it). Previous pin: 0xa2bc_fa1b_e96e_0118.
-const SCREEN_SHAPES_PIN: u64 = 0x86ab_da53_b2fd_6524;
+// The live player's banner, zap and art phases join the Player and Live TV screens' canon (Live TV PR4: `zap`, `art`,
+// `banner`, and the page's `left` channel). Previous pin: 0x86ab_da53_b2fd_6524. Re-record incompatible replay anchors.
+const SCREEN_SHAPES_PIN: u64 = 0xeb60_634f_6b5f_c9ac;
 
 #[cfg(test)]
 mod arg_tests {

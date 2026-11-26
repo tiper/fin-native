@@ -364,7 +364,7 @@ eliding its name to the room the bar leaves (`widgets::chip_name_budget`).
 It ships, and `/tmp/plxnative-flattabs` is the way back to the flat capsule for a comparison.
 Its density is not a constant — see §6.
 
-**No:** anything on the player route (§1), and a second far-away glass cluster that the frame walk merges
+**No:** anything on the player route (§1). (The Live TV art ground is no exception: it asks for no glass at all. Its blur is a small copy of the programme art made once per image, drawn as a plain textured quad, so it is as soft over a bound video plane as anywhere; `ui/src/art_ground.rs`.) And a second far-away glass cluster that the frame walk merges
 into the top band's grab, whose union would grow the snapshot toward the whole frame (§2). Neighbouring
 elements may share one cluster. A far-away second cluster is affordable only when the walk gives it its OWN
 source entry — the hold hint (~180k px²) is drawn in the page layer, which is not a shared band, so

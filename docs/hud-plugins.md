@@ -463,7 +463,7 @@ logical resource ids. Icon and face roles validate their resources as the existi
 Identity and resource inventory have one owner in the manifest. Strict parsing rejects unknown and
 duplicate keys in both documents, using the shared duplicate-preserving JSON reader. The schema URLs
 are `https://plxnative.com/hud/schema/manifest/1.0.json` and
-`https://plxnative.com/hud/schema/hud/1.0.json` or `https://plxnative.com/hud/schema/hud/1.1.json`. Each optional `$schema` must agree with its document.
+`https://plxnative.com/hud/schema/hud/1.0.json`, `https://plxnative.com/hud/schema/hud/1.1.json` or `https://plxnative.com/hud/schema/hud/1.2.json`. Each optional `$schema` must agree with its document.
 
 The initial archive profile is STORE-only. Entries and central records are in ascending ASCII path order.
 ZIP flags, compression, disk numbers, comments, extras and internal attributes are zero. Version-needed
@@ -710,6 +710,23 @@ Up Next arrangement of two buttons (the filled Skip at that width, the Watch but
 timing and cancel rules (`up_next.rs:105-125`, production sites `src/app/run.rs:2001`, `:2026-2045`,
 `src/app/playback.rs:939`), what the buttons do.
 
+**The live banner (`layout.live`, HUD format 1.2).** On a Live TV channel the player draws no transport: no scrubber,
+no control row, no Info, Chapters or track menus. What it draws instead is the live banner, the HUD package's the way
+Up Next is: the package says where it stands, the app owns its inside. `layout.live` is optional and names five px
+values, all required when it is present: `inset` (the block's distance above the screen's bottom edge, and the clock's;
+0 to 540), `x_inset` (its distance from the left edge, and the clock's from the right; 0 to 960), `scrim` (the height of
+the darkening from the screen's bottom; 0 to 1080), `title_width` (the programme title's widest extent before it elides
+to one line) and `progress_width`. A package with no `layout.live`, every package written before 1.2, draws the banner
+where classic's stands (`{"inset": 96, "x_inset": 96, "scrim": 520, "title_width": 1200, "progress_width": 560}`),
+because the compiler reads the absent node as classic's values (`Compiled::live`). The inside is
+`player_hud::live`: the LIVE badge (the theme's `LIVE_BADGE_FILL`, `#ff453a`, a state mark and not a failure read-out),
+the channel's number and station, the programme's title (DISPLAY, bold, one line), the time line (`21:00-22:00 · 22m
+left`, or `21:37-22:39 · Started 1 min ago` within ten minutes of the start, worded by `plx_ui::fmt::airing_line`), a
+progress bar, "Next at 22:00", and the wall clock at the bottom right, over a scrim from transparent through .55 at 45%
+to .88 (`theme::live_scrim`). A package chooses the placement, never the inside; it fades out .35 s after four seconds
+without a key (`live::SHOW_MS`, `live::FADE_MS`, declared values of the banner: `LINGER_MS` is the VOD transport's and
+stays 4500).
+
 Assets: SVG only, under the icon contract (F36): `<svg viewBox>` and `<path d>` only; no `href`, `<image>`,
 `<text>`, `<style>`, entities or external references. A Rust tokenizer checks the subset before nanosvg sees
 the bytes, for every source, because `src/svg.c` is a C parser and the input is attacker-controlled.
@@ -796,8 +813,9 @@ seconds on the primary button instead of the legacy ten-second clock.
 3. `version` is the plugin's semver and orders updates of one id.
 4. Optional `app.min` and `app.max` constrain the app release.
 
-Package format remains at 1.0. The runtime supports HUD formats 1.0 and 1.1. HUD 1.1 adds
-`playbar.end_time_width` and Classic declares 1.1. The published HUD 1.0 schema stays frozen.
+Package format remains at 1.0. The runtime supports HUD formats 1.0, 1.1 and 1.2. HUD 1.1 adds
+`playbar.end_time_width`; HUD 1.2 adds `layout.live` (below) and Classic declares 1.2. The published HUD 1.0 and 1.1
+schemas stay frozen: a node born in a later minor (`live`) is left out of an earlier version's `$defs`.
 The SDK/report/catalog protocols remain at integer 1, and plugin semver is independent.
 
 `--hud-info` and the SDK manifest advertise exact `supported_formats` pairs, distinct manifest/HUD
@@ -1280,7 +1298,8 @@ whole file):
   ],
   "up_next": { "replaces": [ "row" ], "band": "top", "align": "end", "still": true, "caption": true,
                "watch_credits": { "rest": "film", "focus": "accent" }, "play_next": { "rest": "film", "focus": "accent" },
-               "countdown": "fill_sweep" }
+               "countdown": "fill_sweep" },
+  "live": { "inset": 96, "x_inset": 96, "scrim": 520, "title_width": 1200, "progress_width": 560 }
 }
 ```
 

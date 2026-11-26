@@ -758,3 +758,10 @@ The Library order Settings page (`SettingsPage::LibraryOrder`, `ScreenId` 122, #
 `14642991569603421247`, the screen half only: the Settings argument shape's new variant and `TableView::MOTION_SHAPE`'s new lift and
 glide springs); both anchors were re-recorded the same way, and the closed alphabet's owner-word pattern gained `library-order`. Targets and
 Resolve report SAME again with every difference counter at zero (977 and 1328 frames). `docs/ui-replay-v13-anchor.md` has the record.
+
+The live player's banner, zap and art phases (Live TV PR4) joined the Player and Live TV screens' canon, which moved
+`SCREEN_SHAPES_PIN` again, so the two current anchors, `v13-owned-input-content` and `13-by-id-filmography`, were
+observed refused and recorded afresh (`tests/focusfp.sh --rec --only 12,13`, `plxnative-rec rerecord`, `anchor: true`
+preserved; shape `5605084147580227429`). `make check-replay` replays them SAME in Targets and Resolve (902 and 1204 frames,
+every difference counter zero); the four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md`
+has the record.

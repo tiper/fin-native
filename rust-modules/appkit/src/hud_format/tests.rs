@@ -921,7 +921,7 @@ pub(in crate::hud_format) fn corpus() -> Vec<Row> {
     add(row("command_in_the_wrong_case", r(r##""command": "open_tracks""##, r##""command": "Open_Tracks""##), &codes::E0301, &format!("{CENTER}/0/command")).near("open_tracks").only());
 
     // ----- HUD-E0401, 0402, 0403: the version gate answers alone, at /format -----
-    add(format_row("format_1_2_is_a_newer_minor", r##""1.2""##, &codes::E0402).message(REASON_NEWER));
+    add(format_row("format_1_3_is_a_newer_minor", r##""1.3""##, &codes::E0402).message(REASON_NEWER));
     add(format_row("format_1_9_is_a_newer_minor", r##""1.9""##, &codes::E0402).message(REASON_NEWER));
     add(format_row("format_1_10_is_a_newer_minor", r##""1.10""##, &codes::E0402).message(REASON_NEWER));
     add(format_row("format_2_0_is_a_newer_major", r##""2.0""##, &codes::E0403).message(REASON_NEWER));
@@ -943,7 +943,7 @@ pub(in crate::hud_format) fn corpus() -> Vec<Row> {
     add(row("format_missing", metadata(r##""format": "1.0","##, ""), &codes::E0401, "/hud/format").only());
     add(row(
         "a_newer_package_is_judged_by_its_version_alone",
-        edit(&metadata(r##""format": "1.0""##, r##""format": "1.2""##), r##""name": "Reference","##, r##""name": 6,"##),
+        edit(&metadata(r##""format": "1.0""##, r##""format": "1.3""##), r##""name": "Reference","##, r##""name": 6,"##),
         &codes::E0402,
         "/hud/format",
     )
@@ -1078,7 +1078,7 @@ mod invalid {
             let row = rows.into_iter().find(|r| r.label == label).expect(label);
             parse_checked(&row.bytes).findings
         };
-        let newer_minor = by_label("format_1_2_is_a_newer_minor");
+        let newer_minor = by_label("format_1_3_is_a_newer_minor");
         assert_eq!(newer_minor.len(), 1, "the version gate answers alone");
         assert_eq!(newer_minor[0].message, "Made for a newer PlxNative");
         assert_eq!(newer_minor[0].message, REASON_NEWER);
@@ -2893,7 +2893,7 @@ mod drift {
 
     #[test]
     fn the_table_has_the_shape_the_spec_freezes() {
-        assert_eq!(schema::all_nodes().len(), 26, "nodes");
+        assert_eq!(schema::all_nodes().len(), 27, "nodes");
         assert_eq!(schema::COMMANDS.len(), 10, "commands");
         assert_eq!(schema::CONDITIONS.len(), 11, "conditions");
         assert_eq!(schema::all_nodes()[0].name, "hud");
@@ -3469,14 +3469,15 @@ mod reference_keys {
         assert!(seen.contains("layout") && seen.contains("band") && seen.contains("cell"), "{seen:?}");
         // The worked example is the spec's tour of the format (the package root and the app range sit
         // above `layout`).
-        // Three nodes stay unused by it: `rect`, `grab` and `actions`, which the fragment tests cover.
+        // Four nodes stay unused by it: `rect`, `grab`, `actions` and `live` (1.2: the reference is a 1.0 package), which the
+        // fragment tests cover.
         let missing: Vec<&str> = schema::all_nodes()
             .iter()
             .map(|n| n.name)
             .filter(|n| !seen.contains(*n) && !matches!(*n, "hud" | "manifest" | "hud_entry" | "app"))
             .collect();
         assert!(
-            missing.iter().all(|n| matches!(*n, "rect" | "grab" | "actions")),
+            missing.iter().all(|n| matches!(*n, "rect" | "grab" | "actions" | "live")),
             "the reference leaves these nodes unused: {missing:?}"
         );
         assert!(seen.len() >= 18, "{seen:?}");

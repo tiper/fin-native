@@ -258,5 +258,7 @@
   "widgets.failure.change_quality": "Promijeni kvalitetu",
   "widgets.watch.intro": "Gledaj uvod",
   "widgets.verdict.tuners_busy": "Svi su prijamnici zauzeti",
-  "widgets.live.channel_context": "{number} · {programme}"
+  "widgets.live.channel_context": "{number} · {programme}",
+  "widgets.live.badge": "UŽIVO",
+  "widgets.live.next_at": "Sljedeće u {time}"
 }

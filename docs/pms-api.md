@@ -1945,6 +1945,15 @@ every open and publishes no duration. This is an implemented extension of the li
 resource cleanup for this route still require device or server evidence; the official client's
 sequence above proves only the direct-play route.
 
+**Zapping: one run of presses is one session.** Up, Down, CH+ and CH- in the live player step a target the banner
+follows at once, and the app is asked to tune only 600 ms after the last press (`PlayerReq::Tune`, the player screen's
+`zap` machine), so a run of presses sends steps 1 to 4 above once, for the channel it ended on, and none for the
+channels it passed; a run that ends on the channel already playing (Up then Down, or a full lap of the lineup) sends
+nothing, and the stream is neither stopped nor restarted. The tune retires the playing channel first, with the ritual an exit uses (the `stopped` timeline of
+step 5, which frees the tuner of a one-tuner server before it is asked for another), then starts the new one. Nothing is
+sent while the debounce runs, so the old stream keeps playing under the art and the banner until the tune. How a real
+server answers a retune after a stop is as unmeasured as the rest of this route.
+
 The mock server models this whole sequence for tests without a tuner:
 `tests/mock_pms.py --livetv-fixture` (one DVR, two tuners, sixteen channels including an MPEG-2/AC-3
 and an AC-4 one, whose airings began at different times; `--livetv-busy` for no free tuner), pinned by `tests/test_mock_pms_livetv.py`.

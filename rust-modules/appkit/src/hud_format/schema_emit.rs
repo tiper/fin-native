@@ -113,7 +113,7 @@ fn emit_document(manifest: bool, version: Since) -> Value {
     let selected = if manifest { &schema::MANIFEST } else { &schema::ROOT };
     for node in schema::all_nodes() {
         let is_manifest = matches!(node.name, "manifest" | "hud_entry" | "app");
-        if node.name != selected.name && is_manifest == manifest {
+        if node.name != selected.name && is_manifest == manifest && !emitter.unborn(node) {
             let def = emitter.node_schema(node);
             emitter.def(node.name, def);
         }
@@ -216,6 +216,14 @@ fn slug(ty: &Ty) -> Option<String> {
 }
 
 impl Emitter {
+    /// **Has this node not arrived yet in the version being emitted?** A node born after 1.0 whose every field is
+    /// newer than `version` is no part of that version's document: its `$defs` entry would be an empty object nothing
+    /// refers to, and it would rewrite the committed schema of a format that was published without it. (A node of
+    /// 1.0 stays even in an earlier version: the table has nothing older, and its entry is empty there by design.)
+    fn unborn(&self, node: &schema::Node) -> bool {
+        !node.fields.is_empty() && node.fields.iter().all(|f| f.since > schema::V1_0 && f.since > self.version)
+    }
+
     fn def(&mut self, name: &str, schema: Value) {
         self.defs.insert(name.to_owned(), schema);
     }

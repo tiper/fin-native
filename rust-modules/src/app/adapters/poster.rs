@@ -1629,10 +1629,10 @@ pub(crate) fn drain_decoded() {
                 rgba,
                 backdrop: None,
             };
-            // The blurred copy a tile that contains its art draws behind it: made here, once, when the
-            // request asked for one ([`Pslot::backdrop`]), from the pixels just copied
-            // (`art_fit::attach_backdrop`: a few thousand taps and ~1-4 KB), and carried with the
-            // picture into the cache.
+            // The blurred copy the request asked for ([`Pslot::backdrop`]): a tile's, drawn behind its contained
+            // art (a few thousand taps, ~1-4 KB), or the Live TV art ground's full-screen one
+            // (`art_ground::SPEC`, ~7 KB). Made here, once, from the pixels just copied
+            // (`art_fit::attach_backdrop`), and carried with the picture into the cache.
             Ok(match backdrop {
                 Some(spec) => plx_ui::art_fit::attach_backdrop(picture, spec),
                 None => picture,

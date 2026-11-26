@@ -351,6 +351,7 @@ fn execute_endpoint_outcomes_with(
 impl plx_screens::registry::PlayerLike for AppHost {
     fn session<'a>(cx: &Cx<'a, Self>) -> &'a plx_media::route::PlaybackSession { cx.views.session }
     fn transport_paused(cx: &Cx<'_, Self>) -> bool { cx.views.transport_paused }
+    fn lineup<'a>(cx: &Cx<'a, Self>) -> &'a [plx_data::livetv::Channel] { cx.views.livetv.channels }
 }
 
 impl plx_screens::registry::SearchLike for AppHost {
@@ -5476,6 +5477,17 @@ pub(crate) fn send_player_message(d: &mut Dispatcher<AppHost>, message: AppMsg) 
     let Some(instance) = d.top_page() else { return };
     let page = MachineId::Instance(instance);
     d.emit(page, Fx::Deliver(page, Delivery::Screen(ScreenEvent::App(message))));
+}
+
+/// **Tell the Live TV page the player was launched from which channel the viewer left** (`AppMsg::LiveTvSeat`), so its
+/// restore seats that channel's card, not the one that was pressed. The page is covered while the player is up, and a
+/// covered page still receives an addressed command. A player launched from any other page names no channel to anyone.
+pub(crate) fn seat_live_channel(d: &mut Dispatcher<AppHost>, sid: plx_plex::plex::ServerId, dvr: String, channel: String) {
+    let Some(entry) = player(d).and_then(|p| p.origin).map(|o| o.entry) else { return };
+    if !d.nav.entry(entry).is_some_and(|e| matches!(e.arg, AppArg::LiveTv)) { return; }
+    let Some(instance) = d.nav.instance_of(entry) else { return };
+    let page = MachineId::Instance(instance);
+    d.emit(page, Fx::Deliver(page, Delivery::Screen(ScreenEvent::App(AppMsg::LiveTvSeat { sid, dvr, channel }))));
 }
 
 /// **Ask the player page to toggle a section** (Chapters, Info): the `toggle_section` command's performer

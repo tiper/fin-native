@@ -23,6 +23,7 @@ use std::os::raw::{c_char, c_int};
 pub mod qr;
 pub mod a11y; // accessibility ids: `<ns>.<path>` for every focusable element, so a UI test addresses one by id (plan a11y-ids D1, D2)
 pub mod anim;
+pub mod art_ground; // a programme's art full screen over the video plane's hole until the first frame (Live TV player)
 pub(crate) mod card_row;
 pub mod cards; // shared card sections (plan: shared-card-sections): Shelf, Grid, CardSource, and the card conformance suite
 pub mod marquee; // the focused run's looping glide: a tile's title and caption (card_row), cast name and role, menu rows (table)

@@ -130,7 +130,7 @@ fn the_schema_names_its_draft_and_its_published_address() {
         "https://json-schema.org/draft/2020-12/schema"
     );
     assert_eq!(root["$schema"], SCHEMA_DRAFT);
-    assert_eq!(root["$id"], "https://plxnative.com/hud/schema/hud/1.1.json");
+    assert_eq!(root["$id"], "https://plxnative.com/hud/schema/hud/1.2.json");
     assert_eq!(
         schema_id((1, 0)),
         "https://plxnative.com/hud/schema/hud/1.0.json"
@@ -143,12 +143,15 @@ fn the_schema_names_its_draft_and_its_published_address() {
 }
 
 #[test]
-fn the_hud_format_is_1_1_and_emission_is_deterministic() {
-    assert_eq!(schema::CURRENT, (1, 1));
-    assert_eq!(emit_current(), emit((1, 1)));
-    let text = emit_text((1, 1));
-    assert_eq!(text, emit_text((1, 1)));
+fn the_hud_format_is_1_2_and_emission_is_deterministic() {
+    assert_eq!(schema::CURRENT, (1, 2));
+    assert_eq!(emit_current(), emit((1, 2)));
+    let text = emit_text((1, 2));
+    assert_eq!(text, emit_text((1, 2)));
     assert!(emit((1, 0))["$defs"]["playbar"]["properties"].get("end_time_width").is_none());
+    // the live banner's placement is 1.2's: 1.1 and 1.0 know neither the key nor the node
+    assert!(emit((1, 1))["$defs"]["layout"]["properties"].get("live").is_none());
+    assert_eq!(emit_current()["$defs"]["layout"]["properties"]["live"]["$ref"], "#/$defs/live");
     assert_eq!(emit_current()["$defs"]["playbar"]["properties"]["end_time_width"]["type"], "integer");
     assert!(text.ends_with("}\n") && !text.ends_with("\n\n"));
     assert_eq!(

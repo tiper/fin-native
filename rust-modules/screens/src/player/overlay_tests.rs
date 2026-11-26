@@ -90,6 +90,20 @@ impl crate::registry::PlayerLike for TestHost {
         cx.views
     }
     fn transport_paused(_cx: &Cx<'_, Self>) -> bool { false }
+    fn lineup<'a>(_cx: &Cx<'a, Self>) -> &'a [plx_data::livetv::Channel] {
+        LINEUP.with(|lineup| lineup.get())
+    }
+}
+
+thread_local! {
+    /// The Live TV lineup this thread's test host answers with (`PlayerLike::lineup`): empty unless a case sets it.
+    static LINEUP: std::cell::Cell<&'static [plx_data::livetv::Channel]> = const { std::cell::Cell::new(&[]) };
+}
+
+/// Make `channels` the lineup the test host answers with, for the rest of this thread's case. Leaked on purpose: a
+/// case is short and the host's getter hands out a `'static` borrow, like the other test inputs here.
+pub(super) fn set_lineup(channels: Vec<plx_data::livetv::Channel>) {
+    LINEUP.with(|lineup| lineup.set(Box::leak(channels.into_boxed_slice())));
 }
 
 pub(super) fn playback_session(position_ns: i64, duration_ns: i64) -> plx_media::route::PlaybackSession {

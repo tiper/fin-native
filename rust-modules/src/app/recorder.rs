@@ -2892,7 +2892,10 @@ mod tests {
         // Library order adds `SettingsPage::LibraryOrder` to the Settings family's arg shape and the
         // lift and glide springs to `TableView::MOTION_SHAPE` (only the screen half moves): previously
         // 0xd80b_045a_c4aa_fc9b.
-        assert_eq!(state_fp(), 0xcb36_5b40_2b40_643f, "current V13 producer census");
+        // The live player's banner, zap and art phases join the Player and Live TV screens' canon (only the screen
+        // half moves): previously 0xcb36_5b40_2b40_643f.
+        assert_eq!(state_fp(), 0x4dc9_4255_d0b1_4f65, "current V13 producer census");
+        assert_ne!(state_fp(), 0xcb36_5b40_2b40_643f, "the census before the live player's zap, art and banner phases");
         assert_ne!(state_fp(), 0xd80b_045a_c4aa_fc9b, "the census before the Library order page and the table's lift and glide springs");
         assert_ne!(state_fp(), 0xb0b8_437b_410f_aab3, "the census before the shelf's recorded library");
         assert_ne!(state_fp(), 0xb985_c4dc_d4a9_4e97, "the census before the hero row's panel and overflow shapes");
