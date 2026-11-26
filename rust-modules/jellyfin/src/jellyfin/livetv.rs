@@ -94,7 +94,9 @@ pub struct Tuned {
 pub fn tuned(channel_id: &str, r: &Response) -> Option<Tuned> {
     let source = r.media_sources.iter().find(|s| s.transcoding_url.as_deref().is_some_and(|u| !u.is_empty()))?;
     let url = source.transcoding_url.as_deref()?;
-    let part = paths::without_param(&paths::without_param(url, "api_key"), "PlaySessionId");
+    // Jellyfin 10.10 signs the URL as `ApiKey`, older ones as `api_key`: either would be a second
+    // credential beside this client's own.
+    let part = ["api_key", "ApiKey", "PlaySessionId"].iter().fold(url.to_owned(), |u, key| paths::without_param(&u, key));
     Some(Tuned {
         session: LiveSession { key: source.live_stream_id.clone().unwrap_or_default(), rating_key: channel_id.to_owned() },
         play: LivePlay { part, vcodec: VIDEO_CODEC.into(), acodec: AUDIO_CODEC.into(), width: 0, height: 0, channels: AUDIO_CHANNELS },
@@ -131,11 +133,12 @@ mod tests {
 
     #[test]
     fn a_tune_keeps_the_stream_to_close_and_the_playlist_without_the_servers_credentials() {
-        let r: Response = serde_json::from_str(r#"{"MediaSources":[{"Id":"s","LiveStreamId":"ls9","TranscodingUrl":"/videos/ab12/master.m3u8?DeviceId=d&VideoCodec=h264&AudioCodec=ac3&PlaySessionId=srv&api_key=secret&LiveStreamId=ls9"}]}"#).unwrap();
+        let r: Response = serde_json::from_str(r#"{"MediaSources":[{"Id":"s","LiveStreamId":"ls9","TranscodingUrl":"/videos/ab12/master.m3u8?DeviceId=d&VideoCodec=h264&AudioCodec=ac3&PlaySessionId=srv&ApiKey=secret&api_key=old&LiveStreamId=ls9"}]}"#).unwrap();
         let t = tuned("ab12", &r).unwrap();
         assert_eq!((t.session.key.as_str(), t.session.rating_key.as_str()), ("ls9", "ab12"));
         assert_eq!((t.play.vcodec.as_str(), t.play.acodec.as_str(), t.play.channels), ("h264", "aac", 2));
-        assert!(!t.play.part.contains("secret") && !t.play.part.contains("srv"));
+        assert!(!t.play.part.contains("secret") && !t.play.part.contains("old") && !t.play.part.contains("srv"));
+        assert!(!t.play.part.to_ascii_lowercase().contains("apikey") && !t.play.part.contains("api_key"));
         assert!(t.play.part.contains("LiveStreamId=ls9"));
         assert!(tuned("ab12", &Response::default()).is_none());
     }
