@@ -666,6 +666,8 @@ pub struct FixtureModal {
     pub scrim_alpha: f32,
     /// When set the dim is over the video plane (`Scrim::over_video`).
     pub scrim_over_video: bool,
+    /// When set the dim is asked only over a held host page (`Scrim::over_host`).
+    pub scrim_over_host: bool,
     /// Optional lifted element callback for exercising the dispatcher's borrowed frame context.
     /// The bar member this surface hangs from ([`Screen::bar_opener`]), and the rect the dispatcher
     /// last handed it ([`Screen::opener_rect`]).
@@ -756,6 +758,7 @@ impl FixtureModal {
             last_navigation: Default::default(),
             scrim_alpha: 0.0,
             scrim_over_video: false,
+            scrim_over_host: false,
             bar_opener: None,
             opener_seen: Vec::new(),
             opener_alpha: 1.0,
@@ -1015,6 +1018,9 @@ impl Screen<FixtureHost> for FixtureModal {
         self.scrim_at.set(draw_order());
         if self.scrim_over_video {
             return super::screen::Scrim::over_video(self.scrim_alpha);
+        }
+        if self.scrim_over_host {
+            return super::screen::Scrim::over_host(self.scrim_alpha);
         }
         super::screen::Scrim::dim(self.scrim_alpha)
     }

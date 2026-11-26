@@ -406,6 +406,9 @@ nothing itself, so a pick takes the host's own tune path: the page's `ContentReq
 following, exactly as a zap. The page opens it as `ContentPanel::ChannelEntry` (`Style::Compact`); the player asks
 `PlayerReq::OpenChannelEntry`, presented as `Style::PlayerPanel` (`bridge::open_channel_entry`), which leaves the host
 live so the video plane keeps presenting under it, and the digit drops a zap still pending (`Live::cancel_zap`).
+Its ground is derived from that style: `Ground::Menu` with `Scrim::over_host(DIM_COMPACT)`, so over the page the
+container owes the dim, the field latches and the panel is glass, and over the player nothing latches and it is the
+sheet with no dim on the picture (and `popover_glass` never draws glass on a video-plane frame).
 It is one surface however many keys ask for it: a request for a panel that is mounted is refused (the key reaches it as
 input), and one for a panel whose `Present` is still parked for this frame's commit is folded into the parked argument
 as one more opening digit (`bridge::present_once`, `Dispatcher::parked_present_mut`, `AppArg::absorb`). A panel dismissed

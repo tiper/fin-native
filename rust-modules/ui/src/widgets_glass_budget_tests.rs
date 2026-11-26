@@ -384,8 +384,9 @@ fn no_popover_panel_uses_the_blur_path_and_every_one_stands_on_the_field() {
         offenders.join("\n")
     );
 
-    // …and the glass scope is exactly the MENUS (owner decision, wave 2 review): Sort & Filter, the
-    // account menu and the item hold menu name `Ground::Menu`; every other panel (alerts, About,
+    // …and the glass scope is exactly the MENUS (owner decision, wave 2 review) and Live TV's number entry
+    // (owner, 2026-11-27: glass while on the GUI): Sort & Filter, the account menu, the item hold menu and
+    // number entry name `Ground::Menu`; every other panel (alerts, About,
     // Tracks, the person bio, the Also-available sheet, the decision alert) names `Ground::Sheet`.
     // The player's "…" menu stands over the video plane and draws no `panel_ground` at all.
     let ground_of = |rel: &str| {
@@ -397,7 +398,12 @@ fn no_popover_panel_uses_the_blur_path_and_every_one_stands_on_the_field() {
         let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
         (code.contains("Ground::Menu"), code.contains("Ground::Sheet"))
     };
-    for rel in ["screens/src/item_menu.rs", "screens/src/account_menu.rs", "screens/src/library/menu.rs"] {
+    for rel in [
+        "screens/src/item_menu.rs",
+        "screens/src/account_menu.rs",
+        "screens/src/library/menu.rs",
+        "screens/src/channel_entry_panel.rs",
+    ] {
         assert_eq!(ground_of(rel), (true, false), "{rel} is a MENU: `Ground::Menu` and nothing else");
     }
     for rel in [

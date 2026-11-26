@@ -680,7 +680,14 @@ tried first. None of it is reconstructable from the code without repeating the m
 
 - **A MENU is glass on the frozen ground (DS6); nothing else is glass.** The scope is
   MENUS ONLY (owner decision, wave 2 review): Sort & Filter, the account menu, the item hold menu,
-  the Library menu (the player's "…" menu stands over the video plane and keeps its own ground).
+  the Library menu (the player's "…" menu stands over the video plane and keeps its own ground), and
+  Live TV's number entry (owner, 2026-11-27: glass while on the GUI). A `Ground::Menu` is glass only where a
+  frozen page is under it: the number entry declares `Scrim::over_host(DIM_COMPACT)`, the container owes that
+  dim to a style that holds its host (`Style::Compact`, the What's on page) and none to `Style::PlayerPanel`
+  (host live, the video plane behind), so over the player nothing latches and the panel is the sheet it was,
+  with no dim on the picture; and `popover_glass::draw_shadowed` refuses on any video-plane frame. The ground
+  follows the surface's style, fixed for its life, not the plane's bound bit, which changes under a panel
+  opened mid-tune.
   Every other `panel_ground` user — the alerts, About, Track information, the person bio, the
   Also-available sheet, the decision alert — keeps the pre-DS6 ground, the latched underlay field
   under the frost. The choice is explicit at each call, `widgets::Ground::Menu` or
@@ -730,7 +737,7 @@ tried first. None of it is reconstructable from the code without repeating the m
   `GlassRim::Menu` over the LIVE path (`draw_blur_backdrop`) would turn on a per-frame sharp band
   copy; no menu takes that path any more. A source-grep test (`widgets_glass_budget_tests`) keeps `Glass` and
   `Painter::backdrop_blur` out of every file except the chrome list — no popover and no screen
-  names the blur path — and pins the scope: the menu files name `Ground::Menu`, the sheet files
+  names the blur path — and pins the scope: the menu files (number entry among them) name `Ground::Menu`, the sheet files
   `Ground::Sheet`, and none names the other.
 
 - **Glass over a page stands on the frozen host; the page does not move while a menu is up, except

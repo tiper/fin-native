@@ -139,7 +139,7 @@ pub fn declare_chrome_glass_for_test(p: Painter, rects: &[Rect]) {
 /// Which ground a popover panel stands on — the caller's explicit, per-call choice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ground {
-    /// A MENU (Sort & Filter, the account menu, the item hold menu): glass on the frozen ground
+    /// A MENU (Sort & Filter, the account menu, the item hold menu, Live TV's number entry): glass on the frozen ground
     /// (`popover_glass`: a frost of the host snapshot, the latched field as its fallback body, and
     /// the snapshot itself for the rim), the latched-field ground only when there is nothing frozen
     /// to stand on.
@@ -172,8 +172,9 @@ pub enum Ground {
 /// Never a blank, and never the frost alone — [`theme::PANEL_FROST_TOP`] is only legal over the
 /// field it is frosting.
 ///
-/// **DS6 put glass back on MENUS, and only menus** (owner decision, wave 2 review): the caller
-/// states which ground it wants with a [`Ground`], per call, and there is no global switch.
+/// **DS6 put glass back on MENUS, and only menus** (owner decision, wave 2 review; Live TV's number entry joined them
+/// on 2026-11-27, glass while on the GUI): the caller states which ground it wants with a [`Ground`], per call, and
+/// there is no global switch. A menu is never glass on a video-plane frame (`popover_glass::draw_shadowed`).
 /// [`Ground::Menu`] runs `popover_glass::draw` first and wins whenever the field is latched; that
 /// glass stands on frozen pictures (the host's frost of the page for its body, this field as the
 /// body's fallback, and the host snapshot for its rim) and reads no framebuffer either. Everything described above is the ground of [`Ground::Sheet`]
