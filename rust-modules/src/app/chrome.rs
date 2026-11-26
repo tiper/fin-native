@@ -4,7 +4,8 @@
 use plx_ui::containers::tabs::StripMember;
 use plx_machine::machine::{FocusKey, Measure};
 use plx_ui::icons::Icon;
-use plx_ui::widgets::{self, ChromeRead, ProfileChipRead, TabFace, TabLabels, TopFocus};
+use plx_ui::fmt::Wall;
+use plx_ui::widgets::{self, ChromeRead, ClockRead, ProfileChipRead, TabFace, TabLabels, TopFocus};
 use plx_data::stores::browse::{DirectoryView, SecKind};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -84,6 +85,22 @@ pub(crate) struct ChromeSnapshot {
     name_w: f32,
     /// A pulse asked for and not yet handed to the strip's renderer: the destination key.
     pulse: Option<u32>,
+    /// What the clock's face was last worded FROM: the Unix minute and the zone's offset, the only
+    /// two things a face is a function of. Kept apart from `clock` because a wall time whose face
+    /// cannot be worded (the sum overflows) must not read as "changed" on every frame.
+    clock_key: Option<(i64, i32)>,
+    /// The bar's clock, worded and measured for `clock_key`; `None` without a wall time.
+    clock: Option<ClockFace>,
+}
+
+/// The instant `stillclock` holds the bar's clock at: 2025-01-01 10:10:00 UTC, in UTC (the watch-shop
+/// hands), so a held capture's face is the same on every machine and in every zone.
+const HELD_WALL: Wall = Wall { unix_ms: 1_735_726_200_000, utc_offset_s: 0 };
+
+/// The clock's face as captured: the television's 12/24-hour wording of the minute, and its width.
+struct ClockFace {
+    text: std::ffi::CString,
+    w: f32,
 }
 
 impl ChromeSnapshot {
@@ -176,7 +193,36 @@ impl ChromeSnapshot {
     }
 
     pub(crate) fn read(&self, chip_expand: f32) -> ChromeRead<'_> {
-        ChromeRead { profile: self.profile(), labels: self.labels(), chip_expand }
+        ChromeRead { profile: self.profile(), labels: self.labels(), chip_expand, clock: self.clock_read() }
+    }
+
+    /// **Capture the bar's clock for this frame's wall time** (the loop's one clock publication,
+    /// `Bridge::publish_clock`); returns whether the face CHANGED, so the loop asks for the one
+    /// frame a new minute owes ([`Self::set_clock`]'s caller notes the damage). The face is a
+    /// function of the Unix minute and the zone's offset, so it is worded and measured once a
+    /// minute, never per frame; the same wall time again is `false` and costs two integer compares.
+    ///
+    /// No wall time (a replay, a zone the platform cannot read) is no clock. The screenshot pipeline's
+    /// `stillclock` HOLDS the wall at [`HELD_WALL`], the idiom's meaning for every free-running clock,
+    /// so a documentation shot carries the face and no two shots differ by the minute they were taken in.
+    pub(crate) fn set_clock(&mut self, wall: Option<Wall>, measure: &dyn Measure) -> bool {
+        let wall = wall.map(|wall| if plx_machine::motion::phase_clocks_held() { HELD_WALL } else { wall });
+        let key = wall.map(|wall| (wall.unix_s().div_euclid(60), wall.utc_offset_s));
+        if key == self.clock_key { return false; }
+        self.clock_key = key;
+        self.clock = wall.and_then(|wall| plx_ui::fmt::clock_face(wall.unix_s(), i64::from(wall.utc_offset_s)))
+            .and_then(|face| std::ffi::CString::new(face).ok())
+            .map(|text| {
+                let w = measure.width(&text, widgets::TOP_BAR_CLOCK_SIZE, false);
+                ClockFace { text, w }
+            });
+        true
+    }
+
+    /// The clock as the bar draws it: the captured face, if any. The strip yields to the widest face
+    /// the clock can wear (`widgets::TAB_CLOCK_CLEAR`), so there is no room rule to apply here.
+    pub(crate) fn clock_read(&self) -> Option<ClockRead<'_>> {
+        self.clock.as_ref().map(|face| ClockRead { text: &face.text, w: face.w })
     }
 
     pub(crate) fn focus(&self, focus: Option<FocusKey<u32>>) -> TopFocus {
@@ -283,7 +329,7 @@ mod tests {
         // the strip is rebuilt with wider pills; the profile generation does not move
         snapshot.tabs_generation = None;
         snapshot.refresh(&Wide, directory.view(), true);
-        assert!(widgets::tab_track_w(&snapshot.widths) > 1500.0, "the fixture strip must fill the bar");
+        assert!(widgets::tab_track_w(&snapshot.widths) > 1300.0, "the fixture strip must fill the bar (the viewport yields to the clock, 1404 at most)");
         assert_eq!(widgets::chip_name_budget(widgets::tab_track_w(&snapshot.widths)), 0.0);
         assert!(snapshot.name.as_bytes().is_empty() && snapshot.name_w == 0.0,
             "no room, no name: {:?} ({})", snapshot.name, snapshot.name_w);
@@ -294,6 +340,79 @@ mod tests {
         snapshot.tabs_generation = None;
         snapshot.refresh(&plx_ui::fixture::FixtureMeasure, directory.view(), true);
         assert_eq!(snapshot.name_w, roomy);
+    }
+
+    /// 2026-11-26 19:50:00 UTC: a whole minute.
+    const AT: i64 = 1_795_636_200;
+
+    fn face_of(snapshot: &ChromeSnapshot) -> String {
+        snapshot.clock.as_ref().expect("a face").text.to_str().unwrap().to_owned()
+    }
+
+    /// **The face is a function of the Unix minute and the zone's offset, worded once.** The same wall
+    /// time again, or another second of the minute, is no change (so the loop asks for no frame); the
+    /// next minute is one change, and so is a zone moving under the same instant. The words are
+    /// `fmt::clock_face`'s, the television's 12/24-hour style the airing captions already use.
+    #[test]
+    fn the_clock_face_is_captured_once_a_minute_and_a_new_minute_reports_one_change() {
+        let mut snapshot = ChromeSnapshot::default();
+        let measure = &plx_ui::fixture::FixtureMeasure;
+        assert!(snapshot.clock_read().is_none(), "no wall time yet: no clock");
+        assert!(!snapshot.set_clock(None, measure), "nothing in, nothing out: no change");
+
+        assert!(snapshot.set_clock(Some(Wall::from_secs(AT, 3_600)), measure), "the first face");
+        assert_eq!(face_of(&snapshot), plx_ui::fmt::clock_face(AT, 3_600).unwrap());
+        let first = face_of(&snapshot);
+        assert_eq!(snapshot.clock.as_ref().unwrap().w, 28.0 * 0.5 * first.len() as f32, "measured at BODY");
+        for second in [0, 1, 30, 59] {
+            let wall = Wall { unix_ms: (AT + second) * 1_000 + 999, utc_offset_s: 3_600 };
+            assert!(!snapshot.set_clock(Some(wall), measure), "second {second} of the same minute is no change");
+        }
+        assert!(snapshot.set_clock(Some(Wall::from_secs(AT + 60, 3_600)), measure), "the next minute");
+        assert_eq!(face_of(&snapshot), plx_ui::fmt::clock_face(AT + 60, 3_600).unwrap());
+        assert_ne!(face_of(&snapshot), first, "and it reads a minute later");
+        assert!(!snapshot.set_clock(Some(Wall::from_secs(AT + 61, 3_600)), measure));
+
+        assert!(snapshot.set_clock(Some(Wall::from_secs(AT + 61, 7_200)), measure), "the same instant in another zone");
+        assert_eq!(face_of(&snapshot), plx_ui::fmt::clock_face(AT + 61, 7_200).unwrap());
+        assert!(snapshot.set_clock(None, measure), "a wall time lost is a change");
+        assert!(snapshot.clock.is_none() && snapshot.clock_read().is_none());
+        assert!(!snapshot.set_clock(None, measure), "and staying lost is none");
+    }
+
+    /// The bar's focus stops are the chip and the strip's pills, whatever the clock holds: it adds no member.
+    #[test]
+    fn the_clock_adds_no_focus_stop_to_the_bar() {
+        let directory = directory(&[SecKind::Movie, SecKind::Show]);
+        let mut snapshot = ChromeSnapshot::default();
+        snapshot.refresh(&plx_ui::fixture::FixtureMeasure, directory.view(), true);
+        let mut without = Vec::new();
+        snapshot.members(0, None, 0.0, &mut without);
+        snapshot.set_clock(Some(Wall::from_secs(AT, 3_600)), &plx_ui::fixture::FixtureMeasure);
+        let mut with = Vec::new();
+        snapshot.members(0, None, 0.0, &mut with);
+        assert_eq!(with.iter().map(|m| m.elem).collect::<Vec<_>>(), without.iter().map(|m| m.elem).collect::<Vec<_>>());
+        assert!(snapshot.clock_read().is_some(), "premise: the clock is there");
+    }
+
+    /// The screenshot pipeline holds every free-running clock (`stillclock`), and the bar's clock is
+    /// one: it HOLDS the wall at a fixed instant (the face a capture carries), whatever the live time
+    /// and zone are, so each documentation shot is the same picture. No wall time (a replay) stays none.
+    #[cfg(feature = "devtriggers")]
+    #[test]
+    fn the_screenshot_pipelines_pinned_clocks_hold_the_clock_at_a_fixed_instant() {
+        let mut snapshot = ChromeSnapshot::default();
+        let measure = &plx_ui::fixture::FixtureMeasure;
+        plx_machine::motion::hold_phase_clocks(Some(4_000));
+        let held = snapshot.set_clock(Some(Wall::from_secs(AT, 3_600)), measure);
+        let held_face = snapshot.clock.as_ref().map(|face| face.text.to_str().unwrap().to_owned());
+        let again = snapshot.set_clock(Some(Wall::from_secs(AT + 7_200, -18_000)), measure);
+        let none = snapshot.set_clock(None, measure);
+        plx_machine::motion::hold_phase_clocks(None);
+        assert!(held, "the held face shows");
+        assert_eq!(held_face.as_deref(), plx_ui::fmt::clock_face(1_735_726_200, 0).as_deref(), "10:10 in UTC");
+        assert!(!again, "another instant and zone while held: the same face, no change");
+        assert!(none, "and no wall time still means no clock");
     }
 
     #[test]

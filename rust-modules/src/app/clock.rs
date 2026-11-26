@@ -175,6 +175,22 @@ pub(crate) fn reading() -> Option<Reading> {
     Some(Reading { unix_ms, utc_offset_s: zone(unix_ms.div_euclid(1_000)).utc_offset_s })
 }
 
+/// Pin the wall clock and the zone this thread reads (the host suite's stand-in for the platform): the
+/// instant `unix_ms` at `utc_offset_s`, until [`unpin_for_test`].
+#[cfg(test)]
+pub(crate) fn pin_for_test(unix_ms: i64, utc_offset_s: i32) {
+    REPLAY.with(|c| c.set(None));
+    UNIX.with(|c| c.set(Some((now(), Some(unix_ms)))));
+    ZONE.with(|c| c.set(Some((now() / 60_000, Zone { today: None, utc_offset_s: Some(utc_offset_s) }))));
+}
+
+/// Forget a [`pin_for_test`].
+#[cfg(test)]
+pub(crate) fn unpin_for_test() {
+    UNIX.with(|c| c.set(None));
+    ZONE.with(|c| c.set(None));
+}
+
 /// Advance a sampled wall-clock timestamp by monotonic frame time, or ask for a fresh sample once
 /// the cache is five seconds old. Wrapping subtraction keeps SDL's 32-bit tick rollover safe.
 fn advance_unix_ms(sampled_at: u32, sampled: Option<i64>, tick: u32) -> Option<Option<i64>> {
@@ -346,6 +362,32 @@ mod tests {
         super::REPLAY.with(|c| c.set(None));
         super::ZONE.with(|c| c.set(None));
         super::UNIX.with(|c| c.set(None));
+    }
+
+    /// **The minute edge reaches the bar's clock through the one publication**: the loop's reading is
+    /// published once per frame, the face changes only when the Unix minute (or the zone) does, and
+    /// `publish_clock` says so, so a settled screen is asked for exactly one frame a minute.
+    #[test]
+    fn the_published_reading_changes_the_bars_clock_only_at_the_minute_edge() {
+        use crate::app::bridge::Bridge;
+        const AT: i64 = 1_795_649_400;
+        let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+        let mut bridge = owner.bridge();
+        let publish = |bridge: &mut Bridge| bridge.publish_clock(super::reading());
+        super::pin_for_test(AT * 1_000, 3_600);
+        assert!(publish(&mut bridge), "the first reading: a face to show");
+        for ms in [1, 999, 30_000, 59_999] {
+            super::pin_for_test(AT * 1_000 + ms, 3_600);
+            assert!(!publish(&mut bridge), "{ms} ms into the minute: the same face, no frame owed");
+        }
+        super::pin_for_test((AT + 60) * 1_000, 3_600);
+        assert!(publish(&mut bridge), "the next minute begins: one frame owed");
+        assert!(!publish(&mut bridge), "and published again within it, none");
+        super::set_replay(100);
+        assert!(publish(&mut bridge), "a replay has no clock, which takes the face away");
+        assert!(!publish(&mut bridge), "and nothing more is owed after that");
+        super::REPLAY.with(|c| c.set(None));
+        super::unpin_for_test();
     }
 
     #[test]

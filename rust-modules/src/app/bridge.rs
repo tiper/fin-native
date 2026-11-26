@@ -3013,8 +3013,26 @@ impl Bridge<'_> {
     /// **Publish this frame's clock reading** — the one publication of the clock (`AppViews::wall` and the
     /// Live TV store's `now` both come from it). Called once per iteration by the loop, beside
     /// [`Self::publish_today`], with `clock::reading()` (the loop is that door's one caller).
-    pub(crate) fn publish_clock(&mut self, reading: Option<super::clock::Reading>) {
+    ///
+    /// The bar's clock face is captured from the same reading ([`super::chrome::ChromeSnapshot::set_clock`]):
+    /// returns `true` when it CHANGED (a new minute), which the loop turns into the one frame that
+    /// minute owes ([`super::run`]'s `publish_product_frame`). The wall time is passed in and nothing
+    /// here reads a clock or schedules a wake: the minute edge is detected on the frame that first
+    /// carries it.
+    pub(crate) fn publish_clock(&mut self, reading: Option<super::clock::Reading>) -> bool {
         self.retained.clock = reading;
+        let wall = self.retained.wall();
+        self.retained.chrome.set_clock(wall, &self.retained.measure)
+    }
+
+    /// **The clock the bar shows this frame, or `None`: the ONE answer.** The top page wears the bar,
+    /// the bar is on screen ([`plx_ui::dispatch::Dispatcher::bar_presented`], the chrome pass's own
+    /// test, so a detail page, the player, a faded or tucked bar all answer `None`) and a wall time is
+    /// published. What the minute edge owes a frame (`run::publish_product_frame`) and what a dev
+    /// instrument on the bar's right end steps aside for (`run::fps_counter_right_x`) both ask this.
+    pub(crate) fn bar_clock(&self, pages: &plx_ui::dispatch::Dispatcher<AppHost>) -> Option<plx_ui::widgets::ClockRead<'_>> {
+        pages.bar_presented(Rig::navigation_presentation(self, &pages.nav))?;
+        self.retained.chrome.clock_read()
     }
 
     /// The wall time of the clock reading last published ([`Self::publish_clock`]; `None` without a
@@ -3433,6 +3451,9 @@ impl Rig<AppHost> for Bridge<'_> {
         let p = plx_ui::Painter::root().alpha(nav.chrome_alpha).translate(0.0, -nav.chrome_lift);
         let chrome = self.retained.chrome.read(self.retained.strip.chip_expand_pos());
         self.retained.strip.draw(chrome.labels, p, glass.tab_band_mut(), nav);
+        // The clock is a status on the bar, so it rides the bar's painter (the tuck, fade and lift)
+        // and stays up when a menu consumes the chip below.
+        if let Some(clock) = chrome.clock { plx_ui::widgets::draw_top_bar_clock(p, clock); }
         // The chip a morphing menu consumed (`lifted`) is the lift's alone: left out here, it is not
         // under the dim and not in the host snapshot the panel's rim refracts.
         if lifted == Some(plx_ui::widgets::TAB_KEY_CHIP) { return; }
@@ -6099,6 +6120,9 @@ mod under_posters_band_route_tests;
 #[cfg(test)]
 #[path = "home_chrome_route_tests.rs"]
 mod home_chrome_route_tests;
+#[cfg(test)]
+#[path = "chrome_clock_route_tests.rs"]
+mod chrome_clock_route_tests;
 #[cfg(test)]
 #[path = "home_hero_route_tests.rs"]
 mod home_hero_route_tests;
