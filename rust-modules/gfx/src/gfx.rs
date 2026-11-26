@@ -76,6 +76,81 @@ macro_rules! glsl {
 }
 pub(crate) use glsl;
 
+/// `src` with every line that is only a `//` comment left out, behind `prefix`, as the bytes of a
+/// NUL-terminated GLSL source. The driver ignores those lines, so the program is the same; the binary
+/// does not carry them. `fs_img.frag` is embedded once per program variant (plain, dissolve, still,
+/// focus, inset) and ~13 KB of it is the prose that explains it, so the comments are cut at compile
+/// time rather than carried five times (the armv7 binary budget, `ci/build-budgets.json`, is
+/// measured on the stripped binary). Trailing `//` comments stay: they are part of a statement's line.
+const fn lean_glsl<const N: usize>(prefix: &str, src: &str) -> [u8; N] {
+    let (prefix, src) = (prefix.as_bytes(), src.as_bytes());
+    let mut out = [0u8; N];
+    let mut n = 0;
+    let mut i = 0;
+    while i < prefix.len() {
+        out[n] = prefix[i];
+        n += 1;
+        i += 1;
+    }
+    let mut line = 0;
+    while line < src.len() {
+        let mut end = line;
+        while end < src.len() && src[end] != b'\n' {
+            end += 1;
+        }
+        let keep_to = if end < src.len() { end + 1 } else { end };
+        let mut first = line;
+        while first < end && (src[first] == b' ' || src[first] == b'\t') {
+            first += 1;
+        }
+        let comment_only = first + 1 < end && src[first] == b'/' && src[first + 1] == b'/';
+        if !comment_only {
+            let mut k = line;
+            while k < keep_to {
+                out[n] = src[k];
+                n += 1;
+                k += 1;
+            }
+        }
+        line = keep_to;
+    }
+    out
+}
+
+/// How many bytes [`lean_glsl`] writes (its output length, without the terminating NUL).
+const fn lean_glsl_len(prefix: &str, src: &str) -> usize {
+    let (prefix, src) = (prefix.as_bytes(), src.as_bytes());
+    let mut n = prefix.len();
+    let mut line = 0;
+    while line < src.len() {
+        let mut end = line;
+        while end < src.len() && src[end] != b'\n' {
+            end += 1;
+        }
+        let keep_to = if end < src.len() { end + 1 } else { end };
+        let mut first = line;
+        while first < end && (src[first] == b' ' || src[first] == b'\t') {
+            first += 1;
+        }
+        let comment_only = first + 1 < end && src[first] == b'/' && src[first + 1] == b'/';
+        if !comment_only {
+            n += keep_to - line;
+        }
+        line = keep_to;
+    }
+    n
+}
+
+/// [`glsl`] through [`lean_glsl`]: the same source without its full-line comments.
+macro_rules! glsl_lean {
+    ($file:literal, $prefix:literal) => {{
+        const LEN: usize = lean_glsl_len($prefix, include_str!($file)) + 1;
+        const BYTES: [u8; LEN] = lean_glsl::<LEN>($prefix, include_str!($file));
+        // SAFETY: GLSL sources contain no interior NUL, and `BYTES` ends in the one `lean_glsl` leaves (zero).
+        unsafe { ::std::ffi::CStr::from_bytes_with_nul_unchecked(&BYTES) }
+    }};
+}
+
 /// [`glsl`] with the SHARED OUTPUT DITHER prepended — `shaders/dither.glsl`, whose header is the
 /// argument for all of it.
 ///
@@ -197,13 +272,13 @@ const VS_SCRIM_LAYER: &CStr =
     glsl!("shaders/vs_ambient.vert", "#define PLX_SCRIM\n#define PLX_SCRIM_LAYER\n");
 const VS_IMG_DITHERED: &CStr = glsl_vs_dithered!("shaders/vs_img.vert");
 const VS_SRC_DITHERED: &CStr = glsl_vs_dithered!("shaders/vs_src.vert");
-const FS_IMG: &CStr = glsl!("shaders/fs_img.frag");
+const FS_IMG: &CStr = glsl_lean!("shaders/fs_img.frag", "");
 const FS_DISSOLVE_PLAIN: &CStr = glsl!("shaders/fs_tex.frag", "#define PLX_DISSOLVE\n");
-const FS_DISSOLVE: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_DISSOLVE\n");
+const FS_DISSOLVE: &CStr = glsl_lean!("shaders/fs_img.frag", "#define PLX_DISSOLVE\n");
 const FS_FIELD: &CStr = glsl_dithered!("shaders/fs_field.frag");
 const FS_FIELD_PANEL: &CStr = glsl_dithered!("shaders/fs_field_panel.frag");
 const VS_STILL: &CStr = glsl!("shaders/vs_img.vert", "#define PLX_STILL_GROUND\n");
-const FS_STILL: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_STILL_GROUND\n");
+const FS_STILL: &CStr = glsl_lean!("shaders/fs_img.frag", "#define PLX_STILL_GROUND\n");
 /// The FOCUSED-tile specialization: the lit-glass edge + risen shadow, in their own program rather
 /// than a branch every plain IPROG draw paid for (when this was measured, that was every resting
 /// card, glyph, blur reduction, `field_kick` and `FrameCache` quad; the square-cornered ones among
@@ -214,7 +289,11 @@ const FS_STILL: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_STILL_GROUND\n
 /// focused or risen (`focus > 0.0 || dy > 0.0` — at most one card on screen), falling back to
 /// [`IPROG`] with the plain look if it fails to link, same as [`STILL_IMAGE`]'s own fallback.
 const VS_FOCUS: &CStr = glsl!("shaders/vs_img.vert", "#define PLX_FOCUS\n");
-const FS_FOCUS: &CStr = glsl!("shaders/fs_img.frag", "#define PLX_FOCUS\n");
+const FS_FOCUS: &CStr = glsl_lean!("shaders/fs_img.frag", "#define PLX_FOCUS\n");
+/// [`FS_FOCUS`] with a second picture laid whole inside the card ([`draw_tex_carded_inset`]): the
+/// FOCUSED tile of a row whose art is contained over its own backdrop (a blurred copy or a flat
+/// ground), lit as one card.
+const FS_INSET: &CStr = glsl_lean!("shaders/fs_img.frag", "#define PLX_FOCUS\n#define PLX_INSET\n");
 /// The wash with its photograph dissolved into it (`draw_art_wash`): dithered, because the wash it
 /// carries always dithers, over `vs_ambient.vert`'s field mesh so its colour is the wash's own
 /// per-vertex field.
@@ -1086,6 +1165,11 @@ struct ImageUniforms {
 static mut DISSOLVE_IMAGE: Option<(c_uint, ImageUniforms, c_int)> = None;
 static mut DISSOLVE_PLAIN: Option<(c_uint, ImageUniforms, c_int)> = None;
 static mut DISSOLVE_TRIED: bool = false;
+/// Optional focused-card specialization with a contained picture ([`FS_INSET`], over [`VS_FOCUS`]):
+/// the program, its uniforms and its `u_inset` location. Linked at init beside [`FOCUS_IMAGE`], never
+/// on the first focused draw (that is mid-animation); `None` when it did not link, and the caller
+/// keeps its two-quad composition.
+static mut INSET_IMAGE: Option<(c_uint, ImageUniforms, c_int)> = None;
 static mut STILL_IMAGE: Option<(c_uint, ImageUniforms, c_int, c_int)> = None;
 /// Optional FOCUSED-card specialization ([`VS_FOCUS`]/[`FS_FOCUS`]) — [`IPROG`] remains the
 /// fallback (the plain look, same as before this program existed) if this fails to link.
@@ -2824,6 +2908,23 @@ pub fn init_image() -> Result<(), GfxFault> {
             log("focus image prog unavailable — focused cards keep the plain look");
         }
 
+        INSET_IMAGE = link_optional_program(VS_FOCUS.as_ptr(), FS_INSET.as_ptr()).map(|program| {
+            let loc = |name: &CStr| glGetUniformLocation(program, name.as_ptr());
+            let uniforms = ImageUniforms {
+                rect: loc(c"u_trect"), tint: loc(c"u_tint"), uvrect: loc(c"u_uvrect"),
+                card: loc(c"u_card"), rimw: loc(c"u_rimw"), rimcol: loc(c"u_rimcol"),
+                shinv: loc(c"u_shinv"), shcol: loc(c"u_shcol"), focus: loc(c"u_focus"),
+            };
+            use_prog(program);
+            glUniform2f(loc(c"u_tscreen"), SCR_W, SCR_H);
+            glUniform1i(loc(c"u_tex"), 0);
+            glUniform1i(loc(c"u_next"), 1);
+            (program, uniforms, loc(c"u_inset"))
+        });
+        if std::ptr::addr_of!(INSET_IMAGE).read().is_none() {
+            log("inset image prog unavailable - contained art keeps its two plain quads");
+        }
+
         PLAIN_IMAGE = link_optional_program(VS_IMG.as_ptr(), FS_TEX.as_ptr()).map(|program| {
             let loc = |name: &CStr| glGetUniformLocation(program, name.as_ptr());
             use_prog(program);
@@ -3740,7 +3841,7 @@ fn draw_tex_impl(
     // never onto all of it unless that is what `crop` says (a cover crop keeps the aspect).
     let uv = uv_compose(crop, uv_rect_padded(w, h, sides, top, qw, qh));
     let shinv = if shblur > 0.0 { 0.5 / shblur } else { 0.0 };
-    // An explicit `image` override (the still-fusion program) always wins — it is a whole different
+    // An explicit `image` override (the still-fusion, dissolve and inset programs) always wins — it is a whole different
     // specialization, never the plain/focus choice below. Otherwise, only a draw that is actually
     // focused or risen reaches for `FOCUS_IMAGE`; every other draw passes `None`, which
     // `draw_tex_core_in` resolves. A rounded resting card keeps drawing through the smaller `IPROG`
@@ -3886,6 +3987,54 @@ pub fn draw_tex_carded_blend(tex: c_uint, next: c_uint, mix: f32, crop: [f32; 4]
         glActiveTexture(GL_TEXTURE0);
         true
     }
+}
+
+/// **A FOCUSED card whose art is contained: the card's backdrop texture `tex` (windowed by `crop`
+/// to the whole card) with the picture `inner_tex` laid whole in the placed box `inner`
+/// (`x, y, w, h`), composed INSIDE the one card pass.** The rim glow, the sheen and glare crown and
+/// the gloss ramp of a focused card are computed in that pass from the card's own outline, so they
+/// light the whole tile; the picture drawn as a second quad over a card pass painted over them
+/// inside its box (the side glow, the top gloss step).
+///
+/// `tint` inks the whole card (the picture and its backdrop) and carries its fade. Returns `false`,
+/// drawing nothing, when the draw is not a focused or risen one (a resting card has no glow, crown or
+/// gloss to lose, though the picture's edge covers the constant 1px sheen where it touches the tile,
+/// and the caller's two plain quads are the cheaper program) or the specialization did not link; the
+/// caller then draws those two quads.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_tex_carded_inset(tex: c_uint, inner_tex: c_uint, inner: [f32; 4], crop: [f32; 4],
+    x: f32, y: f32, w: f32, h: f32, radius: f32, tint: *const f32,
+    rimw: f32, rimcol: *const f32, pad: f32, blur: f32, shcol: *const f32, f: f32, dy: f32) -> bool {
+    if tex == 0 || inner_tex == 0 || inner[2] <= 0.0 || inner[3] <= 0.0 || !wants_focus_program(f, dy) {
+        return false;
+    }
+    // SAFETY: the same render-thread-only lifecycle as the other image specializations.
+    let Some((program, uniforms, loc_inset)) = (unsafe { std::ptr::addr_of!(INSET_IMAGE).read() }) else {
+        return false;
+    };
+    // The picture's box from the CARD's centre, and its inverse size: the shader's own coordinate is
+    // card-centred (`v_p` shifted by the shadow's dy), so the CPU folds the placement once here.
+    let inset = [
+        inner[0] + inner[2] * 0.5 - (x + w * 0.5),
+        inner[1] + inner[3] * 0.5 - (y + h * 0.5),
+        1.0 / inner[2],
+        1.0 / inner[3],
+    ];
+    note_card(x, y, w, h, pad, dy);
+    // SAFETY: as above.
+    unsafe {
+        use_prog(program);
+        glUniform4f(loc_inset, inset[0], inset[1], inset[2], inset[3]);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, inner_tex);
+        glActiveTexture(GL_TEXTURE0);
+        draw_tex_impl(tex, crop, x, y, w, h, radius, tint, rimw, rimcol, pad, blur, shcol, f, dy,
+            Some((program, uniforms)));
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE0);
+    }
+    true
 }
 
 /// Run `draw` with the simulator's compositor blend ([`straighten::UNDER`]) set and the app's own put
@@ -10553,6 +10702,11 @@ mod tests {
         let mut stack: Vec<Frame> = Vec::new();
         for line in src.lines() {
             let t = line.trim();
+            // This helper models `#ifdef`/`#ifndef`/`#else`/`#endif` and nothing else: a directive it
+            // does not know would be read as shader text and a variant no compiler builds would be
+            // pinned (an `#elif` once was). Refuse it here, so the pins below can only read what builds.
+            assert!(!t.starts_with("#elif") && !t.starts_with("#if ") && !t.starts_with("#undef"),
+                "`{t}`: preprocess() does not model this directive; write it as #ifdef/#else");
             // A real GLSL preprocessor leaves comments alone too, but a header comment mentioning
             // `u_focus` in PROSE (as this very file's own module doc does, outside any `#ifdef`)
             // is not the thing this test exists to catch — strip full-line `//` comments first, the
@@ -10624,6 +10778,71 @@ mod tests {
         for gone in ["wide", "wide2", " vp ", "dShadowBox", "glareTop", "qs", "straightS"] {
             assert!(!fs.contains(gone), "plain fs_img.frag must not carry focus identifier `{gone}`");
         }
+    }
+
+    /// **`fs_img.frag` is embedded without its full-line comments, and with nothing else lost.** The
+    /// five programs built from it carry the file minus the lines that are only a `//` comment (the
+    /// armv7 binary budget counts every copy), which the driver would have ignored; a trailing
+    /// comment, a blank line, indentation and every directive are as in the file, and each source
+    /// is one NUL-terminated string behind its own `#define`s.
+    #[test]
+    fn the_image_shader_variants_drop_only_their_comment_only_lines() {
+        let file = include_str!("shaders/fs_img.frag");
+        let lean = |prefix: &str| {
+            let body: String = file.split_inclusive('\n').filter(|l| !l.trim_start().starts_with("//")).collect();
+            format!("{prefix}{body}")
+        };
+        for (variant, prefix) in [
+            (FS_IMG, ""),
+            (FS_DISSOLVE, "#define PLX_DISSOLVE\n"),
+            (FS_STILL, "#define PLX_STILL_GROUND\n"),
+            (FS_FOCUS, "#define PLX_FOCUS\n"),
+            (FS_INSET, "#define PLX_FOCUS\n#define PLX_INSET\n"),
+        ] {
+            assert_eq!(variant.to_str().unwrap(), lean(prefix), "{prefix:?}");
+        }
+        assert!(FS_IMG.to_bytes().len() + 10_000 < file.len(), "the ~13 KB of prose is not carried");
+        assert!(FS_IMG.to_str().unwrap().contains("uniform sampler2D u_tex;"), "the code is");
+    }
+
+    /// **The inset program is the focus program plus ONE picture mix, and nothing leaks out of it.**
+    /// `PLX_INSET` is the only difference between [`FS_INSET`] and [`FS_FOCUS`]: the picture sampler,
+    /// its box uniform and the mix of it over the backdrop - and the focus program, the unfocused one
+    /// and the still carry none of that. The variants are read through [`preprocess`] (what the driver
+    /// compiles) with the macros each program prepends, so a branch no compiler builds cannot be pinned.
+    #[test]
+    fn the_inset_program_is_the_focus_program_plus_the_picture_mix() {
+        let src = FS_IMG.to_str().unwrap();
+        let inset = preprocess(src, &["PLX_FOCUS", "PLX_INSET"]);
+        let focus = preprocess(src, &["PLX_FOCUS"]);
+        let plain = preprocess(src, &[]);
+        let still = preprocess(src, &["PLX_STILL_GROUND"]);
+        for line in [
+            "uniform sampler2D u_next; // the picture, laid whole inside the card",
+            "highp vec2 ip = (vec2(v_p.x, v_p.y + u_focus.z) - u_inset.xy) * u_inset.zw + 0.5;",
+            "vec4 pic = texture2D(u_next, ip);",
+            "tex = mix(tex, pic.rgb*u_tint.rgb, pic.a);",
+        ] {
+            assert!(inset.contains(line), "the inset program lost `{line}`:\n{inset}");
+        }
+        // The backdrop is inked exactly as a covered card is, and the picture mix follows it.
+        let ink = inset.find("vec3 tex = c.rgb*u_tint.rgb;").expect("the card's ink");
+        assert!(inset.find("texture2D(u_next, ip)").unwrap() > ink, "the picture goes over the backdrop's ink");
+        assert!(!inset.contains("u_dim"), "one ink for the whole card: the copy carries its own brightness");
+        // The focus lighting is still there: the inset program IS the focus program.
+        for line in ["bool wide = u_focus.x > 0.0 && (u_card.z - straight) < 12.0;", "float glareTop = 0.0;"] {
+            assert!(inset.contains(line) && focus.contains(line), "`{line}` lights the focused card in both");
+        }
+        // Without PLX_INSET nothing of the picture is there, in any program that does not compose one.
+        for (name, hay) in [("focus", &focus), ("plain", &plain), ("still", &still)] {
+            for needle in ["u_inset", "ip.x", "pic.", "u_next"] {
+                assert!(!hay.contains(needle), "the {name} program must not carry `{needle}`");
+            }
+        }
+        // And the file has no directive the helper (or a reader) could mistake: the only branches are
+        // `#ifdef`/`#ifndef`/`#else`/`#endif`.
+        assert!(!src.lines().any(|l| l.trim_start().starts_with("#elif")), "fs_img.frag must not use #elif");
+        assert!(inset.lines().all(|l| !l.trim_start().starts_with('#')), "a directive leaked into the inset variant");
     }
 
     /// **The three ways a fragment leaves `fs_img.frag` as plain texture x tint are one expression.**

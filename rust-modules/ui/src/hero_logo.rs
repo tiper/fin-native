@@ -623,10 +623,10 @@ mod tests {
         peeks: &'static std::cell::Cell<u32>,
     }
     impl crate::tex::Source for LogoStore {
-        fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool) -> Option<plx_machine::machine::PosterKey> {
+        fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::BackdropSpec>) -> Option<plx_machine::machine::PosterKey> {
             None
         }
-        fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool) -> crate::tex::Warm {
+        fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::BackdropSpec>) -> crate::tex::Warm {
             crate::tex::Warm::Known
         }
         fn logo(&self, _: u16, _: &str) -> Option<plx_machine::machine::PosterKey> {

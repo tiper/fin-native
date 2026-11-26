@@ -27,15 +27,15 @@ thread_local! {
 
 struct Spy;
 impl Source for Spy {
-    fn probe(&self, srv: u16, path: &str, w: i32, h: i32, _: bool) -> Option<PosterKey> {
+    fn probe(&self, srv: u16, path: &str, w: i32, h: i32, _: bool, _: Option<plx_ui::art_fit::BackdropSpec>) -> Option<PosterKey> {
         LOG.with(|l| l.borrow_mut().probes.push((srv, path.into(), w, h)));
         None
     }
-    fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool) -> Warm {
+    fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<plx_ui::art_fit::BackdropSpec>) -> Warm {
         LOG.with(|l| l.borrow_mut().warms += 1);
         Warm::Claimed
     }
-    fn warm_ahead(&self, srv: u16, path: &str, w: i32, h: i32, _: bool) -> Warm {
+    fn warm_ahead(&self, srv: u16, path: &str, w: i32, h: i32, _: bool, _: Option<plx_ui::art_fit::BackdropSpec>) -> Warm {
         LOG.with(|l| {
             let mut l = l.borrow_mut();
             let req = (srv, path.to_string(), w, h);

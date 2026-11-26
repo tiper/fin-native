@@ -10,6 +10,7 @@
 //! `CardSource` and hands the content to `cards::Shelf` / `cards::Grid`. It is decoupled from any
 //! focus globals / catalog: focus is a plain `Option<usize>`, the item art is a [`Art`] the caller
 //! supplies.
+use crate::art_fit::ArtFit;
 use crate::consts::*;
 use crate::hstack::{Flow, Item};
 use crate::vstack::{Anchor, VStack};
@@ -78,6 +79,12 @@ pub struct RowStyle {
     /// next shelf's heading stands [`theme::STILL_FOOTER_AIR`] under that line's foot. It is part of
     /// [`RowStyle::pitch_fixed`], so the shelf column, the rest scroll and every settled top follow it.
     pub under_tile: f32,
+    /// **How the tile's art meets its box** ([`ArtFit`]): [`ArtFit::Cover`] (fill and crop) for every
+    /// row but Live TV's programme posters ([`RowStyle::PROGRAMME`]), whose non-poster art is
+    /// contained over its own blurred copy (or, with transparency, a flat ground). Read by the shared card draw, never by a screen; only the
+    /// shelf tile draws (`draw_tile_led`, `draw_focused_tile_led`) honour it, and
+    /// [`ArtFit::ContainOnBlur`] is only valid for 2:3 tiles (the copy is made against 2:3).
+    pub fit: ArtFit,
 }
 
 /// Where a label block starts under its tile: [`RowStyle::label_start`].
@@ -155,11 +162,18 @@ impl RowStyle {
         label_drop: None,
         heading_rise: 0.0,
         under_tile: 0.0,
+        fit: ArtFit::Cover,
     };
     /// **A shelf of Live TV channel plates** (the handoff's Recent channels): 250 x 140 on HOME's pitch, so a
     /// column of plates stands over a column of posters and Down lands straight below. Motion, pop, glow and
     /// radius are HOME's; only the height differs.
     pub const CHANNEL: RowStyle = RowStyle { h: 140.0, ..RowStyle::HOME };
+    /// **A shelf of Live TV programme posters** (On now, Channels): [`RowStyle::HOME`]'s tile and motion,
+    /// with art that is not poster-shaped contained whole over its own blurred copy (art with
+    /// transparency, a channel's logo, over the Recent plates' flat ground instead)
+    /// ([`ArtFit::ContainOnBlur`], owner 2026-11-26: "square should fit with blurred bg") instead of
+    /// cover-cropped. A 2:3 poster draws exactly as on Home.
+    pub const PROGRAMME: RowStyle = RowStyle { fit: ArtFit::ContainOnBlur, ..RowStyle::HOME };
     /// **A shelf of EPISODES: landscape stills.** Same motion as HOME — the spring magnification,
     /// the scroll, the glow ring and the heading lift are all one vocabulary — and a different
     /// aspect, because an episode is not a poster.
@@ -191,6 +205,7 @@ impl RowStyle {
         label_drop: None,
         heading_rise: 0.0,
         under_tile: 0.0,
+        fit: ArtFit::Cover,
     };
     /// **The Continue Watching row's landscape tile** (the owner's 2026-11 handoff, "Continue
     /// Watching and episode footer"): the episode strip's own cell (420x236, [`RowStyle::EPISODE`])
@@ -237,6 +252,7 @@ impl RowStyle {
         label_drop: None,
         heading_rise: 0.0,
         under_tile: 0.0,
+        fit: ArtFit::Cover,
     };
     /// "Who's watching" profile pictures: big circular avatars with a clear pop. Centered by the
     /// caller (a short roster), so the scroll spring stays put unless the row overflows.
@@ -263,6 +279,7 @@ impl RowStyle {
         label_drop: None,
         heading_rise: 0.0,
         under_tile: 0.0,
+        fit: ArtFit::Cover,
     };
     /// Corner radius for a tile of size `rect` at radius-scale `s`: half-width for a circle, else the
     /// style's fixed radius scaled with the focus pop. A style with a [`rim`](Self::rim) keeps its radius
@@ -1118,7 +1135,7 @@ pub fn draw_tile_led(
     let f = pop_factor(s, sty.focus_scale);
     // `card` takes the RESTING rect and the scale, not the popped rect: whatever it sets from the
     // tile's size (a fan's live name) must not re-layout on every frame of a pop.
-    crate::widgets::card_named_led(p, rect.scaled(1.0 / s), art, None, rad, true, s, f, led);
+    crate::widgets::card_fitted(p, rect.scaled(1.0 / s), art, None, rad, true, s, f, led, sty.fit);
     if let Some(frac) = resume {
         resume_bar(p, rect, frac, rad);
     }
@@ -1358,8 +1375,8 @@ pub fn draw_focused(
 /// reader is looking at waited for every other one (CONFIRM A1). A grid calls this before it
 /// paints the others and passes the answer to the draw, so the tile still resolves ONCE.
 /// `rect` and `s` are the draw's own.
-pub fn lead_focused(p: Painter, art: &Art<'_>, rect: Rect, s: f32) -> crate::widgets::ArtImage {
-    crate::widgets::lead_card_art(p, rect.scaled(1.0 / s), art, true, s)
+pub fn lead_focused(p: Painter, art: &Art<'_>, rect: Rect, s: f32, sty: &RowStyle) -> crate::widgets::ArtImage {
+    crate::widgets::lead_card_art(p, rect.scaled(1.0 / s), art, true, s, sty.fit)
 }
 
 /// [`draw_focused`] for a tile whose art was asked for ahead of its draw ([`lead_focused`]).
@@ -1398,7 +1415,7 @@ pub fn draw_focused_tile_led(
     let f = pop_factor(s, sty.focus_scale);
     // `card` takes the RESTING rect and the scale, not the popped rect: whatever it sets from the
     // tile's size (a fan's live name) must not re-layout on every frame of a pop.
-    crate::widgets::card_named_led(p, rect.scaled(1.0 / s), art, None, rad, true, s, f, led);
+    crate::widgets::card_fitted(p, rect.scaled(1.0 / s), art, None, rad, true, s, f, led, sty.fit);
     if let Some(frac) = resume {
         resume_bar(p, rect, frac, rad);
     }
@@ -2721,6 +2738,22 @@ mod tests {
         assert_eq!(rings(&plain), 0, "no style but the HUD strip's rings its tile");
         let rimmed = plain.with_rim(Rim { width: 2.5, ink: theme::CONTROL_RIM_FOCUS_UNKEYED });
         assert_eq!(rings(&rimmed), 1, "one rim over the popped rect");
+    }
+
+    /// **A row's tile draws hand the shared card the ROW's art fit** (`RowStyle::fit`), at rest and
+    /// focused: a Live TV poster tile asks for the contained fit, every other row's tile for cover.
+    /// Reverting either call to a bare `Cover` changes this census.
+    #[test]
+    fn a_tile_draw_hands_the_card_its_rows_art_fit() {
+        use crate::art_fit::ArtFit;
+        let rect = Rect::new(100.0, 100.0, 250.0, 375.0);
+        for (sty, fit) in [(RowStyle::PROGRAMME, ArtFit::ContainOnBlur), (RowStyle::HOME, ArtFit::Cover), (RowStyle::CHANNEL, ArtFit::Cover)] {
+            let fits = crate::draw_census::capture_fits(|| {
+                draw_tile_led(Painter::recording(), Art::Poster(None), rect, 1.0, &sty, None, None);
+                draw_focused_tile_led(Painter::recording(), Art::Poster(None), rect.scaled(1.07), 1.07, &sty, None, None);
+            });
+            assert_eq!(fits, vec![fit, fit], "the rest draw and the focused draw both read the style's fit");
+        }
     }
 
     /// **The rim follows the style's corner, not the pop's**: the ring records its radius, and a rimmed tile

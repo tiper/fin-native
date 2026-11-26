@@ -495,6 +495,40 @@ fn every_mode_lists_its_rows_and_every_channel_has_a_tile_somewhere() {
     }
 }
 
+/// **The posters contain their art on a backdrop; the plates do not read the fit.** On now and the
+/// Channels shelf stand on `RowStyle::PROGRAMME` (owner 2026-11-26, "square should fit with blurred bg",
+/// over the cover-crop default of #1557), Recent's plates on the cover-fit `CHANNEL` style, and a 2:3
+/// poster draws as it does on Home (`art_fit`'s tests pin the placement itself).
+#[test]
+fn the_poster_rows_contain_their_art_and_the_plates_keep_the_cover_fit() {
+    use plx_ui::art_fit::ArtFit;
+    assert_eq!(NOW_STYLE.fit, ArtFit::ContainOnBlur);
+    assert_eq!(RECENT_STYLE.fit, ArtFit::Cover);
+    let tile = |s: &RowStyle| (s.w, s.h, s.gap, s.focus_scale, s.radius);
+    assert_eq!(tile(&NOW_STYLE), tile(&RowStyle::HOME), "the tile, its pitch and its pop are Home's");
+}
+
+/// **The Channels shelf's own style contains its art**, read off the section the page actually declares
+/// (not the const the page is meant to use): square channel art (a Pluto logo, a "Star Trek" mark) was
+/// cover-cropped at both sides. On now and Channels are `ContainOnBlur`, Recent's plates `Cover`.
+#[test]
+fn the_declared_channels_and_on_now_sections_contain_their_art() {
+    use plx_ui::art_fit::ArtFit;
+    let _policy = captions::PolicyPin::default_setting();
+    let (mut store, mut screen) = seeded();
+    store.install_for_test(vec![channel("101", "Family Channel"), channel("102", "Cartoons")]);
+    let recent = store.view().channels.to_vec();
+    let view = with_recent(&store, &recent);
+    step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+    let context = cx(view, None);
+    let mut specs = Vec::new();
+    StackPage::<TestHost>::sections(&screen.page, &context, &mut specs);
+    let fit = |k: Sec| specs.iter().find(|s| s.key == k).and_then(|s| match s.kind { Kind::Shelf { style, .. } => Some(style.fit), _ => None });
+    assert_eq!(fit(Sec::Channels), Some(ArtFit::ContainOnBlur), "the Channels shelf");
+    assert_eq!(fit(Sec::Now), Some(ArtFit::ContainOnBlur), "the On now shelf");
+    assert_eq!(fit(Sec::Recent), Some(ArtFit::Cover), "Recent's logo plates keep the cover fit");
+}
+
 /// Recent only: a stored Recent that holds every channel, with no programme on, is one row of plates.
 #[test]
 fn a_recent_row_with_no_programme_on_is_one_row_of_plates() {

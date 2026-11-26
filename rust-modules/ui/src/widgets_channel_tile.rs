@@ -49,7 +49,7 @@ pub struct Face<'a> {
 /// pop factor ([`card_shadow_params`]'s), `image` the logo as [`resolve_card_art`](super::resolve_card_art)
 /// resolved it this frame.
 pub fn draw(p: Painter, rest: Rect, r: Rect, rad: f32, f: f32, face: &Face<'_>, image: ArtImage) {
-    let ArtImage { tex, w: tw, h: th, shown } = image;
+    let ArtImage { tex, w: tw, h: th, shown, .. } = image;
     // A flat plate has no texture pass to fold its shadow into, so the shadow is the one a tile casts
     // (`Painter::tex_carded`'s parameters), drawn under the plate.
     let (blur, off, a, _) = card_shadow_params(r.h, f, theme::CARD_SHADOW[3]);

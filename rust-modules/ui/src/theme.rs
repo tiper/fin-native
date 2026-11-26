@@ -815,6 +815,9 @@ pub const CARD_ABSENT: [f32; 4] = COOL_850;
 /// the top bar's own tone). A logo is drawn contained on it ([`logo::CHANNEL_AREA`]), so a mark on a
 /// transparent ground reads the same whatever the channel's brand colour is.
 pub const CHANNEL_PLATE: [f32; 4] = COOL_825;
+/// [`CHANNEL_PLATE`] as the bytes a one-texel ground texture carries (a poster tile that contains a
+/// picture with a transparent ground, [`crate::art_fit::BackdropSpec::ground`]). Pinned equal by a test.
+pub const CHANNEL_PLATE_RGB8: [u8; 3] = [0x22, 0x27, 0x2d];
 /// Loading-skeleton gradient — top. The same `COOL_850` stop as [`CARD_PLACEHOLDER`]: a card whose
 /// artwork is on the way and one with none to load are the same object at rest. Both lean BLUE,
 /// away from the neutral panel greys, so a missing poster never reads as a panel. The sentinel
@@ -1405,6 +1408,11 @@ pub const PILL_KEYLINE_BG: [f32; 4] = scrim_black(0.55);
 pub const BADGE_FILL: [f32; 4] = with_a(COOL_150, 0.20);
 /// No-op texture tint (structural: draw an RGBA texture unmodified).
 pub const TINT_WHITE: [f32; 4] = WHITE;
+/// The brightness the blurred copy a tile draws BEHIND its contained art keeps
+/// ([`crate::art_fit::backdrop_of`], baked into the copy when it is made): the picture's own colours at
+/// 55%, so the whole picture laid on top of it reads as the subject and the backdrop as its ground,
+/// never as two competing pictures. A flat ground ([`CHANNEL_PLATE`]) is drawn as it is, undimmed.
+pub const ART_BACKDROP_DIM: f32 = 0.55;
 
 // ── Review-score marks (detail hero ratings row) ─────────────────────────────
 // These used to be the ONE place the palette borrowed someone else's colour, justified by the

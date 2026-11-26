@@ -51,7 +51,10 @@ const BOARD_HEADING: f32 = 56.0;
 const BOARD_GAP_AT_REST: f32 = 48.0;
 /// Recent's tiles: a logo plate, 250 x 140 on the poster pitch, so a poster stands under each tile.
 const RECENT_STYLE: RowStyle = RowStyle::CHANNEL;
-const NOW_STYLE: RowStyle = RowStyle::HOME;
+/// On now's posters and the Channels shelf's: the Home poster tile, with art that is not poster-shaped
+/// contained on its own blurred copy (a logo with transparency: on the Recent plates' flat ground)
+/// rather than cover-cropped (`RowStyle::PROGRAMME`).
+const NOW_STYLE: RowStyle = RowStyle::PROGRAMME;
 const STATUS_FRAME: Rect = Rect { x: MARGIN_X, y: plx_ui::page_header::GRID_TOP, w: SCR_W - 2.0 * MARGIN_X, h: SCR_H - plx_ui::page_header::GRID_TOP - MARGIN_Y };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

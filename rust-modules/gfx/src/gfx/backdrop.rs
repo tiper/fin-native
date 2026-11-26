@@ -591,6 +591,7 @@ fn kind_name(tag: u64) -> String {
         // Two painters declare tag 22 (`ambient_art`, `tex_carded_still`); the words cannot tell them apart.
         22 => "ambient_art|tex_carded_still".into(),
         23 => "ambient_inked".into(),
+        27 => "tex_carded_inset".into(),
         26 => "scrim_layer".into(),
         100 => "text".into(),
         101 => "text_fade".into(),

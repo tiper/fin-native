@@ -106,6 +106,18 @@ impl Rect {
             h,
         )
     }
+    /// This rect with a `tw × th` source laid WHOLE inside it, aspect preserved and centred — the
+    /// `background-size: contain` rule, [`cover`](Self::cover)'s counterpart (the long axis fits
+    /// instead of overflowing). A degenerate source returns the rect unchanged, as `cover` does.
+    #[inline]
+    pub fn contain(&self, tw: f32, th: f32) -> Rect {
+        if tw <= 0.0 || th <= 0.0 {
+            return *self;
+        }
+        let s = (self.w / tw).min(self.h / th);
+        let (w, h) = (tw * s, th * s);
+        Rect::new(self.x + (self.w - w) * 0.5, self.y + (self.h - h) * 0.5, w, h)
+    }
     /// The UV window `(u0, v0, su, sv)` of a `tw × th` source that COVERS this rect with its aspect
     /// preserved — [`cover`](Self::cover) expressed as a crop of the texture instead of an overflow
     /// of the quad. That is the form a CLIPPED picture needs: a card's rounded rect or a headshot's
