@@ -12,6 +12,12 @@
 //! draws, captured when the panel opens: a refetch landing behind an open list does not move a
 //! row under the cursor. It opens on the row that wears the check mark, the version Play takes now
 //! (the viewer's choice, else what plays unasked).
+//!
+//! **It grows out of the hero control that opened it** (`Popover::morphing` + `open_from`, the path
+//! every header menu takes) when the argument names that control ([`VersionsArg::opener`]): the
+//! page leaves the control out of its own pass and the opener lift draws it at the morph's
+//! `opener_alpha`, so the panel covers it ([`plx_ui::popover::cover_opener`]) and BACK or a pick
+//! drains the glass back into it. A panel with no opener keeps the fade.
 
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -25,6 +31,7 @@ use plx_machine::machine::{
     Canon, Cx, Delivery, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind,
     InstanceId, Key, LogicalState, Machine, MachineId, NavOp,
 };
+use plx_ui::popover::Popover;
 use plx_ui::screen::{
     Activate, At, AxisMask, Dir, DrawFrame, EdgeRule, ElemKind, FocusSource, Focusable, GroupKind,
     GroupSpec, Hover, HitSource, Placed, RenderStrategy, Screen, ScreenEvent, Scrim, Seat, Step,
@@ -35,7 +42,7 @@ use plx_ui::Rect;
 
 /// The fields [`VersionsPanelScreen::write`] canonicalises, for the recorder's shape pin (§5.4).
 pub const SHAPE: &str =
-    "VersionsPanel{arg:VersionsArg{host:u32,sid:u32,rk:str,anchor:[u32;4]},versions:[i64],sel:i32,table:TableViewMotion}";
+    "VersionsPanel{arg:VersionsArg{host:u32,sid:u32,rk:str,anchor:[u32;4],opener:Option<{entry:u32,elem:u32}>},versions:[i64],sel:i32,table:TableViewMotion}";
 
 /// What the container is asked to present: the Detail instance the choice is reported to, the item
 /// whose versions these are, and the drawn rect of the disc it hangs off (bit-preserving, so a
@@ -46,6 +53,10 @@ pub struct VersionsArg {
     pub sid: ServerId,
     pub rk: String,
     pub anchor: [u32; 4],
+    /// The page's entry and the hero control the panel grows out of and drains back into (the `…`
+    /// button when the menu handed the row over, the disc itself otherwise): the page leaves it out
+    /// of its own pass and the opener lift draws it at the morph's alpha ([`Screen::opener`]).
+    pub opener: Option<(EntryId, u32)>,
 }
 
 impl LogicalState for VersionsArg {
@@ -54,6 +65,7 @@ impl LogicalState for VersionsArg {
         for value in self.anchor {
             c.u32(value);
         }
+        c.option(self.opener, |c, (entry, elem)| { c.u32(entry.0).u32(elem); });
     }
     fn probe(&self, out: &mut String) {
         out.push_str("versions_arg");
@@ -80,6 +92,8 @@ pub struct VersionsPanelScreen {
     /// The versions the rows were built from, in the server's order.
     versions: Vec<MediaId>,
     pub form: FormTable<VersionRow, MediaId, Infallible>,
+    /// The morph, present exactly when the panel has an opener to grow from.
+    popover: Option<Popover>,
 }
 
 impl VersionsPanelScreen {
@@ -97,11 +111,18 @@ impl VersionsPanelScreen {
             Form::new().section(plx_appkit::version_list::section(versions, VersionRow, |v| v.id, checked, unavailable)),
             Some(&VersionRow(opening as u16)),
         );
-        Self { entry, arg, versions: versions.iter().map(|v| v.id).collect(), form }
+        // the control's focused face is a near-white fill: the close's blob whitens toward it
+        let popover = arg.opener.map(|_| Popover::new().morphing().opener_fill(plx_ui::theme::ACCENT));
+        Self { entry, arg, versions: versions.iter().map(|v| v.id).collect(), form, popover }
     }
 
-    /// Under the disc when there is room, above it when there is not.
+    /// Over the control when it morphs out of one (the shared rule, `popover::cover_opener`: the
+    /// opener is consumed, so the glass must stand where it was), under the disc when there is room
+    /// and above it when there is not for a panel with no opener.
     pub fn frame(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
+        if self.popover.is_some() {
+            return plx_ui::detail_layout::hero_panel_rect(&self.form.table, self.arg.anchor, measure);
+        }
         let [x, y, w, h] = self.arg.anchor.map(f32::from_bits);
         plx_ui::popover::under_or_above(Rect::new(x, y, w, h), self.form.table.measured_width(measure), self.form.table.measured_height())
     }
@@ -137,7 +158,25 @@ impl<H: AppLike<Memory = PageMemory>> Machine<H> for VersionsPanelScreen {
     type Ev = ScreenEvent<H>;
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
         match ev {
+            ScreenEvent::Mount => {
+                let pill = plx_ui::detail_layout::hero_pill(self.arg.anchor);
+                if let Some(pop) = &mut self.popover {
+                    pop.open_from(Some(pill));
+                }
+                Handled::No
+            }
+            // However the surface was dismissed (BACK, a pick, the host's own press), the glass
+            // runs the morph back into the control.
+            ScreenEvent::Closing => {
+                if let Some(pop) = &mut self.popover {
+                    pop.dismiss();
+                }
+                Handled::No
+            }
             ScreenEvent::Tick(tick) => {
+                if let Some(pop) = &mut self.popover {
+                    pop.update(tick.dt());
+                }
                 self.form.table.sel = cx
                     .focus
                     .current
@@ -275,6 +314,20 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Screen<H> for VersionsPanel
     fn name(&self) -> &'static str {
         "versions"
     }
+    /// The hero control the glass grew out of: the page leaves it out of its pass
+    /// (`DrawFrame::lifted`) and the dispatcher's lift draws it above the scrim and the panel.
+    fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
+        self.arg.opener.map(|(entry, elem)| (entry, Some(FocusKey { entry, elem })))
+    }
+    /// The opener is CONSUMED by the morph: gone while the panel stands, back as the droplet drains
+    /// into it. Whole for a panel with no morph.
+    fn opener_alpha(&self) -> f32 {
+        self.popover.as_ref().map_or(1.0, Popover::opener_alpha)
+    }
+    /// The droplet has drained into the control: the surface and the lift end on this frame.
+    fn handed_back(&self) -> bool {
+        self.popover.as_ref().is_some_and(Popover::handed_back)
+    }
     fn state(&self) -> &dyn LogicalState {
         self
     }
@@ -282,19 +335,33 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Screen<H> for VersionsPanel
         None
     }
     fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, H>) {}
+    /// The panel's own weight; a morphing panel's dim FOLLOWS the morph (`Popover::dim`).
     fn scrim(&self) -> Scrim {
-        Scrim::dim(plx_ui::theme::underlay::DIM_PANEL)
+        match &self.popover {
+            Some(pop) => pop.dim(plx_ui::theme::underlay::DIM_PANEL),
+            None => Scrim::dim(plx_ui::theme::underlay::DIM_PANEL),
+        }
     }
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
         let appear = f.page_alpha;
         let r = self.frame(f.measure);
-        let p = f.painter.alpha(appear).translate(0.0, RISE * (1.0 - appear));
         let measure = f.measure;
         let field = f.underlay;
-        plx_ui::profile::phase("dt.versions", || {
-            plx_ui::widgets::panel_ground(p, r, PANEL_RAD, field, plx_ui::widgets::Ground::Sheet);
-            self.form.table.draw(p, r, measure);
-        });
+        if let Some(pop) = &self.popover {
+            // The glass and the rows ride the MORPH (`Popover::panel` / `morph_rows`), not the
+            // container's appear: the panel begins and ends as the control it grows from.
+            let m = pop.content_painter_on(f.painter.alpha(f.nav_page_alpha), 0.0);
+            plx_ui::profile::phase("dt.versions", || {
+                pop.panel(m, r, PANEL_RAD, field, plx_ui::widgets::Ground::Menu);
+                pop.morph_rows(m, r, PANEL_RAD, |m| self.form.table.draw(m, r, measure));
+            });
+        } else {
+            let p = f.painter.alpha(appear).translate(0.0, RISE * (1.0 - appear));
+            plx_ui::profile::phase("dt.versions", || {
+                plx_ui::widgets::panel_ground(p, r, PANEL_RAD, field, plx_ui::widgets::Ground::Sheet);
+                self.form.table.draw(p, r, measure);
+            });
+        }
         let hit_p = f.painter.alpha(appear);
         for index in 0..self.form.table.n_rows() as usize {
             let Some(elem) = self.form.key_at(index).map(|k| k.0) else {
@@ -393,7 +460,7 @@ pub(crate) mod tests {
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
         VersionsPanelScreen::new(
             EntryId(3),
-            VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor },
+            VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None },
             &plx_appkit::version_list::sample(),
             None,
             true,
@@ -472,13 +539,22 @@ pub(crate) mod tests {
         assert_eq!(row_subject(&p, 0), None, "no page loaded");
     }
 
+    /// **The standalone Select Version panel is a picker: HEADLINE bold rows** (one size class per glass;
+    /// the same list pushed into an action menu takes the menu's compact class).
+    #[test]
+    fn the_panel_is_headline_bold() {
+        let _guard = plx_base::testlock::serial();
+        let p = morphing_panel(None);
+        assert_eq!(p.form.table.label_style(), (plx_ui::theme::size::HEADLINE, true));
+    }
+
     /// The version Play takes now wears the check mark and the list opens on it; with none named
     /// the list opens on its first row and no row is marked.
     #[test]
     fn the_taken_version_wears_the_check_and_the_list_opens_on_it() {
         let versions = plx_appkit::version_list::sample();
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
-        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor };
+        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None };
         for (checked, marked, opening) in [(None, None, 0), (Some(versions[0].id), Some(0), 0), (Some(versions[1].id), Some(1), 1)] {
             let p = VersionsPanelScreen::new(EntryId(3), arg.clone(), &versions, checked, true);
             let rows: Vec<_> = p.form.table.sections.iter().flat_map(|s| s.rows.iter()).filter(|r| !r.is_note()).collect();
@@ -517,7 +593,7 @@ pub(crate) mod tests {
         let _lang = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
         let why = plx_os::i18n::msg::browse_detail_no_playback();
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
-        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor };
+        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None };
         // What one event does to a panel: the effects it pushes.
         let drive = |p: &mut VersionsPanelScreen, ev: ScreenEvent<HostFixture>| {
             let mut out = Vec::new();
@@ -556,5 +632,109 @@ pub(crate) mod tests {
             }));
             assert!(closes(&back) && !reports(&back), "can_play={can_play}: BACK closes the panel and plays nothing");
         }
+    }
+
+    // ---- the hero control's morph ------------------------------------------------------------
+
+    /// The panel over a hero control at `(500, 700)`: the page's entry 1 and the control's elem 9.
+    fn morphing_panel(opener: Option<(EntryId, u32)>) -> VersionsPanelScreen {
+        let anchor = [500.0f32, 700.0, 64.0, 64.0].map(f32::to_bits);
+        VersionsPanelScreen::new(
+            EntryId(3),
+            VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener },
+            &plx_appkit::version_list::sample(),
+            None,
+            true,
+        )
+    }
+
+    fn step(p: &mut VersionsPanelScreen, ev: ScreenEvent<HostFixture>) {
+        let mut out = Vec::new();
+        let mut present = plx_machine::present::Present::new();
+        let mut fx: Effects<'_, HostFixture> = Effects::new(&mut out, MachineId::Instance(InstanceId(4)), &mut present);
+        Machine::<HostFixture>::step(p, &ev, &cx(), &mut fx);
+    }
+
+    fn tick(p: &mut VersionsPanelScreen, ms: &mut u32, n: usize) {
+        for _ in 0..n {
+            *ms += 16;
+            step(p, ScreenEvent::Tick(plx_machine::machine::Tick { ms: *ms, dt_us: 16_667 }));
+        }
+    }
+
+    /// The glass this frame: the panel ground (a `rect_rimmed`, tag 8, on a host with no frozen field).
+    fn glass(p: &mut VersionsPanelScreen) -> Rect {
+        plx_ui::draw_census::capture(|| {
+            let cx = cx();
+            let mut f = DrawFrame::new(&cx, plx_ui::Painter::recording());
+            Screen::<HostFixture>::draw(p, &mut f);
+        })
+        .into_iter()
+        .find_map(|(tag, r)| (tag == 8).then_some(r))
+        .unwrap_or_default()
+    }
+
+    /// **Select Version GROWS out of the hero control that opened it**, as every header menu does
+    /// (`Popover::morphing` + `open_from`): the control is the surface's `opener` (the page leaves it
+    /// out of its pass; the lift draws it at the morph's `opener_alpha`), the panel covers it, three
+    /// frames in the glass is still the control's size or a little over, the settled panel is exactly
+    /// `frame()`, and BACK (or a pick) runs the morph home into the control.
+    #[test]
+    fn the_panel_grows_out_of_its_control_settles_on_its_frame_and_runs_home_on_back() {
+        let _guard = plx_base::testlock::serial();
+        let mut p = morphing_panel(Some((EntryId(1), 9)));
+        assert_eq!(
+            Screen::<HostFixture>::opener(&p),
+            Some((EntryId(1), Some(FocusKey { entry: EntryId(1), elem: 9 }))),
+            "the opener is the hero control, on the page"
+        );
+        step(&mut p, ScreenEvent::Mount);
+        let settled = p.frame(&plx_ui::fixture::FixtureMeasure);
+        let pill = plx_ui::detail_layout::hero_pill(p.arg.anchor);
+        assert!(
+            settled.x <= pill.x && settled.y <= pill.y && settled.x + settled.w >= pill.x + pill.w && settled.y + settled.h >= pill.y + pill.h,
+            "the settled panel {settled:?} covers the control {pill:?}, which the morph consumes"
+        );
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 1.0, "frame 0 is the control whole");
+        assert!(Screen::<HostFixture>::scrim(&p).ramp.is_some(), "the dim follows the morph");
+        let mut ms = 0;
+        tick(&mut p, &mut ms, 3);
+        let early = glass(&mut p);
+        assert!(
+            early.w < settled.w - 20.0 && early.h < settled.h - 20.0,
+            "three frames in the glass is still growing out of the control ({early:?}), not laid at {settled:?}"
+        );
+        tick(&mut p, &mut ms, 96);
+        let end = glass(&mut p);
+        assert!(
+            (end.x - settled.x).abs() < 0.5 && (end.y - settled.y).abs() < 0.5
+                && (end.w - settled.w).abs() < 0.5 && (end.h - settled.h).abs() < 0.5,
+            "the settled panel is the frame {settled:?}, drew {end:?}"
+        );
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 0.0, "the control stays consumed while the panel stands");
+        step(&mut p, ScreenEvent::Closing);
+        tick(&mut p, &mut ms, 3);
+        assert!(glass(&mut p).w < settled.w - 20.0, "three frames into the close the glass is narrowing into the control");
+        assert!(!Screen::<HostFixture>::handed_back(&p));
+        tick(&mut p, &mut ms, 60);
+        assert!(Screen::<HostFixture>::handed_back(&p), "the droplet has drained into the control");
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 1.0);
+    }
+
+    /// A panel with no opener (every test rig, and any host that names none) draws as it always did:
+    /// under the disc, no morph, the opener whole, no handback of its own.
+    #[test]
+    fn a_panel_with_no_opener_keeps_the_fade() {
+        let _guard = plx_base::testlock::serial();
+        let mut p = morphing_panel(None);
+        step(&mut p, ScreenEvent::Mount);
+        step(&mut p, ScreenEvent::Closing);
+        assert_eq!(Screen::<HostFixture>::opener(&p), None);
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 1.0);
+        assert!(!Screen::<HostFixture>::handed_back(&p));
+        assert!(Screen::<HostFixture>::scrim(&p).ramp.is_none());
+        let [x, y, w, h] = [500.0f32, 700.0, 64.0, 64.0];
+        let under = plx_ui::popover::under_or_above(Rect::new(x, y, w, h), p.form.table.measured_width(&plx_ui::fixture::FixtureMeasure), p.form.table.measured_height());
+        assert_eq!(p.frame(&plx_ui::fixture::FixtureMeasure), under);
     }
 }

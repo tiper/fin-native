@@ -40,6 +40,24 @@
 //! (`loaded_episode`, `from_home`), which is all it was still deciding once the route it named
 //! stopped existing.
 //!
+//! **A menu opened from a HERO control grows out of it.** The Detail hero's `…` ([`ItemMenuKind::HeroOverflow`])
+//! is a control, not a card: the panel is the control's own glass (`Popover::morphing` + `open_from`, the
+//! path every header menu takes), laid over it (`plx_ui::detail_layout::hero_panel_over`, clear of the
+//! synopsis whenever the page fits), the page leaves the control out of its pass and the opener lift
+//! draws it at the morph's `opener_alpha`, and BACK at its rows or a pick drains the glass back into
+//! it. **Select Version and Audio & Subtitles are PAGES of that glass**: OK on the row pushes the page
+//! onto the menu's one page stack ([`ItemMenuScreen::pages`], `plx_ui::page_stack::push_page`, the idiom
+//! the standalone Audio & Subtitles panel stands on), the card springs to the page's rect and the pages
+//! slide in it (`PanelMotion`), BACK pops to the rows with the ring on the row that opened the page,
+//! and Audio & Subtitles pushes Audio or Subtitles further in the same glass. The page content is the
+//! code the standalone panels use (`plx_appkit::version_list`, `plx_appkit::preplay_tracks`), which
+//! stay the round fourth-slot button's panel and the failure screen's. A pick in Select Version
+//! closes the whole menu (the page selects it); a track pick keeps the menu up with the check moved.
+//! A menu opened from a TILE (every other kind) has no popover: the panel stands beside the card, the
+//! lift is whole, and its Select Version row pushes the same page onto the same stack (the card
+//! resizes and the pages slide as a hero menu's do; BACK returns to the rows). The branch is the
+//! opener, which is `HeroOverflow`'s identity, held as the presence of its [`Hero`] state.
+//!
 //! It still only **reports** the chosen [`Action`]: `AppFx::ItemMenu` carries it to
 //! `app::input::apply_item_action`, which does the routing, the server call and the hub refresh.
 //! It never mutates playback or PMS state itself.
@@ -56,7 +74,7 @@ use std::os::raw::c_int;
 use plx_data::pms::{MediaVersion, PmsMovie};
 use plx_media::route::DeckPress;
 use crate::registry::{tile_facts, RepeatGate, PANEL_REPEAT_MS};
-use crate::registry::{hero_face, AppFx, AppLike, AppMsg, HeroCtl, ItemMenuArg, ItemMenuKind, ItemMenuReq};
+use crate::registry::{commit_pick, hero_face, AppFx, AppLike, AppMsg, HeroCtl, ItemMenuArg, ItemMenuKind, ItemMenuReq, PreplaySource};
 use plx_ui::consts::*;
 use plx_ui::form::{Activation, Form, FormId, FormSection, FormTable, RowKey, RowKind};
 use plx_ui::frame::Budget;
@@ -70,6 +88,10 @@ use plx_ui::screen::{
     Activate, At, AxisMask, Dir, DrawFrame, EdgeRule, ElemKind, Focusable, GroupKind, GroupSpec,
     Hover, Placed, RenderStrategy, Screen, ScreenEvent, Scrim, Seat, Step, Stop,
 };
+use plx_ui::page_stack::{self, PageStack};
+use plx_ui::panel_motion::PanelMotion;
+use plx_ui::popover::Popover;
+use plx_appkit::preplay_tracks::{self as tracks, Pick, PickPage, PickRow, PickerCore};
 use plx_ui::table::{Row, MENU_MAX_W, MENU_MIN_W};
 use plx_ui::widgets::PosterMark;
 use plx_ui::{theme, Rect};
@@ -124,8 +146,13 @@ pub enum Action {
     ChooseVersion(String),
     /// A hero action under the Detail page's … menu: the row IS the round button it replaces, so the
     /// action is that [`HeroCtl`]. The menu closes and hands it back to the page that opened it
-    /// (`AppMsg::HeroCtl`), whose `activate_hero` performs it; it never reaches the app.
+    /// (`AppMsg::HeroCtl`), whose `activate_hero` performs it; it never reaches the app. (Select
+    /// Version and Audio & Subtitles push a page of the menu instead.)
     Hero(HeroCtl),
+    /// A row of the Audio & Subtitles pages the hero's `…` menu hosts: the SAME rows the standalone
+    /// panel lists (`plx_appkit::preplay_tracks`), by their identity there. A drill-in row pushes its
+    /// page, a track row is a pick; both are the menu's own (`ItemMenuScreen::activate_hero_menu`).
+    Pick(PickRow),
     /// Select this leaf's version `media` as the file Play and Resume start. It plays nothing; the
     /// app remembers it for the profile (`plx_media::route::choose_version`). The id, never a
     /// position: it is resolved against the item when it is played
@@ -173,7 +200,7 @@ impl Action {
             Action::SelectVersion { rk, .. } => rk,
             Action::PlayTrailer { rk, .. } => rk,
             // No ratingKey: the subject is a catalog id, or (a hero control) the page that opened the menu.
-            Action::WatchlistAdd { .. } | Action::Hero(_) => "",
+            Action::WatchlistAdd { .. } | Action::Hero(_) | Action::Pick(_) => "",
         }
     }
 
@@ -195,6 +222,7 @@ impl Action {
             // Tag 13 was `PlayVersion` when it was recorded; the wire is unchanged by what a press MEANS.
             Action::SelectVersion { .. } => 13,
             Action::Hero(_) => 14,
+            Action::Pick(_) => 15,
         };
         c.u32(tag).str(self.rk());
         if let Action::WatchlistAdd { hex } = self {
@@ -208,6 +236,9 @@ impl Action {
         }
         if let Action::Hero(ctl) = self {
             c.u32(ctl.elem());
+        }
+        if let Action::Pick(row) = self {
+            c.u32(row.key().0);
         }
         if let Action::PlayTrailer {
             part,
@@ -237,7 +268,7 @@ const EDGE_X: f32 = plx_ui::consts::MARGIN_X;
 /// `media:u64(PlayVersion only)` is the pinned spelling of tag 13's payload, which `Action::SelectVersion` keeps:
 /// renaming what a press MEANS changes neither the canonical bytes nor the shape (`SCREEN_SHAPES_PIN`).
 pub const SHAPE: &str =
-    "ItemMenu{arg:ItemMenuArg,acts:[Option<Action{tag:u32,rk:str,season:u32,part:str,vcodec:str,acodec:str,title:str,hex:str(WatchlistAdd only),media:u64(PlayVersion only),ctl:u32(Hero only)}>],sel:i32,\
+    "ItemMenu{arg:ItemMenuArg,acts:[Option<Action{tag:u32,rk:str,season:u32,part:str,vcodec:str,acodec:str,title:str,hex:str(WatchlistAdd only),media:u64(PlayVersion only),ctl:u32(Hero only),pick:u32(Pick only)}>],sel:i32,depth:u32,\
      table:TableViewMotion}";
 
 /// Is `m` an item the menu has anything to offer? A leaf or a show/season — i.e. everything the
@@ -273,6 +304,8 @@ pub enum ItemRow {
     Hero(HeroCtl),
     /// One version on the Play Version page, by its position in the list captured at open.
     Version(u16),
+    /// A row of the Audio & Subtitles pages, by its identity there ([`PickRow`]).
+    Pick(PickRow),
 }
 
 impl ItemRow {
@@ -303,6 +336,7 @@ impl ItemRow {
             // Named by its control in `a11y` (`itemmenu.hero.<ctl>`), which reads the control itself.
             ItemRow::Hero(_) => "hero",
             ItemRow::Version(_) => "version",
+            ItemRow::Pick(_) => "pick",
         }
     }
 }
@@ -324,12 +358,16 @@ impl FormId for ItemRow {
             ItemRow::PlayVersion => 12,
             ItemRow::Hero(ctl) => HERO_KEY_BASE + ctl.elem(),
             ItemRow::Version(n) => VERSION_KEY_BASE + u32::from(*n),
+            ItemRow::Pick(row) => PICK_KEY_BASE + row.key().0,
         })
     }
 }
 
 /// The Play Version page's row keys start here, clear of the fixed rows above.
 const VERSION_KEY_BASE: u32 = 100;
+/// The Audio & Subtitles pages' row keys start here, clear of every other page's (a page's own keys,
+/// `PickRow::key`, are below 3000).
+const PICK_KEY_BASE: u32 = 10_000;
 /// The hero overflow rows' keys start here: the control's own fixed identity ([`HeroCtl::elem`]) past it.
 const HERO_KEY_BASE: u32 = 1000;
 
@@ -603,8 +641,9 @@ fn build_episode(rk: &str, mark: PosterMark, versions: &[MediaVersion], face: Op
 /// **The Detail hero's … menu**: one row per action the round buttons had no room for, in the row's
 /// order. A row wears the SAME icon and verb as its round button (`registry::hero_face`) and a press
 /// hands its [`HeroCtl`] back to the page that opened the menu, which performs it through the one path
-/// its own button takes (`AppMsg::HeroCtl`): Select Version included, so the versions list is the
-/// page's panel, anchored where the menu was, not a second page inside this one.
+/// its own button takes (`AppMsg::HeroCtl`). The two that have a LIST (Select Version, Audio &
+/// Subtitles) are pushed as pages of this menu instead (`ItemMenuScreen::page_for`); a Select
+/// Version row with no versions to list falls back to the page's own panel.
 fn build_hero_overflow(rows: &[HeroCtl]) -> ItemForm {
     let mut sec = FormSection::new("");
     for &ctl in rows {
@@ -677,11 +716,13 @@ fn build_season(rk: &str, mark: PosterMark, face: Option<&watchlist::Face>) -> I
 
 /// **The Select Version page**: the shared version list (`plx_appkit::version_list`), every row a
 /// choice of that version for the captured item, the one `checked` (the file Play takes now) marked.
-fn build_versions(rk: &str, versions: &[MediaVersion], checked: Option<plx_plex::plex::MediaId>) -> ItemForm {
+fn build_versions(rk: &str, versions: &[MediaVersion], checked: Option<plx_plex::plex::MediaId>, can_play: bool) -> ItemForm {
+    // without a playback driver every row is disabled and says why (the standalone panel's rule)
+    let unavailable = (!can_play).then(plx_os::i18n::msg::browse_detail_no_playback);
     Form::new().section(plx_appkit::version_list::section(versions, ItemRow::Version, |v| Action::SelectVersion {
         rk: rk.to_string(),
         media: v.id,
-    }, checked, None))
+    }, checked, unavailable))
 }
 
 /// Beside the card, never over it: to its RIGHT by default, flipped to its LEFT when that would run
@@ -717,6 +758,169 @@ pub fn fallback_anchor() -> Rect {
     )
 }
 
+/// A page the hero's `…` menu shows over its root rows: Select Version, or one of the Audio & Subtitles
+/// pages (its root, then Audio or Subtitles pushed over it). The menu's root is the EMPTY stack.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MenuPage {
+    Versions,
+    Tracks(PickPage),
+}
+
+impl MenuPage {
+    /// The page's title band (`None`: Select Version and the Audio & Subtitles root have none, as in
+    /// their standalone panels).
+    fn title(self) -> Option<String> {
+        match self {
+            MenuPage::Versions => None,
+            MenuPage::Tracks(page) => PickerCore::title_of(page),
+        }
+    }
+}
+
+/// **The state only a hero control's menu has**: the glass it grows out of its button as (`Popover`) and
+/// the content of the pages its rows open: Select Version's versions and Audio & Subtitles' tracks, of
+/// the page the menu hangs off, read when the menu was built (the SAME pages the standalone panels
+/// show, built by the same code, `plx_appkit::version_list` and `plx_appkit::preplay_tracks`). One
+/// value, so the menu has all of it or none: a tile's menu is none of it.
+///
+/// The glass is `Popover`'s Closed / Open / Closing. The page stack and the card's motion are the
+/// menu's own ([`ItemMenuScreen::pages`], [`ItemMenuScreen::motion`]): a push or a pop only changes the
+/// page and retargets the card; it never touches the glass's phase, and a menu that is `Closing`
+/// takes no input, so a page cannot be pushed while the glass drains.
+struct Hero {
+    popover: Popover,
+    /// The page's versions and the one Play takes now.
+    versions: Vec<MediaVersion>,
+    taken: Option<plx_plex::plex::MediaId>,
+    /// Whether a playback driver was composed; without one every version row is disabled.
+    can_play: bool,
+    tracks: PickerCore,
+}
+
+impl Hero {
+    fn new(sid: plx_plex::plex::ServerId, rk: &str) -> Self {
+        Self {
+            // the control's focused face is a near-white fill: the close's blob whitens toward it
+            popover: Popover::new().morphing().opener_fill(theme::ACCENT),
+            versions: Vec::new(),
+            taken: None,
+            can_play: true,
+            tracks: PickerCore::new(crate::registry::empty_tracks(sid, rk)),
+        }
+    }
+}
+
+/// What the menu's ROOT rows are built from besides its argument, read when it opened (so a pop can build
+/// them again exactly as they were): a card's cached trailer and the deck-press preference.
+struct RootInputs {
+    trailer: Option<plx_data::metadata::Extra>,
+    deck_press: DeckPress,
+}
+
+/// **What this menu's pages are built from**, borrowed field by field of [`ItemMenuScreen`] (the
+/// `source!` macro) so a push or a pop can hold the page stack, the form and the motion mutably while the
+/// page is built. The rows of every page, the root's included, come out of here and nowhere else.
+struct PageSource<'a> {
+    arg: &'a ItemMenuArg,
+    face: Option<&'a watchlist::Face>,
+    root: &'a RootInputs,
+    hero: Option<&'a Hero>,
+}
+
+macro_rules! source {
+    ($menu:expr) => {
+        PageSource { arg: &$menu.arg, face: $menu.face.as_ref(), root: &$menu.root, hero: $menu.hero.as_ref() }
+    };
+}
+
+impl PageSource<'_> {
+    /// The menu's own rows, by what it is about.
+    fn root_form(&self) -> ItemForm {
+        let arg = self.arg;
+        match &arg.kind {
+            ItemMenuKind::WatchlistAdd { hex } => build_watchlist_add(*hex),
+            ItemMenuKind::Card { row, from_deck } => {
+                // A Watchlist tile with a reachable copy is a card of that copy, and Remove joins it.
+                let remove = arg.catalog.as_ref().map(|c| c.guid.as_str());
+                build_card(row, *from_deck, self.root.deck_press, self.root.trailer.as_ref(), remove, self.face)
+            }
+            ItemMenuKind::Episode { mark, versions } => build_episode(&arg.rk, *mark, versions, self.face),
+            ItemMenuKind::Season { mark, .. } => build_season(&arg.rk, *mark, self.face),
+            ItemMenuKind::HeroOverflow { rows, .. } => build_hero_overflow(rows),
+            ItemMenuKind::Catalog { state } => {
+                let guid = arg.catalog.as_ref().map_or("", |c| c.guid.as_str());
+                let kind = arg.catalog.as_ref().map_or(plx_data::watchlist::model::Kind::Movie, |c| c.kind);
+                // A Watchlist tile is on the list by definition; a face says otherwise.
+                let member = self.face.map_or(plx_data::catalog::Membership::On, |f| f.member);
+                build_catalog(*state, kind, &arg.rk, guid, member)
+            }
+        }
+    }
+
+    /// What Select Version lists: the versions, the one Play takes now (the check mark) and whether a
+    /// playback driver can take one. A hero menu read them off its page when it opened; a tile's menu
+    /// lists the versions of its item, the profile's choice else what plays unasked.
+    fn versions(&self) -> (&[MediaVersion], Option<plx_plex::plex::MediaId>, bool) {
+        if let Some(hero) = self.hero {
+            return (&hero.versions, hero.taken, hero.can_play);
+        }
+        let versions: &[MediaVersion] = match &self.arg.kind {
+            ItemMenuKind::Card { row, .. } => &row.versions,
+            ItemMenuKind::Episode { versions, .. } => versions,
+            _ => &[],
+        };
+        let chosen = plx_media::route::chosen_version(plx_media::route::item_sid(self.arg.sid), &self.arg.rk);
+        (versions, plx_media::route::taken_version(versions, chosen), true)
+    }
+
+    /// The rows of `page` (`None`: the menu's own), by the code the standalone panels use.
+    fn form(&self, page: Option<MenuPage>) -> ItemForm {
+        match page {
+            None => self.root_form(),
+            Some(MenuPage::Versions) => {
+                let (versions, taken, can_play) = self.versions();
+                build_versions(&self.arg.rk, versions, taken, can_play)
+            }
+            Some(MenuPage::Tracks(page)) => self.hero.map_or_else(Form::new, |hero| {
+                hero.tracks.page_form(page).map(|b| {
+                    let id = ItemRow::Pick(b.id);
+                    Some(plx_ui::form::Binding {
+                        key: id.key(),
+                        id,
+                        // a drill-in is the menu's to execute (`Action::Pick` -> its page), not the form's
+                        kind: match b.kind {
+                            RowKind::Nav(_) => RowKind::Button,
+                            RowKind::Toggle => RowKind::Toggle,
+                            RowKind::Choice => RowKind::Choice,
+                            RowKind::Button => RowKind::Button,
+                        },
+                        action: Action::Pick(b.id),
+                        disabled: b.disabled,
+                    })
+                })
+            }),
+        }
+    }
+
+    /// Where focus opens on `page`: the check mark's row, so the viewer sees what is chosen.
+    fn initial(&self, page: MenuPage) -> Option<ItemRow> {
+        match page {
+            MenuPage::Versions => {
+                let (versions, taken, _) = self.versions();
+                let n = taken.and_then(|id| versions.iter().position(|v| v.id == id))?;
+                Some(ItemRow::Version(n as u16))
+            }
+            MenuPage::Tracks(page) => self.hero?.tracks.page_initial(page).map(ItemRow::Pick),
+        }
+    }
+
+    /// `page` ready to show ([`page_stack::Built`]): its rows and its title band. The size class is the
+    /// menu's, compact, whatever page shows (`TableView::compact`: one per glass).
+    fn built(&self, page: Option<MenuPage>) -> page_stack::Built<ItemRow, Action, Infallible> {
+        page_stack::Built { form: self.form(page), title: page.and_then(MenuPage::title) }
+    }
+}
+
 pub struct ItemMenuScreen {
     entry: EntryId,
     arg: ItemMenuArg,
@@ -733,6 +937,15 @@ pub struct ItemMenuScreen {
     /// The Watchlist subject captured when the menu opened; `None` omits the membership row
     /// (plex.tv unreachable, or the item has no catalog guid). See [`watchlist::Face`].
     face: Option<watchlist::Face>,
+    /// The pages pushed over the rows (Select Version, Audio & Subtitles): empty = the rows. The ONE stack
+    /// of every menu, a tile's Select Version and a hero control's pages alike.
+    pages: PageStack<MenuPage, ItemRow>,
+    /// The card's resize and the pages' slide ([`PanelMotion`]), toward the page showing.
+    motion: PanelMotion,
+    root: RootInputs,
+    /// A hero control's menu: its glass and page content. `None` for a tile's menu, which keeps the
+    /// container's appear.
+    hero: Option<Hero>,
 }
 
 /// Play Trailer only when the already-loaded Detail is this movie/show and already has a trailer.
@@ -754,6 +967,7 @@ fn cached_trailer(
 
 impl ItemMenuScreen {
     pub fn new(entry: EntryId, arg: ItemMenuArg) -> Self {
+        let hero = matches!(arg.kind, ItemMenuKind::HeroOverflow { .. }).then(|| Hero::new(arg.sid, &arg.rk));
         Self {
             entry,
             arg,
@@ -761,7 +975,16 @@ impl ItemMenuScreen {
             repeat: RepeatGate::IDLE,
             built: false,
             face: None,
+            pages: PageStack::new(),
+            motion: PanelMotion::new().spring_all_edges(),
+            root: RootInputs { trailer: None, deck_press: DeckPress::Play },
+            hero,
         }
+    }
+
+    /// The opener's focused pill: where a hero control's menu grows from and drains back into.
+    fn pill(&self) -> Rect {
+        plx_ui::detail_layout::hero_pill(self.arg.anchor)
     }
 
     /// The Watchlist subject the app captured at open (identity and membership as read THEN).
@@ -778,25 +1001,21 @@ impl ItemMenuScreen {
             return;
         }
         self.built = true;
-        let form = match &self.arg.kind {
-            ItemMenuKind::WatchlistAdd { hex } => build_watchlist_add(*hex),
-            ItemMenuKind::Card { row, from_deck } => {
-                let trailer = cached_trailer(self.arg.sid, row, meta);
-                // A Watchlist tile with a reachable copy is a card of that copy, and Remove joins it.
-                let remove = self.arg.catalog.as_ref().map(|c| c.guid.as_str());
-                build_card(row, *from_deck, deck_press, trailer.as_ref(), remove, self.face.as_ref())
-            }
-            ItemMenuKind::Episode { mark, versions } => build_episode(&self.arg.rk, *mark, versions, self.face.as_ref()),
-            ItemMenuKind::Season { mark, .. } => build_season(&self.arg.rk, *mark, self.face.as_ref()),
-            ItemMenuKind::HeroOverflow { rows, .. } => build_hero_overflow(rows),
-            ItemMenuKind::Catalog { state } => {
-                let guid = self.arg.catalog.as_ref().map_or("", |c| c.guid.as_str());
-                let kind = self.arg.catalog.as_ref().map_or(plx_data::watchlist::model::Kind::Movie, |c| c.kind);
-                // A Watchlist tile is on the list by definition; a face says otherwise.
-                let member = self.face.as_ref().map_or(plx_data::catalog::Membership::On, |f| f.member);
-                build_catalog(*state, kind, &self.arg.rk, guid, member)
-            }
+        self.root = RootInputs {
+            trailer: match &self.arg.kind {
+                ItemMenuKind::Card { row, .. } => cached_trailer(self.arg.sid, row, meta),
+                _ => None,
+            },
+            deck_press,
         };
+        // the pages a hero control's rows open, read once off the page the menu hangs off (as the standalone
+        // panels read theirs at mount): by the PAGE's key, not the item Play acts on, which on a show page
+        // is its on-deck episode
+        if let (Some(hero), ItemMenuKind::HeroOverflow { page, .. }) = (&mut self.hero, &self.arg.kind) {
+            (hero.versions, hero.taken) = crate::registry::hero_page_versions(meta, self.arg.sid, page);
+            hero.tracks = PickerCore::new(crate::registry::page_preplay_tracks(meta, self.arg.sid, page));
+        }
+        let form = source!(self).root_form();
         // a short list of one-line actions — BODY labels, not menu-size HEADLINE
         self.form.table.compact = true;
         self.form.set(form, None);
@@ -809,9 +1028,17 @@ impl ItemMenuScreen {
         self.form.opening_key().map_or(0, |k| k.0)
     }
 
+    /// The page showing, laid out: over the control a hero menu grows out of (the one hero rule,
+    /// [`plx_ui::detail_layout::hero_panel_rect`]), beside the card of a tile's menu. The natural rect
+    /// the card's motion springs to when the page changes.
     fn frame(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
-        let [x, y, w, h] = self.arg.anchor.map(f32::from_bits);
-        panel_at(Rect::new(x, y, w, h), self.form.table.measured_width(measure), self.form.table.measured_height())
+        self.motion.natural(self.form.table.layout_rev(), || {
+            if self.hero.is_some() {
+                return plx_ui::detail_layout::hero_panel_rect(&self.form.table, self.arg.anchor, measure);
+            }
+            let [x, y, w, h] = self.arg.anchor.map(f32::from_bits);
+            panel_at(Rect::new(x, y, w, h), self.form.table.measured_width(measure), self.form.table.measured_height())
+        })
     }
 
     /// The rows a focus stop exists for — every bound row. The separator is unfocusable, exactly
@@ -824,34 +1051,122 @@ impl ItemMenuScreen {
         self.form.step_key(RowKey(from), delta).map(|k| k.0)
     }
 
+    /// The card as drawn this frame: the page's natural rect, followed by the card's resize motion.
+    fn shown(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
+        self.motion.shown(self.frame(measure))
+    }
+
+    /// The popover's glass, on a hero menu.
+    fn glass(&self) -> Option<&Popover> {
+        self.hero.as_ref().map(|h| &h.popover)
+    }
+
+    /// The page a hero control's row opens inside this menu, when the menu has it: Select Version
+    /// when the page has versions, Audio & Subtitles when it has tracks to pick. `None`: the control's
+    /// own path, which closes the menu and hands the control back to the page.
+    fn page_for(&self, ctl: HeroCtl) -> Option<MenuPage> {
+        let hero = self.hero.as_ref()?;
+        match ctl {
+            HeroCtl::Version => (!hero.versions.is_empty()).then_some(MenuPage::Versions),
+            HeroCtl::AudioSubtitles => (!hero.tracks.is_empty()).then_some(MenuPage::Tracks(PickPage::Root)),
+            _ => None,
+        }
+    }
+
+    /// OK on a row that opens a page ([`page_stack::push_page`], the one push): the card resizes toward
+    /// the page's rect and the pages slide meanwhile.
+    fn push_page(&mut self, page: MenuPage, opener: ItemRow) {
+        let src = source!(self);
+        let (built, initial) = (src.built(Some(page)), src.initial(page));
+        page_stack::push_page(&mut self.pages, &mut self.form, &mut self.motion, page, opener, initial.as_ref(), built);
+    }
+
+    /// BACK, or a click on the title band: pop a page when there is one ([`page_stack::pop_page`]), else
+    /// the menu closes (the glass of a hero menu drains into its button).
+    fn back<H: AppLike>(&mut self, fx: &mut Effects<'_, H>) {
+        let src = source!(self);
+        if !page_stack::pop_page(&mut self.pages, &mut self.form, &mut self.motion, |top| src.built(top)) {
+            fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
+        }
+    }
+
+    /// OK on a row of a hero control's menu: a control that has a page here pushes it, a pick on a
+    /// page acts, and any other control closes the menu and is handed back to the page that owns
+    /// the hero (its `activate_hero` is the one path: Go to Show, Play from Start, Trailer, ...).
+    fn activate_hero_menu<H: AppLike>(&mut self, elem: u32, fx: &mut Effects<'_, H>) {
+        if page_stack::is_title_key(elem) {
+            return self.back(fx);
+        }
+        let ItemMenuKind::HeroOverflow { opener, .. } = &self.arg.kind else { return };
+        let opener = *opener;
+        let Some(index) = self.form.index_of_key(RowKey(elem)) else {
+            // a key that names no row only dismisses
+            fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
+            return;
+        };
+        let row = self.form.id_at(index).copied();
+        // OK on a DISABLED row does nothing and the menu stays up (no playback driver: every version)
+        let Some(activation) = self.form.activate(index) else { return };
+        let act = match activation {
+            Activation::Action(act) => act,
+            Activation::Push(never) => match never {},
+        };
+        match (act, row) {
+            (Action::Hero(ctl), Some(row)) => match self.page_for(ctl) {
+                Some(page) => self.push_page(page, row),
+                None => {
+                    fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
+                    fx.push(Fx::Deliver(
+                        MachineId::Instance(opener),
+                        Delivery::Screen(ScreenEvent::App(AppMsg::HeroCtl { ctl, anchor: self.arg.anchor })),
+                    ));
+                }
+            },
+            // A pick in Select Version closes the whole menu and reports the choice to the page, which
+            // selects it (the standalone panel's own commit); focus returns to the `…` with the glass.
+            (Action::SelectVersion { media, .. }, _) => {
+                fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
+                fx.push(Fx::Deliver(
+                    MachineId::Instance(opener),
+                    Delivery::Screen(ScreenEvent::App(AppMsg::SelectVersion(media))),
+                ));
+            }
+            (Action::Pick(pick), Some(row)) => self.pick(pick, row, fx),
+            _ => fx.push(Fx::Nav(NavOp::Dismiss(self.entry))),
+        }
+    }
+
+    /// A row of an Audio & Subtitles page: a drill-in pushes its page; a track is picked exactly as
+    /// the standalone panel picks it (the page rebuilds with the check moved, the menu stays up, the
+    /// store keeps the pick for the next start and the loop commits it to the server).
+    fn pick<H: AppLike>(&mut self, pick: PickRow, row: ItemRow, fx: &mut Effects<'_, H>) {
+        let what = tracks::pick_of(pick);
+        if let Pick::Open(page) = what {
+            return self.push_page(MenuPage::Tracks(page), row);
+        }
+        let Some(hero) = &mut self.hero else { return };
+        let Some(sel) = hero.tracks.select(what) else { return };
+        let picked = hero.tracks.tracks().clone();
+        let form = source!(self).form(self.pages.top());
+        self.form.set_sliding(form, Some(&row));
+        commit_pick(fx, picked, sel, PreplaySource::Page);
+    }
+
     /// Emit dismissal before the captured action. Navigation is parked until commit, while the
     /// action yields to the app runner; neither needs to read the surface after activation.
     fn activate<H: AppLike>(&mut self, elem: u32, fx: &mut Effects<'_, H>) {
-        let act = self
-            .form
-            .index_of_key(RowKey(elem))
-            .and_then(|i| self.form.activate(i))
-            .map(|a| match a {
-                Activation::Action(act) => act,
-                Activation::Push(never) => match never {},
-            });
-        // The hero's … menu is its round buttons' overflow: a row is a [`HeroCtl`], and the menu closes and
-        // hands it back to the page that owns the hero, anchored on the rect it hung off. The page's
-        // `activate_hero` is the one path (Go to Show, Play from Start, the versions list and the
-        // picker are its panels, never a second copy inside this menu).
-        if let ItemMenuKind::HeroOverflow { opener, .. } = &self.arg.kind {
-            fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
-            if let Some(Action::Hero(ctl)) = act {
-                fx.push(Fx::Deliver(
-                    MachineId::Instance(*opener),
-                    Delivery::Screen(ScreenEvent::App(AppMsg::HeroCtl { ctl, anchor: self.arg.anchor })),
-                ));
-            }
-            return;
+        if self.hero.is_some() {
+            return self.activate_hero_menu(elem, fx);
         }
-        if let Some(Action::ChooseVersion(rk)) = &act {
-            self.show_versions(rk);
-            return;
+        let index = self.form.index_of_key(RowKey(elem));
+        let row = index.and_then(|i| self.form.id_at(i).copied());
+        let act = index.and_then(|i| self.form.activate(i)).map(|a| match a {
+            Activation::Action(act) => act,
+            Activation::Push(never) => match never {},
+        });
+        // Select Version is a page of this menu, as it is of a hero control's
+        if let (Some(Action::ChooseVersion(_)), Some(row)) = (&act, row) {
+            return self.push_page(MenuPage::Versions, row);
         }
         // Every arm of the dispatch turns an rk into a blocking fetch, a scrobble or a play; an
         // empty one would fetch nothing and land on a blank page. `build` already refuses to offer
@@ -874,29 +1189,6 @@ impl ItemMenuScreen {
                 from_home: self.arg.from_home,
             })));
         }
-    }
-
-    /// The versions this menu's item was opened with (empty when it has fewer than two).
-    fn versions(&self) -> &[MediaVersion] {
-        match &self.arg.kind {
-            ItemMenuKind::Card { row, .. } => &row.versions,
-            ItemMenuKind::Episode { versions, .. } => versions,
-            _ => &[],
-        }
-    }
-
-    /// Replace the rows with the Select Version page, in the same panel. The focused row is gone
-    /// from the new form, so the engine's reconcile seats focus on its opening row, the one that
-    /// wears the check mark: the version Play takes now (the profile's choice, else what plays
-    /// unasked).
-    fn show_versions(&mut self, rk: &str) {
-        let versions = self.versions();
-        let chosen = plx_media::route::chosen_version(plx_media::route::item_sid(self.arg.sid), rk);
-        let checked = plx_media::route::taken_version(versions, chosen);
-        let opening = checked.and_then(|id| versions.iter().position(|v| v.id == id)).map(|n| ItemRow::Version(n as u16));
-        let form = build_versions(rk, versions, checked);
-        self.form.table.compact = false;
-        self.form.set(form, opening.as_ref());
     }
 
     /// The highlighted row, for the focus probe — a READ of the cursor the engine moves.
@@ -925,12 +1217,29 @@ impl<H: AppLike + crate::registry::MetadataLike + crate::registry::ScreenInputsL
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
         match ev {
             ScreenEvent::Mount => {
+                let pill = self.pill();
+                if let Some(hero) = &mut self.hero {
+                    hero.popover.open_from(Some(pill));
+                    hero.can_play = H::screen_inputs(cx).can_play();
+                }
                 self.build_rows(H::metadata(cx), H::screen_inputs(cx).preference::<plx_plex::plex::session::DeckPressPref>());
                 // The menu is the thing the Home hold hint teaches; once ANY card screen has
                 // opened one the lesson retires for this input owner, through its typed effect.
                 fx.push(Fx::HoldHint(plx_machine::machine::HoldHintEvent::Learned));
             }
+            // However the surface was dismissed (BACK, a pick, the host's own press), the glass
+            // runs the morph back into its control.
+            ScreenEvent::Closing => {
+                if let Some(hero) = &mut self.hero {
+                    hero.popover.dismiss();
+                }
+            }
             ScreenEvent::Tick(tick) => {
+                let natural = self.frame(cx.measure);
+                self.motion.step(tick.dt(), natural);
+                if let Some(hero) = &mut self.hero {
+                    hero.popover.update(tick.dt());
+                }
                 self.form.table.sel = cx
                     .focus
                     .current
@@ -955,7 +1264,9 @@ impl<H: AppLike + crate::registry::MetadataLike + crate::registry::ScreenInputsL
                     return Handled::No;
                 };
                 if key == Key::Back && edge == Edge::Down {
-                    fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
+                    // a hero menu on a page goes back to the page beneath; at its rows (and on every
+                    // tile's menu) BACK closes
+                    self.back(fx);
                     return Handled::Yes;
                 }
                 // **The hold-to-move cadence, applied HERE and nowhere else.** It was
@@ -989,7 +1300,7 @@ impl<H: AppLike> Focusable<H> for ItemMenuScreen {
             seat: Seat::Remembered,
             reachable: AxisMask::BOTH,
             edge: [EdgeRule::Stop; 4],
-            extent: self.frame(cx.measure),
+            extent: self.shown(cx.measure),
             len: self.focusable().count(),
             elem: ElemKind::Bare,
         });
@@ -1012,23 +1323,27 @@ impl<H: AppLike> Focusable<H> for ItemMenuScreen {
         }
     }
     fn place(&self, elem: &u32, cx: &Cx<'_, H>, _: At) -> Option<Placed> {
+        let natural = self.frame(cx.measure);
+        let dx = self.motion.live_dx();
+        if *elem == page_stack::TITLE_KEY {
+            // the title band's pointer-only key: a click on it goes back
+            let band = self.form.table.title_rect(natural)?;
+            return Some(page_stack::panel_stop(band, self.shown(cx.measure), dx, None));
+        }
         <Self as Focusable<H>>::group_of(self, elem, cx)?;
         let index = self.form.index_of_key(RowKey(*elem))?;
-        let rect = self.form.table.row_frame(self.frame(cx.measure), index as i32)?;
-        Some(Placed {
-            rect,
-            rest_rect: rect,
-            clip: self.frame(cx.measure),
-            index: Some(index as u32),
-        })
+        let rest = self.form.table.row_frame(natural, index as i32)?;
+        Some(page_stack::panel_stop(rest, self.shown(cx.measure), dx, Some(index as u32)))
     }
     fn reconcile(&self, want: FocusKey<u32>, cx: &Cx<'_, H>) -> FocusKey<u32> {
         if <Self as Focusable<H>>::group_of(self, &want.elem, cx).is_some() {
             want
         } else {
+            // a page that was just left for another (a hero menu's pop): the ring goes to the row the
+            // form restored, the one that opened the page, as a seat does
             FocusKey {
                 entry: self.entry,
-                elem: self.opening(),
+                elem: self.form.selected_key().map_or_else(|| self.opening(), |k| k.0),
             }
         }
     }
@@ -1049,6 +1364,13 @@ impl<H: AppLike> Focusable<H> for ItemMenuScreen {
         let path = match *self.form.id_at(index)? {
             ItemRow::Version(n) => A11yPath::new().name("version").index(usize::from(n)),
             ItemRow::Hero(ctl) => A11yPath::new().name("hero").name(ctl.a11y_name()),
+            ItemRow::Pick(pick) => match pick {
+                PickRow::OpenAudio => A11yPath::new().name("tracks").name("audio"),
+                PickRow::OpenSubtitles => A11yPath::new().name("tracks").name("subtitles"),
+                PickRow::SubOff => A11yPath::new().name("tracks").name("subtitle").name("off"),
+                PickRow::Audio(i) => A11yPath::new().name("tracks").name("audio").index(i),
+                PickRow::Sub(i) => A11yPath::new().name("tracks").name("subtitle").index(i),
+            },
             row => A11yPath::new().name(row.a11y_name()),
         };
         let a = A11y::new(path, Role::Row);
@@ -1068,6 +1390,17 @@ impl<H: AppLike> Focusable<H> for ItemMenuScreen {
 impl<H: AppLike + crate::registry::MetadataLike + crate::registry::ScreenInputsLike> Screen<H> for ItemMenuScreen {
     fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
         Some(ItemMenuScreen::opener(self))
+    }
+    /// A hero control's menu CONSUMES its opener (`popover_morph`): gone while the glass stands,
+    /// back as it drains. A tile's card stays whole above the dim.
+    fn opener_alpha(&self) -> f32 {
+        self.glass().map_or(1.0, Popover::opener_alpha)
+    }
+    /// The droplet has drained into the control: the surface and the lift end on this frame (a hero
+    /// menu closes by BACK or a pick, never by handing off to a panel: Select Version and Audio &
+    /// Subtitles are its own pages). `false` for a tile's menu, whose close is the container's.
+    fn handed_back(&self) -> bool {
+        self.glass().is_some_and(Popover::handed_back)
     }
     fn as_any(&self) -> Option<&dyn std::any::Any> {
         Some(self)
@@ -1095,15 +1428,35 @@ impl<H: AppLike + crate::registry::MetadataLike + crate::registry::ScreenInputsL
         // The COMPACT role — the lightest dim in `theme::underlay`: the design's whole point is that
         // the card and the shelf stay legible behind the popover, so this recesses them rather
         // than blanking them.
-        Scrim::dim(theme::underlay::DIM_COMPACT)
+        match self.glass() {
+            Some(pop) => pop.dim(theme::underlay::DIM_COMPACT),
+            None => Scrim::dim(theme::underlay::DIM_COMPACT),
+        }
     }
     fn prepare(&mut self, _: &mut Budget, _: &Cx<'_, H>) {}
+    /// The card is moving to a page's rect or the pages are sliding: a pointer that is held down
+    /// waits (`Screen::pointer_held`), as the standalone panel's does.
+    fn pointer_held(&self) -> bool {
+        self.motion.transitioning()
+    }
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
         let p = f.painter.alpha(f.page_alpha);
         let r = self.frame(f.measure);
-        plx_ui::widgets::panel_ground(p, r, PANEL_RAD, f.underlay, plx_ui::widgets::Ground::Menu);
-        self.form.table.draw(p, r, f.measure);
-        for elem in self.focusable().collect::<Vec<_>>() {
+        // The card is the page's SHOWN rect (it resizes from page to page) and the pages slide in it.
+        let shown = self.motion.shown(r);
+        if let Some(hero) = &self.hero {
+            // The glass and the rows ride the MORPH (`Popover::panel` / `morph_rows`), not the
+            // container's appear: the panel begins and ends as the control it grows from.
+            let pop = &hero.popover;
+            let m = pop.content_painter_on(f.painter.alpha(f.nav_page_alpha), 0.0);
+            pop.panel(m, shown, PANEL_RAD, f.underlay, plx_ui::widgets::Ground::Menu);
+            pop.morph_rows(m, shown, PANEL_RAD, |m| self.motion.draw_rows(m, r, &self.form.table, f.measure));
+        } else {
+            plx_ui::widgets::panel_ground(p, shown, PANEL_RAD, f.underlay, plx_ui::widgets::Ground::Menu);
+            self.motion.draw_rows(p, r, &self.form.table, f.measure);
+        }
+        let title = self.form.table.title_rect(r).map(|_| page_stack::TITLE_KEY);
+        for elem in self.focusable().chain(title).collect::<Vec<_>>() {
             if let Some(placed) = <Self as Focusable<H>>::place(self, &elem, f.cx, At::Drawn) {
                 f.stop(
                     p,
@@ -1115,7 +1468,8 @@ impl<H: AppLike + crate::registry::MetadataLike + crate::registry::ScreenInputsL
                         rect: placed.rect,
                         rest_rect: placed.rest_rect,
                         clip: placed.clip,
-                        hover: Hover::Focus,
+                        // the title band is pointer-only: a click goes back, a hover seats nothing
+                        hover: if elem == page_stack::TITLE_KEY { Hover::Ignore } else { Hover::Focus },
                         activate: Activate::Immediate,
                     },
                 );
@@ -1136,6 +1490,7 @@ impl LogicalState for ItemMenuScreen {
             c.option(self.form.binding_at(i).map(|b| &b.action), |c, a| a.write(c));
         }
         c.u32(self.form.table.sel as u32);
+        c.u32(self.pages.len() as u32);
         self.form.table.write_motion(c);
     }
     fn probe(&self, out: &mut String) {
@@ -1158,6 +1513,8 @@ impl LogicalState for ItemMenuScreen {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::registry::ContentReq;
+    use plx_data::stores::StoreId;
 
     /// A catalog row of `kind` in a given watch state, with the flags a real `pms::parse_item`
     /// would set — which is the part that matters here, since the menu's row set is derived from
@@ -2660,40 +3017,6 @@ pub(crate) mod tests {
         plx_ui::table::assert_no_fit_failures(&out);
     }
 
-    /// **Audio & Subtitles under …** closes the menu and hands the request back to the page that opened
-    /// it, anchored on the rect the menu hung off: the picker is the page's panel, not a second copy
-    /// inside the menu, so nothing reaches the app runner.
-    #[test]
-    fn every_overflow_row_closes_the_menu_and_hands_its_control_back_to_the_page() {
-        let anchor = [10.0f32, 20.0, 64.0, 64.0].map(f32::to_bits);
-        let rows = vec![HeroCtl::GoToShow, HeroCtl::Restart, HeroCtl::Version, HeroCtl::AudioSubtitles];
-        for (n, want) in rows.iter().enumerate() {
-            let mut arg = card_arg(&item(3, PosterMark::None), false);
-            arg.anchor = anchor;
-            arg.kind = ItemMenuKind::HeroOverflow { rows: rows.clone(), opener: plx_machine::machine::InstanceId(4) };
-            let mut s = ItemMenuScreen::new(EntryId(7), arg);
-            s.built = true;
-            s.form.set(build_hero_overflow(&rows), None);
-            let elem = s.form.key_at(n).expect("a row").0;
-            let mut out = Vec::new();
-            let mut present = plx_machine::present::Present::new();
-            let mut fx = Effects::new(&mut out, plx_machine::machine::MachineId::Instance(plx_machine::machine::InstanceId(8)), &mut present);
-            s.activate::<HostFixture>(elem, &mut fx);
-            assert!(out.iter().any(|e| matches!(e.fx, Fx::Nav(NavOp::Dismiss(EntryId(7))))), "{want:?}: the menu closes");
-            assert!(
-                out.iter().any(|e| matches!(
-                    &e.fx,
-                    Fx::Deliver(
-                        MachineId::Instance(plx_machine::machine::InstanceId(4)),
-                        Delivery::Screen(ScreenEvent::App(AppMsg::HeroCtl { ctl, anchor: got })),
-                    ) if ctl == want && *got == anchor
-                )),
-                "{want:?}: the opening page is handed the control on the menu's anchor"
-            );
-            assert!(!out.iter().any(|e| matches!(e.fx, Fx::App(AppFx::ItemMenu(_)))), "nothing reaches the app runner");
-        }
-    }
-
     /// A leaf with three versions, its card menu built (so Play Version is a row).
     fn leaf_menu_with_versions() -> ItemMenuScreen {
         let m = versioned(3);
@@ -2828,5 +3151,442 @@ pub(crate) mod tests {
         for (id, subject) in &rows {
             assert_eq!(*subject, None, "{id}: a Catalog menu has no ratingKey to name");
         }
+    }
+
+    // ---- the hero control's morph ------------------------------------------------------------
+
+    /// The Detail hero's `…` menu, built over a `…` button at `(600, 760)`.
+    fn hero_menu() -> ItemMenuScreen {
+        let rows = vec![HeroCtl::GoToShow, HeroCtl::Restart, HeroCtl::Version, HeroCtl::AudioSubtitles];
+        let mut arg = card_arg(&item(3, PosterMark::None), false);
+        arg.anchor = [600.0f32, 760.0, 64.0, 64.0].map(f32::to_bits);
+        arg.kind = ItemMenuKind::HeroOverflow { rows, opener: plx_machine::machine::InstanceId(4), page: arg.rk.clone() };
+        let mut menu = ItemMenuScreen::new(EntryId(7), arg);
+        menu.build_rows(test_store().view(), DeckPress::Play);
+        menu
+    }
+
+    /// The glass the surface drew this frame: the panel ground (a `rect_rimmed`, tag 8, on a host with
+    /// no frozen field).
+    fn glass(menu: &mut ItemMenuScreen) -> Rect {
+        with_cx(|cx| {
+            plx_ui::draw_census::capture(|| {
+                let mut f = DrawFrame::new(cx, plx_ui::Painter::recording());
+                Screen::<HostFixture>::draw(menu, &mut f);
+            })
+        })
+        .into_iter()
+        .find_map(|(tag, r)| (tag == 8).then_some(r))
+        .unwrap_or_default()
+    }
+
+    fn tick(menu: &mut ItemMenuScreen, ms: &mut u32, n: usize) {
+        for _ in 0..n {
+            *ms += 16;
+            step_ev(menu, &ScreenEvent::Tick(Tick { ms: *ms, dt_us: 16_667 }));
+        }
+    }
+
+    /// **The hero's `…` menu GROWS out of the button** (`Popover::morphing` + `open_from`, the path
+    /// every header menu takes), and BACK (any dismissal) runs the morph home. Red while the panel
+    /// was laid beside the button at its final rect on its first frame and only appeared: three
+    /// frames in, the glass is still the button's size or a little over; the settled panel is exactly
+    /// `frame()`, and it COVERS the button (the opener is consumed: the lift draws it at the morph's
+    /// `opener_alpha`, gone while the glass stands, whole again once the droplet has drained into it).
+    #[test]
+    fn the_hero_menu_grows_out_of_its_button_settles_on_its_frame_and_runs_home_on_back() {
+        let _guard = plx_base::testlock::serial();
+        let mut menu = hero_menu();
+        step_ev(&mut menu, &ScreenEvent::Mount);
+        let settled = menu.frame(&FixtureMeasure);
+        let pill = menu.pill();
+        assert!(
+            settled.x <= pill.x && settled.y <= pill.y && settled.x + settled.w >= pill.x + pill.w && settled.y + settled.h >= pill.y + pill.h,
+            "the settled panel {settled:?} covers the button it grew out of {pill:?}"
+        );
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&menu), 1.0, "frame 0 is the button whole");
+        assert!(Screen::<HostFixture>::scrim(&menu).ramp.is_some(), "the dim follows the morph");
+        let mut ms = 0;
+        tick(&mut menu, &mut ms, 3);
+        let early = glass(&mut menu);
+        assert!(
+            early.w < settled.w - 20.0 && early.h < settled.h - 20.0,
+            "three frames in the glass is still growing out of the button ({early:?}), not laid at {settled:?}"
+        );
+        tick(&mut menu, &mut ms, 6);
+        assert!(Screen::<HostFixture>::opener_alpha(&menu) < 0.5, "the button is consumed as the glass detaches from it");
+        tick(&mut menu, &mut ms, 90);
+        let end = glass(&mut menu);
+        assert!(
+            (end.x - settled.x).abs() < 0.5 && (end.y - settled.y).abs() < 0.5
+                && (end.w - settled.w).abs() < 0.5 && (end.h - settled.h).abs() < 0.5,
+            "the settled panel is the frame {settled:?}, drew {end:?}"
+        );
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&menu), 0.0, "the button stays consumed while the menu stands");
+        assert!(!Screen::<HostFixture>::handed_back(&menu));
+        // BACK: the dispatcher delivers `Closing`; the glass drains back into the button
+        step_ev(&mut menu, &ScreenEvent::Closing);
+        tick(&mut menu, &mut ms, 3);
+        let closing = glass(&mut menu);
+        assert!(closing.w < settled.w - 20.0, "three frames into the close the glass is narrowing into the button ({closing:?})");
+        assert!(!Screen::<HostFixture>::handed_back(&menu), "the droplet is still draining");
+        tick(&mut menu, &mut ms, 60);
+        assert!(Screen::<HostFixture>::handed_back(&menu), "the droplet has drained into the button: the surface retires");
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&menu), 1.0, "the button is whole again");
+    }
+
+    /// **A pointer held down waits while the card moves or the pages slide** (`Screen::pointer_held`, as
+    /// the standalone panel's does): idle at the rows, held while a pushed page slides in, idle again once
+    /// it has settled. Red while the menu answered `false` throughout.
+    #[test]
+    fn a_pointer_waits_while_a_page_slides() {
+        let _guard = plx_base::testlock::serial();
+        let mut menu = hero_menu_with_pages();
+        step_ev(&mut menu, &ScreenEvent::Mount);
+        let mut ms = 0;
+        tick(&mut menu, &mut ms, 90);
+        assert!(!Screen::<HostFixture>::pointer_held(&menu), "the open menu at rest takes pointers");
+        press_row(&mut menu, ItemRow::Hero(HeroCtl::Version));
+        assert!(Screen::<HostFixture>::pointer_held(&menu), "a page is sliding in");
+        tick(&mut menu, &mut ms, 90);
+        assert!(!Screen::<HostFixture>::pointer_held(&menu), "the page has settled");
+        press_back(&mut menu);
+        assert!(Screen::<HostFixture>::pointer_held(&menu), "the page slides back out");
+    }
+
+    /// **A page pushed into a menu takes the menu's size class** (`TableView::compact`, one per glass):
+    /// Select Version and Audio & Subtitles, in a hero `…` menu and in a tile's menu, lay out BODY regular
+    /// like the rows beneath them, on the way in and again after BACK. Red while a page was built full
+    /// size (HEADLINE bold).
+    #[test]
+    fn pages_pushed_into_a_menu_lay_out_body_regular() {
+        let _guard = plx_base::testlock::serial();
+        let body_regular = (plx_ui::theme::size::BODY, false);
+        let mut hero = hero_menu_with_pages();
+        assert_eq!(hero.form.table.label_style(), body_regular, "the rows");
+        for ctl in [HeroCtl::Version, HeroCtl::AudioSubtitles] {
+            press_row(&mut hero, ItemRow::Hero(ctl));
+            assert_eq!(depth(&hero), 1);
+            assert_eq!(hero.form.table.label_style(), body_regular, "{ctl:?} page of the hero menu");
+            if ctl == HeroCtl::AudioSubtitles {
+                press_row(&mut hero, ItemRow::Pick(PickRow::OpenAudio));
+                assert_eq!(hero.form.table.label_style(), body_regular, "the Audio page, one deeper");
+                press_back(&mut hero);
+            }
+            press_back(&mut hero);
+            assert_eq!(hero.form.table.label_style(), body_regular, "back on the rows");
+        }
+        let m = versioned(3);
+        let mut tile = ItemMenuScreen::new(EntryId(7), card_arg(&m, false));
+        tile.build_rows(test_store().view(), DeckPress::Play);
+        press_row(&mut tile, ItemRow::PlayVersion);
+        assert_eq!(depth(&tile), 1);
+        assert_eq!(tile.form.table.label_style(), body_regular, "Select Version in a tile's menu");
+        press_back(&mut tile);
+        assert_eq!(tile.form.table.label_style(), body_regular, "the tile's rows");
+    }
+
+    /// **A page with nothing behind it is not pushed**: a hero menu whose page offers no tracks hands
+    /// Audio & Subtitles back to the control's own path (the panel), as a page with no versions does Select
+    /// Version, never an empty list of rows with nothing to pick.
+    #[test]
+    fn a_page_with_nothing_to_pick_is_not_pushed() {
+        let _guard = plx_base::testlock::serial();
+        let mut menu = hero_menu();
+        let hero = menu.hero.as_mut().expect("a hero menu");
+        assert!(hero.versions.is_empty() && hero.tracks.is_empty(), "the page offered nothing");
+        assert_eq!(menu.page_for(HeroCtl::Version), None);
+        assert_eq!(menu.page_for(HeroCtl::AudioSubtitles), None);
+        let out = press_row(&mut menu, ItemRow::Hero(HeroCtl::AudioSubtitles));
+        assert_eq!(depth(&menu), 0, "no page was pushed");
+        assert!(dismisses(&out), "the control's own path: the menu closes and the page opens its panel");
+    }
+
+    /// **A tile's Select Version is a page of the same stack**: OK pushes it, BACK returns to the tile's
+    /// rows with focus on the row that opened it (it closed the menu before), and a version row still
+    /// reports its selection.
+    #[test]
+    fn a_tiles_select_version_is_a_page_and_back_returns_to_its_rows() {
+        let _guard = plx_base::testlock::serial();
+        let m = versioned(3);
+        let mut menu = ItemMenuScreen::new(EntryId(7), card_arg(&m, false));
+        menu.build_rows(test_store().view(), DeckPress::Play);
+        let rows: Vec<Option<Action>> = (0..menu.form.table.n_rows() as usize).map(|i| menu.form.binding_at(i).map(|b| b.action.clone())).collect();
+        let out = press_row(&mut menu, ItemRow::PlayVersion);
+        assert!(out.is_empty(), "the menu turns itself into the list: no request, no dismiss");
+        assert_eq!(depth(&menu), 1);
+        assert!(Screen::<HostFixture>::pointer_held(&menu), "the page slides in");
+        let out = press_back(&mut menu);
+        assert!(!dismisses(&out), "BACK on the page returns to the rows");
+        assert_eq!(depth(&menu), 0);
+        assert_eq!(selected(&menu), Some(ItemRow::PlayVersion.key().0), "the ring is on the row that opened the page");
+        let again: Vec<Option<Action>> = (0..menu.form.table.n_rows() as usize).map(|i| menu.form.binding_at(i).map(|b| b.action.clone())).collect();
+        assert_eq!(again, rows, "the rows are the ones the menu opened with");
+        assert!(dismisses(&press_back(&mut menu)), "BACK at the rows closes");
+    }
+
+    /// The `…` menu with the page's data loaded as `build_rows` reads it from the metadata store: three
+    /// versions (the first the one Play takes) and a two-audio, one-subtitle item.
+    fn hero_menu_with_pages() -> ItemMenuScreen {
+        let mut menu = hero_menu();
+        let stream = |id: i64, lang: &str, code: &str| plx_data::metadata::Stream {
+            id,
+            lang: lang.into(),
+            lang_code: code.into(),
+            ..plx_data::metadata::Stream::default()
+        };
+        let versions = sample_versions();
+        let taken = versions.first().map(|v| v.id);
+        let hero = menu.hero.as_mut().expect("a hero menu");
+        hero.versions = versions;
+        hero.taken = taken;
+        hero.tracks = PickerCore::new(plx_data::metadata::PreplayTracks {
+            sid: plx_plex::plex::ServerId::from_raw(1),
+            rk: "42".into(),
+            kind: "movie".into(),
+            show_rk: String::new(),
+            part: "/library/parts/9001/1/file.mkv".into(),
+            audio: vec![stream(101, "English", "eng"), stream(102, "French", "fra")],
+            subs: vec![stream(201, "English", "eng")],
+            pick: None,
+        });
+        menu
+    }
+
+    /// Run `f` against a fresh effect sink and answer what it emitted.
+    fn emitted(f: impl FnOnce(&mut Effects<'_, HostFixture>)) -> Vec<plx_machine::machine::Stamped<HostFixture>> {
+        let mut out = Vec::new();
+        let mut present = plx_machine::present::Present::new();
+        let mut fx = Effects::new(&mut out, MachineId::Instance(plx_machine::machine::InstanceId(8)), &mut present);
+        f(&mut fx);
+        drop(fx);
+        out
+    }
+
+    fn press_row(menu: &mut ItemMenuScreen, row: ItemRow) -> Vec<plx_machine::machine::Stamped<HostFixture>> {
+        let elem = row.key().0;
+        assert!(menu.form.index_of_key(RowKey(elem)).is_some(), "{row:?} is on the page showing");
+        emitted(|fx| menu.activate::<HostFixture>(elem, fx))
+    }
+
+    fn press_back(menu: &mut ItemMenuScreen) -> Vec<plx_machine::machine::Stamped<HostFixture>> {
+        emitted(|fx| menu.back::<HostFixture>(fx))
+    }
+
+    fn dismisses(out: &[plx_machine::machine::Stamped<HostFixture>]) -> bool {
+        out.iter().any(|e| matches!(e.fx, Fx::Nav(NavOp::Dismiss(EntryId(7)))))
+    }
+
+    fn depth(menu: &ItemMenuScreen) -> usize {
+        menu.pages.len()
+    }
+
+    fn selected(menu: &ItemMenuScreen) -> Option<u32> {
+        menu.form.selected_key().map(|k| k.0)
+    }
+
+    /// **A hero control with no page in the menu closes it and is handed back to the page that owns
+    /// the hero** (Go to Show, Play from Start: the page's own `activate_hero`), anchored on the rect
+    /// the menu hung off; nothing reaches the app runner. (Select Version and Audio & Subtitles have
+    /// pages here: `the_pages_push_...`.)
+    #[test]
+    fn every_other_overflow_row_closes_the_menu_and_hands_its_control_back_to_the_page() {
+        let anchor = [600.0f32, 760.0, 64.0, 64.0].map(f32::to_bits);
+        for want in [HeroCtl::GoToShow, HeroCtl::Restart] {
+            let mut menu = hero_menu_with_pages();
+            let out = press_row(&mut menu, ItemRow::Hero(want));
+            assert!(dismisses(&out), "{want:?}: the menu closes");
+            assert!(
+                out.iter().any(|e| matches!(
+                    &e.fx,
+                    Fx::Deliver(
+                        MachineId::Instance(plx_machine::machine::InstanceId(4)),
+                        Delivery::Screen(ScreenEvent::App(AppMsg::HeroCtl { ctl, anchor: got })),
+                    ) if *ctl == want && *got == anchor
+                )),
+                "{want:?}: the opening page is handed the control on the menu's anchor"
+            );
+            assert!(!out.iter().any(|e| matches!(e.fx, Fx::App(_))), "nothing reaches the app runner");
+            assert_eq!(depth(&menu), 0, "{want:?}: no page");
+        }
+        // with nothing to list, Select Version has no page here either: the page's own panel is the way
+        let mut bare = hero_menu();
+        let out = press_row(&mut bare, ItemRow::Hero(HeroCtl::Version));
+        assert!(dismisses(&out) && depth(&bare) == 0, "no versions: the control is handed back");
+    }
+
+    /// **OK on Select Version / Audio & Subtitles PUSHES the page into the same glass; BACK returns to
+    /// the menu's rows with focus on the row that opened it; BACK again drains the menu.** The A&S
+    /// pages push further (Subtitles over its root) and each BACK pops one.
+    #[test]
+    fn the_pages_push_into_the_same_glass_and_back_returns_to_the_row_that_opened_them() {
+        let _guard = plx_base::testlock::serial();
+        let mut menu = hero_menu_with_pages();
+        step_ev(&mut menu, &ScreenEvent::Mount);
+        let root_rows = menu.form.table.n_rows();
+        let (v, a) = (ItemRow::Hero(HeroCtl::Version), ItemRow::Hero(HeroCtl::AudioSubtitles));
+
+        // Select Version: pushed, not dismissed; the page is the version list
+        let out = press_row(&mut menu, v);
+        assert!(!dismisses(&out) && out.is_empty(), "OK pushes a page and emits nothing");
+        assert_eq!(depth(&menu), 1);
+        assert_eq!(menu.focusable().count(), sample_versions().len(), "one row per version");
+        assert_eq!(selected(&menu), Some(ItemRow::Version(0).key().0), "it opens on the version Play takes");
+        // BACK pops to the rows, focus on the row that opened the page
+        let out = press_back(&mut menu);
+        assert!(!dismisses(&out), "BACK pops a page before it closes the menu");
+        assert_eq!((depth(&menu), menu.form.table.n_rows()), (0, root_rows));
+        assert_eq!(selected(&menu), Some(v.key().0), "focus is on Select Version");
+
+        // Audio & Subtitles: its root, then Subtitles over it: two pages in the one stack
+        press_row(&mut menu, a);
+        assert_eq!(depth(&menu), 1);
+        assert!(menu.form.index_of_key(RowKey(ItemRow::Pick(PickRow::OpenSubtitles).key().0)).is_some(), "the root lists Audio and Subtitles");
+        press_row(&mut menu, ItemRow::Pick(PickRow::OpenSubtitles));
+        assert_eq!(depth(&menu), 2, "Subtitles pushes further in the same glass");
+        assert_eq!(menu.form.table.title(), PickerCore::title_of(PickPage::Subtitles).as_deref());
+        press_back(&mut menu);
+        assert_eq!((depth(&menu), selected(&menu)), (1, Some(ItemRow::Pick(PickRow::OpenSubtitles).key().0)), "back to the A&S root on Subtitles");
+        press_back(&mut menu);
+        assert_eq!((depth(&menu), selected(&menu)), (0, Some(a.key().0)), "back to the menu on Audio & Subtitles");
+        let out = press_back(&mut menu);
+        assert!(dismisses(&out), "BACK at the rows drains the menu into its button");
+    }
+
+    /// **A pick in Select Version closes the whole menu** and reports the choice to the page (which
+    /// selects it, as the standalone panel's pick does); nothing else reaches the loop.
+    #[test]
+    fn a_version_pick_closes_the_whole_menu_and_reports_it_to_the_page() {
+        let mut menu = hero_menu_with_pages();
+        step_ev(&mut menu, &ScreenEvent::Mount);
+        press_row(&mut menu, ItemRow::Hero(HeroCtl::Version));
+        let second = sample_versions()[1].id;
+        let out = press_row(&mut menu, ItemRow::Version(1));
+        assert!(dismisses(&out), "the pick closes the menu from its page");
+        assert!(
+            out.iter().any(|e| matches!(
+                &e.fx,
+                Fx::Deliver(
+                    MachineId::Instance(plx_machine::machine::InstanceId(4)),
+                    Delivery::Screen(ScreenEvent::App(AppMsg::SelectVersion(media))),
+                ) if *media == second
+            )),
+            "the page is told which version"
+        );
+        assert!(!out.iter().any(|e| matches!(e.fx, Fx::App(_))));
+    }
+
+    /// With no playback driver every version row is disabled: OK does nothing and the menu stays.
+    #[test]
+    fn a_version_row_is_disabled_without_a_playback_driver_and_the_menu_stays_up() {
+        let mut menu = hero_menu_with_pages();
+        step_ev(&mut menu, &ScreenEvent::Mount);
+        menu.hero.as_mut().unwrap().can_play = false;
+        press_row(&mut menu, ItemRow::Hero(HeroCtl::Version));
+        assert_eq!(depth(&menu), 1);
+        let out = press_row(&mut menu, ItemRow::Version(1));
+        assert!(out.is_empty(), "OK on a disabled row does nothing");
+    }
+
+    /// **A track pick stays on its page with the check moved** and writes what the standalone panel
+    /// writes: the store keeps the pick and the loop commits it, for a Detail page (`Source::Page`).
+    #[test]
+    fn a_track_pick_moves_the_check_and_commits_as_the_standalone_panel_does() {
+        let mut menu = hero_menu_with_pages();
+        step_ev(&mut menu, &ScreenEvent::Mount);
+        press_row(&mut menu, ItemRow::Hero(HeroCtl::AudioSubtitles));
+        press_row(&mut menu, ItemRow::Pick(PickRow::OpenAudio));
+        assert_eq!((depth(&menu), selected(&menu)), (2, Some(ItemRow::Pick(PickRow::Audio(0)).key().0)), "Audio opens on the checked track");
+        let out = press_row(&mut menu, ItemRow::Pick(PickRow::Audio(1)));
+        assert!(!dismisses(&out), "a track pick keeps the menu up");
+        assert_eq!(depth(&menu), 2);
+        assert_eq!(menu.hero.as_ref().unwrap().tracks.now().audio, 1, "the choice is carried forward");
+        assert!(out.iter().any(|e| matches!(&e.fx, Fx::App(AppFx::Store(StoreId::Metadata, _)))), "the store keeps the pick");
+        assert!(
+            out.iter().any(|e| matches!(&e.fx, Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { source: PreplaySource::Page, .. })))),
+            "and the loop commits it to the server"
+        );
+    }
+
+    /// **The card is retargeted from page to page, never re-presented**: after a push the glass is
+    /// still the rows' rect on the next frame and springs to the page's rect, the `…` stays consumed
+    /// and the surface never hands itself back; a pop springs it back. The popover's own phase is
+    /// untouched by either.
+    #[test]
+    fn a_page_change_retargets_the_glass_in_place_and_never_re_presents_it() {
+        let _guard = plx_base::testlock::serial();
+        let mut menu = hero_menu_with_pages();
+        step_ev(&mut menu, &ScreenEvent::Mount);
+        let mut ms = 0;
+        tick(&mut menu, &mut ms, 90);
+        let rows_rect = glass(&mut menu);
+        assert!(rows_rect.w > 100.0, "rig: the menu stands");
+        press_row(&mut menu, ItemRow::Hero(HeroCtl::Version));
+        let page_rect = menu.frame(&FixtureMeasure);
+        assert!(page_rect != menu.hero.as_ref().map(|_| rows_rect).unwrap(), "the page is its own size");
+        assert_eq!(glass(&mut menu), rows_rect, "the push frame is still the old rect: no jump");
+        for n in 1..=60 {
+            tick(&mut menu, &mut ms, 1);
+            let g = glass(&mut menu);
+            assert!(g.w > 100.0 && g.h > 100.0, "frame {n}: there is glass");
+            assert_eq!(Screen::<HostFixture>::opener_alpha(&menu), 0.0, "frame {n}: the button stays consumed");
+            assert!(!Screen::<HostFixture>::handed_back(&menu), "frame {n}: the surface is never handed back");
+        }
+        let settled = glass(&mut menu);
+        assert!((settled.x - page_rect.x).abs() < 0.5 && (settled.h - page_rect.h).abs() < 0.5 && (settled.w - page_rect.w).abs() < 0.5,
+            "it settles on the page's rect ({settled:?} vs {page_rect:?})");
+        press_back(&mut menu);
+        tick(&mut menu, &mut ms, 90);
+        let back = glass(&mut menu);
+        assert!((back.h - rows_rect.h).abs() < 0.5 && (back.w - rows_rect.w).abs() < 0.5, "a pop returns the card to the rows' rect");
+        // and the close from a page drains into the button from where the card is
+        press_row(&mut menu, ItemRow::Hero(HeroCtl::Version));
+        tick(&mut menu, &mut ms, 90);
+        step_ev(&mut menu, &ScreenEvent::Closing);
+        tick(&mut menu, &mut ms, 3);
+        assert!(glass(&mut menu).w < menu.frame(&FixtureMeasure).w - 20.0, "draining from the page's rect");
+        tick(&mut menu, &mut ms, 60);
+        assert!(Screen::<HostFixture>::handed_back(&menu) && Screen::<HostFixture>::opener_alpha(&menu) == 1.0);
+    }
+
+    /// BACK as the surface receives it: pops a page when there is one, else closes.
+    #[test]
+    fn the_back_key_pops_a_page_before_it_closes_the_menu() {
+        let _guard = plx_base::testlock::serial();
+        let mut menu = hero_menu_with_pages();
+        step_ev(&mut menu, &ScreenEvent::Mount);
+        press_row(&mut menu, ItemRow::Hero(HeroCtl::Version));
+        let _ = feed(&mut menu, Key::Back, Edge::Down, 10);
+        assert_eq!(depth(&menu), 0, "the first BACK pops the page");
+    }
+
+    /// **A tile's hold menu is unchanged**: no morph (the opener is a card, not a hero control), the
+    /// panel BESIDE the card at its final rect on its first frame, the dim the container's own appear
+    /// (no ramp of the menu's), the card's lift whole, and nothing handed back before the container's
+    /// spring says so.
+    #[test]
+    fn a_tile_hold_menu_keeps_the_appear_and_the_card_whole() {
+        let _guard = plx_base::testlock::serial();
+        let anchor = Rect::new(400.0, 300.0, 300.0, 170.0);
+        let mut arg = card_arg(&item(3, PosterMark::None), true);
+        arg.anchor = [anchor.x, anchor.y, anchor.w, anchor.h].map(f32::to_bits);
+        let mut menu = ItemMenuScreen::new(EntryId(7), arg);
+        menu.build_rows(test_store().view(), DeckPress::Play);
+        step_ev(&mut menu, &ScreenEvent::Mount);
+        let beside = panel_at(anchor, menu.form.table.measured_width(&FixtureMeasure), menu.form.table.measured_height());
+        assert_eq!(menu.frame(&FixtureMeasure), beside, "the panel is placed beside the card, not over it");
+        let mut ms = 0;
+        for settle in [0, 3, 90] {
+            tick(&mut menu, &mut ms, settle);
+            assert_eq!(glass(&mut menu), beside, "the glass is the panel at its rect from the first frame");
+            assert_eq!(Screen::<HostFixture>::opener_alpha(&menu), 1.0, "the card stays whole above the dim");
+            assert!(!Screen::<HostFixture>::handed_back(&menu));
+            let scrim = Screen::<HostFixture>::scrim(&menu);
+            assert!(scrim.ramp.is_none(), "the dim is the container's own appear");
+            assert_eq!(scrim.alpha, plx_ui::theme::underlay::DIM_COMPACT);
+        }
+        step_ev(&mut menu, &ScreenEvent::Closing);
+        tick(&mut menu, &mut ms, 90);
+        assert!(!Screen::<HostFixture>::handed_back(&menu), "a tile's close is the container's spring, never the droplet's");
     }
 }

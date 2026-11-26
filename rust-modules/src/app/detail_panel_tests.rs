@@ -326,11 +326,12 @@ fn a_picked_version_is_selected_and_nothing_plays_though_its_panel_is_still_clos
         ..Default::default()
     });
     let host = page_instance(&w.d);
+    let page = w.d.nav.top_page().map(|e| e.id).expect("the page mounted");
     open_content_panel(
         &mut w.d,
         host,
         Some((plx_plex::plex::ServerId::UNSET, "movie")),
-        plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits) },
+        plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits), opener: (page, plx_screens::registry::HeroCtl::More.elem()) },
     );
     w.frames(40);
     assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel is up");
@@ -367,11 +368,12 @@ fn a_version_pick_asks_for_no_play_when_the_platform_composed_no_driver() {
     });
     w.bridge.bridge().retained.screen_inputs.backends = plx_media::route::BackendSet::NONE;
     let host = page_instance(&w.d);
+    let page = w.d.nav.top_page().map(|e| e.id).expect("the page mounted");
     open_content_panel(
         &mut w.d,
         host,
         Some((plx_plex::plex::ServerId::UNSET, "movie")),
-        plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits) },
+        plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits), opener: (page, plx_screens::registry::HeroCtl::More.elem()) },
     );
     w.frames(40);
     assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel is up");
@@ -549,10 +551,10 @@ fn back_out(w: &mut World) {
     }
 }
 
-/// **A pick in Select Version, opened from the hero's `…` menu, returns focus to the `…`** (the menu row
-/// hands its panel to the page, so the panel is presented while the closing menu still owns the ring).
-/// The page used to keep the menu's row as its return spot and was restored onto a dead entry: no ring,
-/// Left and Right dead, Down on the cast. The same close as BACK without a pick.
+/// **A pick in Select Version, opened from the hero's `…` menu, returns focus to the `…`**: the page is
+/// pushed INTO the menu's own glass, and the pick closes the whole menu (the surface the ring returns
+/// from is the menu's). BACK from the page returns to the menu's rows with the ring on Select Version,
+/// and BACK again closes the menu with the ring on the `…`.
 #[test]
 fn a_version_pick_from_the_more_menu_returns_focus_to_the_more_button() {
     use plx_screens::detail::HeroCtl;
@@ -560,18 +562,113 @@ fn a_version_pick_from_the_more_menu_returns_focus_to_the_more_button() {
     walk_to(&mut w, HeroCtl::More);
     w.press(Key::Ok);
     assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the … menu is up");
-    w.press(Key::Ok); // its first row: Select Version
-    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel replaced the menu");
+    w.press(Key::Ok); // its first row: Select Version, pushed into the same glass
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: still the one surface (the menu), now on its Select Version page");
     w.press(Key::Down);
     w.press(Key::Ok);
     assert_focus_on_hero(&w, HeroCtl::More, "a version pick");
 
-    // control: BACK without a pick
+    // control: BACK without a pick pops to the menu's rows, then closes the menu
     w.press(Key::Ok);
     w.press(Key::Ok);
-    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the panel is up again");
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the menu is up again, on its page");
     w.press(Key::Back);
-    assert_focus_on_hero(&w, HeroCtl::More, "BACK from the panel");
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "BACK from the page returns to the menu's rows, still up");
+    w.press(Key::Back);
+    assert_focus_on_hero(&w, HeroCtl::More, "BACK from the menu");
+}
+
+/// **The `…` menu's pages push into the one glass and BACK walks them back, through the product frame**:
+/// OK on Audio & Subtitles pushes its page (the surface is still the menu, never re-presented), OK on
+/// Subtitles pushes over it, and each BACK pops one with the ring on the row that opened the page it
+/// leaves; the last BACK closes the menu with the ring on the `…`.
+#[test]
+fn the_more_menu_pages_push_into_one_glass_and_back_returns_to_the_row_that_opened_them() {
+    use plx_screens::detail::HeroCtl;
+    use plx_screens::item_menu::ItemRow;
+    let mut w = hero_world("menu-pages", None);
+    walk_to(&mut w, HeroCtl::More);
+    w.press(Key::Ok);
+    w.press(Key::Down); // Select Version, then Audio & Subtitles
+    let menu_entry = w.d.nav.modals.surfaces[0].entry.id;
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "Audio & Subtitles is a page of the menu, not a new surface");
+    assert_eq!(w.d.nav.modals.surfaces[0].entry.id, menu_entry, "the same entry: the glass is never re-presented");
+    w.press(Key::Down); // Audio, then Subtitles
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "Subtitles pushes further in the same glass");
+    w.press(Key::Back);
+    assert_eq!(w.d.nav.modals.surfaces[0].entry.id, menu_entry);
+    assert_eq!(w.elem(), Some(ItemRow::Pick(plx_appkit::preplay_tracks::PickRow::OpenSubtitles).focus_key()), "back on Subtitles");
+    w.press(Key::Back);
+    assert_eq!(w.elem(), Some(ItemRow::Hero(HeroCtl::AudioSubtitles).focus_key()), "back on Audio & Subtitles, in the menu's rows");
+    w.press(Key::Back);
+    assert_focus_on_hero(&w, HeroCtl::More, "BACK from the menu's rows");
+}
+
+/// A SHOW page whose hero plays the underway on-deck episode (`on-deck`, two versions): the page's own key
+/// is `show`, and the streams on it are the episode's (`episode_streams`), so Select Version and Audio &
+/// Subtitles are about an item that is not the page's own. The tracks and versions the `…` menu's pages
+/// list reach it through the app's own path (`build_rows` off the loaded page), never written into the menu.
+fn show_hero_world(name: &str) -> World {
+    plx_data::metadata::prewarm_dv_latches();
+    let stream = |id| plx_data::metadata::Stream { id, ..Default::default() };
+    let version = |id: i64| plx_data::pms::MediaVersion { id: plx_plex::plex::MediaId(id), ..Default::default() };
+    let detail = plx_data::metadata::Detail {
+        sid: plx_plex::plex::ServerId::UNSET,
+        rk: "show".into(),
+        kind: "show".into(),
+        title: "Show".into(),
+        is_show: true,
+        on_deck: Some(plx_data::metadata::Episode {
+            rk: "on-deck".into(),
+            resume_ms: 60_000,
+            dur_ms: 120_000,
+            part: "/library/parts/1/1/file.mkv".into(),
+            versions: vec![version(1), version(2)],
+            ..Default::default()
+        }),
+        audio: vec![stream(11), stream(12)],
+        subs: vec![stream(21), stream(22)],
+        episode_streams: plx_data::metadata::EpisodeStreams::Loaded("on-deck".into()),
+        ..Default::default()
+    };
+    World::detail_page_at(name, detail_arg("show"), detail)
+}
+
+/// **On a SHOW page the `…` menu's pages list the on-deck episode's versions and tracks**: the item Play
+/// acts on (`Detail::play_rk`) is not the loaded page, which the pages are read off by its OWN key. Red
+/// while the menu looked the page up by the episode's key, found none, pushed an Audio & Subtitles page with
+/// nothing to pick and sent Select Version to the standalone panel (the surface count went to two).
+#[test]
+fn a_show_pages_more_menu_hosts_the_on_deck_episodes_pages() {
+    use plx_appkit::preplay_tracks::PickRow;
+    use plx_screens::detail::HeroCtl;
+    use plx_screens::item_menu::ItemRow;
+    let mut w = show_hero_world("show-menu-pages");
+    walk_to(&mut w, HeroCtl::More);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the … menu is up");
+    let menu_entry = w.d.nav.modals.surfaces[0].entry.id;
+    // Select Version: a page of the menu, with the episode's two versions
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "Select Version is a page of the menu, not a second surface");
+    assert_eq!(w.d.nav.modals.surfaces[0].entry.id, menu_entry);
+    let on_version = |w: &World| (0..2).any(|n| w.elem() == Some(ItemRow::Version(n).focus_key()));
+    assert!(on_version(&w), "the page lists the episode's versions: focus {:?}", w.elem());
+    w.press(Key::Down);
+    assert!(on_version(&w), "a second version row is there to move to");
+    w.press(Key::Back);
+    assert_eq!(w.elem(), Some(ItemRow::Hero(HeroCtl::Version).focus_key()), "back on Select Version, in the menu's rows");
+    // Audio & Subtitles: its root page, and Audio inside it with the episode's two tracks
+    w.press(Key::Down);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "Audio & Subtitles is a page of the menu");
+    assert_eq!(w.elem(), Some(ItemRow::Pick(PickRow::OpenAudio).focus_key()), "the root of the picker");
+    w.press(Key::Ok);
+    assert_eq!(w.elem(), Some(ItemRow::Pick(PickRow::Audio(0)).focus_key()), "the Audio page opens on a track");
+    w.press(Key::Down);
+    assert_eq!(w.elem(), Some(ItemRow::Pick(PickRow::Audio(1)).focus_key()), "the episode's second audio track is listed");
 }
 
 /// **A pick in Audio & Subtitles, opened from the hero's `…` menu, returns focus to the `…`**, the panel

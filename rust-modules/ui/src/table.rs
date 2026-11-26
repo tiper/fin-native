@@ -786,10 +786,17 @@ pub struct TableView {
     ///
     /// Defaults to `true`, so every panel whose list is the only focusable thing is unchanged.
     pub list_focused: bool,
-    /// compact size class: BODY regular row LABELS instead of the default HEADLINE bold (HEADLINE-bold
-    /// rows overwhelmed the small account popover, a panel of one-word actions). Set it on every
-    /// ACTION menu — the item context menu, account, more, and the library sort/filter/genre menus
-    /// all do; only a PICKER of title+detail rows stays on the default.
+    /// **The size class: ONE per glass.** Compact = BODY regular row LABELS (and two-line titles) instead
+    /// of the default HEADLINE bold; the detail line stays at CAPTION in secondary ink in both. HEADLINE-bold
+    /// rows overwhelmed the small account popover, a panel of one-word actions. Set it on every ACTION
+    /// menu — the item context menu, account, more, and the library sort/filter/genre menus all do;
+    /// only a standalone PICKER of title+detail rows (Select Version, Audio & Subtitles, the failure
+    /// screen's) stays on the default.
+    ///
+    /// The class belongs to the surface, never to a page: **a picker pushed into an action menu takes
+    /// the menu's class** (the hero `…` menu's and a tile menu's Select Version and Audio & Subtitles
+    /// pages are BODY regular), so a page push and pop leave it alone (`page_stack::push_page`,
+    /// [`Self::blank_like`] carries it) and the same page on its standalone panel is HEADLINE bold.
     ///
     /// It no longer affects HEADERS: those are CAPS at CAPTION in both classes, because the caps
     /// are what make a header a label and a size that varied could tie with its own rows.
@@ -1432,7 +1439,8 @@ impl TableView {
         }
     }
 
-    fn label_style(&self) -> (std::os::raw::c_int, bool) {
+    /// The size and weight of a row's label (and a two-line row's title) in this table's class ([`Self::compact`]).
+    pub fn label_style(&self) -> (std::os::raw::c_int, bool) {
         if self.lineup {
             (theme::size::CAPTION, false)
         } else if self.compact { (theme::size::BODY, false) } else { (theme::size::HEADLINE, true) }
@@ -2940,6 +2948,27 @@ mod tests {
             let gap = span - M.width_str(&row.label, size, bold) - M.width_str(value, theme::size::LABEL, VALUE_BOLD != 0);
             assert!(gap >= theme::space::MD - 0.01, "{}: label to value air {gap} < the MD rung", row.label);
         }
+    }
+
+    /// **One size class per glass** (`TableView::compact`): a compact table lays its row labels and its
+    /// two-line titles out at BODY regular, the default at HEADLINE bold, and a page taken aside for a
+    /// slide ([`TableView::blank_like`], which the next page is built into) keeps the class, so a page
+    /// pushed into an action menu is BODY regular and a standalone panel's stays HEADLINE bold.
+    #[test]
+    fn the_size_class_is_the_tables_and_a_page_swap_keeps_it() {
+        use plx_base::fontcov::advances::ShippedMeasure as M;
+        let two_line = |compact: bool| {
+            let mut t = TableView::new();
+            t.compact = compact;
+            t.set_sections(vec![Section::new("").row(Row::new("Original quality").detail("H.264 · 8 Mbps"))], 0, false);
+            t
+        };
+        let (menu, panel) = (two_line(true), two_line(false));
+        assert_eq!(menu.label_style(), (theme::size::BODY, false), "a compact table's labels are BODY regular");
+        assert_eq!(panel.label_style(), (theme::size::HEADLINE, true), "the default is HEADLINE bold");
+        assert!(menu.measured_width(&M) < panel.measured_width(&M), "the rows are laid out at the class's size");
+        assert_eq!(menu.blank_like().label_style(), menu.label_style(), "the page built next takes the glass's class");
+        assert_eq!(panel.blank_like().label_style(), panel.label_style());
     }
 
     const ES_NOTE: &str = "No se puede cambiar mientras Realzar diálogos o Normalizar volumen esté activado.";

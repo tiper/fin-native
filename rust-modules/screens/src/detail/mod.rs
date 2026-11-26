@@ -864,7 +864,7 @@ impl DetailScreen {
 
     /// **What the hero's … opens**: the item its Play from Start / Play Version act on (the on-deck
     /// episode on a show page, via [`Detail::play_rk`]) and one row per action the round buttons had no
-    /// room for ([`hero::overflow_ctls`]), in the row's order. `None` unless focus is on the … button.
+    /// room for ([`hero::overflow_ctls`]), in the row's order, and the page's own key (`Detail::rk`) for the pages the menu hosts. `None` unless focus is on the … button.
     /// A new hero action is one more arm in the `match` below.
     pub fn hero_overflow(
         &self,
@@ -891,7 +891,7 @@ impl DetailScreen {
             .collect();
         Some((d.play_rk().to_string(), rows))
             .filter(|(_, rows)| !rows.is_empty())
-            .map(|(rk, rows)| (rk, crate::registry::ItemMenuKind::HeroOverflow { rows, opener }))
+            .map(|(rk, rows)| (rk, crate::registry::ItemMenuKind::HeroOverflow { rows, opener, page: d.rk.clone() }))
     }
 
     pub fn focused_episode(
@@ -982,6 +982,17 @@ impl DetailScreen {
                 f.measure,
                 meta,
             ),
+            // A hero control a surface lifts: the page pass left it out (`draw`), so this is its one
+            // copy, drawn exactly where and how the row draws it (the row's scroll, fade and chrome
+            // alpha, the focus spring the frozen page holds) at the alpha the morph says.
+            Some(Located::Hero(ctl)) => {
+                let hero_vis = hero_alpha(self.scroll.pos, HERO_FADE);
+                if hero_vis > 0.01 {
+                    let chain = self.hero_chain(measure, meta);
+                    let p = f.painter.translate(0.0, -self.scroll.pos).alpha(hero_vis).alpha(self.preview_chrome);
+                    self.draw_buttons(p, f.cx, chain.btn_y, f.nav_page_alpha, ButtonPass::Lift(ctl.elem()));
+                }
+            }
             Some(Located::Related(_)) => self.related.redraw_focused(
                 f,
                 f.painter,
@@ -2835,7 +2846,16 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Screen<H> for 
         self.draw_backdrop(p, d, f.measure, preview, meta);
         let hero_vis = hero_alpha(self.scroll.pos, HERO_FADE);
         if hero_vis > 0.01 {
-            self.draw_hero(p.translate(0.0, -self.scroll.pos).alpha(hero_vis), f, d, nav_page_alpha);
+            // A hero control a surface lifts (the `…` a menu grew out of, the disc a panel did) is
+            // left OUT of this pass: the opener lift (`redraw_focused`) draws its only copy, at the
+            // morph's alpha, above the scrim and the glass, as it does for an episode still.
+            let lifted = f
+                .lifted
+                .filter(|k| k.entry == self.entry)
+                .filter(|k| matches!(self.locate(k.elem, meta), Some(Located::Hero(_))))
+                .filter(|k| f.leaves_out(self.entry, k.elem))
+                .map(|k| k.elem);
+            self.draw_hero(p.translate(0.0, -self.scroll.pos).alpha(hero_vis), f, d, nav_page_alpha, lifted);
         }
         if let Some(d) = d {
             self.draw_compact_title(p, d, hero_vis, f.measure);
@@ -3138,7 +3158,7 @@ impl DetailScreen {
         }
     }
 
-    fn draw_hero<H: ContentLike + crate::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, d: Option<&Detail>, nav_page_alpha: f32) {
+    fn draw_hero<H: ContentLike + crate::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, d: Option<&Detail>, nav_page_alpha: f32, lifted: Option<u32>) {
         let meta = H::metadata(cx);
         let measure = cx.measure;
         use plx_ui::detail_layout::HERO_TEXT_W;
@@ -3197,7 +3217,7 @@ impl DetailScreen {
         // focus there — `hero::focusable` keeps Play legitimate, so the engine has somewhere to
         // stand and the page does not scroll itself into the sections below — it simply fades out
         // with `chrome`, like everything else the page owns.
-        self.draw_buttons(chrome, cx, chain.btn_y, nav_page_alpha);
+        self.draw_buttons(chrome, cx, chain.btn_y, nav_page_alpha, ButtonPass::Page { lifted });
         // The hint that UP is there — since 2026-09-18 a third element on the HEADER line rather
         // than page furniture under the action row: centred on the screen, vertically centred on
         // the same row the preview-shrunk logo/title occupies (`PREVIEW_LOGO_Y`/`compact_band`),
@@ -3328,7 +3348,7 @@ impl DetailScreen {
         }
     }
 
-    fn draw_buttons<H: ContentLike + crate::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, y: f32, nav_page_alpha: f32) {
+    fn draw_buttons<H: ContentLike + crate::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, y: f32, nav_page_alpha: f32, pass: ButtonPass) {
         let meta = H::metadata(cx);
         let set = self.hero_set(meta);
         let widths = hero::hero_widths(
@@ -3353,7 +3373,11 @@ impl DetailScreen {
         let picture = plx_media::player::preview::view().picture;
         // A text-recording pass (the transition's prewarm, or a headless sweep) drew no pixels
         // under this row, so a read-back there would sample some other page's ground.
+        // The lift reads no ground of its own: the framebuffer it would sample is the dimmed page under
+        // the scrim, so it wears the palette the page pass last sampled (`sample_control_ground` hands
+        // back that one when it may not read), and the two copies are the same colour.
         let may_read = !picture
+            && matches!(pass, ButtonPass::Page { .. })
             && !p.is_recording()
             && may_sample_control_ground(nav_page_alpha, hero_alpha(self.scroll.pos, HERO_FADE));
         let palette = if picture {
@@ -3369,6 +3393,9 @@ impl DetailScreen {
             ControlGround::Keyed
         };
         for (i, ctl) in controls[..n].iter().copied().enumerate() {
+            if !pass.draws(ctl.elem()) {
+                continue;
+            }
             let rect = hero::hero_btn_rect_at(set, i, y, widths);
             let fill = self.ctl_pop.focus(i);
             let scale = self.ctl_pop.scale(i, cx.press);
@@ -3594,6 +3621,25 @@ fn play_resume_ns(from_start: bool, resume_ms: i64, duration_ms: i64) -> i64 {
 /// stable backdrop to sample: `sample_control_ground` caches its result across frames
 /// (`CONTROL_GROUND_SAMPLE_EVERY`), so a sample taken mid-transition would be read back for
 /// several frames after the transition ends, on a real device screen this cannot be tested on.
+/// **Which hero controls one `draw_buttons` call paints**: the page pass draws every control but the
+/// one a surface lifts, and the opener lift draws that one alone.
+#[derive(Clone, Copy)]
+enum ButtonPass {
+    /// The page's own pass; `lifted` is the control the lift owns this frame, left out.
+    Page { lifted: Option<u32> },
+    /// The opener lift: only this control (its engine elem).
+    Lift(u32),
+}
+
+impl ButtonPass {
+    fn draws(self, elem: u32) -> bool {
+        match self {
+            ButtonPass::Page { lifted } => lifted != Some(elem),
+            ButtonPass::Lift(only) => only == elem,
+        }
+    }
+}
+
 fn may_sample_control_ground(nav_page_alpha: f32, hero_alpha: f32) -> bool {
     nav_page_alpha >= 0.999 && hero_alpha > 0.99
 }
@@ -4860,9 +4906,12 @@ impl DetailScreen {
                     [rect.x, rect.y, rect.w, rect.h].map(f32::to_bits)
                 });
                 if let Some(anchor) = menu_anchor.or(drawn) {
+                    // The control the panel grows out of and drains back into: the `…` button when the
+                    // menu handed the row over (`menu_anchor`), else the control's own disc.
+                    let opener = (self.entry, if menu_anchor.is_some() { hero::ELEM_MORE } else { ctl.elem() });
                     let panel = match ctl {
-                        hero::HeroCtl::Version => ContentPanel::Versions { anchor },
-                        hero::HeroCtl::AudioSubtitles => ContentPanel::PreplayTracks { anchor },
+                        hero::HeroCtl::Version => ContentPanel::Versions { anchor, opener },
+                        hero::HeroCtl::AudioSubtitles => ContentPanel::PreplayTracks { anchor, opener },
                         _ => ContentPanel::AltSources { anchor },
                     };
                     self.content(fx, ContentReq::Panel(panel));

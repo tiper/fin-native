@@ -1118,7 +1118,8 @@ pub(super) unsafe fn apply_item_action<R: super::playback::PlaybackResources>(
             }
         }
         // The menu turns itself into the version list; this never arrives (`ItemMenuScreen::activate`).
-        Action::ChooseVersion(_) | Action::Hero(_) => {}
+        // (A hero menu's Audio & Subtitles rows act inside the menu: `Action::Pick`.)
+        Action::ChooseVersion(_) | Action::Hero(_) | Action::Pick(_) => {}
         // A picked version is only CHOSEN: it becomes the file this profile's Play and Resume start
         // for that item (the filmstrip's episode, or the card the menu captured), and nothing plays.
         // The ratingKey is the action's own, so a choice lands on the item the menu was opened on.

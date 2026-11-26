@@ -32,6 +32,7 @@ use plx_ui::a11y::{A11y, A11yPath};
 use plx_ui::frame::Budget;
 use plx_ui::form::RowKey;
 use plx_ui::page_stack;
+use plx_ui::popover::Popover;
 use plx_ui::screen::{
     At, AxisMask, Dir, DrawFrame, EdgeRule, ElemKind, FocusSource, Focusable, GroupKind, GroupSpec, HitSource, Placed,
     RenderStrategy, Screen, ScreenEvent, Scrim, Seat, Step,
@@ -40,7 +41,7 @@ use plx_ui::screen::{
 use crate::registry::{AppFx, AppLike, ContentReq, MetadataLike, PageMemory};
 
 /// The fields [`PreplayPanelScreen::write`] canonicalises, for the recorder's shape pin (§5.4).
-pub const SHAPE: &str = "PreplayPanel{arg:PreplayArg{host:u32,sid:u32,rk:str,anchor:[u32;4],source:{Page,Failed{part_id:u64}}},audio:u32,sub:Option<u32>,depth:u32}";
+pub const SHAPE: &str = "PreplayPanel{arg:PreplayArg{host:u32,sid:u32,rk:str,anchor:[u32;4],opener:Option<{entry:u32,elem:u32}>,source:{Page,Failed{part_id:u64}}},audio:u32,sub:Option<u32>,depth:u32}";
 
 /// Where the panel's tracks come from.
 #[derive(Clone, Copy, Debug)]
@@ -79,6 +80,9 @@ pub struct PreplayArg {
     pub sid: ServerId,
     pub rk: String,
     pub anchor: [u32; 4],
+    /// The page's entry and the hero control the panel grows out of and drains back into; `None` on
+    /// the failure screen, whose panel keeps its fade (nothing of the page to lift).
+    pub opener: Option<(EntryId, u32)>,
     pub source: Source,
 }
 
@@ -88,6 +92,7 @@ impl LogicalState for PreplayArg {
         for value in self.anchor {
             c.u32(value);
         }
+        c.option(self.opener, |c, (entry, elem)| { c.u32(entry.0).u32(elem); });
         match self.source {
             Source::Page => {
                 c.u32(0);
@@ -106,6 +111,9 @@ pub struct PreplayPanelScreen {
     entry: EntryId,
     arg: PreplayArg,
     picker: PickerState,
+    /// The morph, present exactly when the panel has an opener to grow from (the page's hero control;
+    /// the failure screen's panel has none and keeps its fade).
+    popover: Option<Popover>,
 }
 
 impl PreplayPanelScreen {
@@ -113,7 +121,12 @@ impl PreplayPanelScreen {
     /// cannot say gets an empty set, which lists its two rows with nothing behind them.
     pub fn new(entry: EntryId, arg: PreplayArg, tracks: PreplayTracks) -> Self {
         let anchor = arg.anchor;
-        Self { entry, arg, picker: PickerState::new(tracks, anchor) }
+        let picker = PickerState::new(tracks, anchor);
+        match arg.opener {
+            // the control's focused face is a near-white fill: the close's blob whitens toward it
+            Some(_) => Self { entry, arg, picker: picker.over_opener(), popover: Some(Popover::new().morphing().opener_fill(plx_ui::theme::ACCENT)) },
+            None => Self { entry, arg, picker, popover: None },
+        }
     }
 
     pub fn picker(&self) -> &PickerState {
@@ -137,29 +150,58 @@ impl PreplayPanelScreen {
         }
         let Some(id) = self.picker.row_at(RowKey(elem)) else { return };
         if let Outcome::Picked(sel) = self.picker.ok(id) {
-            let tracks = self.picker.tracks().clone();
-            // **The store keeps only what the viewer chose for the item's next start**, and a page's
-            // pick is that. The failure screen's pair is the session's (`route::hold_pick_for_retry`,
-            // run by the loop's commit): its standing half is DERIVED from the failed attempt (a `0`
-            // subtitle reads as `Off`), which is not the viewer's word, so it never reaches the store.
-            if matches!(self.arg.source, Source::Page) {
-                fx.push(Fx::App(AppFx::Store(
-                    StoreId::Metadata,
-                    StoreCmd::Metadata(plx_appkit::preplay_tracks::patch_command(&tracks, &sel)),
-                )));
-            }
-            // On the failure screen the loop starts the retry with the commit and closes this panel
-            // only when the retry started (`content_command`), so a refused retry keeps it.
-            fx.push(Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { tracks, sel, source: self.arg.source })));
+            commit_pick(fx, self.picker.tracks().clone(), sel, self.arg.source);
         }
     }
+}
+
+/// **A pick of Audio & Subtitles, as effects: the ONE pair of every surface that lists the tracks** (this
+/// panel, the hero `…` menu's pages). `tracks` is the set after the pick, `sel` what was chosen.
+///
+/// **The store keeps only what the viewer chose for the item's next start**, and a page's pick is that.
+/// The failure screen's pair is the session's (`route::hold_pick_for_retry`, run by the loop's commit):
+/// its standing half is DERIVED from the failed attempt (a `0` subtitle reads as `Off`), which is not
+/// the viewer's word, so it never reaches the store. On the failure screen the loop starts the retry
+/// with the commit and closes the panel only when the retry started (`content_command`), so a refused
+/// retry keeps it.
+pub(crate) fn commit_pick<H: AppLike>(
+    fx: &mut Effects<'_, H>,
+    tracks: PreplayTracks,
+    sel: plx_appkit::preplay_tracks::Selection,
+    source: Source,
+) {
+    if matches!(source, Source::Page) {
+        fx.push(Fx::App(AppFx::Store(
+            StoreId::Metadata,
+            StoreCmd::Metadata(plx_appkit::preplay_tracks::patch_command(&tracks, &sel)),
+        )));
+    }
+    fx.push(Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { tracks, sel, source })));
 }
 
 impl<H: AppLike<Memory = PageMemory>> Machine<H> for PreplayPanelScreen {
     type Ev = ScreenEvent<H>;
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
         match ev {
+            ScreenEvent::Mount => {
+                let pill = plx_ui::detail_layout::hero_pill(self.arg.anchor);
+                if let Some(pop) = &mut self.popover {
+                    pop.open_from(Some(pill));
+                }
+                Handled::No
+            }
+            // However the surface was dismissed (BACK, a pick), the glass runs the morph back into
+            // the control.
+            ScreenEvent::Closing => {
+                if let Some(pop) = &mut self.popover {
+                    pop.dismiss();
+                }
+                Handled::No
+            }
             ScreenEvent::Tick(tick) => {
+                if let Some(pop) = &mut self.popover {
+                    pop.update(tick.dt());
+                }
                 let focused = cx.focus.current.filter(|key| key.entry == self.entry);
                 if let Some(i) = focused.and_then(|key| self.picker.form.index_of_key(RowKey(key.elem))) {
                     self.picker.form.table.sel = i as i32;
@@ -273,17 +315,33 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Screen<H> for PreplayPanelS
         None
     }
     fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, H>) {}
+    /// The hero control the glass grew out of (see `VersionsPanelScreen::opener`).
+    fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
+        self.arg.opener.map(|(entry, elem)| (entry, Some(FocusKey { entry, elem })))
+    }
+    /// The opener is consumed by the morph: gone while the panel stands, back as it drains.
+    fn opener_alpha(&self) -> f32 {
+        self.popover.as_ref().map_or(1.0, Popover::opener_alpha)
+    }
+    /// The droplet has drained into the control: the surface and the lift end on this frame.
+    fn handed_back(&self) -> bool {
+        self.popover.as_ref().is_some_and(Popover::handed_back)
+    }
+    /// The panel's own weight; a morphing panel's dim FOLLOWS the morph (`Popover::dim`).
     fn scrim(&self) -> Scrim {
-        Scrim::dim(plx_ui::theme::underlay::DIM_PANEL)
+        match &self.popover {
+            Some(pop) => pop.dim(plx_ui::theme::underlay::DIM_PANEL),
+            None => Scrim::dim(plx_ui::theme::underlay::DIM_PANEL),
+        }
     }
     fn pointer_held(&self) -> bool {
         self.picker.motion.transitioning()
     }
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
         let measure = f.measure;
-        plx_ui::profile::phase("dt.preplay", || {
-            let appear = f.page_alpha;
-            self.picker.draw(appear, measure);
+        plx_ui::profile::phase("dt.preplay", || match &self.popover {
+            Some(pop) => self.picker.draw_morph(pop, f.painter.alpha(f.nav_page_alpha), f.underlay, measure),
+            None => self.picker.draw(f.page_alpha, measure),
         });
         page_stack::popover_register_stops(&self.picker, self.entry, f);
     }
@@ -375,7 +433,7 @@ pub(crate) mod tests {
 
     fn panel_from(source: Source) -> PreplayPanelScreen {
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
-        let arg = PreplayArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, source };
+        let arg = PreplayArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None, source };
         PreplayPanelScreen::new(EntryId(3), arg, tracks())
     }
 
@@ -475,5 +533,101 @@ pub(crate) mod tests {
         drive(&mut page, |p, fx| p.activate(elem(PickRow::OpenSubtitles), fx));
         let fx = drive(&mut page, |p, fx| p.activate(elem(PickRow::SubOff), fx));
         assert!(!fx.iter().any(|f| matches!(f, Fx::Nav(_))), "a Detail page's panel stays up with the check moved");
+    }
+
+    // ---- the hero control's morph ------------------------------------------------------------
+
+    fn morphing(opener: Option<(EntryId, u32)>, source: Source) -> PreplayPanelScreen {
+        let anchor = [500.0f32, 700.0, 64.0, 64.0].map(f32::to_bits);
+        let arg = PreplayArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener, source };
+        PreplayPanelScreen::new(EntryId(3), arg, tracks())
+    }
+
+    fn step(p: &mut PreplayPanelScreen, ev: ScreenEvent<HostFixture>) {
+        let mut out = Vec::new();
+        let mut present = plx_machine::present::Present::new();
+        let mut fx: Effects<'_, HostFixture> = Effects::new(&mut out, MachineId::Instance(InstanceId(4)), &mut present);
+        Machine::<HostFixture>::step(p, &ev, &cx(), &mut fx);
+    }
+
+    fn tick(p: &mut PreplayPanelScreen, ms: &mut u32, n: usize) {
+        for _ in 0..n {
+            *ms += 16;
+            step(p, ScreenEvent::Tick(plx_machine::machine::Tick { ms: *ms, dt_us: 16_667 }));
+        }
+    }
+
+    /// The glass this frame: the panel ground (a `rect_rimmed`, tag 8, on a host with no frozen field).
+    fn glass(p: &mut PreplayPanelScreen) -> plx_ui::Rect {
+        plx_ui::draw_census::capture(|| {
+            let cx = cx();
+            let mut f = DrawFrame::new(&cx, plx_ui::Painter::recording());
+            Screen::<HostFixture>::draw(p, &mut f);
+        })
+        .into_iter()
+        .find_map(|(tag, r)| (tag == 8).then_some(r))
+        .unwrap_or_default()
+    }
+
+    /// **Audio & Subtitles GROWS out of the hero control that opened it** (the `…` button or its own
+    /// disc), as every header menu does: the control is the opener, the panel covers it, three frames in
+    /// the glass is still the control's size or a little over, the settled panel is exactly the
+    /// picker's rect, and BACK runs the morph home. The failure screen's panel names no opener and
+    /// keeps its fade, hung under or above its control.
+    #[test]
+    fn the_panel_grows_out_of_its_control_settles_on_its_frame_and_runs_home_on_back() {
+        let _guard = plx_base::testlock::serial();
+        let mut p = morphing(Some((EntryId(1), 9)), Source::Page);
+        assert_eq!(
+            Screen::<HostFixture>::opener(&p),
+            Some((EntryId(1), Some(FocusKey { entry: EntryId(1), elem: 9 }))),
+        );
+        step(&mut p, ScreenEvent::Mount);
+        let settled = p.picker().panel_rect(&plx_ui::fixture::FixtureMeasure);
+        let pill = plx_ui::detail_layout::hero_pill(p.arg.anchor);
+        assert!(
+            settled.x <= pill.x && settled.y <= pill.y && settled.x + settled.w >= pill.x + pill.w && settled.y + settled.h >= pill.y + pill.h,
+            "the settled panel {settled:?} covers the control {pill:?}"
+        );
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 1.0);
+        assert!(Screen::<HostFixture>::scrim(&p).ramp.is_some(), "the dim follows the morph");
+        let mut ms = 0;
+        tick(&mut p, &mut ms, 3);
+        let early = glass(&mut p);
+        assert!(
+            early.w < settled.w - 20.0 && early.h < settled.h - 20.0,
+            "three frames in the glass is still growing out of the control ({early:?}), not laid at {settled:?}"
+        );
+        tick(&mut p, &mut ms, 96);
+        let end = glass(&mut p);
+        assert!(
+            (end.x - settled.x).abs() < 0.5 && (end.y - settled.y).abs() < 0.5
+                && (end.w - settled.w).abs() < 0.5 && (end.h - settled.h).abs() < 0.5,
+            "the settled panel is {settled:?}, drew {end:?}"
+        );
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 0.0);
+        step(&mut p, ScreenEvent::Closing);
+        tick(&mut p, &mut ms, 3);
+        assert!(glass(&mut p).w < settled.w - 20.0, "the close narrows the glass into the control");
+        tick(&mut p, &mut ms, 60);
+        assert!(Screen::<HostFixture>::handed_back(&p), "the droplet has drained into the control");
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 1.0);
+
+        // the failure screen's panel: no opener, no morph, hung beside its control as before
+        let mut failed = morphing(None, Source::Failed { part_id: 9001, pick: None });
+        step(&mut failed, ScreenEvent::Mount);
+        step(&mut failed, ScreenEvent::Closing);
+        assert_eq!(Screen::<HostFixture>::opener(&failed), None);
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&failed), 1.0);
+        assert!(!Screen::<HostFixture>::handed_back(&failed));
+        assert!(Screen::<HostFixture>::scrim(&failed).ramp.is_none());
+        let [x, y, w, h] = [500.0f32, 700.0, 64.0, 64.0];
+        let m = &plx_ui::fixture::FixtureMeasure;
+        let beside = plx_ui::popover::under_or_above_fit(
+            plx_ui::Rect::new(x, y, w, h),
+            failed.picker().form.table.menu_panel_width(m),
+            failed.picker().form.table.measured_height(),
+        );
+        assert_eq!(failed.picker().panel_rect(m), beside);
     }
 }

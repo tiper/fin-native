@@ -365,7 +365,7 @@ fn the_control_focus_lands_on_draws_a_focused_face_and_a_disabled_one_never_woul
         for _ in 0..120 {
             screen.ctl_pop.step(focus, 0.05);
         }
-        plx_ui::draw_census::capture_inks(|| screen.draw_buttons(plx_ui::Painter::recording(), &cx(&measure, None), 600.0, 1.0))
+        plx_ui::draw_census::capture_inks(|| screen.draw_buttons(plx_ui::Painter::recording(), &cx(&measure, None), 600.0, 1.0, super::ButtonPass::Page { lifted: None }))
     };
     for no_driver in [false, true] {
         let guard = install(resumable(sid));
@@ -998,5 +998,35 @@ fn a_hold_that_opens_a_menu_ends_the_pages_claim_and_one_that_opens_nothing_does
         step(&mut screen, &hold, Some(held));
         assert_eq!(screen.provisional, own, "{what}");
         clear();
+    }
+}
+
+/// **A hero control a surface lifts is drawn ONCE, by the lift.** The page pass leaves it out
+/// (`ButtonPass::Page { lifted }`, asked through `DrawFrame::leaves_out`), and the opener lift draws it
+/// alone (`ButtonPass::Lift`), so the two passes together are exactly the row: nothing doubled under the
+/// scrim, nothing missing where the morph consumes the control. Red when the page kept drawing the
+/// `…` under the glass that grew out of it.
+#[test]
+fn a_lifted_hero_control_is_left_out_of_the_page_pass_and_drawn_alone_by_the_lift() {
+    let sid = ServerId::UNSET;
+    let measure = plx_ui::fixture::FixtureMeasure;
+    let guard = install(resumable(sid));
+    let mut screen = bare(&guard, sid, "movie");
+    let set = screen.hero_set(test_store().view());
+    let (row, n) = hero::visible_ctls(set, hero::Stops { full_trailer: false, no_playback: false });
+    assert!(n >= 3, "rig: a row of several controls");
+    for _ in 0..120 {
+        screen.ctl_pop.step(None, 0.05);
+    }
+    let ink = |pass: super::ButtonPass| {
+        plx_ui::draw_census::capture(|| screen.draw_buttons(plx_ui::Painter::recording(), &cx(&measure, None), 600.0, 1.0, pass))
+    };
+    let all = ink(super::ButtonPass::Page { lifted: None }).len();
+    for &ctl in &row[..n] {
+        let page = ink(super::ButtonPass::Page { lifted: Some(ctl.elem()) }).len();
+        let lift = ink(super::ButtonPass::Lift(ctl.elem())).len();
+        assert!(lift > 0, "{ctl:?}: the lift draws the control");
+        assert!(page < all, "{ctl:?}: the page pass leaves it out");
+        assert_eq!(page + lift, all, "{ctl:?}: the two passes are the row, each control once");
     }
 }

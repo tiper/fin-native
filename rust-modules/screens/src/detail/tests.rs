@@ -5856,6 +5856,7 @@ fn the_picker_follows_the_file_play_starts_when_no_version_was_chosen() {
         sid: ServerId::UNSET,
         rk: "leaf".into(),
         anchor: [0; 4],
+        opener: None,
         source: crate::registry::PreplaySource::Page,
     };
     let tracks = crate::registry::preplay_tracks_of(test_store().view(), &arg);
@@ -5877,7 +5878,7 @@ fn a_hero_control_handed_back_after_it_left_the_page_does_nothing() {
         clear();
         effects.iter().any(|e| matches!(
             &e.fx,
-            Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::PreplayTracks { anchor: got }))) if *got == anchor
+            Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::PreplayTracks { anchor: got, .. }))) if *got == anchor
         ))
     };
     let with_tracks = Detail { audio: vec![stream(1, true), stream(2, false)], subs: vec![stream(3, false)], ..versioned("movie", 1) };
@@ -6267,7 +6268,7 @@ fn the_play_pill_reads_disabled_when_no_playback_driver_is_composed() {
         let screen = bare(&_guard, sid, "movie");
         let measure = plx_ui::fixture::FixtureMeasure;
         let runs = plx_ui::draw_census::capture_runs(|| {
-            screen.draw_buttons(plx_ui::Painter::recording(), &cx(&measure, None), 600.0, 1.0)
+            screen.draw_buttons(plx_ui::Painter::recording(), &cx(&measure, None), 600.0, 1.0, super::ButtonPass::Page { lifted: None })
         });
         NO_DRIVER.with(|flag| flag.set(false));
         inks.push(runs.iter().find(|r| r.text == play_label).map(|r| r.ink));

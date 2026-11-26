@@ -416,6 +416,23 @@ pub fn cover_opener(pill: Rect, size: (f32, f32), keep: Rect) -> Rect {
     Rect::new(hang_x(pill, w, keep), y, w, h)
 }
 
+/// **[`cover_opener`] that keeps clear of text above the opener** (owner report: the hero's panels
+/// slid UP over the description): the panel's top stays at or below `clear_y` (the foot of what must
+/// stay readable) whenever the whole panel fits between `clear_y` and the bottom of `keep`. When it
+/// cannot, the answer is plain [`cover_opener`]'s (the panel still covers its opener and stays
+/// inside `keep`); the caller does not choose between covering the text and cutting rows, the numbers
+/// decide, and a panel that does not fit says so by overlapping.
+pub fn cover_opener_clear(pill: Rect, size: (f32, f32), keep: Rect, clear_y: f32) -> Rect {
+    let top = keep.y.max(clear_y);
+    let below = Rect::new(keep.x, top, keep.w, (keep.y + keep.h - top).max(0.0));
+    let r = cover_opener(pill, size, below);
+    if r.y >= top - crate::consts::EDGE_TOL && r.y + r.h <= keep.y + keep.h + crate::consts::EDGE_TOL {
+        r
+    } else {
+        cover_opener(pill, size, keep)
+    }
+}
+
 /// The [`Opener::redraw`] of a popover with nothing to lift — a named fn rather than a closure, so
 /// [`Opener::NONE`] can be a `const`.
 fn draw_nothing() {}

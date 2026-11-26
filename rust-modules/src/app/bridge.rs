@@ -4503,6 +4503,7 @@ pub(crate) fn open_failed_tracks(ps: &plx_media::route::PlaybackSession, anchor:
         sid: plx_media::route::cur_sid(ps),
         rk: plx_media::route::cur_rk(ps),
         anchor,
+        opener: None,
         source: plx_screens::preplay_panel::Source::Failed { part_id: plx_media::route::cur_part_id(ps), pick: plx_media::route::failed_pick(ps) },
     });
     present_once(d, arg, Style::PlayerPanel { survives_failure: true });
