@@ -39,7 +39,7 @@ use plx_playback_contract::{AttemptId, Capabilities, CommandId, ContentTime, Dis
     SourceKey, SourceKind, StopReason, TrackChoice, TrackKind, TrackSelection};
 use std::collections::VecDeque;
 
-/// What the driver can call: a progressive source, pause and seek. No HLS, no track disable, no packet feed, no
+/// What the driver can call: a progressive source, pause and seek. No HLS, no audio disable, no packet feed, no
 /// subtitle selection, and no variable speed (that has no flag: the planner refuses any rate but normal for every
 /// URI driver). The flags say what is CALLABLE, never a codec veto.
 ///
@@ -51,8 +51,14 @@ use std::collections::VecDeque;
 /// not native evidence that the player selected anything. A request for any other stream is refused with
 /// `Unsupported` and tears nothing down. Which stream the retail player starts on for a source with several is
 /// unmeasured, which is why such a source is not certified.
+///
+/// `subtitle_off` is `true` by construction too: the host player is given no subtitle (no `player_set_subtitle_path`,
+/// no text-track selection, no subtitle callback), and `docs/tizen.md` ("Subtitles off") records the emulator run in
+/// which a file with an embedded default text track played with no subtitle on the picture. A play with subtitle
+/// streams and none selected is therefore one this driver carries, and its `SelectTrack(Subtitle, Off)` is settled
+/// without a host call ([`Machine::select_subtitle`]).
 pub const CAPS: Capabilities = Capabilities { progressive_uri: true, hls_uri: false, packet_feed: false, pause: true,
-    seek: true, audio_track: true, subtitle_track: false, audio_off: false, subtitle_off: false };
+    seek: true, audio_track: true, subtitle_track: false, audio_off: false, subtitle_off: true };
 
 /// The deadlines the machine enforces, in milliseconds on the executor's clock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -372,13 +378,20 @@ impl Machine {
         DispatchResult::Queued
     }
 
-    /// A subtitle request: the host player has no subtitle verb.
-    pub fn select_subtitle(&self, attempt: AttemptId) -> DispatchResult {
-        if self.active.as_ref().is_some_and(|a| a.attempt == attempt) {
-            DispatchResult::Refused(Failure::Unsupported)
-        } else {
-            DispatchResult::Refused(Failure::Stale)
+    /// A subtitle request. The host player has no subtitle verb, so only Off can be honoured, and it is settled by
+    /// construction: the player is never given a subtitle to show ([`CAPS`]). Selecting a subtitle is `Unsupported`.
+    pub fn select_subtitle(&mut self, attempt: AttemptId, command: CommandId, choice: TrackChoice) -> DispatchResult {
+        let Some(active) = self.active.as_ref().filter(|a| a.attempt == attempt) else {
+            return DispatchResult::Refused(Failure::Stale);
+        };
+        if choice != TrackChoice::Off {
+            return DispatchResult::Refused(Failure::Unsupported);
         }
+        if active.phase != Phase::Open || !active.prepared {
+            return DispatchResult::Refused(Failure::Busy);
+        }
+        self.pending.push_back(DriverEvent::TrackSettled { attempt, command, kind: TrackKind::Subtitle, choice });
+        DispatchResult::Queued
     }
 
     /// A Stop of `attempt`: close, and wait for the host's confirmation.

@@ -18,7 +18,7 @@
 use super::paths::Transcode;
 use super::playback_info::Encoders;
 use super::time::ms_to_ticks;
-use plx_plex::plex::{Ceiling, MediaContainer, Metadata, Stream, TranscodeDelivery, TranscodeOffset, TranscodeSpec};
+use plx_plex::plex::{Ceiling, MediaContainer, Metadata, Stream, TranscodeDelivery, TranscodeOffset, TranscodeSource, TranscodeSpec};
 
 /// What the device takes, read once per request from its capability table.
 pub struct Device<'a> {
@@ -99,6 +99,14 @@ pub fn copy_refusal(kind: &str, codec: &str) -> MediaContainer {
 
 pub fn is_hls(spec: &TranscodeSpec<'_>) -> bool {
     matches!(spec.contract.delivery, TranscodeDelivery::FixedHls { .. })
+}
+
+/// The library item a transcode is for. A live channel's session has no Jellyfin item, so none.
+pub fn library_item<'a>(spec: &TranscodeSpec<'a>) -> Option<&'a str> {
+    match spec.source {
+        TranscodeSource::Library(item) => Some(item),
+        TranscodeSource::Live(_) => None,
+    }
 }
 
 /// The media source id a part key carries (`...&mediaSourceId=<id>`).
@@ -253,7 +261,7 @@ mod tests {
         static ASSUMED: std::sync::OnceLock<plx_os::devcaps::Caps> = std::sync::OnceLock::new();
         TranscodeSpec {
             caps: ASSUMED.get_or_init(plx_os::devcaps::Caps::assumed),
-            rating_key: "abc",
+            source: TranscodeSource::Library("abc"),
             session: "s1",
             encoder_session: "s1",
             contract: EncodeContract {

@@ -181,10 +181,14 @@ pub struct AuthContext {
 /// one item, naming a `machineIdentifier` and a ratingKey), `library_sorts` (how each library was
 /// last browsed) and `last_library` (the library each top tab opened in), the last two naming a
 /// server and a section.
+///
+/// `recent_channels` (Live TV's Recent row, per profile) names a server's machine identifier and a
+/// channel, and goes with the account the same way.
 pub const ACCOUNT_BOUND_PREFERENCES: &[&str] = &[
     "server_key_pins",
     "plaintext_consent",
     "track_memory",
+    "recent_channels",
     "profile_prefs",
     "subtitle_offsets",
     "library_sorts",

@@ -610,6 +610,42 @@ fn boot_auto_sign_in_restores_the_seated_profile() {
     assert_eq!(cells(), OTHER, "the stored profile's own values, before Home mounts");
 }
 
+/// **A profile publication alone gives Live TV its Recent row.** The seat arrives through the real
+/// `SessionFx::PublishProfile` (`ResumeStored`), the memory door is seeded the way the handoff's
+/// restore seeds it (after the publication, as `follow_auth_landing` does), and nothing is tuned: the
+/// step's input reads the door's list when it is built, so the stored channels show. A list copied at
+/// the publication would have read the door before it was seeded, and shown nothing until the next tune.
+#[test]
+fn a_profile_publication_shows_the_stored_recent_row_with_no_tune() {
+    use plx_plex::plex::session::prefs::{MemoryEntry, ProfileMemory, RecentChannelEntry};
+    let _serial = plx_base::testlock::serial();
+    let mut stored = record("", &[]);
+    let stamp = plx_plex::plex::grant::account_key(&stored.account_token);
+    for n in ["1", "2"] {
+        let e = RecentChannelEntry::new(MACHINE, "7", &format!("C{n}"));
+        stored.prefs.recent_channels.upsert_with("", &stamp, &e.key(), e.noted());
+    }
+    let _fixture = Fixture::new("a0c-recent-publication", &stored);
+    let sid = plx_plex::plex::register_for_test(MACHINE, "127.0.0.1", 9, "synthetic", "fixture");
+    let (mut harness, _d) = resume(&stored);
+    let rig = harness.bridge();
+    assert_eq!(rig.retained.seat_watch.restored, seat_of(""), "the publication seated the owner");
+    // What the handoff's restore leaves: the process-global seat, and the door seeded from the record.
+    seat_globally("");
+    plx_media::route::restore_install_rows(&session::load());
+    let channel = |n: &str| plx_data::livetv::Channel { sid, dvr: "7".into(), channel: format!("C{n}"), vcn: n.into(),
+        name: format!("Channel {n}"), thumb: String::new(), now: String::new(), now_thumb: String::new(),
+        now_summary: String::new(), begins_at: 0, ends_at: 0 };
+    crate::app::adapters::stores::refill_client_keys(&mut rig.retained.client_keys);
+    // One step to register the roster's sources, then the lineup they would publish, then the step whose
+    // input carries the list.
+    rig.stores.livetv_pump(&rig.retained.livetv_input(&rig.retained.client_keys));
+    rig.stores.livetv.install_for_test(vec![channel("1"), channel("2"), channel("3")]);
+    rig.stores.livetv_pump(&rig.retained.livetv_input(&rig.retained.client_keys));
+    let row: Vec<_> = rig.livetv_view().recent.iter().map(|c| c.vcn.clone()).collect();
+    assert_eq!(row, ["2", "1"], "the stored channels, newest first, with no tune and no refresh");
+}
+
 /// **Case 2: the boot picker (plan 3.8.5a).** Auto sign-in off on a Home with two profiles:
 /// "Who's watching?" is up and Home has not mounted, so no handoff has been released, and the pick's
 /// `release_held_handoff` seats the CHOSEN profile, whose own values are restored before the `Ready` the

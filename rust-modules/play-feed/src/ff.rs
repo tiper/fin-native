@@ -527,6 +527,31 @@ pub struct HlsNet {
     pub range: Arc<dyn RangeFactory>,
     pub credential_gate: plx_net::stream::redirect::CredentialGate,
     pub observer: Arc<dyn DemuxObserver>,
+    /// `Some` only for a Live TV session (armed by `hls_cursor_open` when the entry is a media
+    /// playlist): the stream state one segment leaves for the next. Rides here because this is the
+    /// one value every segment fetch of the session is lent.
+    pub carry: Option<SegmentCarry>,
+}
+
+/// What a Live TV segment hands the next one of the SAME playlist. A recording is the tuner's
+/// stream copied and cut every second whatever the GOP (measured on the TV 2026-10-21: segment 1
+/// probed `0x0` and opened mid-GOP), so its segments are cuts of ONE stream, not independently
+/// decodable pieces: a later one may carry no SPS/PPS, begin without an IDR, and time B-frames
+/// before its first packet. PMS's own transcodes are independent segments and never arm this.
+/// Scoped to the playlist's directory, so nothing crosses into another playlist.
+#[derive(Default)]
+pub struct SegmentCarry {
+    /// Empty until the first segment lands: armed, nothing to continue yet.
+    scope: String,
+    params: H264ParamSets,
+    raster: (i32, i32),
+    anchors: (Option<crate::hls::StreamAnchor>, Option<crate::hls::StreamAnchor>),
+}
+
+/// The directory a segment's playlist lives in — the scope of a [`SegmentCarry`].
+fn carry_scope(segment: &crate::hls::Segment) -> &str {
+    let path = segment.resource.path.split_once('?').map_or(segment.resource.path.as_str(), |(p, _)| p);
+    path.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
 
 /// **The live-transfer terminal rule.** A partial response is right-censored evidence.  PMS may
@@ -3349,7 +3374,7 @@ pub fn adts_header(freq_idx: u8, chan_cfg: u8, payload_len: usize) -> [u8; 7] {
     ]
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct H264ParamSets {
     pub sps: Vec<u8>,
     pub pps: Vec<u8>,
@@ -3452,13 +3477,13 @@ pub fn annexb_h264_access_unit(
     if is_key {
         if !has_sps {
             if params.sps.is_empty() {
-                return Err("IDR has no in-band or cached SPS");
+                return Err(H264_IDR_WITHOUT_SPS);
             }
             out.extend_from_slice(&params.sps);
         }
         if !has_pps {
             if params.pps.is_empty() {
-                return Err("IDR has no in-band or cached PPS");
+                return Err(H264_IDR_WITHOUT_PPS);
             }
             out.extend_from_slice(&params.pps);
         }
@@ -3571,9 +3596,9 @@ impl From<plx_playback_contract::adaptive::PhysicalFailure> for HlsExit {
 /// retry). A plain failure ends the segment the way any unexplained transport failure does.
 const UNLATCHED_STOP: HlsExit = HlsExit::Failed("HLS acquisition stopped without a latched reason");
 
-/// Lookahead of N+1 must not tear down a session that already fed N. Only teardown is fatal.
+/// Carry teardown and a terminal live stall out of lookahead. Ordinary misses can retry on demand.
 pub fn hls_prefetch_is_fatal(err: &HlsExit) -> bool {
-    matches!(err, HlsExit::Aborted)
+    matches!(err, HlsExit::Aborted | HlsExit::Failed(HLS_LIVE_STALLED))
 }
 
 pub fn classify_plaintext_open_failure(error: plx_net::stream::HttpOpenError) -> HlsExit {
@@ -4295,8 +4320,9 @@ struct AudioStamp {
 
 /// MPEG-TS may put a PES timestamp on the second AAC access unit while the first unit carries
 /// only its frame duration. Resolve those holes inside one complete segment before mapping the
-/// audio lane onto the normalized content timeline. We never borrow video PTS or wall time.
-fn resolve_audio_stamps(stamps: &mut [AudioStamp]) -> Result<usize, &'static str> {
+/// audio lane onto the normalized content timeline. We never borrow wall time, and video PTS only
+/// as `start_ns`: where a segment with no audio timestamp at all begins its frame clock.
+fn resolve_audio_stamps(stamps: &mut [AudioStamp], start_ns: i64) -> Result<usize, &'static str> {
     let missing = stamps.iter().filter(|stamp| stamp.raw_ns.is_none()).count();
     if stamps.is_empty() || missing == 0 {
         return Ok(missing);
@@ -4323,9 +4349,9 @@ fn resolve_audio_stamps(stamps: &mut [AudioStamp]) -> Result<usize, &'static str
         }
     }
     // A segment with no PES timestamp at all still has an exact AAC frame clock. Anchor its
-    // first frame locally at zero; SegmentClock supplies the content-time base.
+    // first frame at `start_ns`; SegmentClock supplies the content-time base.
     if stamps[0].raw_ns.is_none() && stamps.iter().all(|stamp| stamp.raw_ns.is_none()) {
-        stamps[0].raw_ns = Some(0);
+        stamps[0].raw_ns = Some(start_ns);
         for index in 1..stamps.len() {
             if let (Some(previous), Some(duration)) =
                 (stamps[index - 1].raw_ns, stamps[index - 1].duration_ns)
@@ -4344,6 +4370,32 @@ fn resolve_audio_stamps(stamps: &mut [AudioStamp]) -> Result<usize, &'static str
         return Err("AAC timestamps move backwards");
     }
     Ok(missing)
+}
+
+/// Resolve a complete segment's audio stamps and write each access unit's content time; returns
+/// how many were synthesized and the lane's tail.
+///
+/// `stream_start_ns` is where a segment with NO audio timestamp starts its frame clock. An
+/// independent segment (VOD, a PMS transcode) passes `None`: its lane origin is its own first
+/// stamp, so a zero-based clock lands on the segment boundary. A cut of a continuous tuner stream
+/// passes the raw PTS of the first video access unit it published (the IDR, on the first cut): its
+/// audio is read against the stream's raw origin ([`crate::hls::SegmentClock::share_origin`], then
+/// the carried anchors), where a zero-based clock sits a whole stream clock before that origin and
+/// every frame clamped onto one content time (PR #993 review). Both lanes of a tuner stream run on
+/// one clock, so that picture's PTS is this cut's own position on it, within the reorder depth.
+fn stamp_segment_audio(stamps: &mut [AudioStamp], stream_start_ns: Option<i64>,
+    clock: &mut crate::hls::SegmentClock, aus: &mut [HlsAu]) -> Result<(usize, Option<i64>), &'static str> {
+    let synthesized = resolve_audio_stamps(stamps, stream_start_ns.unwrap_or(0))?;
+    let mut tail = None;
+    for stamp in stamps.iter() {
+        let pts = clock
+            .normalize_audio(stamp.raw_ns.expect("audio stamps resolved"))
+            .0
+            .saturating_mul(1_000_000);
+        aus[stamp.au].pts_ns = pts;
+        tail = Some(tail.map_or(pts, |tail: i64| tail.max(pts)));
+    }
+    Ok((synthesized, tail))
 }
 
 pub struct HlsSegmentOutput {
@@ -4392,6 +4444,17 @@ pub unsafe fn hls_demux_segment(
     let path = auth
         .request_path(&segment.resource)
         .map_err(|_| HlsExit::Failed("segment credential rejected"))?;
+    let scope = carry_scope(segment).to_owned();
+    let live = net.carry.is_some();
+    let carried = net
+        .carry
+        .as_ref()
+        .filter(|c| c.scope == scope && c.raster.0 > 0 && c.raster.1 > 0)
+        .map(|c| (c.params.clone(), c.raster, c.anchors));
+    let continuing = carried.is_some();
+    // Only a direct tuner playlist arms carry state. Its first readable cut can begin mid-GOP;
+    // live transcoder variants have no carry and remain independently decodable at every segment.
+    let mut live_cut_start = LiveCutStart::for_tuner_segment(live, continuing);
     let request_started = runtime.request_started();
     let retry_budget = segment
         .duration
@@ -4542,12 +4605,14 @@ pub unsafe fn hls_demux_segment(
     }
     let vst = *streams.add(vi as usize);
     let vcp = stream_codecpar(vst);
-    if (*vcp).codec_id != AV_CODEC_ID_H264 {
+    let vcodec = std::ffi::CStr::from_ptr(avcodec_get_name((*vcp).codec_id)).to_string_lossy();
+    if !plx_playback_contract::demux::hls_accepts_codecs(&vcodec, None) {
         return Err(HlsExit::Failed("HLS segment video is not H.264"));
     }
     let aac_adts = if ai >= 0 {
         let acp = stream_codecpar(*streams.add(ai as usize));
-        if (*acp).codec_id != AV_CODEC_ID_AAC {
+        let acodec = std::ffi::CStr::from_ptr(avcodec_get_name((*acp).codec_id)).to_string_lossy();
+        if !plx_playback_contract::demux::hls_accepts_codecs(&vcodec, Some(&acodec)) {
             return Err(HlsExit::Failed("HLS segment audio is not AAC"));
         }
         adts_params(acp)
@@ -4555,12 +4620,27 @@ pub unsafe fn hls_demux_segment(
         None
     };
 
-    let video_width = (*vcp).width;
-    let video_height = (*vcp).height;
-    if video_width <= 0 || video_height <= 0 {
-        return Err(HlsExit::Failed("HLS segment has invalid video dimensions"));
+    let (mut video_width, mut video_height) = ((*vcp).width, (*vcp).height);
+    let (mut params, carried_raster, anchors) = carried.unwrap_or_default();
+    if continuing {
+        clock.continue_stream(anchors);
+    } else if live_cut_start.is_some() {
+        // The cut every later one continues: its lanes anchor the tune on one origin.
+        clock.share_origin();
     }
-    let mut params = H264ParamSets::default();
+    if video_width <= 0 || video_height <= 0 {
+        // No SPS in this segment for the probe to read: the previous segment of this playlist
+        // named the raster, and its parameter sets go in front of this one's IDR.
+        let (w, h) = carried_raster;
+        if w <= 0 || h <= 0 {
+            return Err(HlsExit::Failed(HLS_MISSING_RASTER));
+        }
+        (video_width, video_height) = (w, h);
+        plx_base::eventlog::log(&format!(
+            "hls: using previous parameter sets and raster {w}x{h} for segment {} without SPS",
+            segment.sequence
+        ));
+    }
     let mut aubuf = Vec::with_capacity(4 * 1024 * 1024);
     let mut video_packets = 0usize;
     let mut audio_packets = 0usize;
@@ -4568,7 +4648,7 @@ pub unsafe fn hls_demux_segment(
     let mut first_au_at = None;
     let mut aus = Vec::new();
     let mut video_tail_ns = -1;
-    let mut audio_tail_ns = None;
+    let mut first_video_raw_ns = None;
 
     loop {
         input.state.io_failed = false;
@@ -4599,11 +4679,20 @@ pub unsafe fn hls_demux_segment(
                 &mut aubuf,
             )
             .map_err(HlsExit::Failed)?;
-            if video_packets == 0 && !is_key {
-                av_packet_unref(input.pkt);
-                return Err(HlsExit::Failed("HLS segment does not begin with an IDR"));
-            }
+            // Keep the segment's real timeline origin even when its leading pictures are not
+            // published; otherwise clock.end() would credit the discarded prefix as buffer.
             let pts = clock.normalize_video(raw_pts).0.saturating_mul(1_000_000);
+            if let Some(start) = live_cut_start.as_mut() {
+                if !start.video(is_key, raw_pts) {
+                    av_packet_unref(input.pkt);
+                    continue;
+                }
+            }
+            // A continued live segment is a cut of the stream the decoder is already inside.
+            if video_packets == 0 && !is_key && !continuing {
+                av_packet_unref(input.pkt);
+                return Err(HlsExit::Failed(HLS_MISSING_IDR));
+            }
             aus.push(HlsAu {
                 data: aubuf.clone(),
                 pts_ns: pts,
@@ -4611,6 +4700,7 @@ pub unsafe fn hls_demux_segment(
                 es: 1,
             });
             video_tail_ns = video_tail_ns.max(pts);
+            first_video_raw_ns.get_or_insert(raw_pts);
             video_packets += 1;
             first_au_at.get_or_insert_with(std::time::Instant::now);
             av_packet_unref(input.pkt);
@@ -4631,6 +4721,17 @@ pub unsafe fn hls_demux_segment(
             });
             let raw =
                 std::slice::from_raw_parts((*input.pkt).data, (*input.pkt).size.max(0) as usize);
+            if live_cut_start
+                .as_ref()
+                .is_some_and(|start| !start.audio(raw_pts))
+            {
+                if let Some(raw_pts) = raw_pts {
+                    // Establish the audio lane's origin without publishing this pre-IDR packet.
+                    clock.normalize_audio(raw_pts);
+                }
+                av_packet_unref(input.pkt);
+                continue;
+            }
             let duration_ns = packet_duration
                 .or_else(|| adts_duration_ns(raw))
                 .or(aac_duration);
@@ -4679,19 +4780,15 @@ pub unsafe fn hls_demux_segment(
     }
 
     if video_packets == 0 {
+        if live_cut_start.as_ref().is_some_and(|start| !start.primed()) {
+            return Err(HlsExit::Failed(HLS_MISSING_IDR));
+        }
         return Err(HlsExit::Failed(
             "HLS segment produced no video access units",
         ));
     }
-    let synthesized_audio = resolve_audio_stamps(&mut audio_stamps).map_err(HlsExit::Failed)?;
-    for stamp in &audio_stamps {
-        let pts = clock
-            .normalize_audio(stamp.raw_ns.expect("audio stamps resolved"))
-            .0
-            .saturating_mul(1_000_000);
-        aus[stamp.au].pts_ns = pts;
-        audio_tail_ns = Some(audio_tail_ns.map_or(pts, |tail: i64| tail.max(pts)));
-    }
+    let (synthesized_audio, mut audio_tail_ns) = stamp_segment_audio(&mut audio_stamps,
+        first_video_raw_ns.filter(|_| live), clock, &mut aus).map_err(HlsExit::Failed)?;
     // Every AU in this independently decodable segment has been read successfully. Buffer health
     // is the end of decoded content, not the start timestamp of the final video frame; using the
     // latter made a complete 2 s / 24 fps segment look 42 ms short and forced an immediate drop.
@@ -4733,6 +4830,14 @@ pub unsafe fn hls_demux_segment(
     ));
     if let Some(cs) = input.state.src.take_curl() {
         net.curl = Some(cs);
+    }
+    if live {
+        net.carry = Some(SegmentCarry {
+            scope,
+            params,
+            raster: (video_width, video_height),
+            anchors: clock.stream_anchors(),
+        });
     }
     Ok(HlsSegmentOutput {
         aus,
@@ -4825,6 +4930,190 @@ pub struct HlsCursor {
     pub ended: bool,
     pub target_duration_secs: u64,
     pub start_applied: bool,
+    /// A Live TV playback — the session's own media playlist (the entry is already a media
+    /// playlist) or the universal transcoder's output for a live session
+    /// ([`is_live_session_source`]). Every open, a reload included, starts
+    /// [`LIVE_START_CUSHION_NS`] behind its edge; polled every [`LIVE_POLL`].
+    pub live: bool,
+    /// Fresh opens may pass at most this many undecodable cuts before failing closed.
+    pub live_start_skips_left: u8,
+    /// When the live playlist last stopped bringing segments: `None` while it grows. Until
+    /// [`live_stall_limit`] has passed the same cursor keeps polling the same playlist (no reopen,
+    /// no new session; the pump holds the clock on "Buffering" once the fed media runs out); past
+    /// it the read fails with [`HLS_LIVE_STALLED`] instead of polling forever.
+    pub live_unchanged_since: Option<std::time::Instant>,
+    /// Where the playlist ended (its media sequence plus its segments) at the last read the start
+    /// cushion held: the growth the stall clock measures before the tracker has seen a segment.
+    pub live_held_next: u64,
+}
+
+/// An IDR that arrived without a parameter set and with none cached from an earlier access unit
+/// ([`annexb_h264_access_unit`]). On a fresh tuner cut that is one more undecodable start.
+const H264_IDR_WITHOUT_SPS: &str = "IDR has no in-band or cached SPS";
+const H264_IDR_WITHOUT_PPS: &str = "IDR has no in-band or cached PPS";
+const HLS_MISSING_RASTER: &str = "HLS segment has invalid video dimensions";
+const HLS_MISSING_IDR: &str = "HLS segment does not begin with an IDR";
+const LIVE_START_SKIP_SEGMENTS: u8 = 3;
+/// The maintainer's webOS 4.5 run (PR #993): a Threadfin channel's playlist stopped growing at 4:19,
+/// with no end marker, and the reader re-read it every 500 ms for good while the picture froze and
+/// nothing told the viewer. The read fails instead. It is not a decode failure: the recording has
+/// no input, so converting that same recording meets the same gap. [`hls_failure_effects`] names it
+/// to the player ([`DemuxEffect::LiveStalled`]), which reads it out without spending the channel's
+/// conversion.
+const HLS_LIVE_STALLED: &str = "HLS live playlist stopped advancing";
+/// The least a live playlist is given to bring something new. PROVISIONAL (PR #993 review): on the
+/// maintainer's webOS 4.5 runs Plex waited 29.8 s and 30.3 s for DVR input on two Pluto channels and
+/// then resumed on the same encoder, 14-15 s after the 15 s this floor used to be had given up. 45 s
+/// is those gaps plus half again; it is a measurement of two channels, not a protocol bound.
+const LIVE_STALL_FLOOR_SECS: u64 = 45;
+/// How long a live playlist may bring nothing new: three target durations (RFC 8216 lets a server
+/// take up to one and a half to publish the next segment), and never under
+/// [`LIVE_STALL_FLOOR_SECS`], so a recording whose input paused and resumes is not cut off.
+fn live_stall_limit(target_duration_secs: u64) -> std::time::Duration {
+    std::time::Duration::from_secs(target_duration_secs.saturating_mul(3).max(LIVE_STALL_FLOOR_SECS))
+}
+
+/// The same bound while the start cushion still holds ([`live_start_ready`]). A tuner's own
+/// playlist (`tuner`) is already recording when it is first read, and an input gap is no shorter
+/// below the cushion than after the start, so it keeps [`live_stall_limit`] and its floor.
+/// A conversion's is read from before its encoder has listed anything, and the stall clock starts on
+/// that first held read: the wait spans the encoder's whole start (attaching to the recording,
+/// probing it, its first GOP), which the limit after the start never has to cover. Its bound is the
+/// one it had before the floor was raised, four times three target durations and never under 60 s:
+/// at every target duration that is still at least [`live_stall_limit`] plus 15 s for the encoder's
+/// start, so a 30 s input gap met during the start is covered without the hold growing to minutes,
+/// and a playlist that froze below the cushion with no end marker still ends.
+fn live_hold_stall_limit(tuner: bool, target_duration_secs: u64) -> std::time::Duration {
+    if tuner {
+        return live_stall_limit(target_duration_secs);
+    }
+    std::time::Duration::from_secs(target_duration_secs.saturating_mul(3).max(15).saturating_mul(4))
+}
+
+/// What a failed HLS read ends the session with, in publication order: a live playlist that stopped
+/// advancing is named first ([`DemuxEffect::LiveStalled`]), then the failure flag every such exit
+/// raises (the transport's once anything was delivered, the open's before that). The name precedes
+/// the flag because the pump reads both from the one sample the flag gates.
+fn hls_failure_effects(why: &'static str, pushed_any: bool) -> impl Iterator<Item = DemuxEffect> {
+    let stalled = (why == HLS_LIVE_STALLED).then_some(DemuxEffect::LiveStalled);
+    let flag = if pushed_any { DemuxEffect::IoFailed } else { DemuxEffect::FailFault(DemuxFault::HlsFailed) };
+    stalled.into_iter().chain([flag])
+}
+
+/// Whether a live playlist read that brought `new` segments has now been unchanged for longer than
+/// `limit`. Growth clears the clock; the first empty read starts it.
+fn live_playlist_stalled(since: &mut Option<std::time::Instant>, new: usize,
+    now: std::time::Instant, limit: std::time::Duration) -> bool {
+    if new > 0 {
+        *since = None;
+        return false;
+    }
+    let started = *since.get_or_insert(now);
+    now.saturating_duration_since(started) > limit
+}
+
+/// A fresh tuner cut may start mid-GOP. Do not feed its leading pictures or audio; prime the
+/// decoder only at the first IDR, which `ts_h264_access_unit` has already validated with SPS/PPS.
+#[derive(Default)]
+struct LiveCutStart {
+    idr_pts_ns: Option<i64>,
+}
+
+impl LiveCutStart {
+    fn for_tuner_segment(live_playlist: bool, continuing: bool) -> Option<Self> {
+        (live_playlist && !continuing).then(Self::default)
+    }
+
+    fn video(&mut self, is_idr: bool, pts_ns: i64) -> bool {
+        if self.idr_pts_ns.is_some() {
+            return true;
+        }
+        if is_idr {
+            self.idr_pts_ns = Some(pts_ns);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn audio(&self, pts_ns: Option<i64>) -> bool {
+        self.idr_pts_ns
+            .is_some_and(|idr| pts_ns.is_none_or(|pts| pts >= idr))
+    }
+
+    fn primed(&self) -> bool {
+        self.idr_pts_ns.is_some()
+    }
+}
+
+impl HlsCursor {
+    fn skip_live_start(&mut self, segment: &crate::hls::Segment, net: &HlsNet, error: HlsExit) -> bool {
+        let continuing = net.carry.as_ref().is_some_and(|carry|
+            carry.scope == carry_scope(segment) && carry.raster.0 > 0 && carry.raster.1 > 0);
+        if !self.live || self.live_start_skips_left == 0 || continuing
+            || !matches!(error, HlsExit::Failed(HLS_MISSING_RASTER | HLS_MISSING_IDR
+                | H264_IDR_WITHOUT_SPS | H264_IDR_WITHOUT_PPS)) {
+            return false;
+        }
+        if self.live_start_skips_left == LIVE_START_SKIP_SEGMENTS {
+            plx_base::eventlog::log("hls: live start skips undecodable cuts until an SPS/IDR segment (bounded)");
+        }
+        self.live_start_skips_left -= 1;
+        true
+    }
+}
+
+/// How far behind a live recording's edge playback starts. Measured on the TV 2026-10-21: started
+/// on the first one-second segment, the play rate held 1000‰ for 11 s and then swung between 667‰
+/// and 1400‰ with 400-600 ms video gaps — every late segment was a stall, because the whole buffer
+/// was the one segment in hand. Three seconds of recording absorb that jitter; the start costs the
+/// same three seconds once.
+const LIVE_START_CUSHION_NS: i64 = 3_000_000_000;
+
+/// A live playlist grows by one segment a second; polled at the VOD cadence (a full second for
+/// these) each new segment was found up to a second late, a second the cushion then has to pay.
+const LIVE_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Whether a live playlist holding `total_ns` of recording may start delivering segments. One
+/// that `ended` will never grow into the cushion, so what it lists goes out and the read ends.
+fn live_start_ready(live: bool, start_applied: bool, total_ns: i64, ended: bool) -> bool {
+    !live || start_applied || ended || total_ns >= LIVE_START_CUSHION_NS
+}
+
+/// Whether a master playlist URL is the universal transcoder's output for a Live TV session: its
+/// `path=` source is a `/livetv/sessions/…` key (`TranscodeSource::Live`), never a library item.
+/// The route's own source names it; a growing playlist alone does not (a fresh library encoder's
+/// playlist also lists only what it has produced so far).
+fn is_live_session_source(path_and_query: &str) -> bool {
+    let query = path_and_query.split_once('?').map_or("", |(_, q)| q);
+    query.split('&').any(|pair| {
+        let value = pair.strip_prefix("path=").unwrap_or("");
+        value.starts_with("%2Flivetv%2Fsessions%2F") || value.starts_with("/livetv/sessions/")
+    })
+}
+
+/// The index a live playlist starts delivering from: the latest segment with at least
+/// [`LIVE_START_CUSHION_NS`] of recording from it to the edge, so every open (a reload of a long
+/// recording included) starts a cushion behind the edge. A list shorter than the cushion, or an
+/// empty one, starts at its first segment.
+fn live_edge_start_index(durations_ns: &[i64]) -> usize {
+    let mut held_ns = 0i64;
+    for (index, duration_ns) in durations_ns.iter().enumerate().rev() {
+        held_ns = held_ns.saturating_add(*duration_ns);
+        if held_ns >= LIVE_START_CUSHION_NS {
+            return index;
+        }
+    }
+    0
+}
+
+/// The wait before re-reading a playlist that had nothing new.
+fn playlist_poll(live: bool, target_duration_secs: u64) -> std::time::Duration {
+    if live {
+        LIVE_POLL
+    } else {
+        std::time::Duration::from_millis(target_duration_secs.saturating_mul(500).clamp(250, 1_000))
+    }
 }
 
 /// One worker-local physical owner for the active object and any candidate
@@ -5144,6 +5433,27 @@ pub fn hls_cursor_open(
     // Parsed against where the fetch LANDED: a redirected master's children are relative to it.
     let (master_text, master_ms, master_landed) =
         hls_fetch_text(&master_resource, &auth, aq, net, reserve)?;
+    if crate::hls::is_media_playlist(&master_text) {
+        // A Live TV session: the URL is the media playlist itself, read again by the first
+        // `hls_cursor_next` like any variant's. No declared rate exists for it.
+        plx_base::eventlog::log(&format!("hls: entry is a media playlist fetch_ms={master_ms}"));
+        net.carry = Some(SegmentCarry::default());
+        return Ok(HlsCursor {
+            publishes_duration,
+            declared_bps: 0,
+            auth,
+            media: master_landed,
+            tracker: crate::hls::MediaTracker::default(),
+            pending: std::collections::VecDeque::new(),
+            ended: false,
+            target_duration_secs: 1,
+            start_applied: false,
+            live: true,
+            live_start_skips_left: LIVE_START_SKIP_SEGMENTS,
+            live_unchanged_since: None,
+            live_held_next: 0,
+        });
+    }
     let master = crate::hls::parse_master(&master_landed, &master_text).map_err(|e| {
         plx_base::eventlog::log(&format!("hls: master rejected: {e}"));
         HlsExit::Failed("HLS master rejected")
@@ -5162,6 +5472,10 @@ pub fn hls_cursor_open(
         ended: false,
         target_duration_secs: 1,
         start_applied: false,
+        live: is_live_session_source(path),
+        live_start_skips_left: if is_live_session_source(path) { LIVE_START_SKIP_SEGMENTS } else { 0 },
+        live_unchanged_since: None,
+        live_held_next: 0,
     })
 }
 
@@ -5186,9 +5500,18 @@ fn hls_cursor_next(
             HlsExit::Failed("HLS media playlist rejected")
         })?;
         cursor.target_duration_secs = media.target_duration_secs;
-        let start_index = media
-            .preferred_start_index()
-            .map_err(|_| HlsExit::Failed("HLS start offset is outside the supported timeline"))?;
+        let start_index = if cursor.live {
+            let durations_ns: Vec<i64> = media
+                .segments
+                .iter()
+                .map(|segment| i64::try_from(segment.duration.as_nanos()).unwrap_or(i64::MAX))
+                .collect();
+            live_edge_start_index(&durations_ns)
+        } else {
+            media
+                .preferred_start_index()
+                .map_err(|_| HlsExit::Failed("HLS start offset is outside the supported timeline"))?
+        };
         let total_ns = i64::try_from(
             media
                 .total_duration()
@@ -5196,47 +5519,74 @@ fn hls_cursor_next(
                 .as_nanos(),
         )
         .map_err(|_| HlsExit::Failed("HLS playlist duration overflow"))?;
-        if cursor.publishes_duration {
+        // A live recording has no duration: its playlist total only grows, and the HUD would climb.
+        if cursor.publishes_duration && !cursor.live {
             net.observer.publish(DemuxCallbackEffect::DurationNs(total_ns));
         }
-        let mut refresh = cursor.tracker.apply(&media).map_err(|e| {
-            plx_base::eventlog::log(&format!("hls: refresh rejected: {e}"));
-            HlsExit::Failed("HLS media refresh rejected")
-        })?;
-        let mut skipped = 0usize;
-        if !cursor.start_applied {
-            let first_sequence = media
-                .segments
-                .get(start_index)
-                .map(|segment| segment.sequence)
-                .unwrap_or_else(|| {
-                    media
-                        .media_sequence
-                        .saturating_add(media.segments.len() as u64)
-                });
-            let before = refresh.new_segments.len();
-            refresh
-                .new_segments
-                .retain(|segment| segment.sequence >= first_sequence);
-            skipped = before.saturating_sub(refresh.new_segments.len());
-            cursor.start_applied = true;
+        // Not one segment of a growing live recording leaves before the cushion exists (an ended
+        // one has all it will ever list); the tracker is left
+        // untouched, so the read that has it delivers from the edge index, not the first segment.
+        let holding = !live_start_ready(cursor.live, cursor.start_applied, total_ns, media.end_list);
+        if holding {
+            plx_base::eventlog::log(&format!("hls: live start holds for its cushion total_ms={}", total_ns / 1_000_000));
+            // The tracker has seen nothing yet, so growth is read off the playlist's own end. A
+            // tuner's own playlist (the one that arms carry state) is judged on the stall limit, a
+            // conversion's on the one its encoder's start needs ([`live_hold_stall_limit`]).
+            let next = media.media_sequence.saturating_add(media.segments.len() as u64);
+            let grown = next.saturating_sub(cursor.live_held_next);
+            cursor.live_held_next = next;
+            let limit = live_hold_stall_limit(net.carry.is_some(), cursor.target_duration_secs);
+            if live_playlist_stalled(&mut cursor.live_unchanged_since, usize::try_from(grown).unwrap_or(usize::MAX),
+                std::time::Instant::now(), limit) {
+                plx_base::eventlog::log(&format!(
+                    "hls: live playlist unchanged below its start cushion for {}s with no end marker; giving up the read",
+                    limit.as_secs()));
+                return Err(HlsExit::Failed(HLS_LIVE_STALLED));
+            }
         }
-        plx_base::eventlog::log(&format!(
-            "hls: refresh new={} skipped={} total_ms={} end={} fetch_ms={media_ms}",
-            refresh.new_segments.len(),
-            skipped,
-            total_ns / 1_000_000,
-            refresh.end_list
-        ));
-        cursor.pending.extend(refresh.new_segments);
-        cursor.ended = refresh.end_list;
+        if !holding {
+            let mut refresh = cursor.tracker.apply(&media).map_err(|e| {
+                plx_base::eventlog::log(&format!("hls: refresh rejected: {e}"));
+                HlsExit::Failed("HLS media refresh rejected")
+            })?;
+            let mut skipped = 0usize;
+            if !cursor.start_applied {
+                let first_sequence = media
+                    .segments
+                    .get(start_index)
+                    .map(|segment| segment.sequence)
+                    .unwrap_or_else(|| {
+                        media
+                            .media_sequence
+                            .saturating_add(media.segments.len() as u64)
+                    });
+                let before = refresh.new_segments.len();
+                refresh
+                    .new_segments
+                    .retain(|segment| segment.sequence >= first_sequence);
+                skipped = before.saturating_sub(refresh.new_segments.len());
+                cursor.start_applied = true;
+            }
+            plx_base::eventlog::log(&format!(
+                "hls: refresh new={} skipped={} total_ms={} end={} fetch_ms={media_ms}",
+                refresh.new_segments.len(),
+                skipped,
+                total_ns / 1_000_000,
+                refresh.end_list
+            ));
+            let new = refresh.new_segments.len();
+            cursor.pending.extend(refresh.new_segments);
+            cursor.ended = refresh.end_list;
+            if cursor.live && !cursor.ended && live_playlist_stalled(&mut cursor.live_unchanged_since,
+                new, std::time::Instant::now(), live_stall_limit(cursor.target_duration_secs)) {
+                plx_base::eventlog::log(&format!(
+                    "hls: live playlist unchanged for {}s with no end marker; giving up the read",
+                    live_stall_limit(cursor.target_duration_secs).as_secs()));
+                return Err(HlsExit::Failed(HLS_LIVE_STALLED));
+            }
+        }
         if cursor.pending.is_empty() && !cursor.ended {
-            let poll = std::time::Duration::from_millis(
-                cursor
-                    .target_duration_secs
-                    .saturating_mul(500)
-                    .clamp(250, 1_000),
-            );
+            let poll = playlist_poll(cursor.live, cursor.target_duration_secs);
             let reserve_snapshot = reserve
                 .as_deref_mut()
                 .and_then(|reserve| reserve.active(false));
@@ -5633,22 +5983,41 @@ fn hls_read_active(
     prefetched: &mut Option<ActiveMedia>, aq: *mut AuQueue, acodec: &str,
     at_floor: Option<bool>,
 ) -> Result<Option<ActiveMedia>, HlsExit> {
+    hls_read_active_with(cursor, net, timeline, prefetched, aq, at_floor,
+        |segment, auth, clock, net, acquisition| unsafe {
+            hls_demux_segment(segment, auth, clock, aq, net, acodec, acquisition)
+        })
+}
+
+fn hls_read_active_with<F>(
+    cursor: &mut HlsCursor, net: &mut HlsNet, timeline: crate::hls::SegmentTimeline,
+    prefetched: &mut Option<ActiveMedia>, aq: *mut AuQueue, at_floor: Option<bool>,
+    mut demux: F,
+) -> Result<Option<ActiveMedia>, HlsExit>
+where F: FnMut(&crate::hls::Segment, &crate::hls::InheritedAuth,
+    &mut crate::hls::SegmentClock, &mut HlsNet, SegmentAcquisition)
+    -> Result<HlsSegmentOutput, HlsExit>,
+{
     if let Some(round) = prefetched.take() { return Ok(Some(round)); }
-    let Some(segment) = hls_cursor_next(cursor, aq, net, None)? else { return Ok(None); };
-    let mut clock = timeline.begin(segment.duration)
-        .map_err(|_| HlsExit::Failed("HLS content timeline overflow"))?;
-    let acquisition = SegmentAcquisition::for_cursor(at_floor, net.observer.clone())
-        .ok_or(HlsExit::Aborted)?;
-    let stall_reserve_ms = acquisition.stall()
-        .map(|guard| guard.reserve_ms_at_start).unwrap_or(-1);
-    match unsafe { hls_demux_segment(
-        &segment, &cursor.auth, &mut clock, aq, net, acodec, acquisition,
-    ) } {
-        Ok(output) => Ok(Some((segment, output, clock, false))),
-        Err(HlsExit::StallAbort(transfer)) => Ok(Some(hls_stall_abort_outcome(
-            segment, clock, transfer, stall_reserve_ms, cursor,
-        ))),
-        Err(other) => Err(other),
+    loop {
+        let Some(segment) = hls_cursor_next(cursor, aq, net, None)? else { return Ok(None); };
+        let mut clock = timeline.begin(segment.duration)
+            .map_err(|_| HlsExit::Failed("HLS content timeline overflow"))?;
+        let acquisition = SegmentAcquisition::for_cursor(at_floor, net.observer.clone())
+            .ok_or(HlsExit::Aborted)?;
+        let stall_reserve_ms = acquisition.stall()
+            .map(|guard| guard.reserve_ms_at_start).unwrap_or(-1);
+        match demux(&segment, &cursor.auth, &mut clock, net, acquisition) {
+            Ok(output) => {
+                cursor.live_start_skips_left = 0;
+                return Ok(Some((segment, output, clock, false)));
+            }
+            Err(error) if cursor.skip_live_start(&segment, net, error) => continue,
+            Err(HlsExit::StallAbort(transfer)) => return Ok(Some(hls_stall_abort_outcome(
+                segment, clock, transfer, stall_reserve_ms, cursor,
+            ))),
+            Err(other) => return Err(other),
+        }
     }
 }
 
@@ -5751,7 +6120,7 @@ fn hls_demux(
             kbps: i64::from(start.initial_kbps()),
         });
     }
-    let mut net = HlsNet { hs, curl: None, range: transport.range, credential_gate: transport.credential_gate, observer: session.observer() };
+    let mut net = HlsNet { hs, curl: None, range: transport.range, credential_gate: transport.credential_gate, observer: session.observer(), carry: None };
     let mut cursor = hls_cursor_open(origin, path, aq, &mut net, true, None)?;
     if abr.is_some() {
         session.media().publish(DemuxEffect::AbrHlsDeclared {
@@ -6388,10 +6757,8 @@ pub fn demux(
             Ok(Ok(())) | Ok(Err(HlsExit::Aborted)) => {}
             Ok(Err(HlsExit::Failed(why))) => {
                 session.media().record(&format!("hls: demux failed: {why}"));
-                if PUSHED_ANY.load(Ordering::Relaxed) {
-                    session.media().publish(DemuxEffect::IoFailed);
-                } else {
-                    session.media().publish(DemuxEffect::FailFault(DemuxFault::HlsFailed));
+                for effect in hls_failure_effects(why, PUSHED_ANY.load(Ordering::Relaxed)) {
+                    session.media().publish(effect);
                 }
             }
             Ok(Err(HlsExit::NotReady)) => {
@@ -7632,3 +7999,7 @@ mod packet_framing_tests;
 #[cfg(test)]
 #[path = "ff_audio_tests.rs"]
 mod audio_tests;
+
+#[cfg(test)]
+#[path = "ff_hls_live_tests.rs"]
+mod hls_live_tests;

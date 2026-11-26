@@ -366,7 +366,7 @@ fn refusal_recovered_context(recovered: &super::recovery::Recovered) -> Option<R
         LoadRefusal::Refused { num } => RefusalError::Number(num),
         LoadRefusal::TimedOut => RefusalError::Timeout,
         LoadRefusal::Stalled => RefusalError::Stall,
-        LoadRefusal::SourceFailed => return None,
+        LoadRefusal::SourceFailed | LoadRefusal::LiveStalled => return None,
     };
     // The codec class and, for audio, the channel bucket: the facet's raster and exact layout stay
     // in the machine.
@@ -379,6 +379,9 @@ fn refusal_recovered_context(recovered: &super::recovery::Recovered) -> Option<R
         None => (RefusedStream::None, ChannelBucket::Unknown),
     };
     let rung = match recovered.rung {
+        // A Live TV channel's own conversion is no refusal class of the television's: the channel was
+        // read through the live universal transcoder, which says nothing about the set's facets.
+        Rung::Live => return None,
         Rung::Facet => RecoveryRung::Facet,
         Rung::Both => RecoveryRung::Hls,
         Rung::Encode => RecoveryRung::Encode,

@@ -254,8 +254,9 @@ impl JfBackend {
     /// used whenever the plan describes exactly what that stream carries.
     fn transcode_plan(&self, spec: &TranscodeSpec<'_>) -> Option<(Arc<JfClient>, transcode::Plan)> {
         let c = self.client()?;
-        let m = c.metadata_recent(spec.rating_key)?;
-        let held = self.verdict_for(spec.rating_key);
+        let item = transcode::library_item(spec)?;
+        let m = c.metadata_recent(item)?;
+        let held = self.verdict_for(item);
         let encoders = held.as_ref().map_or(playback_info::Encoders::ALL, |v| v.encoders);
         let server = held.filter(|v| !v.direct_play && spec.contract.ceiling.is_none());
         let video_copy = plx_plex::plex::direct_play_video_codecs(spec.caps);
@@ -1042,7 +1043,7 @@ impl Backend for Shared {
         let (c, p) = self.0.transcode_plan(spec)?;
         let url = match &p.server_url {
             Some(server) => c.server_transcode_url(server, spec.session, p.start_ticks),
-            None => c.transcode_url(&p.request(spec.rating_key, spec.session)),
+            None => c.transcode_url(&p.request(transcode::library_item(spec)?, spec.session)),
         };
         Some(StreamUrl::parse(&url))
     }

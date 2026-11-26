@@ -152,13 +152,16 @@ was enough. With the window's alpha on the UI draws unchanged, and a picture sho
 Measured on the TV 10.0 x86_64 emulator, 2026-11-22 (a scratch probe; emulator only, no retail set):
 
 - With the window's alpha **on** (`ecore_wl2_window_alpha_set(win, 1)`; this crate set 0 until part B2) the native player's OVERLAY video shows
-  **only through the pixels the frame clears to (0, 0, 0, 0)**; the UI around it is intact. The window is therefore created translucent and stays so
-  (`plx_platform_tizen::ecore::WINDOW_ALPHA`): it is a flag of the window, so nothing is routed per frame and the Tizen shell's `opaque_route` has no
+  **only through the pixels the frame clears to (0, 0, 0, 0)**; the UI around it is intact. With it off and nothing else, no video shows.
+  **Superseded on 2026-11-26 (next section):** a translucent window shows the TV's home screen through those pixels on a retail set, so the window
+  is now opaque and states `has_video` (`plx_platform_tizen::ecore::WindowMode`), and is translucent only on an image without that call. Either
+  way the mode is a flag of the window set at creation, so nothing is routed per frame and the Tizen shell's `opaque_route` has no
   work. The pages with a ground clear to an opaque colour, so only the player route and the detail trailer preview (`frame_clear_through`) open the
   hole, the same shared chain webOS uses. **The player route's clear is keyed on the route, not on the plane**: the loop clears to `(0, 0, 0, 0)`
   whenever the player route is up (`fr.player`), bound or not, and `PlayerScreen` has no ground, so its spinner and its "Playback failed" read-out sit
   on a transparent clear even with no plane bound. The straighten pass and the capture skip are the ones keyed on `Player::video_plane_bound`.
-- The **video plane mixes STRAIGHT alpha** (pixel-exact: a straight (255, 255, 255, 128) strip is a 50 % veil over the video) while window-over-window
+- The **video plane mixes STRAIGHT alpha** (measured with the window TRANSLUCENT; not re-taken since the window became opaque with
+  `has_video`, whose compositor path is a different one, so it is unverified there; pixel-exact: a straight (255, 255, 255, 128) strip is a 50 % veil over the video) while window-over-window
   composition is premultiplied: the split webOS has, which `plx_gfx` already handles. Over the bound plane the loop's last draw is the straighten pass
   (`gfx/straighten.rs`), which divides the frame's premultiplied colour by its alpha; off the plane the frame goes out premultiplied, which is what the
   window compositor wants.
@@ -192,7 +195,7 @@ Measured on the TV 10.0 x86_64 emulator, 2026-11-22 (a scratch probe; emulator o
 
 At the time of this run the player was not yet bound, so `PauseForHome` and `ResumeAfterHome` had not been exercised with a player open: the first run of part B1's driver (at `126d1f04c`, below) did, and found that Home with a player open never resumed (fixed since in code, re-run pending). Still UNVERIFIED: a picture through the
 real URI driver (part B1, which calls `Hosted::player_open`; the later emulator runs drove it against the mock, and no reading of the picture was taken), and anything on a retail
-set (H6 stays OPEN: the library's thread, the overlay beneath an alpha window, privileges, firmware differences). The C# is built by no CI job
+set (H6 stays OPEN: the library's thread, the overlay beneath an opaque `has_video` window, or an alpha window where the symbol is missing, privileges, firmware differences). The C# is built by no CI job
 (`.github/workflows/tizen.yml` runs `tizen-abi` and `tizen-so`, which links the Rust library and never builds `PlxHost`); it is compiled by a
 `make PLATFORM=tizen tizen-tpk` on a machine with the .NET SDK (the run above did that for this tree).
 
@@ -201,7 +204,7 @@ set (H6 stays OPEN: the library's thread, the overlay beneath an alpha window, p
 `rust-modules/platform-tizen/src/player/` holds `TizenUriDriver`, a Sans-IO `DriverSet` + `UriDriver` over a `HostPlayer` port that `hosted` implements: it
 starts no worker and reads no global, its requests go out as `Hosted::player_open` / `player_verb` and every answer returns as one addressed event
 through `drain_player`. Every request and event carries the epoch, and an event of any other epoch (a completion after a stop) is dropped and counted.
-The driver states `progressive_uri`, `pause`, `seek` and `audio_track`, and no HLS, packet feed, subtitle track, audio-off or subtitle-off. `audio_track` has a narrow
+The driver states `progressive_uri`, `pause`, `seek`, `audio_track` and `subtitle_off`, and no HLS, packet feed, subtitle track or audio-off. `subtitle_off` holds by construction: the host never gives the player a subtitle (no `player_set_subtitle_path`, no text-track selection, no subtitle callback), and a `SelectTrack(Subtitle, Off)` is settled without a host call; "Subtitles off" (below) is the emulator run behind it. `audio_track` has a narrow
 meaning: the host ABI has no track verb, and which audio stream the retail player starts on when a source has several is unmeasured, so the qualifier certifies only a
 source with ONE audio stream (`!has_multiple_audio_tracks`, the webOS precedent `ManyAudioTracksExported`); the planner needs the flag because it issues a `SelectTrack`
 for any title whose server-selected audio stream is stated, and the driver settles that request for the one stream **by construction** (there was nothing to choose between), not
@@ -212,7 +215,7 @@ output (`qualify_pms` is Unknown); the codec table behind Standard is still `Cap
 (`player::MEDIA`) replaces `host::NO_MEDIA` in a `uri` build; it installs the driver only when the host's table offers a player and the run is not a controlled
 one, and returns the resolver only when the adapter accepted the driver. It names no LG binding and publishes no default backend.
 
-**The refusal set.** Before the Tizen qualifier is asked, the planner's own preflight (`ResolvePort::refusal`, final for the play) refuses an original for: a selected rate other than 1x; a quality ceiling or Direct play rule; a Plex relay; Auto on a link not known to be local; Boost Dialog or Normalize Loudness (`audio_contract.any()`); a burned subtitle; a client-drawn (sidecar) subtitle; and, most often, **`SubtitleOff`**: the planner sets `subtitle_choice = Off` whenever the item has ANY subtitle stream and none is selected (`plan.rs`), and no driver here can switch the native player's default subtitle off. A selected embedded subtitle fails the driver's `subtitle_track: false`. With no Feed and `qualify_pms` Unknown, each of these ends as the planner's typed `NoQualifiedBackend` refusal, not as a play. So a title plays through this driver only if it has no subtitle streams (or none that the planner treats as unselected), one audio stream, a container and codecs Standard direct-plays, local Auto or a fixed quality, and no audio enhancement. A resolver test pins `subtitle_choice: Off` to `SubtitleOff` and the others to their reasons. **Open measurement:** whether Tizen's native player renders an embedded subtitle when none is set (which would decide whether `SubtitleOff` could be allowed); until it is measured it is NOT allowed.
+**The refusal set.** Before the Tizen qualifier is asked, the planner's own preflight (`ResolvePort::refusal`, final for the play) refuses an original for: a selected rate other than 1x; a quality ceiling or Direct play rule; a Plex relay; Auto on a link not known to be local; Boost Dialog or Normalize Loudness (`audio_contract.any()`); a burned subtitle; and a client-drawn (sidecar) subtitle. `SubtitleOff` (the item has subtitle streams and none is selected, `subtitle_choice = Off` in `plan.rs`) is refused only where the driver's evidence cannot carry Off, so it no longer stops a Tizen play: that refusal ended every title with subtitles on the first retail report (a 2023 UA65CU7700, discussion #1460), and the one title there without subtitle streams played. A selected embedded subtitle still fails (`SubtitleNotCarried`: the driver states no `subtitle_track`, and nothing here draws one), so a profile whose subtitle preference picks a track gets the refusal until a subtitle render exists. With no Feed and `qualify_pms` Unknown, each refusal ends as the planner's typed `NoQualifiedBackend`, not as a play. So a title plays through this driver if it has no selected subtitle, one audio stream, a container and codecs Standard direct-plays, local Auto or a fixed quality, and no audio enhancement. The resolver tests pin Off to a certified start and the others to their reasons.
 
 **A pick the driver cannot carry does not replace the playing title.** Picking another audio or subtitle track mid-play on a URI attempt that cannot switch natively used to re-plan the play, which retires the playing item first and, here, can only end in `NoQualifiedBackend`. The shared door (`route::request_viewer_reconfigure`) now asks `PlaybackSession::source_track_change_carriable()` first: true with a Feed (webOS) or when the URI resolver's provider says it can certify such an output (`OriginalQualifier::carries_source_track_change`, default true; `TizenQualifier` says false), and a pick nothing can carry is refused with `ViewerReconfigureRefusal::NoBackendCarriesTrack` before anything is retired or spent. **The Quality ladder is the same kind of request** (a rung asks the server to convert, and `request_transcode_refresh` only queues a `Retranscode` that the Feed engine's pump consumes): `PlaybackSession::quality_pick_carriable()` (the same provider flag) makes the More menu not offer the Quality rows and `set_quality` refuse a rung before it persists it or moves the route contract; unrefused, the pick left the title playing unchanged and the next re-resolve of it (a Home restore, a stall retry) planned under the new ceiling and ended in `NoQualifiedBackend`.
 
@@ -352,9 +355,89 @@ In the receiver, in order (the host's lines are fixed by `Program.cs`; the libra
 State plainly what was not seen. The log is the evidence. A host-side window capture of the emulator does show the GL UI (a Windows
 `PrintWindow` capture showed Home, the detail page and the focus ring), so a capture is a record of the screen to attach beside the log.
 
+## Subtitles off (emulator run, 2026-11-25)
+
+The first retail report (discussion #1460: a 2023 UA65CU7700, Tizen 9.0 platform) logged `uri original: the file has subtitle
+streams and none is selected` for every title that had a subtitle stream; the one title without subtitle streams played (Prepared,
+`VideoSize 1920x1026`, Started, an advancing position, a clean Stop and Closed, twice). The question that rule left open was whether
+the native player draws an embedded subtitle when the app sets none. On the Windows machine's Tizen TV 10.0 emulator, against
+`tests/mock_pms.py --movies 0 --extra-media-video-only` with two video-only 180 s clips, each carrying ONE embedded English subtitle
+flagged `default` (a `mov_text` track in an MP4 and a SubRip track in an MKV) whose cue covers 0.5 s to 179 s, and with the mock's
+selection cleared (`PUT /library/parts/<id>?subtitleStreamID=0`, the state the retail log's `select streams: ... sub=0` shows):
+
+- Before the change, the MP4 play ended in `uri original: the file has subtitle streams and none is selected`, and with the shared
+  refusal lifted but `UriSource::can_supply` still answering `false` for Off, in `the certified source did not match this play`.
+- After it, both clips played through this driver (Buffering, Prepared, `VideoSize 1280x720`, Started, the timeline advancing; the
+  MP4 to 45 s, then a clean Stop and Closed), and captures of the panel at 1.3 s and 25 s (MP4) and at 7.4 s and 15.4 s (MKV) show
+  the test pattern with no subtitle text on it.
+
+So on the emulator the native player draws no embedded subtitle the app did not set, including a default-flagged one, and the
+driver states `subtitle_off`. **The retail set is not measured**: the next nightly asks the tester to confirm that a title with
+subtitles shows none. A selected embedded subtitle is still refused (`SubtitleNotCarried`), and the emulator has no audio path, so
+sound is not determinable here.
+
+## The window is opaque and has video (retail report and emulator run, 2026-11-26)
+
+The first retail set (discussion #1460) played video with the translucent window above and sent two photos. The TV's own
+home screen (Smart Hub) showed through every pixel the frame cleared to (0, 0, 0, 0): in the letterbox bars above and below
+a wide picture, and over the whole screen, under the player's controls, when no picture was up. The emulator never showed
+this because nothing was below its window.
+
+The compositor's source explains it (Tizen's E20, read from a 2019 mirror; the TV's current compositor was not read):
+
+- `ecore_wl2_window_alpha_set(win, 1)` sends a null opaque region, which marks the window ARGB, and E20's visibility walk
+  (`e_client.c`) never lets an ARGB window hide the windows below it.
+- `ecore_wl2_window_video_has(win, 1)` (Tizen-only, public since 6.0) sends `tizen_policy.has_video`. For a window that is
+  NOT ARGB the compositor then puts a (0, 0, 0, 0) COPY rectangle under it and blends its buffer's alpha
+  (`e_comp_wl_subsurface.c`, `_e_comp_wl_subsurface_check_below_bg_rectangle`). The window's alpha-0 pixels reach the video
+  plane, and the windows below stay hidden.
+
+So `ecore::WindowMode` makes the window opaque (alpha 0) and calls `video_has` after the surface exists. It falls back to the
+translucent window only where the symbol is missing, because an opaque window without `has_video` shows no video at all.
+
+Measured on the TV 10.0 emulator against `tests/mock_pms.py`:
+
+- The log reads `ecore: ecore_wl2_video bound` and `ecore: window mode OpaqueWithVideo (alpha 0)`.
+- A 1280x720 clip plays (Prepared, `VideoSize 1280x720`, Started) and its picture fills the panel.
+- The controls draw over the picture.
+- Home and the detail page are opaque, before playback and after Back.
+
+**Not measured:** a retail set. Whether Smart Hub stays hidden, and what the letterbox bars show (the plane's own background,
+expected black), is the tester's next nightly.
+
+## The system keyboard (emulator run, 2026-11-25)
+
+Search's field raises the television's own on-screen keyboard through Ecore IMF (`platform-tizen/src/ime.rs`). The
+platform's `Shell` states `keyboard_available` / `show_keyboard` / `hide_keyboard`, which `textinput` calls where an SDL
+shell calls SDL. Every IMF call runs on the host's main thread (`run_on_host`). The sequence is flutter-tizen's
+`tizen_input_method_context.cc`: a context from `ecore_imf_context_default_id_get`, the window as its client by
+`ecore_wl2_window_id_get`, then `focus_in` + `input_panel_show` to raise it and `input_panel_hide` + `focus_out` to dismiss it.
+
+Measured on the TV 10.0 emulator against `tests/mock_pms.py`:
+
+- **Raise.** OK on the field logs `keyboard: start support=1`, `ime: context_add(wayland)`, `ime: panel show` and
+  `ime: panel state Show`. The Samsung keyboard is drawn over the lower part of the window.
+- **Typing.** While the panel is up the remote's arrows and OK move and press inside the panel. They do not reach the window.
+  Each letter arrives as one COMMIT (`ime: commit (1 bytes)`; the text is never logged) and the query follows it.
+- **Keys the panel sends to the window.** Three of the panel's keys arrive as ordinary key events, now in `keys.rs` as
+  measured rows:
+  - Its delete key is `BackSpace` (code 22) and deletes one character.
+  - Done is `Select` (code 0). It is bound to OK, so the field commits the query and closes the panel. Done also
+    hides the panel, and its HIDE and its key can arrive in either order; `ime::Panel::done` makes them one decision. A
+    `Select` while the panel is up is the OK and the HIDE behind it is the library's own; a `Select` after the HIDE
+    already dismissed the field is dropped, so it cannot raise the panel again.
+  - Back is `Cancel` (code 231). It has no action, because the panel closes itself.
+- **Closed on the panel.** After Back, the panel's STATE callback reports HIDE and the library pushes
+  `Input::KeyboardDismissed` (`ime: panel state Hide (closed on the panel)`). The loop turns it into the same
+  `SystemKeyboard(false)` the background edge sends, so the field stops owning a keyboard that has gone, and OK on the
+  field raises the panel again. A HIDE after the library's own `hide` is not counted as the viewer's (`ime::Panel`).
+
+Not measured: a retail set, other layouts and languages (the `globe` key), the panel's arrows `<` / `>`, and the
+`filter_event` forwarding flutter-tizen does while the panel is up, which this emulator did not need.
+
 ## Known gaps seen on the emulator (2026-11-21)
 
-- The Home hero's Play looks enabled; pressing it opens the player route ("Playback failed / The server cannot play or convert this file", footer `decision_refused`) and logs no decision line. That route clears to `(0, 0, 0, 0)` over a translucent window: the emulator shows black behind the read-out (above); a retail set is unmeasured (H6).
+- The Home hero's Play looks enabled; pressing it opens the player route ("Playback failed / The server cannot play or convert this file", footer `decision_refused`) and logs no decision line. That route clears to `(0, 0, 0, 0)`: the emulator shows black behind the read-out (above). The retail set showed its home screen there while the window was translucent; since the window is opaque with video ("The window is opaque and has video", above), what it shows is unmeasured.
 - (Fixed in part B2.) `shader compile FAILED: 0:37(1): error: syntax error, unexpected NEW_IDENTIFIER` on YaGL, followed by `straighten: no program`, was seen on 2026-11-21. Part B2 gave the copy variant a source of its own ("The video plane", above) and the 2026-11-22 run at `3d56d35b2` logs `straighten: no framebuffer fetch - the pass copies the frame` instead.
 - webOS-only lines are still printed: `devcaps: ... assuming the 49SM9000PLA profile`, the player footer `webOS unknown — os_info.json unreadable · unknown set`, and three `ff: ... MISSING ... reinstall the package` lines, whose advice does not apply to this package.
 - Closing the app logs `surface: the host asked the library to stop, so the window teardown is not requested; it lives until the process ends`.

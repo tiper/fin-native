@@ -125,8 +125,9 @@ pub fn window_flags(win: *mut c_void) -> u32 {
     unsafe { SDL_GetWindowFlags(win) }
 }
 
-/// What the boot log's `keyboard:` line reports about the system keyboard. The fields are SDL's own
-/// numbers, unconverted, so the line keeps printing exactly what it always has.
+/// SDL's own numbers about the system keyboard, unconverted, for the boot log's `keyboard:` line. The
+/// line prints `active` and `wflags` from here; its `support=` is the platform's answer
+/// (`Shell::keyboard_available`), which on an SDL shell is this struct's `support` again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyboardProbe {
     /// `SDL_HasScreenKeyboardSupport()`.
@@ -137,7 +138,7 @@ pub struct KeyboardProbe {
     pub wflags: u32,
 }
 
-/// Read the three facts the `keyboard:` boot line prints, in one call.
+/// Read SDL's three keyboard facts (the `keyboard:` boot line's SDL half), in one call.
 pub fn keyboard_probe(win: *mut c_void) -> KeyboardProbe {
     unsafe {
         KeyboardProbe {
@@ -551,7 +552,8 @@ mod tests {
 
     /// **A surface with no SDL window is safe to ask the SDL-shaped questions** (the Tizen platform's
     /// `Surface::window()` is null and it never initialises SDL: `docs/platform-ports.md`, W9, D1).
-    /// This calls the REAL externs `keyboard_probe` and `textinput::available` reach, not
+    /// This calls the REAL externs `keyboard_probe` reaches (and `textinput::available` on an SDL shell;
+    /// on Tizen it asks the platform's own keyboard instead), not
     /// [`host_test_sdl`]'s stubs, which `cfg(test)` swaps in for the wrappers above: the declarations
     /// in `sys.rs` resolve against the host's SDL2, whose video subsystem no host test initialises, so
     /// this is exactly the state of a process that never called `SDL_Init`. SDL answers a NULL window with

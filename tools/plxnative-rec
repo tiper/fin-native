@@ -97,7 +97,7 @@ UI_ENUMS = {
     'dolby_vision_mode': ('auto', 'off'),
     'deck_press': ('details', 'play'),
 }
-LANGUAGE_ENUM = ('system', 'en', 'es', 'be', 'ca', 'fr', 'it', 'pt', 'de', 'hu', 'ru', 'pl', 'nl')
+LANGUAGE_ENUM = ('system', 'en', 'es', 'be', 'ca', 'fr', 'it', 'pt', 'de', 'hu', 'ru', 'pl', 'nl', 'hr')
 POSTER_LADDER = ('year_length', 'genre', 'video', 'age_rating_score', 'none')
 POSTER_PARTS = {
     'detail_parts': ('year', 'length', 'genre', 'video_quality', 'age_rating', 'score'),
@@ -108,7 +108,7 @@ POSTER_PARTS = {
 # Shape of the actual producer's permanent V13 anchor: keys, scalar types and array
 # arities only, never values. This closes new initial-state domains without granting
 # arbitrary strings permission. The raw anchor hash is pinned independently in tests.
-CURRENT_FP = 9159521251572352515  # 0x7f1d_280c_909c_8603: the census with the by-id `Id` resolution row
+CURRENT_FP = 8363262880582770195  # Current V13 producer fingerprint.
 CURRENT_MANIFEST_SHAPE = '59120bd99cf7687b732343385c8623508aa21f86e3268fae175987a3f6a773fc'
 
 

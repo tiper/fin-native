@@ -106,8 +106,8 @@ pub(crate) fn note_dim(d: Dim) {
 }
 
 /// Run `f` (a dim's paint) as the dim of surface `index` (its position in the stack, bottom = 0).
-/// `ModalStack::draw_scrims_on` records EVERY surface's dim before any surface draws, so the
-/// frame's count alone cannot say how many lie below a given surface.
+/// The page pass records page-backed dims before the surfaces draw. Dims above an opaque
+/// surface are recorded during the surface pass. The owner index keeps both paths ordered.
 pub(crate) fn dim_owner<R>(index: usize, f: impl FnOnce() -> R) -> R {
     let prev = DIM_OWNER.with(|c| c.replace(index));
     let r = f();

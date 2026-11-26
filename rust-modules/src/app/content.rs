@@ -250,6 +250,14 @@ pub(super) fn request_play_intent(
         }
         plx_screens::registry::PlayIntent::Movie { item, version } =>
             plx_media::route::request_play_movie(session, meta, super::playback::start_caps(), item, &super::playback::movie_ctx(item), *version),
+        plx_screens::registry::PlayIntent::Live { sid, dvr, channel, title } => {
+            let ok = plx_media::route::request_live(session, meta, super::playback::start_caps(), *sid, dvr, channel, title);
+            if ok {
+                // The previous item's caption would otherwise label the channel for the whole tune.
+                meta.run(plx_data::stores::metadata::MetadataCmd::SetNowPlaying(None));
+            }
+            ok
+        }
     }
 }
 
@@ -807,7 +815,9 @@ fn home_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, request: 
     use plx_machine::machine::AppCommandOutcome;
     let MachineId::Instance(instance) = source else { return AppCommandOutcome::Refused };
     let Some(entry) = app.pages.nav.entry_of_instance(instance) else { return AppCommandOutcome::RetiredSender };
-    if !holds_input(app.pages, entry) || app.route() != AppArg::Home {
+    let from_live = app.route() == AppArg::LiveTv;
+    if !holds_input(app.pages, entry) || (app.route() != AppArg::Home
+        && !(from_live && matches!(request, HomeReq::Tab(_) | HomeReq::Account))) {
         return AppCommandOutcome::Refused;
     }
     match request {
@@ -815,12 +825,15 @@ fn home_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, request: 
         HomeReq::Account => chip_activate(app.pages),
         HomeReq::Tab(tab) => {
             // A stale presented map cannot resurrect a withdrawn destination.
-            if !home_tab_available(app.bridge.browse_directory(), tab) { return AppCommandOutcome::Refused; }
+            if !home_tab_available(app.bridge.browse_directory(), app.bridge.livetv_available(), tab) {
+                return AppCommandOutcome::Refused;
+            }
             match tab {
                 HomeTab::Home => {
                     bridge::nav_cancel(app.pages);
-                    bridge::nav_home_pill(app.pages, app.bridge, None);
+                    bridge::nav_home_pill(app.pages, app.bridge, from_live.then_some(ret));
                 }
+                HomeTab::LiveTv if from_live => {}
                 other => bridge::nav_tab(app.pages, app.bridge, other, None, Some(ret)),
             }
         }
@@ -1210,8 +1223,10 @@ pub(crate) fn watchlist_navigation(
 
 fn home_tab_available(
     directory: plx_data::stores::browse::DirectoryView<'_>,
+    live_tv: bool,
     tab: HomeTab,
 ) -> bool {
+    if tab == HomeTab::LiveTv { return live_tv; }
     let kind = match tab {
         HomeTab::Movies => Some(plx_data::stores::browse::SecKind::Movie),
         HomeTab::Shows => Some(plx_data::stores::browse::SecKind::Show),
@@ -1473,9 +1488,11 @@ mod library_publication_tests {
             },
         ]);
 
-        assert!(home_tab_available(directory.view(), HomeTab::Movies));
-        assert!(!home_tab_available(directory.view(), HomeTab::Shows));
-        assert!(home_tab_available(directory.view(), HomeTab::Home));
+        assert!(home_tab_available(directory.view(), false, HomeTab::Movies));
+        assert!(!home_tab_available(directory.view(), false, HomeTab::Shows));
+        assert!(home_tab_available(directory.view(), false, HomeTab::Home));
+        assert!(!home_tab_available(directory.view(), false, HomeTab::LiveTv));
+        assert!(home_tab_available(directory.view(), true, HomeTab::LiveTv));
     }
 
     #[test]

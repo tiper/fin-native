@@ -201,6 +201,7 @@ impl HudCommand {
     /// **Is a press of this command meaningful now?** The table's "Enabled" column, from the
     /// frame's [`HudModel`] alone.
     pub fn enabled(self, model: &HudModel) -> bool {
+        if model.is_live { return self.shown_live(); }
         match self {
             // a jump needs a known duration to clamp against (`commit_jump` returns without one)
             HudCommand::Seek(_) => model.duration_ns > 0,
@@ -216,6 +217,10 @@ impl HudCommand {
             | HudCommand::FromBeginning
             | HudCommand::ToggleStats => true,
         }
+    }
+
+    pub fn shown_live(self) -> bool {
+        matches!(self, Self::TogglePlay | Self::ToggleSection(Section::Info) | Self::ToggleStats)
     }
 }
 

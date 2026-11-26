@@ -76,10 +76,16 @@ impl UriSource {
 
     /// Whether this owned source can execute its required native track choices. The same
     /// check guards qualification and the physical Start; no URL or index map escapes.
+    ///
+    /// `Off` names no track, so it needs nothing of the source's map: whether a play can be carried
+    /// with a track off is the DRIVER's capability ([`Capabilities::supports_track`]), which every
+    /// URI driver checks before this (a pipeline that shows a default subtitle by itself states
+    /// `subtitle_off: false` and refuses it there).
+    ///
+    /// [`Capabilities::supports_track`]: crate::Capabilities::supports_track
     pub fn can_supply(&self, requirements: Requirements) -> bool {
         let mapped = |choice, kind| match choice {
-            TrackChoice::Unspecified => true,
-            TrackChoice::Off => false,
+            TrackChoice::Unspecified | TrackChoice::Off => true,
             TrackChoice::Selected(id) => native_index(&self.tracks, TrackSelection { kind, id }).is_some(),
         };
         self.has_url() && self.valid_track_map()
@@ -134,5 +140,33 @@ impl UriNotReady {
             Self::DisplayUnavailable => "the driver has no display path",
             Self::Driver(reason) => reason,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Capabilities, Fidelity, SourceKind};
+
+    fn wants(audio_track: TrackChoice, subtitle_track: TrackChoice) -> Requirements {
+        Requirements { source: SourceKind::ProgressiveUri, video: Fidelity::Exact, audio: Fidelity::Exact,
+            audio_track, subtitle_track }
+    }
+
+    /// Off names no track, so a URL source supplies it with an empty map; whether it is carried is the driver's
+    /// capability, which refuses it where the pipeline cannot hold a track off.
+    #[test]
+    fn off_needs_no_native_track_and_is_the_drivers_to_refuse() {
+        let source = UriSource::new("http://pms/file".into(), vec![]);
+        let off = wants(TrackChoice::Unspecified, TrackChoice::Off);
+        assert!(source.can_supply(off));
+        assert!(source.can_supply(wants(TrackChoice::Off, TrackChoice::Unspecified)));
+        assert!(!source.can_supply(wants(TrackChoice::Unspecified, TrackChoice::Selected(7))),
+            "a selected track still needs its native index");
+        assert!(!UriSource::new(String::new(), vec![]).can_supply(off), "no URL, no source");
+        let no_off = Capabilities { progressive_uri: true, hls_uri: false, packet_feed: false, pause: true, seek: true,
+            audio_track: true, subtitle_track: true, audio_off: false, subtitle_off: false };
+        assert!(!no_off.supports(off));
+        assert!(Capabilities { subtitle_off: true, ..no_off }.supports(off));
     }
 }

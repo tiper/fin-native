@@ -728,7 +728,12 @@ impl ResolvePort {
         else if request.selection.audio_contract.any() { Some(UriDecline::AudioEnhancement) }
         else if request.requires_subtitle_burn { Some(UriDecline::SubtitleBurn) }
         else if request.requires_client_subtitle { Some(UriDecline::ClientSubtitle) }
-        else if request.subtitle_choice == TrackChoice::Off { Some(UriDecline::SubtitleOff) }
+        // Off is refused only where the driver cannot carry it: a pipeline that shows a default
+        // subtitle by itself (the webOS one) states `subtitle_off: false`.
+        else if request.subtitle_choice == TrackChoice::Off
+            && !(evidence.callable.subtitle_off && evidence.certified.subtitle_off) {
+            Some(UriDecline::SubtitleOff)
+        }
         else if request.dolby_vision.present
             && request.dolby_vision_mode == plx_plex::plex::session::DolbyVisionMode::Off {
             Some(UriDecline::DolbyVisionOff)
@@ -1170,7 +1175,7 @@ mod tests {
                     audio_track: TrackChoice::Selected(42),
                     subtitle_track: if request.selection.subtitle_sid > 0 {
                         TrackChoice::Selected(request.selection.subtitle_sid as u64)
-                    } else { TrackChoice::Unspecified } },
+                    } else { request.subtitle_choice } },
                 certified_dolby_vision: self.dovi,
                 certified_subtitle_source: self.subtitle.clone(),
                 expires_at: if self.expired { Instant::now() - std::time::Duration::from_secs(1) }
@@ -1412,11 +1417,22 @@ mod tests {
         let render_proof = ResolvePort::new(evidence, Arc::new(Certified { dovi: None,
             subtitle: Some(source_subtitle.clone()), expired: false, mapped: true }));
         assert!(matches!(render_proof.qualify(&off, subtitle_request()), Verdict::Known(_)));
-        let mut off_request = request();
-        off_request.dolby_vision = plx_data::metadata::Dovi::NONE;
-        off_request.subtitle_choice = TrackChoice::Off;
-        assert!(matches!(render_proof.qualify(&off, off_request), Verdict::Refused(UriDecline::SubtitleOff)),
+        let off_request = || { let mut input = request(); input.dolby_vision = plx_data::metadata::Dovi::NONE;
+            input.subtitle_choice = TrackChoice::Off; input };
+        assert!(matches!(render_proof.qualify(&off, off_request()), Verdict::Refused(UriDecline::SubtitleOff)),
             "the native driver cannot disable an otherwise selectable subtitle");
+        // A driver that carries Off (its pipeline is given no subtitle, the Tizen host's) is asked, and certifies it.
+        let carries_off = Capabilities { subtitle_off: true, ..evidence.callable };
+        let off_evidence = ProductEvidence { callable: carries_off,
+            certified: Capabilities { subtitle_off: true, ..evidence.certified }, ..evidence };
+        let off_driver = ResolvePort::new(off_evidence, Arc::new(Certified { dovi: None,
+            subtitle: None, expired: false, mapped: true }));
+        assert!(matches!(off_driver.qualify(&off, off_request()), Verdict::Known(_)),
+            "Off is refused only where the driver cannot carry it");
+        // Callable is not enough: Off must also be certified.
+        let uncertified = ResolvePort::new(ProductEvidence { callable: carries_off, ..evidence },
+            Arc::new(Certified { dovi: None, subtitle: None, expired: false, mapped: true }));
+        assert!(matches!(uncertified.qualify(&off, off_request()), Verdict::Refused(UriDecline::SubtitleOff)));
     }
 
     // ---- why the Experimental engine did not take a play (`UriDecline`) ----

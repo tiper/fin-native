@@ -1,0 +1,57 @@
+name: Classify issue
+description: Analyze one issue with Pullfrog and return structured triage.
+outputs:
+  result:
+    description: Validated Pullfrog output
+    value: ${{ steps.pullfrog.outputs.result }}
+runs:
+  using: composite
+  steps:
+    - name: Run Pullfrog
+      id: pullfrog
+      uses: pullfrog/pullfrog@19ed08a1c60d607423b3096ae625ddb70bc161ca # v0.1.142
+      env:
+        PULLFROG_FORCE_LOCAL_CLI: '1'
+        # The pinned action uses this read-only job token for Git and GitHub tools.
+        GH_TOKEN: ${{ github.token }}
+      with:
+        # A standalone prompt_file avoids the App's webhook dispatch path. The read-only
+        # GH_TOKEN, rather than progress_comments, prevents the model from posting.
+        prompt_file: ${{ runner.temp }}/issue-triage.txt
+        model: deepseek/deepseek-flash
+        effort: high
+        timeout: 6m
+        shell: disabled
+        push: disabled
+        progress_comments: disabled
+        output_schema: |
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["labels", "related", "support"],
+            "properties": {
+              "labels": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 50}},
+              "related": {
+                "type": "array", "maxItems": 2,
+                "items": {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["number", "reason"],
+                  "properties": {
+                    "number": {"type": "integer", "minimum": 1},
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 250}
+                  }
+                }
+              },
+              "support": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "required": ["outcome", "category", "topic", "handoff"],
+                "properties": {
+                  "outcome": {"enum": ["ask", "check", "handoff", "quiet"]},
+                  "category": {"enum": ["app_bug", "platform_limit", "configuration", "feature", "unclear"]},
+                  "topic": {"type": ["string", "null"], "maxLength": 40},
+                  "handoff": {"type": ["string", "null"], "minLength": 1, "maxLength": 350}
+                }
+              }
+            }
+          }

@@ -1,0 +1,130 @@
+name: Triage one issue
+
+on:
+  workflow_call:
+    inputs:
+      number:
+        type: number
+        required: true
+      only_if_unlabeled:
+        type: boolean
+        required: true
+      dry_run:
+        type: boolean
+        required: true
+      support_mode:
+        type: string
+        required: true
+      comment_id:
+        type: number
+        required: true
+
+concurrency:
+  group: issue-triage-${{ inputs.number }}
+  cancel-in-progress: false
+
+jobs:
+  classify:
+    name: classify issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      id-token: write
+    outputs:
+      eligible: ${{ steps.prepare.outputs.eligible }}
+      model: ${{ steps.prepare.outputs.model }}
+      revision: ${{ steps.prepare.outputs.revision }}
+      conversation: ${{ steps.prepare.outputs.conversation }}
+      sensitive: ${{ steps.prepare.outputs.sensitive }}
+      result: ${{ steps.initial.outcome == 'success' && steps.initial.outputs.result || steps.retry.outcome == 'success' && steps.retry.outputs.result || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare trusted instructions and issue context
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.number }}
+          ONLY_IF_UNLABELED: ${{ inputs.only_if_unlabeled }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          SUPPORT_MODE: ${{ inputs.support_mode }}
+          SUPPORT_COMMENT_ID: ${{ inputs.comment_id }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$ONLY_IF_UNLABELED" == true ]]; then args+=(--only-if-unlabeled); fi
+          if [[ "$DRY_RUN" == true ]]; then args+=(--dry-run); fi
+          python3 ci/label-issue.py prepare "$ISSUE" "${args[@]}" > "$RUNNER_TEMP/issue-triage.txt"
+      - name: Classify and triage with Pullfrog
+        # An exhausted or human-owned thread is handed off without a model call.
+        if: steps.prepare.outputs.eligible == 'true' && steps.prepare.outputs.sensitive != 'true' && steps.prepare.outputs.model == 'true'
+        id: initial
+        continue-on-error: true
+        uses: ./.github/actions/classify-issue
+      - name: Retry classification once
+        if: steps.initial.outcome == 'failure'
+        id: retry
+        uses: ./.github/actions/classify-issue
+      - name: Show validated dry run
+        if: ${{ !cancelled() && steps.prepare.outputs.eligible == 'true' && inputs.dry_run }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.number }}
+          ISSUE_REVISION: ${{ steps.prepare.outputs.revision }}
+          SUPPORT_CONVERSATION: ${{ steps.prepare.outputs.conversation }}
+          SUPPORT_MODE: ${{ inputs.support_mode }}
+          SUPPORT_COMMENT_ID: ${{ inputs.comment_id }}
+          TRIAGE_SENSITIVE: ${{ steps.prepare.outputs.sensitive }}
+          PULLFROG_RESULT: ${{ steps.initial.outcome == 'success' && steps.initial.outputs.result || steps.retry.outcome == 'success' && steps.retry.outputs.result || '' }}
+        run: python3 ci/label-issue.py apply "$ISSUE" --dry-run
+
+  apply:
+    name: apply triage
+    needs: classify
+    # The deterministic user-report label still applies if both model attempts failed.
+    if: ${{ !cancelled() && !inputs.dry_run && needs.classify.outputs.eligible == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            ci/label-issue.py
+            ci/issue_support.py
+          sparse-checkout-cone-mode: false
+      - name: Get Pullfrog token for issue writes
+        id: pullfrog_write
+        if: inputs.comment_id == 0 || needs.classify.outputs.result != '' || needs.classify.outputs.model == 'false'
+        # Keep the validated summary available if the token exchange fails.
+        continue-on-error: true
+        uses: pullfrog/pullfrog/get-installation-token@19ed08a1c60d607423b3096ae625ddb70bc161ca # v0.1.142
+        env:
+          PULLFROG_FORCE_LOCAL_CLI: '1'
+      - name: Apply validated triage
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PULLFROG_WRITE_TOKEN: ${{ steps.pullfrog_write.outputs.token }}
+          ISSUE: ${{ inputs.number }}
+          ONLY_IF_UNLABELED: ${{ inputs.only_if_unlabeled }}
+          ISSUE_REVISION: ${{ needs.classify.outputs.revision }}
+          SUPPORT_CONVERSATION: ${{ needs.classify.outputs.conversation }}
+          SUPPORT_MODE: ${{ inputs.support_mode }}
+          # Replies and support labels also need the variable to still be public when this runs.
+          CURRENT_SUPPORT_MODE: ${{ vars.PLXNATIVE_ISSUE_SUPPORT }}
+          SUPPORT_COMMENT_ID: ${{ inputs.comment_id }}
+          TRIAGE_SENSITIVE: ${{ needs.classify.outputs.sensitive }}
+          PULLFROG_RESULT: ${{ needs.classify.outputs.result }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$ONLY_IF_UNLABELED" == true ]]; then args+=(--only-if-unlabeled); fi
+          python3 ci/label-issue.py apply "$ISSUE" "${args[@]}"

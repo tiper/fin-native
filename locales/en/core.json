@@ -61,6 +61,29 @@
     },
     "description": "Time remaining of an hour or more in a still's one-line footer, shortest form: '1h 12m left'. See core.footer_left_minutes. DRAFT per language until a native reviewer has read it."
   },
+  "core.airing_started": {
+    "value": "Started {minutes} min ago",
+    "args": {
+      "minutes": "i64"
+    },
+    "description": "How long ago a live programme started, in whole minutes, while it is within its first ten minutes: 'Started 4 min ago'. Live TV tile captions and the player banner's time line. DRAFT per language until a native reviewer has read it."
+  },
+  "core.airing_range": {
+    "value": "{start}–{end}",
+    "args": {
+      "start": "str",
+      "end": "str"
+    },
+    "description": "The clock times a live programme runs between, each already in the television's clock style: '21:00–22:00'."
+  },
+  "core.airing_pair": {
+    "value": "{first} · {second}",
+    "args": {
+      "first": "str",
+      "second": "str"
+    },
+    "description": "Two parts of a live programme's time line joined by a middle dot: '21:00–22:00 · 22m left', 'Started 4 min ago · 1h 18m left'. A language may reorder the parts."
+  },
   "core.seconds": {
     "value": "{seconds} s",
     "args": {

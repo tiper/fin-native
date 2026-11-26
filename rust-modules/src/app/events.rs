@@ -119,6 +119,9 @@ pub(crate) enum HostEvent {
     /// loop ignores an empty one as it always has). The platform's own text layout is decoded
     /// before it gets here (`plx_shell_sdl::text::decode`, the one place that knows the offsets).
     Text(String),
+    /// The platform took its on-screen keyboard down by itself ([`super::platform::EventSink::keyboard_dismissed`]):
+    /// the viewer closed it on the panel. Input, since it is the viewer's act.
+    KeyboardDismissed,
     /// One pointer event, at authored 1920x1080 coordinates (`plx_shell_sdl::event::ptr_xy`: the window's pixels
     /// converted exactly once, the identity while the drawable is the canvas). `edge` is what it did:
     /// moved, went down or came up. It is the event TYPE alone, for any button, as the loop has always
@@ -140,7 +143,7 @@ impl HostEvent {
     /// session open and repaints as input damage, where the window's events are page damage. The same
     /// split [`is_input_event`] makes of an SDL event type, which `host_event_tests` pins them to.
     pub(crate) fn is_input(&self) -> bool {
-        matches!(self, HostEvent::Key(_) | HostEvent::Text(_) | HostEvent::Pointer { .. } | HostEvent::Wheel { .. })
+        matches!(self, HostEvent::Key(_) | HostEvent::Text(_) | HostEvent::KeyboardDismissed | HostEvent::Pointer { .. } | HostEvent::Wheel { .. })
     }
 }
 
@@ -281,6 +284,9 @@ impl super::platform::EventSink for HostQueue {
     }
     fn text(&mut self, text: &str) {
         self.0.push(HostEvent::Text(text.to_owned()));
+    }
+    fn keyboard_dismissed(&mut self) {
+        self.0.push(HostEvent::KeyboardDismissed);
     }
     fn pointer(&mut self, x: f32, y: f32, edge: PointerEdge) {
         self.0.push(HostEvent::Pointer { x, y, edge });
@@ -450,10 +456,12 @@ pub(crate) fn token_is_direct(tok: &str) -> bool {
         return true;
     }
     tok == "shot"
+        || tok == "state" // the command API's snapshot dump (api.rs)
         || tok == "diag"
         || tok == "diagnostics"
         || tok.starts_with("pat:")
         || tok.starts_with("txt:")
+        || tok.starts_with("api:") // the command API's verbs perform on the spot (api.rs)
 }
 
 #[cfg(test)]
@@ -539,13 +547,16 @@ pub(crate) fn dispatch_remote_token(flavor: SdlFlavor, tok: &str, ps: &plx_media
             RemotePointer::Up => remote_synth_pointer(SDL_MOUSEBUTTONUP, x, y),
         }
         true
-    } else if cfg!(feature = "sim") && tok == "shot" {
-        // Simulator only. Screenshotting has to be a TOKEN rather than a launch option, because
-        // the interesting frame is the one AFTER driving, and `PLXNATIVE_SHOT_FRAME` is fixed
-        // before the app starts — worse, presented frames only accrue when something repaints
-        // (the idle gate), so no frame number can be predicted from outside. This makes
-        // `down down right ok shot` a single composable line.
-        #[cfg(feature = "sim")]
+    } else if tok == "shot" && (cfg!(feature = "sim") || plx_base::devtrig::ENABLED) {
+        // The command API's screenshot door (simulator + every devtrig build — the FIFO's own
+        // gate; the stable build has no FIFO, hence no shot). Screenshotting has to be a TOKEN
+        // rather than a launch option, because the interesting frame is the one AFTER driving,
+        // and `PLXNATIVE_SHOT_FRAME` is fixed before the app starts — worse, presented frames
+        // only accrue when something repaints (the idle gate), so no frame number can be
+        // predicted from outside. This makes `down down right ok shot` a single composable
+        // line, and the same token works on the television. `shot.rs` writes `shot-<N>.png`
+        // in the instance root for the agent to fetch.
+        #[cfg(any(feature = "sim", feature = "devtriggers"))]
         crate::shot::request();
         true
     } else if tok == "okdown" || tok == "okup" {

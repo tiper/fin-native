@@ -37,8 +37,17 @@ pub struct HudModel {
     pub skip_progress: Option<f32>,
     /// The playing metadata is a genuine episode, independent of queue neighbours.
     pub is_episode: bool,
-    /// The projected local wall-clock finish time, supplied by the app for this frame.
+    /// The source is a channel with no seek bar or library-only controls.
+    pub is_live: bool,
+    /// The projected local wall-clock finish time (`plx_ui::fmt::clock_hm` of the projected Unix
+    /// second in the zone in force AT that second, `wall`'s own offset where the zone cannot say),
+    /// supplied by the app for this frame and worded at draw.
     pub end_time: Option<[i32; 2]>,
+    /// This frame's wall-clock time as the loop published it (`Bridge::wall`; `None` under a
+    /// replay and where the platform cannot say): what the live airing's clock times and "22m
+    /// left" are worded from at draw (`plx_ui::fmt::airing_line`), and what the screen's clock
+    /// fingerprint follows so the line is redrawn when its words change.
+    pub wall: Option<plx_ui::fmt::Wall>,
     /// `plx_media::player::TX.scrub_ns.load(Relaxed)`: the live scrub preview's target, -1 when no
     /// scrub is in progress.
     pub scrub_ns: i64,
@@ -95,7 +104,9 @@ impl Default for HudModel {
             paused: false,
             marker_prefs: Default::default(), playback_id: 0, advancing: false, seeking: false, covered: false, skip_progress: None,
             is_episode: false,
+            is_live: false,
             end_time: None,
+            wall: None,
             scrub_ns: -1,
             playpos_ns: 0,
             seek_display_ns: -1,
@@ -156,7 +167,7 @@ pub fn end_time_is_eligible(state: EndTimeEligibility) -> bool {
 /// playback pipeline's APPLIED rate (per mille). Invalid or unrepresentable inputs stay unknown.
 ///
 /// Keep the wall clock and remaining media time at subsecond precision until they have been added.
-/// Apply timezone rules at the projected instant, including any DST transition before the end.
+/// The result is a clock face; [`projected_end_clock`] puts it in the zone at the END second.
 pub fn projected_end_unix_seconds(
     now_utc_ms: i64,
     position_ns: i64,
@@ -174,9 +185,82 @@ pub fn projected_end_unix_seconds(
     Some(end_ms / 1_000)
 }
 
+/// **The finish time the HUD words**: [`projected_end_unix_seconds`] from the frame's published
+/// `wall` time (to the millisecond, so a steady playback projects the same second all the way
+/// through a wall second; no second clock is read) as the viewer's `[hour, minute]` in the
+/// zone AT THE FINISH (`utc_offset_at`, the app's clock door: seconds east of UTC at the Unix second
+/// it is given, `None` where the zone cannot say), so a title that spans a clock change ends at the
+/// local time after it. Where the zone cannot be read at the end, `wall`'s own offset stands (a
+/// finish time a clock change off is better than none). The conversion is
+/// `plx_ui::fmt::clock_hm`, the one every clock face shares.
+pub fn projected_end_clock(
+    wall: plx_ui::fmt::Wall,
+    position_ns: i64,
+    duration_ns: i64,
+    rate_permille: Option<i32>,
+    utc_offset_at: impl FnOnce(i64) -> Option<i32>,
+) -> Option<[i32; 2]> {
+    let end = projected_end_unix_seconds(wall.unix_ms, position_ns, duration_ns, rate_permille)?;
+    plx_ui::fmt::clock_hm(end, i64::from(utc_offset_at(end).unwrap_or(wall.utc_offset_s)))
+}
+
 #[cfg(test)]
 mod end_time_tests {
-    use super::{end_time_is_eligible, projected_end_unix_seconds};
+    use super::{end_time_is_eligible, projected_end_clock, projected_end_unix_seconds};
+
+    #[test]
+    fn the_finish_clock_is_the_projected_second_in_the_published_zone() {
+        // 2026-11-25 21:00:00 UTC, thirty-five minutes of film at 1x, 2x and in three zones.
+        let wall = |utc_offset_s| plx_ui::fmt::Wall::from_secs(1_795_640_400, utc_offset_s);
+        let film = 35 * 60 * 1_000_000_000i64;
+        // A zone with no clock change: the offset is the published one at every instant.
+        let steady = |offset: i32| move |_end: i64| Some(offset);
+        assert_eq!(projected_end_clock(wall(0), 0, film, Some(1000), steady(0)), Some([21, 35]));
+        assert_eq!(projected_end_clock(wall(3_600), 0, film, Some(1000), steady(3_600)), Some([22, 35]));
+        assert_eq!(projected_end_clock(wall(-6 * 3_600), 0, film, Some(1000), steady(-6 * 3_600)), Some([15, 35]));
+        assert_eq!(projected_end_clock(wall(19_800), 0, film, Some(2000), steady(19_800)), Some([2, 47]), "past midnight, a half-hour zone, doubled speed");
+        assert_eq!(projected_end_clock(wall(0), 0, film, None, steady(0)), None, "an unknown rate is not assumed");
+        assert_eq!(projected_end_clock(wall(0), film, film, Some(1000), steady(0)), None, "nothing left to project");
+    }
+
+    /// **A steady playback's finish time does not move.** Position and wall clock advance together, so
+    /// the projected end is one instant; it must not flip with the wall clock's whole second (the
+    /// published second is behind the real time by up to 999 ms while the position keeps moving), or
+    /// the label would change minutes once a second near a minute boundary and redraw each time.
+    #[test]
+    fn a_steady_playback_projects_one_finish_across_a_wall_second() {
+        const BASE_MS: i64 = 1_795_640_400_000; // 21:00:00.000 UTC
+        // Starts 600 ms into a second; the film is 35 min less 600 ms, so it ends exactly 21:35:00.000.
+        let film_ns = 35 * 60 * 1_000_000_000i64 - 600_000_000;
+        let wall_at = |ms: i64| plx_ui::fmt::Wall { unix_ms: ms, utc_offset_s: 0 };
+        for elapsed_ms in (0..2_500).step_by(50) {
+            let wall = wall_at(BASE_MS + 600 + elapsed_ms);
+            let position_ns = elapsed_ms * 1_000_000;
+            assert_eq!(projected_end_clock(wall, position_ns, film_ns, Some(1000), |_| Some(0)), Some([21, 35]), "{elapsed_ms} ms in");
+        }
+    }
+
+    /// **The finish time is read in the zone at the finish, not at now.** A film that spans a clock
+    /// change shows the local time after it: here Central Europe on the night of 2026-10-25, when 03:00
+    /// CEST (+2) becomes 02:00 CET (+1) at 01:00 UTC. The zone is a lookup the caller supplies (the app's
+    /// clock door), so the case needs no process-wide TZ.
+    #[test]
+    fn a_title_spanning_a_clock_change_ends_at_the_local_time_after_it() {
+        const FALL_BACK: i64 = 1_792_890_000; // 2026-10-25 01:00:00 UTC
+        let berlin = |at: i64| Some(if at < FALL_BACK { 7_200 } else { 3_600 });
+        let wall = |unix_s| plx_ui::fmt::Wall::from_secs(unix_s, berlin(unix_s).unwrap());
+        let hours = |h: i64| h * 3_600 * 1_000_000_000;
+        // 00:30 UTC (02:30 CEST) now, a 2 h film: it ends 02:30 UTC = 03:30 CET, not 04:30 by now's +2.
+        assert_eq!(projected_end_clock(wall(FALL_BACK - 1_800), 0, hours(2), Some(1000), berlin), Some([3, 30]));
+        // Wholly before the change the zone is CEST at both ends: 20:30 UTC + 1 h = 21:30 UTC = 23:30 CEST.
+        assert_eq!(projected_end_clock(wall(FALL_BACK - 4 * 3_600 - 1_800), 0, hours(1), Some(1000), berlin), Some([23, 30]));
+        // The lookup is asked for the projected end second, not for now.
+        let asked = std::cell::Cell::new(None);
+        let _ = projected_end_clock(wall(FALL_BACK - 1_800), 0, hours(2), Some(1000), |at| { asked.set(Some(at)); berlin(at) });
+        assert_eq!(asked.get(), Some(FALL_BACK - 1_800 + 7_200));
+        // A zone that cannot be read at the end falls back to the published offset: the finish is still shown.
+        assert_eq!(projected_end_clock(wall(FALL_BACK - 1_800), 0, hours(2), Some(1000), |_| None), Some([4, 30]));
+    }
 
     #[test]
     fn end_time_visibility_requires_a_reliable_movie_or_episode_playback() {

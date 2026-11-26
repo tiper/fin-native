@@ -552,6 +552,7 @@ pub(super) fn activate_server_owned(
     let _ = bridge.hubs_run(plx_data::stores::hubs::HubsCmd::Reset).changed;
     bridge.person_run(plx_data::stores::person::PersonCmd::Reset);
     bridge.collection_run(plx_data::stores::collection::CollectionCmd::Reset);
+    bridge.livetv_run(plx_data::livetv::LiveTvCmd::Reset);
     // before the stores reset: a stop the previous identity left in flight must not land on this one
     plx_media::route::retire_pending_stops();
     let mut endpoints = bridge.viewstate_run(plx_data::stores::viewstate::ViewStateCmd::Reset).endpoints;
@@ -740,7 +741,8 @@ pub(crate) unsafe fn construct(
     // The system on-screen keyboard, PROBED — see `crate::textinput`'s module doc. Both facts
     // on this line are preconditions that fail in complete silence, and nothing in this tree
     // had ever read either of them:
-    //   support= `SDL_HasScreenKeyboardSupport` — does this firmware's SDL have a panel at all.
+    //   support= `Shell::keyboard_available` — does this platform have a panel at all (SDL's
+    //            `SDL_HasScreenKeyboardSupport` on an SDL shell).
     //   focus=   `SDL_WINDOW_INPUT_FOCUS` — `SDL_StartTextInput` shows the panel only
     //            `if (SDL_GetKeyboardFocus())`. Clear, and it enables text events, returns
     //            void, and no panel appears.
@@ -762,9 +764,11 @@ pub(crate) unsafe fn construct(
     // this window, and the window is created here, a long way from where BACK is decided.
     platform.shell.bind_window(win);
     let keyboard = plx_shell_sdl::text::keyboard_probe(win);
+    // `support=` is the platform's answer (`Shell::keyboard_available`): SDL's own on an SDL shell, so the
+    // same number as before there, and Ecore IMF's on Tizen, whose keyboard is not SDL's.
     log(&format!(
         "keyboard: support={} active={} focus={} winflags=0x{:x}",
-        keyboard.support,
+        i32::from(platform.shell.keyboard_available()),
         keyboard.active,
         i32::from(keyboard.wflags & SDL_WINDOW_INPUT_FOCUS != 0),
         keyboard.wflags
@@ -883,6 +887,8 @@ pub(crate) unsafe fn construct(
         super::adapters::poster::init();
         crate::capture::init(); // dev live UI capture stream
     }
+    #[cfg(feature = "devtriggers")]
+    super::api::init(); // command API — both transports are devtrig-only; a release build has no door at all (see api.rs's doc)
 
     // Any dev trigger under /tmp marks the boot as automated (the harness token override,
     // autoplay/detail captures, playback-path knobs): those runs need a deterministic Home,
@@ -1554,6 +1560,8 @@ pub(crate) unsafe fn construct(
         last_route_reported,
         ptr,
         menu_play_await: None,
+        #[cfg(feature = "devtriggers")]
+        api_waiting: Default::default(),
         deeplink: Default::default(),
         prev,
         refresh_hubs,
