@@ -136,7 +136,7 @@ impl LibraryScreen {
         // The name is made of the two borrowed pieces and keyed on them: no string is put together
         // on a frame that changes none of them.
         let strings = name.map(|(title, owner, server)| self.capsule_text.get_keyed(&[title, owner, server], || {
-            let name = super::toolbar::joined_name(title, owner);
+            let name = plx_ui::page_header::joined_name(title, owner);
             if server.is_empty() { name } else { format!("{name} · {server}") }
         }, total, sort));
         let worn = strings.map(|(name, count, criterion)| plx_ui::scroll_capsule::Capsule::new(name, count, criterion, f.measure));

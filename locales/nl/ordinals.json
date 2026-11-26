@@ -1,0 +1,13 @@
+{
+  "ordinal.first": "als eerste",
+  "ordinal.second": "als tweede",
+  "ordinal.third": "als derde",
+  "ordinal.fourth": "als vierde",
+  "ordinal.fifth": "als vijfde",
+  "ordinal.sixth": "als zesde",
+  "ordinal.seventh": "als zevende",
+  "ordinal.eighth": "als achtste",
+  "ordinal.ninth": "als negende",
+  "ordinal.tenth": "als tiende",
+  "ordinal.other": "als nummer {n}"
+}

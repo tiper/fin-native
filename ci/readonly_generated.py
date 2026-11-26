@@ -13,7 +13,7 @@ import re
 from readonly_dependencies import _local_sha, _sha, _json, _manifest_paths, _configs, _workspace_hashes, WORKSPACE_HASHING
 
 CERTIFICATE_PATH = Path(__file__).with_name('proofs') / 'platform-generated-enums.json'
-CERTIFICATE_SHA256 = 'e932c0cb80198ab3463c7cbe39188d21c6181f705c5492e1ca11d224cffacea3'
+CERTIFICATE_SHA256 = 'd843855c8bae08589dbdeb8e5d91d0aabab8936bb11b723a474f9a8999d5625c'
 SOURCES = ['os/Cargo.toml', 'os/src/lib.rs', 'os/src/i18n/mod.rs',
            'os/build.rs', 'os/build_support/catalog.rs', 'build_support/install_identities.rs',
            'machine/src/lib.rs', 'machine/src/machine.rs']
@@ -37,7 +37,8 @@ I18N_SOURCES = ['40a13d07a43c772b10587e510a69502684abfa1f582ce355b22fd935a8c46f4
                 '867bb41013e0016d186e699698c762685325aa02f01ebe92d39797c0a41a37e1',
                 '82ee1803e4a6339772a175da2f256a7d6a313619e242f76f47c345cdd8199e92',
                 '17a2cff5ffb5bf95a46a2a0c12b13c0b7a02c1f7554656fa0f59557b7afca2ec',
-                '3a51ceeb41a6027d177b205a5c66ac7c4b039291cc216a6ebb4a171afff25b83']
+                '3a51ceeb41a6027d177b205a5c66ac7c4b039291cc216a6ebb4a171afff25b83',
+                '9cfedcf1aa68bc126966a701a2616e4c3e63c96a1bbc2558db0969b29325a52a']
 
 def source_hashes(root):
     sources = {p: _local_sha((root / p).read_bytes()) for p in SOURCES}

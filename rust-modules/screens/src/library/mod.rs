@@ -15,6 +15,7 @@ mod transactions;
 mod draw;
 mod collections_page;
 mod header;
+pub(crate) use header::{names_preview, visit_slot};
 mod toolbar;
 mod status;
 pub mod menu;

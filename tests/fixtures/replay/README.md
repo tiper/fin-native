@@ -754,3 +754,7 @@ to fold Browse's household verdicts before a pin table, which republishes Home o
 shape moved), so they were recorded afresh on the merged tree (`tests/focusfp.sh --rec --only 12,13`) and installed with
 `tools/plxnative-rec rerecord`, anchors kept. The closed alphabet gained the one string `Mixed` (a `ShelfLibrary` variant name). Targets
 and Resolve both report SAME with every difference counter at zero (892 and 1304 frames). `docs/ui-replay-v13-anchor.md` has the record.
+The Library order Settings page (`SettingsPage::LibraryOrder`, `ScreenId` 122, #1554) then moved the shape once more (to
+`14642991569603421247`, the screen half only: the Settings argument shape's new variant and `TableView::MOTION_SHAPE`'s new lift and
+glide springs); both anchors were re-recorded the same way, and the closed alphabet's owner-word pattern gained `library-order`. Targets and
+Resolve report SAME again with every difference counter at zero (977 and 1328 frames). `docs/ui-replay-v13-anchor.md` has the record.

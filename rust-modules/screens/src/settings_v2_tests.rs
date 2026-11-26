@@ -15,6 +15,7 @@ fn inputs(signed_in: bool) -> RootInputs {
         resolution: UiResolution::Auto, resolution_offered: false,
         language: plx_os::i18n::Preference::System,
         under_posters: plx_plex::plex::session::UnderPosters::DEFAULT, plaintext: Vec::new(),
+        library_order: plx_os::i18n::msg::library_order_value_server().to_string(),
     }
 }
 
@@ -24,13 +25,13 @@ fn ids(inputs: &RootInputs) -> Vec<RootId> {
     (0..form.table.n_rows() as usize).filter_map(|i| form.id_at(i).cloned()).collect()
 }
 
-/// The board's root (Sv2-1): four groups in order, eleven rows for a signed-in multi-profile
+/// The board's root (Sv2-1): four groups in order, twelve rows for a signed-in multi-profile
 /// set — and no row carries a sub-line, because the sentence lives beside the table.
 #[test]
 fn the_root_is_four_groups_of_rows_without_sub_lines() {
     let inputs = RootInputs { multi_user: true, ..inputs(true) };
     assert_eq!(ids(&inputs), vec![
-        RootId::Favourites, RootId::UnderPosters,
+        RootId::Favourites, RootId::LibraryOrder, RootId::UnderPosters,
         RootId::Playback, RootId::AudioSubtitles,
         RootId::Language, RootId::AutoSignIn, RootId::TrailerAutoplay,
         RootId::Privacy, RootId::Diagnostics, RootId::Legal, RootId::About,
@@ -60,7 +61,7 @@ fn the_signed_out_root_drops_every_signed_in_row() {
 /// metrics, in the Settings layout's own table frame), and how far it may drift before this test
 /// says the row heights or the section break moved. It is a pin of our geometry, not a number
 /// read off the board.
-const ALL_ROWS_SCROLL: f32 = 244.0;
+const ALL_ROWS_SCROLL: f32 = 304.0;
 const ALL_ROWS_SCROLL_TOLERANCE: f32 = 6.0;
 
 /// Sv2s-R2: every conditional row at once is the board's longest root, and it scrolls.
@@ -137,7 +138,7 @@ fn every_followed_sentence_fits_five_lines_in_every_language() {
         let frame = layout.narrative_copy_frame(false, msg::settings_title(), layout.action.y, &ShippedMeasure);
         // `Header::paint` hangs the sentence its CSS box's cap drop (~7px) below the frame's top
         let drop = layout.copy_cap_drop(&ShippedMeasure);
-        let mut all: Vec<RootId> = vec![RootId::Favourites, RootId::UnderPosters, RootId::Playback, RootId::AudioSubtitles,
+        let mut all: Vec<RootId> = vec![RootId::Favourites, RootId::LibraryOrder, RootId::UnderPosters, RootId::Playback, RootId::AudioSubtitles,
             RootId::Language, RootId::AutoSignIn, RootId::TrailerAutoplay, RootId::Resolution, RootId::Privacy,
             RootId::Diagnostics, RootId::Legal, RootId::About];
         all.push(RootId::Plaintext(ServerMachineId("m".into())));
@@ -271,7 +272,7 @@ fn the_root_asks_for_posters_while_favorite_libraries_has_focus_and_the_fan_is_e
 #[test]
 fn the_root_and_diagnostics_rows_name_themselves_with_distinct_ids() {
     let root = [
-        RootId::Favourites, RootId::UnderPosters, RootId::Playback, RootId::AudioSubtitles, RootId::Language,
+        RootId::Favourites, RootId::LibraryOrder, RootId::UnderPosters, RootId::Playback, RootId::AudioSubtitles, RootId::Language,
         RootId::AutoSignIn, RootId::TrailerAutoplay, RootId::Resolution, RootId::Privacy, RootId::Diagnostics,
         RootId::Legal, RootId::About,
     ];

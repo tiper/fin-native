@@ -1,0 +1,17 @@
+{
+  "library_order.title": "Bibliotheekvolgorde",
+  "library_order.value_server": "Servervolgorde",
+  "library_order.value_first": "{title} eerst",
+  "library_order.row_detail": "Kies de volgorde van je favoriete bibliotheken op Home en in de koptekst van Bibliotheek.",
+  "library_order.reset": "Volgorde herstellen",
+  "library_order.state_idle": "Druk op OK om {title} omhoog of omlaag te verplaatsen. Home en de koptekst voor {kind} tonen je favoriete bibliotheken in deze volgorde.",
+  "library_order.state_reset": "Zet je favoriete bibliotheken terug in de volgorde waarin je servers ze vermelden.",
+  "library_order.state_moving": "{title} wordt verplaatst. Omhoog en Omlaag wijzigen de positie, OK bevestigt die en Terug annuleert.",
+  "library_order.state_unnamed": "{title} kan nog niet worden verplaatst: de server is nog niet klaar met verbinden.",
+  "library_order.state_dropped": "{title} staat nu {home} op Home en {header} in de koptekst voor {kind}.",
+  "library_order.state_confirm": "Druk nogmaals op OK om je favoriete bibliotheken terug te zetten in de volgorde van je servers. Elke andere knop behoudt je volgorde.",
+  "library_order.state_reset_done": "Je favoriete bibliotheken staan weer in de volgorde waarin je servers ze vermelden.",
+  "library_order.state_unsaved": "Deze volgorde kon niet worden opgeslagen; ze geldt totdat PlxNative opnieuw start.",
+  "library_order.preview_caption": "{kind} · Koptekst Bibliotheek",
+  "library_order.preview_more": "Bibliotheken die niet passen zitten achter …."
+}

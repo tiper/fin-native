@@ -1114,6 +1114,38 @@ pub struct PinCommit {
     pub recorded: bool,
 }
 
+/// One library of the table, in the server's own order: the input `plex::library_order` lays an order
+/// out over. `machine_id` is empty while the registry has not learned the server's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrderSlot {
+    /// the section table index (an identity only inside one table epoch)
+    pub section: usize,
+    pub machine_id: String,
+    pub key: i64,
+}
+
+/// **The table indices in the order to PRESENT** the libraries of `slots` (the default order) under
+/// `record`: plex's own [`effective`](plx_plex::plex::library_order::effective), so a library the
+/// record cannot name falls right after its default predecessor. The store lays its table out with
+/// this, and Settings' Library order page lays out the order a held library would leave with this
+/// same call, so what the page shows during a move is what the store publishes after the drop.
+pub fn presented_sections(slots: &[OrderSlot], record: Option<&plx_plex::plex::session::LibraryOrder>) -> Vec<usize> {
+    let libs: Vec<plx_plex::plex::library_order::Lib<'_>> = slots.iter()
+        .map(|slot| plx_plex::plex::library_order::Lib { machine_id: &slot.machine_id, key: slot.key }).collect();
+    plx_plex::plex::library_order::effective(&libs, record).into_iter().map(|at| slots[at].section).collect()
+}
+/// [`presented_sections`] for an order named as `(machine id, section key)` pairs, first shown first:
+/// where the table's libraries land were exactly these recorded (what a drop's command will make the
+/// store publish).
+pub fn presented_sections_named(slots: &[OrderSlot], named: &[(String, i64)]) -> Vec<usize> {
+    use plx_plex::plex::session::{LibraryOrder, OrderedLib};
+    let record = LibraryOrder {
+        libs: named.iter().map(|(machine_id, key)| OrderedLib { machine_id: machine_id.clone(), key: *key, ..Default::default() }).collect(),
+        ..Default::default()
+    };
+    presented_sections(slots, Some(&record))
+}
+
 pub use plx_plex::plex::library_order::OrderState;
 pub use preferences_job::WriteState;
 
@@ -2202,21 +2234,19 @@ impl BrowseState {
         });
         order
     }
-    /// The libraries at `order` (table indices) as `plex::library_order` sees them.
-    fn libs_in<'a>(&'a self, order: &[usize]) -> Vec<plx_plex::plex::library_order::Lib<'a>> {
-        order.iter().map(|&index| {
-            let section = &self.sections[index];
-            plx_plex::plex::library_order::Lib {
-                machine_id: self.sources.get(section.src).map_or("", |source| source.machine_id.as_str()),
-                key: section.key,
-            }
+    /// **The table in its default order, as `plex::library_order` sees it**: the one input every
+    /// presentation of a Library order is laid out from, the store's own and Settings' page (which
+    /// reads it from the publication, [`DirectoryView::library_order_slots`]).
+    fn order_slots(&self) -> Vec<OrderSlot> {
+        self.default_section_order().into_iter().filter_map(|index| {
+            let section = self.sections.get(index)?;
+            let machine_id = self.sources.get(section.src).map_or("", |source| source.machine_id.as_str());
+            Some(OrderSlot { section: index, machine_id: machine_id.to_string(), key: section.key })
         }).collect()
     }
     /// Every table index in the order to PRESENT: the default order under this profile's record.
     fn section_order(&self) -> Vec<usize> {
-        let default = self.default_section_order();
-        plx_plex::plex::library_order::effective(&self.libs_in(&default), self.order_record.as_ref())
-            .into_iter().map(|at| default[at]).collect()
+        presented_sections(&self.order_slots(), self.order_record.as_ref())
     }
     /// The favourites (table indices) in presentation order.
     fn favorite_order(&self) -> Vec<usize> {
@@ -4406,6 +4436,59 @@ pub fn set_pinned_for_owner_test(state: &mut BrowseState, index: usize, on: bool
     if let Some(section) = state.sections.get_mut(index) {
         section.pinned = on;
     }
+}
+
+/// One library of a table described for [`library_order_publication`]: `(machine id, section key,
+/// title, kind, favourite)`.
+#[cfg(any(test, feature = "test-support"))]
+pub type TestLibrary<'a> = (&'a str, i64, &'a str, SecKind, bool);
+
+/// **A REAL store's publication of the Library order** over a table a test describes, for the page
+/// tests above this layer (which cannot reach the store's state): `libs` in the table's own order
+/// (each distinct machine id is one own server, in the order first seen; an empty machine id is a
+/// server whose id the registry has not learned), `record` the profile's order as `(machine id,
+/// key)` pairs, which may name libraries that are not favourites. `then` is an order the SAME store
+/// is then told to hold (`set_library_order_from`, the command a drop sends), so a test sees what
+/// the writer makes of it over the record it already had; empty for none. The rows, the server-order
+/// slots and the record state are what [`BrowseState`] publishes for them, not a fixture's guess.
+#[cfg(any(test, feature = "test-support"))]
+pub fn library_order_publication(libs: &[TestLibrary<'_>], record: &[(&str, i64)], then: &[(&str, i64)])
+    -> crate::stores::browse::DirectorySnapshot {
+    let mut session = plx_plex::plex::session::Session {
+        client_id: "order-client".into(), account_token: "order-account".into(), ..Default::default()
+    };
+    let mut state = BrowseState::default();
+    let mut machines: Vec<&str> = Vec::new();
+    for (machine, ..) in libs {
+        if !machines.contains(machine) { machines.push(machine); }
+    }
+    state.sources = machines.iter().map(|machine| a_source(machine, "", true)).collect();
+    state.preference_writes.prepare(&session, 0);
+    for (source, machine) in machines.iter().enumerate() {
+        let list: Vec<(i64, String, SecKind)> = libs.iter().filter(|lib| lib.0 == *machine)
+            .map(|(_, key, title, kind, _)| (*key, (*title).to_string(), *kind)).collect();
+        state.append_sections_with(source, list, &session, "");
+    }
+    for section in &mut state.sections {
+        let machine = state.sources[section.src].machine_id.as_str();
+        section.pinned = libs.iter().any(|lib| lib.0 == machine && lib.1 == section.key && lib.4);
+    }
+    // the record is SAVED (on the session, as a profile load finds it), so the order `then` is
+    // written over it the way a drop's command is: a pending write replaces an earlier pending one
+    // whole, and only a saved record is what the writer merges with
+    let user = state.profile_key.clone();
+    if !record.is_empty() {
+        let named: Vec<(String, i64)> = record.iter().map(|(machine, key)| ((*machine).to_string(), *key)).collect();
+        session.set_order_for(&user, &named);
+        state.load_remembered(&session, &user);
+    }
+    if !then.is_empty() {
+        let named: Vec<(String, i64)> = then.iter().map(|(machine, key)| ((*machine).to_string(), *key)).collect();
+        state.set_library_order_from(named, &session);
+    }
+    let mut snapshot = crate::stores::browse::DirectorySnapshot::default();
+    snapshot.capture_from(&mut state, &plx_plex::plex::ClientKeys::default());
+    snapshot
 }
 
 #[cfg(any(test, feature = "test-support"))]

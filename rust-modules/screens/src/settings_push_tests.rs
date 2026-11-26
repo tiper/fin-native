@@ -160,7 +160,7 @@ fn held_pages() -> Vec<SettingsPage> {
     use SettingsPage::*;
     let sha = plx_data::hudpacks::Sha::of(b"push-test");
     let mut pages = vec![
-        Root, Language, UnderPosters, UnderPostersDetails(PosterKind::Movie), UnderPostersDetails(PosterKind::Show), Contribute,
+        Root, Language, LibraryOrder, UnderPosters, UnderPostersDetails(PosterKind::Movie), UnderPostersDetails(PosterKind::Show), Contribute,
         Playback, AudioSubtitles, Favourites, LibraryFavourites, Privacy, Legal, About, Document(0), Preview(0), Diagnostics,
         PlayerHud, HudGallery, HudDetail(sha), HudAbout(sha),
     ];

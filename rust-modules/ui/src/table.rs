@@ -54,6 +54,70 @@ pub enum Origin {
     Server,
 }
 
+/// The ink of an [`Row::inert`] row: the whole row at one weight, so its label, read-out and marks
+/// can never dim out of step (the same reason [`Section::dim`] is an alpha over the group).
+const INERT_A: f32 = 0.45;
+/// The weight of a focused [`RowMove::Pickable`] row's chevron pair: dim, "this row can move".
+const PICKABLE_A: f32 = 0.45;
+/// The weight of a chevron the row cannot move toward (the first row's up, the last row's down).
+const MOVE_END_A: f32 = 0.25;
+/// A [`RowMove::Lifted`] row grows by this about its centre ...
+const LIFT_SCALE: f32 = 1.03;
+/// ... and rises this many pixels above the rows it will pass.
+const LIFT_RISE: f32 = 4.0;
+/// The stiffness every row-level spring of the table runs at: the pill's edges and the reorder
+/// glide, so a row sliding to its new place and the pill that follows it arrive together.
+const K_ROW: f32 = 360.0;
+/// Chevron box of a move mark, stacked in the check column (the mockup's 24 px, gap 0).
+const MOVE_MARK: f32 = 24.0;
+
+/// **A row's part in a reorder** - the ONE per-row state of the shared table's move mode, so the
+/// look of every phase is derived from it and no caller keeps a flag beside it. The page decides
+/// the order and builds each row's state; the table only draws the states and glides rows to
+/// wherever the order it is handed puts them ([`TableView::glide_from`]).
+///
+/// * `Off` - an ordinary row.
+/// * `Pickable` - a row that can be picked up: while FOCUSED it shows a dim [`Icon::ChevronUp`] /
+///   [`Icon::ChevronDown`] pair in the check column, saying it can move; `can_up` / `can_down` say which
+///   way (the other chevron is quieter still).
+/// * `Lifted` - the row that IS being moved: grown ([`LIFT_SCALE`]), risen ([`LIFT_RISE`]), cast a
+///   focus shadow, wearing its own pill and full chevrons, and drawn last, over the rows it passes.
+///   The grow, rise and shadow follow ONE spring (`TableView::lift`, 0 to 1 on pickup and back on
+///   drop, at [`K_ROW`]), so the row eases up and settles down rather than cutting.
+/// * `Waiting` - every other row while one is lifted: read in secondary ink, and no stop of focus
+///   ([`Row::selectable`]), so neither a key nor a pointer can leave the row being moved.
+///
+/// [`Icon::ChevronUp`]: crate::icons::Icon::ChevronUp
+/// [`Icon::ChevronDown`]: crate::icons::Icon::ChevronDown
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RowMove {
+    #[default]
+    Off,
+    Pickable { can_up: bool, can_down: bool },
+    Lifted { can_up: bool, can_down: bool },
+    Waiting,
+}
+impl RowMove {
+    /// Is this the row being moved?
+    pub fn is_lifted(self) -> bool {
+        matches!(self, Self::Lifted { .. })
+    }
+    /// The weights of the up and down chevrons this state draws in the check column, `None` for
+    /// none: a FOCUSED pickable row's pair at [`PICKABLE_A`], a lifted row's at full weight, a
+    /// chevron toward a wall at [`MOVE_END_A`] of that. `focused` is the table's selection, which
+    /// the row cannot know.
+    pub fn chevrons(self, focused: bool) -> Option<(f32, f32)> {
+        let end = |can: bool| if can { 1.0 } else { MOVE_END_A };
+        match self {
+            Self::Pickable { can_up, can_down } if focused => {
+                Some((PICKABLE_A * end(can_up), PICKABLE_A * end(can_down)))
+            }
+            Self::Lifted { can_up, can_down } => Some((end(can_up), end(can_down))),
+            _ => None,
+        }
+    }
+}
+
 pub struct Row {
     pub label: String,
     pub label_origin: Origin,
@@ -106,6 +170,19 @@ pub struct Row {
     /// section after the first is preceded by a gap and a hairline, headed or not, so a
     /// `Row::separator` beside a section boundary would draw two rules.)
     pub sep: bool,
+    /// The row is **INERT**: present and drawn dimmed ([`INERT_A`]) but never selectable, exactly as
+    /// a grouping hairline never is. Where [`Row::disabled`] keeps focus able to land (the viewer
+    /// reads why) and a hairline or note says nothing about an action, an inert row stands for an
+    /// action that does not exist right now AND has no reason worth a stop of focus (Library
+    /// order's Reset row while the order is the server's own). Every walk that asks "can focus land
+    /// here" asks [`Row::selectable`], the ONE predicate, never `!sep`.
+    ///
+    /// A page built on a [`crate::form::Form`] never sets it by hand: it declares
+    /// [`crate::form::FormSection::inert`].
+    pub inert: bool,
+    /// This row's part in a reorder, see [`RowMove`]. [`RowMove::Off`] (every row that never asks)
+    /// draws exactly as before.
+    pub moving: RowMove,
     /// The row's action is **destructive** — it ends or removes something (Sign out, Remove from
     /// Deck). Semantics only, never drawn: it exists so a menu never OPENS with its focus on one
     /// ([`TableView::opening_row`]). A stray OK on a freshly opened menu must be harmless; the row
@@ -135,6 +212,8 @@ impl Row {
             dim: false,
             disabled: false,
             sep: false,
+            inert: false,
+            moving: RowMove::Off,
             destructive: false,
             note_lines: std::cell::Cell::new(1),
         }
@@ -142,6 +221,14 @@ impl Row {
     /// A [`Row::note`]: `sep` with text (a bare `sep` is the hairline).
     pub fn is_note(&self) -> bool {
         self.sep && !self.label.is_empty()
+    }
+    /// **Can focus land on this row?** The ONE answer: not a hairline or note ([`Self::sep`]),
+    /// not [`Self::inert`], and not [`RowMove::Waiting`] (while one row is held, the others are no
+    /// stop for a key or a pointer, drawn at their own weight rather than dimmed). Every selection, hit and element walk of the table (and `ui::geom`'s) asks
+    /// this; only the FIT report, which measures what is drawn rather than what can be focused,
+    /// still reads `sep` itself.
+    pub fn selectable(&self) -> bool {
+        !self.sep && !self.inert && self.moving != RowMove::Waiting
     }
     /// The grouping hairline — a row that draws a rule and cannot be focused.
     pub fn separator() -> Self {
@@ -247,6 +334,16 @@ impl Row {
     /// Mark the row disabled - see [`Row::disabled`]. Its reason is the [`Row::value`].
     pub fn disabled(mut self, v: bool) -> Self {
         self.disabled = v;
+        self
+    }
+    /// Mark the row inert — see [`Row::inert`].
+    pub fn inert(mut self, v: bool) -> Self {
+        self.inert = v;
+        self
+    }
+    /// Set the row's reorder state — see [`RowMove`].
+    pub fn moving(mut self, m: RowMove) -> Self {
+        self.moving = m;
         self
     }
     /// Mark the row's action destructive — see [`Row::destructive`].
@@ -651,6 +748,13 @@ fn next_rev() -> u32 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The lift of one row: its global index and the spring that grows, raises and shadows it.
+#[derive(Clone, Copy)]
+struct Lift {
+    row: i32,
+    spring: Spring,
+}
+
 pub struct TableView {
     pub sections: Vec<Section>,
     /// Optional empty-state copy; an empty string leaves it to the surrounding narrative.
@@ -690,6 +794,18 @@ pub struct TableView {
     hl_top: Spring,
     hl_bot: Spring,
     scroll: Spring,
+    /// **Row glide**: for each global row index, how far above/below its place the row is still
+    /// DRAWN (content px), stepping to 0 at [`K_ROW`]. Seeded by [`TableView::glide_from`] when a
+    /// reinstall reorders rows, so a row slides to its new slot instead of cutting. Empty at rest
+    /// (and for every table that never reorders), so a table pays nothing for it.
+    glide: Vec<Spring>,
+    /// **The lift**, `None` at rest: ONE spring at [`K_ROW`] for the whole table (a table lifts at
+    /// most one row), 0 to 1 under a [`RowMove::Lifted`] row, so the zoom, the rise and the shadow
+    /// all ease in on pickup and out on drop together, instead of cutting. It belongs to ONE row
+    /// ([`Lift`]), kept after the drop until the spring has landed, so the dropped row settles
+    /// instead of snapping. A caller that replaces the sections and knows the rows' identities
+    /// follows the row ([`TableView::carry_lift`]; `FormTable` does, by key).
+    lift: Option<Lift>,
     /// A drill-in page's title band, see [`TableView::set_title`].
     title: Option<String>,
     /// Re-stamped by every mutation that can change the table's measured size (new sections, a new
@@ -709,15 +825,20 @@ const WALK_TITLE: i32 = -3;
 /// The glyph that opens a page title: the drill-in's "back" mark, the mirror of a row's chevron.
 const TITLE_BACK_GLYPH: &str = "\u{2039}";
 impl TableView {
-    pub const MOTION_SHAPE: &'static str = "TableViewMotion{sel:i32,list_focused:bool,compact:bool,tall:bool,header_ink:[f32;4],hl_top:Spring{pos:f32,vel:f32},hl_bot:Spring{pos:f32,vel:f32},scroll:Spring{pos:f32,vel:f32}}";
+    pub const MOTION_SHAPE: &'static str = "TableViewMotion{sel:i32,list_focused:bool,compact:bool,tall:bool,header_ink:[f32;4],hl_top:Spring{pos:f32,vel:f32},hl_bot:Spring{pos:f32,vel:f32},scroll:Spring{pos:f32,vel:f32},glide:[Spring{pos:f32,vel:f32}],lift:Spring{pos:f32,vel:f32},lift_row:i32}";
 
     /// The owner records its row data separately. These fields determine layout, the selected
     /// face and subsequent motion; no text/texture cache or renderer pointer is traversed.
     pub fn write_motion(&self, c: &mut plx_machine::machine::Canon) {
-        let Self { sections: _, sel, list_focused, compact, tall, board: _, header_ink, hl_top, hl_bot, scroll, title: _, min_panel_w: _, rev: _, empty_text: _ } = self;
+        let Self { sections: _, sel, list_focused, compact, tall, board: _, header_ink, hl_top, hl_bot, scroll, glide, lift, title: _, min_panel_w: _, rev: _, empty_text: _ } = self;
         c.u32(*sel as u32).bool(*list_focused).bool(*compact).bool(*tall);
         for component in header_ink { c.f32(*component); }
         for spring in [hl_top, hl_bot, scroll] { c.f32(spring.pos).f32(spring.vel); }
+        c.seq(glide.len());
+        for spring in glide { c.f32(spring.pos).f32(spring.vel); }
+        // the same bytes as ever: a table at rest writes a settled spring and no row (-1)
+        let (spring, row) = lift.map_or((Spring::at(0.0), -1), |lift| (lift.spring, lift.row));
+        c.f32(spring.pos).f32(spring.vel).u32(row as u32);
     }
 
     /// **Two-line rows at the CATALOG measure (98) rather than the settings one (92).**
@@ -804,6 +925,8 @@ impl TableView {
             hl_top: Spring::at(0.0),
             hl_bot: Spring::at(0.0),
             scroll: Spring::at(0.0),
+            glide: Vec::new(),
+            lift: None,
             title: None,
             rev: 0,
         }
@@ -857,13 +980,13 @@ impl TableView {
 
     /// Row `i`'s frame under the live scroll WHETHER OR NOT it is inside the viewport — the one
     /// walk [`row_rect`](Self::row_rect), [`hit_row`](Self::hit_row) and `ui::geom::Table::place`
-    /// share (spec §7.1). `None` for a header index, a separator, or an index out of range.
+    /// share (spec §7.1). `None` for a header index, a separator or an inert row (nothing focuses either), or an index out of range.
     pub fn row_frame(&self, frame: Rect, i: i32) -> Option<Rect> {
         let top0 = frame.y + TOP_PAD;
         let scroll = self.scroll.pos;
         let mut out = None;
         self.walk(|cy, gi, _| {
-            if gi != i || gi < 0 || self.rows_at(gi).sep {
+            if gi != i || gi < 0 || !self.rows_at(gi).selectable() {
                 return;
             }
             let sy = top0 + cy - scroll;
@@ -881,11 +1004,11 @@ impl TableView {
             return None;
         }
         if delta == 0 {
-            return (!self.rows_at(i).sep).then_some(i);
+            return self.rows_at(i).selectable().then_some(i);
         }
         let mut j = i + delta;
         while j >= 0 && j < n {
-            if !self.rows_at(j).sep {
+            if self.rows_at(j).selectable() {
                 return Some(j);
             }
             j += delta;
@@ -905,7 +1028,7 @@ impl TableView {
         let scroll = self.scroll.pos;
         let mut hit = None;
         self.walk(|cy, gi, _| {
-            if gi < 0 || self.rows_at(gi).sep {
+            if gi < 0 || !self.rows_at(gi).selectable() {
                 return; // headers and grouping hairlines are not click targets
             }
             let sy = top0 + cy - scroll;
@@ -988,6 +1111,8 @@ impl TableView {
     pub fn set_sections(&mut self, sections: Vec<Section>, sel: i32, slide: bool) {
         self.rev = next_rev();
         self.sections = sections;
+        // the glide belongs to the rows it was seeded for; a caller that reorders re-seeds it
+        self.glide.clear();
         let n = self.n_rows();
         self.sel = if n == 0 { 0 } else { self.settle_sel(sel) };
         if !slide {
@@ -1014,7 +1139,7 @@ impl TableView {
     /// and then the one action on offer is the one asked for); `0` for an empty table.
     pub fn opening_row(&self) -> i32 {
         let n = self.n_rows();
-        let selectable = || (0..n).filter(|&i| !self.rows_at(i).sep);
+        let selectable = || (0..n).filter(|&i| self.rows_at(i).selectable());
         selectable()
             .find(|&i| !self.rows_at(i).destructive)
             .or_else(|| selectable().next())
@@ -1033,7 +1158,7 @@ impl TableView {
     /// ([`crate::route_screen`]'s rule 2) is graded against this, so the band stays reachable
     /// whatever the list ends with.
     pub fn last_row(&self) -> Option<i32> {
-        (0..self.n_rows()).rev().find(|&i| !self.rows_at(i).sep)
+        (0..self.n_rows()).rev().find(|&i| self.rows_at(i).selectable())
     }
 
     /// Is the selection on the last selectable row? — rule 2's own predicate.
@@ -1405,7 +1530,7 @@ impl TableView {
     /// asks, not with a second spring (the ink would start leading the fill). A table that does not
     /// hold focus draws no pill and so covers nothing. At rest on a row the answer is exactly 1.
     fn pill_cover(&self, cy: f32, h: f32) -> f32 {
-        if !self.list_focused {
+        if !self.shared_pill() {
             return 0.0;
         }
         let inset = ROW_INK_PAD + PILL_INSET;
@@ -1416,13 +1541,20 @@ impl TableView {
         ((self.hl_bot.pos.min(bot) - self.hl_top.pos.max(top)) / (bot - top)).clamp(0.0, 1.0)
     }
 
+    /// Is the table's shared sliding pill on screen? It is while the list holds focus, EXCEPT under a
+    /// [`RowMove::Lifted`] selection: that row wears a pill of its own, lifted with it, so the shared
+    /// one (still travelling to the row's new place) must neither draw nor flip any row's ink.
+    fn shared_pill(&self) -> bool {
+        self.list_focused && !(self.n_rows() > 0 && self.rows_at(self.sel).moving.is_lifted())
+    }
+
     /// How much of the pill is the GHOST right now, 0..1: the share of the pill's travel that sits on
     /// [`Row::disabled`] rows, by the very coverage rule the ink follows ([`Self::pill_cover`]), so
     /// the fill and the ink can never disagree about which row the pill is on. The sum is clamped:
     /// between two disabled rows the pill is ghost throughout (their two coverages add to one).
     /// 0 for a table with no disabled row, which then pays no walk.
     fn ghost_cover(&self) -> f32 {
-        if !self.list_focused || !self.sections.iter().any(|s| s.rows.iter().any(|r| r.disabled)) {
+        if !self.shared_pill() || !self.sections.iter().any(|s| s.rows.iter().any(|r| r.disabled)) {
             return 0.0;
         }
         let mut sum = 0.0f32;
@@ -1456,12 +1588,12 @@ impl TableView {
             return 0;
         }
         let i = i.clamp(0, n - 1);
-        if !self.rows_at(i).sep {
+        if self.rows_at(i).selectable() {
             return i;
         }
         (i + 1..n)
-            .find(|&j| !self.rows_at(j).sep)
-            .or_else(|| (0..i).rev().find(|&j| !self.rows_at(j).sep))
+            .find(|&j| self.rows_at(j).selectable())
+            .or_else(|| (0..i).rev().find(|&j| self.rows_at(j).selectable()))
             .unwrap_or(i)
     }
 
@@ -1478,7 +1610,7 @@ impl TableView {
         let mut cur = self.settle_sel(self.sel);
         for _ in 0..delta.abs() {
             let mut j = cur + step;
-            while j >= 0 && j < n && self.rows_at(j).sep {
+            while j >= 0 && j < n && !self.rows_at(j).selectable() {
                 j += step;
             }
             if j < 0 || j >= n {
@@ -1561,8 +1693,8 @@ impl TableView {
         let top = self.row_top(self.sel);
         let rh = self.row_height(self.sel);
         // top and bottom edges spring independently → the pill stretches/morphs between rows
-        self.hl_top.step(top + PILL_INSET, 360.0, dt);
-        self.hl_bot.step(top + rh - PILL_INSET, 360.0, dt);
+        self.hl_top.step(top + PILL_INSET, K_ROW, dt);
+        self.hl_bot.step(top + rh - PILL_INSET, K_ROW, dt);
         // keep the selection (plus a row of context) inside the viewport
         let content_h = self.content_h();
         let max_scroll = (content_h - visible_h).max(0.0);
@@ -1575,6 +1707,137 @@ impl TableView {
         }
         sc = sc.clamp(0.0, max_scroll);
         self.scroll.step(sc, 300.0, dt);
+        self.step_glide(dt);
+        self.step_lift(dt);
+    }
+
+    /// The global index of the row asking to be lifted ([`RowMove::Lifted`]), if one does.
+    fn lifted_row(&self) -> Option<i32> {
+        let mut gi = 0;
+        for section in &self.sections {
+            for row in &section.rows {
+                if row.moving.is_lifted() { return Some(gi); }
+                gi += 1;
+            }
+        }
+        None
+    }
+
+    /// Step the lift toward 1 while a row is [`RowMove::Lifted`], else toward 0, and drop it once it
+    /// has landed, so a table that never lifts writes the same motion as ever.
+    fn step_lift(&mut self, dt: f32) {
+        match (self.lifted_row(), self.lift.as_mut()) {
+            (Some(row), Some(lift)) => { lift.row = row; lift.spring.step(1.0, K_ROW, dt); }
+            (Some(row), None) => {
+                let mut lift = Lift { row, spring: Spring::at(0.0) };
+                lift.spring.step(1.0, K_ROW, dt);
+                self.lift = Some(lift);
+            }
+            (None, Some(lift)) => {
+                lift.spring.step(0.0, K_ROW, dt);
+                if plx_machine::motion::report::settled(lift.spring.pos, 0.0, lift.spring.vel) { self.lift = None; }
+            }
+            (None, None) => {}
+        }
+    }
+
+    /// **Follow the lifted row to where the sections just replaced put it**: `to` is its global index
+    /// in the new sections, `None` when it left them (the lift is dropped; it is never handed to
+    /// whichever row now stands in its old slot). A table has no identity for its rows, so the owner
+    /// that does ([`crate::form::FormTable`], by key) calls this after it installs sections.
+    pub fn carry_lift(&mut self, to: Option<i32>) {
+        match (to, self.lift.as_mut()) {
+            (Some(to), Some(lift)) => lift.row = to,
+            _ => self.lift = None,
+        }
+    }
+
+    /// The global index of the row the lift belongs to, held or landing; `None` at rest.
+    pub fn lift_owner(&self) -> Option<i32> {
+        self.lift.map(|lift| lift.row)
+    }
+
+    /// How far row `gi` is lifted, 0..1: the lift spring for the row it belongs to (the row being
+    /// moved, or the one just dropped while the spring lands), 0 for every other.
+    fn lift_at(&self, gi: i32, row: &Row) -> f32 {
+        self.lift.filter(|lift| row.moving.is_lifted() || lift.row == gi).map_or(0.0, |lift| lift.spring.pos.max(0.0))
+    }
+
+    /// Is row `gi` drawn in the lifted pass (over its neighbours, under its own pill)?
+    fn lifted_now(&self, gi: i32, row: &Row) -> bool {
+        row.moving.is_lifted() || self.lift.is_some_and(|lift| lift.row == gi && lift.spring.pos > 0.0)
+    }
+
+    /// Step every row's glide toward 0 and drop the lot once all have landed, so a settled table
+    /// holds no glide (and [`Self::write_motion`] reads the same as a table that never glided).
+    fn step_glide(&mut self, dt: f32) {
+        for spring in &mut self.glide {
+            spring.step(0.0, K_ROW, dt);
+            if plx_machine::motion::report::settled(spring.pos, 0.0, spring.vel) {
+                spring.jump(0.0);
+            }
+        }
+        if self.glide.iter().all(|s| s.pos == 0.0 && s.vel == 0.0) {
+            self.glide.clear();
+        }
+    }
+
+    /// Where each global row is DRAWN, as a content y: its place in the layout plus whatever glide
+    /// is left. The "before" of a reorder ([`Self::glide_from`]).
+    pub fn drawn_tops(&self) -> Vec<f32> {
+        let mut tops = self.rest_tops();
+        for (gi, top) in tops.iter_mut().enumerate() {
+            *top += self.glide_at(gi as i32);
+        }
+        tops
+    }
+
+    /// Where the layout puts each global row (content y), glide aside.
+    pub fn rest_tops(&self) -> Vec<f32> {
+        let mut tops = vec![0.0; self.n_rows().max(0) as usize];
+        self.walk(|y, gi, _| {
+            if gi >= 0 {
+                tops[gi as usize] = y;
+            }
+        });
+        tops
+    }
+
+    /// **Glide rows from where they were drawn to where the layout now puts them**: `from[gi]` is the
+    /// content y row `gi` was drawn at before the sections were replaced ([`Self::drawn_tops`]);
+    /// `None` for a row with no earlier place (a new row cuts in). Each row's spring starts at
+    /// the distance between the two and runs to 0. The table has no reorder logic: whatever order the
+    /// owner installed is the order it animates to. Call it after the sections are in.
+    pub fn glide_from(&mut self, from: &[Option<f32>]) {
+        let now = self.rest_tops();
+        let offsets: Vec<f32> = (0..now.len()).map(|gi| from.get(gi).copied().flatten().map_or(0.0, |y| y - now[gi])).collect();
+        self.glide = if offsets.iter().any(|o| *o != 0.0) { offsets.into_iter().map(Spring::at).collect() } else { Vec::new() };
+    }
+
+    /// The global indices of the rows drawn LIFTED right now (the row held, or the one just dropped
+    /// while its lift lands). Test-only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn drawn_lifted(&self) -> Vec<i32> {
+        let mut out = Vec::new();
+        let mut gi = 0;
+        for section in &self.sections {
+            for row in &section.rows {
+                if self.lifted_now(gi, row) { out.push(gi); }
+                gi += 1;
+            }
+        }
+        out
+    }
+
+    /// Is any row still gliding? Test-only: a settled table drops its glide entirely.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn gliding(&self) -> bool {
+        !self.glide.is_empty()
+    }
+
+    /// How far above/below its place row `gi` is still drawn (0 at rest).
+    fn glide_at(&self, gi: i32) -> f32 {
+        usize::try_from(gi).ok().and_then(|gi| self.glide.get(gi)).map_or(0.0, |s| s.pos)
     }
 
     /// The highlight springs as `(top position, top velocity, bottom position, bottom velocity)`.
@@ -1673,7 +1936,7 @@ impl TableView {
             frame.w - 2.0 * SIDE,
             (py1 - py0).max(1.0),
         );
-        if self.list_focused && pill.y + pill.h > vis_top && pill.y < vis_bot {
+        if self.shared_pill() && pill.y + pill.h > vis_top && pill.y < vis_bot {
             // fades with its row's ink under the top edge (focus keeps a row of context above it,
             // so this only shows while the scroll is still catching up)
             let fade = Self::top_edge_alpha(py0 - PILL_INSET + ROW_INK_PAD, vis_top);
@@ -1693,7 +1956,8 @@ impl TableView {
         }
 
         // ---- headers + rows ----
-        self.walk(|cy, gi, si| {
+        // `late` is the second pass: only a LIFTED row is drawn in it, over every row it passes.
+        let paint = |cy: f32, gi: i32, si: usize, late: bool| {
             // ONE alpha over the whole group (see `Section::dim`) — pushed here, at the top of the
             // walk, so header, accessory, rows, marks and read-outs can never dim out of step.
             let sy = top0 + cy - scroll;
@@ -1790,6 +2054,10 @@ impl TableView {
                 return;
             }
             let row = self.rows_at(gi);
+            // the LIFTED row waits for the second pass, so it is drawn over every row it passes
+            if self.lifted_now(gi, row) != late {
+                return;
+            }
             let h = row.height_in(self.tall_row_h());
             if sy + h < vis_top || sy > vis_bot {
                 return; // fully scrolled out; a partial edge row is drawn and scissor-clipped to `frame`
@@ -1801,6 +2069,13 @@ impl TableView {
                 return;
             }
             let p = p.alpha(edge);
+            // an inert row is the whole row at one weight; a gliding row is drawn where it still is
+            let p = if row.inert { p.alpha(INERT_A) } else { p };
+            let p = p.translate(0.0, self.glide_at(gi));
+            // a lifted row grows, rises, casts its shadow and wears its OWN pill (the shared one is
+            // not drawn under it, `shared_pill`); everything below draws through this painter
+            let lifted = self.lifted_now(gi, row);
+            let p = if lifted { self.lift_row(p, Rect::new(frame.x + SIDE, sy, frame.w - 2.0 * SIDE, h), self.lift_at(gi, row)) } else { p };
             if row.sep && row.label.is_empty() {
                 // grouping hairline, on the row's centre line and inset to the label column so it
                 // reads as a divider between groups rather than a full-bleed panel rule
@@ -1843,7 +2118,8 @@ impl TableView {
             // the moment focus moved to the Sources panel's level pills. `focused` stays the
             // SELECTION (the marquee runs on the selected row).
             let focused = gi == self.sel && self.list_focused;
-            let cover = self.pill_cover(cy, h);
+            // under its own pill a lifted row is fully on it, whatever the shared pill is doing
+            let cover = if lifted { f32::from(u8::from(self.list_focused)) } else { self.pill_cover(cy, h) };
             // `cross` at the ends is exact, so a row at rest on either side is the colour it always was
             let on_pill = |rest: [f32; 4], over: [f32; 4]| match cover {
                 c if c <= 0.0 => rest,
@@ -1853,6 +2129,9 @@ impl TableView {
             // a disabled row keeps its soft ink under the pill (the ghost): secondary, not near-black
             let base = if row.disabled {
                 on_pill(theme::DISABLED.label, theme::TEXT_SECONDARY)
+            } else if row.moving == RowMove::Waiting {
+                // another row is being moved: this one reads in secondary ink until it is dropped
+                on_pill(theme::TEXT_SECONDARY, ink)
             } else {
                 on_pill(if row.dim { dimc } else { white }, ink)
             };
@@ -1868,7 +2147,17 @@ impl TableView {
             } else {
                 row.licon
             };
-            if let Some(li) = lead {
+            // A move mark takes the same column: the up/down pair, one box above the other, centred
+            // on the row. It wins the slot (the row is mid-reorder; a tick says where you ARE).
+            if let Some((up, down)) = row.moving.chevrons(focused) {
+                let x = content_x + (CHECK_W - MOVE_MARK) * 0.5;
+                for (icon, a, y) in [
+                    (crate::icons::Icon::ChevronUp, up, cyc - MOVE_MARK),
+                    (crate::icons::Icon::ChevronDown, down, cyc),
+                ] {
+                    crate::icons::draw(p, icon, Rect::new(x, y, MOVE_MARK, MOVE_MARK), theme::with_a(base, base[3] * a));
+                }
+            } else if let Some(li) = lead {
                 let cs = 26.0f32;
                 let cr = Rect::new(content_x + (CHECK_W - cs) * 0.5, cyc - cs * 0.5, cs, cs);
                 crate::icons::draw(p, li, cr, base);
@@ -2042,7 +2331,29 @@ impl TableView {
                     );
                 }
             }
-        });
+        };
+        self.walk(|cy, gi, si| paint(cy, gi, si, false));
+        // the second pass: the lifted row (at most one, but the table does not say so), over the rest
+        if self.lift.is_some_and(|lift| lift.spring.pos > 0.0) || self.sections.iter().flat_map(|s| &s.rows).any(|r| r.moving.is_lifted()) {
+            self.walk(|cy, gi, si| {
+                if gi >= 0 {
+                    paint(cy, gi, si, true);
+                }
+            });
+        }
+    }
+
+    /// `p` for a [`RowMove::Lifted`] row at `band` (the row's full band): grown about its centre,
+    /// risen, with its focus shadow cast and its own accent pill drawn under it - the one place the
+    /// lift's look lives. What the row then draws through the returned painter is grown with it.
+    fn lift_row(&self, p: Painter, band: Rect, lift: f32) -> Painter {
+        let z = p.translate(0.0, -LIFT_RISE * lift).zoomed(crate::Zoom::about(band, (0.5, 0.5), 1.0 + (LIFT_SCALE - 1.0) * lift));
+        let pill = Rect::new(band.x, band.y + PILL_INSET, band.w, band.h - 2.0 * PILL_INSET);
+        z.focus_shadow_outside(pill, PILL_RAD, lift);
+        if self.list_focused {
+            z.rrect(pill, PILL_RAD, PILL_RAD, crate::ACCENT);
+        }
+        z
     }
 
     /// The painter for one walk event: its section's ([`Self::group_painter`]), except the page
@@ -2178,7 +2489,7 @@ mod tests {
             c.finish()
         }
         let baseline = hash(&super::TableView::new());
-        for field in 0..7 {
+        for field in 0..10 {
             let mut table = super::TableView::new();
             match field {
                 0 => table.hl_top.vel = 1.0,
@@ -2188,6 +2499,9 @@ mod tests {
                 4 => table.list_focused = !table.list_focused,
                 5 => table.compact = !table.compact,
                 6 => table.tall = !table.tall,
+                7 => table.glide = vec![Spring::at(3.0)],
+                8 => table.lift = Some(super::Lift { row: 0, spring: Spring::at(0.5) }),
+                9 => table.lift = Some(super::Lift { row: 2, spring: Spring::at(0.0) }),
                 _ => unreachable!(),
             }
             assert_ne!(hash(&table), baseline, "field {field}");

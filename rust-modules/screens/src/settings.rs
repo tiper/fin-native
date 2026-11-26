@@ -490,6 +490,7 @@ fn mount_page(
     match arg {
         SettingsPage::Root => Box::new(RootPage::new(entry, cx.views.directory, &cx.views.inputs)),
         SettingsPage::Language => Box::new(LanguagePage::new(entry, cx.views.inputs)),
+        SettingsPage::LibraryOrder => Box::new(library_order::LibraryOrderPage::new(entry, cx.views.directory)),
         SettingsPage::UnderPosters => Box::new(under_posters::UnderPostersPage::new(entry)),
         SettingsPage::UnderPostersDetails(kind) => Box::new(under_posters::DetailsPage::new(entry, kind)),
         SettingsPage::Contribute => Box::new(super::legal::DocumentPage::contribute(entry)),
@@ -1082,6 +1083,7 @@ struct ServerMachineId(String);
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum RootId {
     Favourites,
+    LibraryOrder,
     UnderPosters,
     Playback,
     AudioSubtitles,
@@ -1117,6 +1119,7 @@ impl FormId for RootId {
             RootId::About => 9,
             RootId::Resolution => 10,
             RootId::UnderPosters => 11,
+            RootId::LibraryOrder => 13,
             RootId::Diagnostics => 12,
             // the base; `root_form` adds the position (`item_keyed`)
             RootId::Plaintext(_) => PLAINTEXT_KEY_BASE,
@@ -1126,6 +1129,7 @@ impl FormId for RootId {
         Some(match self {
             RootId::Favourites => "favourites",
             RootId::UnderPosters => "under_posters",
+            RootId::LibraryOrder => "library_order",
             RootId::Playback => "playback",
             RootId::AudioSubtitles => "audio_subtitles",
             RootId::Language => "language",
@@ -1184,6 +1188,8 @@ pub struct RootPage {
     grant_seen: u64,
     /// The libraries whose shelves the Under posters picture is owed, asked once the row has focus.
     under_ask: under_posters::PosterAsk,
+    /// The header preview the Library order row shows beside the table while it has focus.
+    order_preview: library_order::Preview,
     /// The sentence beside the table: the focused row's own, else the page's (Settings v2). A pure
     /// function of the focused row ([`sentence_for`]); this only fades between its answers.
     follow: plx_ui::follow_copy::FollowCopy,
@@ -1266,6 +1272,8 @@ struct RootInputs {
     /// What shows under a poster (the stored setting, read at the build), which the Under posters
     /// row summarises the way Language shows its name.
     under_posters: plx_plex::plex::session::UnderPosters,
+    /// The Library order row's value ("Server order", "Anime first"), read from the Browse publication.
+    library_order: String,
     /// Unencrypted-connection switches, in row order — empty when signed out or when nobody has
     /// an answered/offered plaintext question.
     plaintext: Vec<PlaintextRowInput>,
@@ -1297,6 +1305,7 @@ fn sentence_for(id: Option<&RootId>) -> Cow<'static, str> {
     use plx_os::i18n::msg;
     match id {
         Some(RootId::Favourites) => Cow::Owned(format!("{} {}", msg::settings_libraries_detail(), msg::settings_libraries_more())),
+        Some(RootId::LibraryOrder) => Cow::Borrowed(msg::library_order_row_detail()),
         Some(RootId::UnderPosters) => Cow::Borrowed(msg::under_posters_detail()),
         Some(RootId::Playback) => Cow::Borrowed(msg::settings_playback_detail()),
         Some(RootId::AudioSubtitles) => Cow::Borrowed(msg::settings_audio_detail()),
@@ -1314,13 +1323,13 @@ fn sentence_for(id: Option<&RootId>) -> Cow<'static, str> {
 
 fn root_form(inputs: &RootInputs) -> Form<RootId, Action, SettingsPage> {
     let signed_in = inputs.signed_in;
-    // Order (Settings v2): Libraries (Favorite libraries, Under posters), Playback (Video &
+    // Order (Settings v2): Libraries (Favorite libraries, Library order, Under posters), Playback (Video &
     // playback, Audio & subtitles), System (Language, Automatically Sign In, Play trailers
     // automatically, Interface resolution on webOS 1-3), Unencrypted connections, then Support
     // (Privacy & data, Diagnostics, Legal notices, About PlxNative). A row is its label and a value,
     // a switch or a chevron: its sentence is [`sentence_for`]'s.
     //
-    // The Libraries section is Libraries and the row is Favorite libraries: the switch governs
+    // The Libraries section is Libraries and its first row is Favorite libraries: the switch governs
     // the whole app — Home's shelves, the top tab strip and the Library's Sources picker.
     let libraries = FormSection::new(plx_os::i18n::msg::settings_libraries_section())
         .visible(signed_in)
@@ -1330,6 +1339,14 @@ fn root_form(inputs: &RootInputs) -> Form<RootId, Action, SettingsPage> {
             Action::Door,
             Row::new(plx_os::i18n::msg::settings_libraries_title())
                 .value(plx_os::i18n::msg::settings_libraries_count(inputs.library_count))
+                .chevron(true),
+        )
+        .item(
+            RootId::LibraryOrder,
+            RowKind::Nav(SettingsPage::LibraryOrder),
+            Action::Door,
+            Row::new(plx_os::i18n::msg::library_order_title())
+                .value(&inputs.library_order)
                 .chevron(true),
         )
         .item(
@@ -1457,6 +1474,7 @@ impl RootPage {
             auto_receipt: None, trailer_receipt: None,
             trailer_seat: inputs.profile.seat(), trailer_scope: inputs.profile.generation,
             under_ask: Default::default(),
+            order_preview: library_order::Preview::new(),
             plaintext_rows: Vec::new(),
             pending_plaintext: None,
             alert: PlaintextAlert::new(ALERT_GROUP, super::registry::ALERT, super::registry::ALERT + 1),
@@ -1507,7 +1525,7 @@ impl RootPage {
             trace: self.state.trace,
             signed_in, multi_user, library_count: directory.pinned_count() as i64,
             auto_sign_in, trailer_autoplay, resolution, resolution_offered, language: self.state.language,
-            under_posters: self.state.under_posters, plaintext,
+            under_posters: self.state.under_posters, library_order: library_order::root_value(directory), plaintext,
         });
         let keep = self.form.selected_id().cloned();
         self.form.set(form, keep.as_ref());
@@ -1706,6 +1724,11 @@ impl Machine<InnerHost> for RootPage {
                 if owed && cx.focus.current.is_some_and(|key| key.entry == self.entry) {
                     self.under_ask.step(cx, fx);
                 }
+                if self.form.selected_id() == Some(&RootId::LibraryOrder) {
+                    let rows = library_order::rows_of(cx.views.directory);
+                    self.order_preview.sync(rows, rows.first(), cx.views.directory, cx.measure);
+                    self.order_preview.step(t.dt());
+                }
                 let key = self.inputs.session_key();
                 let mut landed = self.session_watch != Some(key)
                     || self.state.language != self.inputs.install_language
@@ -1881,8 +1904,10 @@ impl Screen<InnerHost> for RootPage {
         let fan = plx_ui::follow_copy::PosterFan { arts: posters.iter().map(|m| plx_ui::widgets::Art::Poster(Some(super::registry::tile_facts::of(m)))).collect() };
         let kind_posters = under_posters::preview_posters(f.cx);
         let under = under_posters::RootPicture { value: self.state.under_posters, posters: &kind_posters, sorted: false, opacity: [1.0, 1.0] };
+        let order = self.order_preview.slot();
         let picture: Option<&dyn plx_ui::follow_copy::PictureSlot> = match self.form.selected_id() {
             Some(RootId::Favourites) => Some(&fan),
+            Some(RootId::LibraryOrder) => order.as_ref().map(|slot| slot as &dyn plx_ui::follow_copy::PictureSlot),
             Some(RootId::UnderPosters) => Some(&under),
             _ => None,
         };
@@ -1906,6 +1931,8 @@ impl Screen<InnerHost> for RootPage {
 
 #[path = "settings_under_posters.rs"]
 mod under_posters;
+#[path = "settings_library_order.rs"]
+mod library_order;
 #[path = "settings_diagnostics.rs"]
 mod diagnostics;
 #[cfg(test)]

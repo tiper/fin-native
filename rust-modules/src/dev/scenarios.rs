@@ -1350,6 +1350,7 @@ pub(crate) fn settings_boot_page(target: &str) -> Option<plx_screens::family::Se
         // Prints `overlay=legal`, the Legal index's word (a `DocumentPage` answers `word::LEGAL`), so no fps scene
         // selects on it.
         "about" => SettingsPage::About,
+        "library-order" => SettingsPage::LibraryOrder,
         "under-posters" => SettingsPage::UnderPosters,
         // root → Under posters → the details picker of one kind (`SettingsPage::boot_trail`)
         "under-posters-movie" => SettingsPage::UnderPostersDetails(PosterKind::Movie),

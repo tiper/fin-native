@@ -1,0 +1,17 @@
+{
+  "library_order.title": "Poredak biblioteka",
+  "library_order.value_server": "Poredak poslužitelja",
+  "library_order.value_first": "{title} na vrhu",
+  "library_order.row_detail": "Odaberite poredak omiljenih biblioteka na zaslonu „Početna” i u zaglavlju biblioteke.",
+  "library_order.reset": "Vrati poredak",
+  "library_order.state_idle": "Pritisnite OK da biste „{title}” pomaknuli gore ili dolje. Zaslon „Početna” i zaglavlje „{kind}” prikazuju omiljene biblioteke ovim poretkom.",
+  "library_order.state_reset": "Vraća omiljene biblioteke na poredak kojim ih navode vaši poslužitelji.",
+  "library_order.state_moving": "Pomicanje: „{title}”. Gore i Dolje mijenjaju položaj, OK ga potvrđuje, a Natrag poništava.",
+  "library_order.state_unnamed": "„{title}” još nije moguće pomaknuti: njezin poslužitelj još nije dovršio povezivanje.",
+  "library_order.state_dropped": "„{title}” je sada {home} na zaslonu „Početna”, a {header} u zaglavlju „{kind}”.",
+  "library_order.state_confirm": "Ponovno pritisnite OK da biste omiljene biblioteke vratili na poredak poslužitelja. Bilo koja druga tipka zadržava vaš poredak.",
+  "library_order.state_reset_done": "Omiljene biblioteke ponovno su u poretku kojim ih navode vaši poslužitelji.",
+  "library_order.state_unsaved": "Poredak nije moguće spremiti; vrijedi do ponovnog pokretanja PlxNative.",
+  "library_order.preview_caption": "{kind} · Zaglavlje biblioteke",
+  "library_order.preview_more": "Biblioteke koje se ne uklapaju skrivene su iza …."
+}

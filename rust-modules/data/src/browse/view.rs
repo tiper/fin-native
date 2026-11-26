@@ -463,6 +463,8 @@ struct DirectoryData {
     /// Every `sections` index in the order to PRESENT (the profile's Library order over the
     /// deterministic default). `sections` itself stays in table order: its indices are identities.
     order: Vec<usize>,
+    /// The table in its default order: what `order` was laid out from ([`super::OrderSlot`]).
+    order_slots: Vec<super::OrderSlot>,
     /// The favourites in presentation order (Settings' Library order's rows).
     order_rows: Vec<super::LibraryOrderRow>,
     /// What the profile's record is against the libraries present ([`super::OrderState`]): Settings'
@@ -636,6 +638,7 @@ impl DirectorySnapshot {
                     }).collect(),
                 favorites: state.favorite_sections(),
                 order: state.section_order(),
+                order_slots: state.order_slots(),
                 order_rows: state.library_order_rows(),
                 order_state: state.order_state(),
                 home_order: state.home_order(),
@@ -677,6 +680,7 @@ impl DirectorySnapshot {
                 sections: Vec::new(),
                 favorites: Vec::new(),
                 order: Vec::new(),
+                order_slots: Vec::new(),
                 order_rows: Vec::new(),
                 order_state: super::OrderState::Server,
                 home_order: Default::default(),
@@ -693,6 +697,22 @@ impl DirectorySnapshot {
             pin_commit: super::PinCommit::default(),
             order_write: Default::default(),
         }
+    }
+
+    /// This directory publishing a Library order: `rows` (the favourites in presentation order,
+    /// what [`DirectoryView::library_order`] reads), `slots` (EVERY library of the table in the
+    /// server's own order, favourites or not: what [`DirectoryView::library_order_slots`] reads),
+    /// what the profile's record is and where its last write stands. For a page test that has no
+    /// store to drive; [`super::library_order_publication`] is the real store's.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_library_order(mut self, rows: Vec<super::LibraryOrderRow>, slots: Vec<super::OrderSlot>,
+        state: super::OrderState, write: super::WriteState) -> Self {
+        let data = Arc::make_mut(&mut self.data);
+        data.order_slots = slots;
+        data.order_rows = rows;
+        data.order_state = state;
+        self.order_write = write;
+        self
     }
 
     /// This directory with `kind`'s library's shelves read and committed.
@@ -772,6 +792,7 @@ impl DirectorySnapshot {
                 sections,
                 favorites,
                 order,
+                order_slots: Vec::new(),
                 order_rows: Vec::new(),
                 order_state: super::OrderState::Server,
                 home_order: Default::default(),
@@ -881,6 +902,12 @@ impl<'a> DirectoryView<'a> {
     /// library has landed.
     pub fn library_order(self) -> &'a [super::LibraryOrderRow] {
         &self.0.data.order_rows
+    }
+    /// **The libraries in the server's own order**, the input the store laid the order out from
+    /// ([`super::presented_sections`]): a page that lays out another order (the one a held library
+    /// would leave with) calls the same function over this, and gets what the store will publish.
+    pub fn library_order_slots(self) -> &'a [super::OrderSlot] {
+        &self.0.data.order_slots
     }
     /// **What the profile's record is** ([`super::OrderState`]): `Server` when there is none (Reset has
     /// nothing to delete), `Recorded { in_effect }` when one is shown or still stored. `in_effect`

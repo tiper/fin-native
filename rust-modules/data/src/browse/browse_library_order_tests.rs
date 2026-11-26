@@ -105,6 +105,26 @@ fn a_set_order_is_a_projection_and_leaves_the_table_alone() {
     assert_eq!((rows[1].machine_id.as_str(), rows[1].key, rows[1].handle.as_str()), ("nas", 2, "anna"), "the owner handle rides along");
 }
 
+/// A page that lays out an order a held library would leave reads the publication's table in the
+/// server's order and calls `presented_sections_named`: for the order the store holds, that is the
+/// order the store presents (the same function, the same input), the favourites among them being the
+/// rows the page lists.
+#[test]
+fn the_published_server_table_lays_a_named_order_out_as_the_store_presents_it() {
+    let mut state = table(&[0, 1]);
+    let named = ids(&[("home", 1), ("nas", 2), ("home", 4), ("home", 5), ("nas", 9)]);
+    state.set_library_order_from(named.clone(), &signed_in());
+    let mut snapshot = DirectorySnapshot::default();
+    snapshot.capture_from(&mut state, &plx_plex::plex::ClientKeys::default());
+    let view = snapshot.view();
+    let slots = view.library_order_slots();
+    assert_eq!(slots.iter().map(|slot| slot.section).collect::<Vec<_>>(), state.default_section_order(), "the table in its server order");
+    assert_eq!(presented_sections_named(slots, &named), state.section_order());
+    let rows: Vec<usize> = view.library_order().iter().map(|row| row.section).collect();
+    let favourites: Vec<usize> = presented_sections_named(slots, &named).into_iter().filter(|section| state.sections[*section].pinned).collect();
+    assert_eq!(rows, favourites);
+}
+
 /// The Library header reads the same order: `rows_for` walks the presentation order, per kind.
 #[test]
 fn the_library_header_follows_the_order() {

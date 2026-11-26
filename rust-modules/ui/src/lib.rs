@@ -62,6 +62,8 @@ pub mod form; // declared, ordered rows with stable keys: Form / FormTable (docs
 #[cfg(test)]
 mod form_tests;
 #[cfg(test)]
+mod table_move_tests; // the shared table's reorder surface: inert rows, RowMove, row glide
+#[cfg(test)]
 mod input_tests; // RESTRUCTURE (spec §15.1): the dispatcher's input path — engine, map, press, keyboard, legacy
 pub mod input; // RESTRUCTURE (spec §2.2): the Input machine — owner of the press (an `App` field)
 #[cfg(feature = "threadcheck")]

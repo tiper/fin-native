@@ -132,6 +132,12 @@ arguments, and its time is the `dt` it is handed.
      (`push`/`place`), `next_x` for the lazy break. Never write `x += w + GAP` for a new row.
      The same stack top to bottom is `vstack::VStack`/`VFlow` (`Anchor::{Top,Bottom,Centre}`, `Item::before` for a
      gap that belongs to the item below it, `AlertHead` for the alert family's eyebrow/title/path ladder); never `y += h + GAP`.
+   - **Reordering rows**: `table::RowMove` (`Off | Pickable | Lifted | Waiting`, set per row with `Row::moving`) is the ONE
+     move-mode state; the table draws chevrons, lift, shadow and ink from it and glides rows to whatever order a
+     `FormTable` reinstall hands it (`TableView::glide_from`, seeded on a reorder only). The page decides the order.
+     Two kinds of row are not a stop (`Row::selectable`; neither key nor pointer lands on them): an `inert` row (`FormSection::inert`) is drawn at .45, and a `RowMove::Waiting` row, one that waits while another is held, keeps its own weight in secondary ink; do not dim it by hand.
+   - **A row of name pills with a ⋯** (the Library header, Settings' Library order preview): `page_header::{item, more_item,
+     plan_names, names_row}` (`names_row` is the ONE assembly: labels at room, visit slot, right cluster, ⋯ per `MoreOpener`; `joined_name` and `fit_name` are the shared name fit); never re-pack names by hand.
    - **Springs**: `Spring` (`lib.rs`) stepped at the shared stiffness (`consts::K_SCALE`,
      `K_SCROLL`, `K_SNAP`; `popover::K_APPEAR`), not a new constant or a hand-made easing.
 
@@ -1033,4 +1039,4 @@ nothing above draws a single pixel. For anything that moves pixels, capture the 
 cap-band re-centering are invisible until deployed.
 
 Note (library redesign): `cards::draw_label` is re-exported so screens can draw a poster caption
-through the shared label path; Settings > Libraries has two rows (Favorite libraries, Under posters).
+through the shared label path.
