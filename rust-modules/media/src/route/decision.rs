@@ -12468,6 +12468,9 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             plan.sub_sid
         ));
         crate::player::request_subtitle(ord);
+        if let Some(why) = side_reader_refusal(ps) {
+            crate::player::log(&format!("subside: reader not admitted ({why})"));
+        }
     }
     // A retry or a remembered per-item correction carried its subtitle offset through the reset
     // (`reset_track_selection`); hold it to the range of the subtitle that actually landed, so an
@@ -12824,6 +12827,35 @@ fn side_subs_allowed_for(ps: &PlaybackSession, sid: i64, drawable: bool, sidecar
 /// **May the app draw the selected subtitle over a remux** instead of the server burning it?
 fn side_subs_allowed(ps: &PlaybackSession) -> bool {
     side_subs_allowed_for(ps, ps.cur_sub_sid, ps.cur_sub_client_drawable, ps.cur_sub_sidecar)
+}
+
+/// The first term that keeps the side reader from reading the selected embedded track over a
+/// remux, or `None` when it may (or when nothing asks it to). For the log only: the gate itself
+/// is [`side_subs_allowed`] and [`side_reader_target`].
+fn side_reader_refusal(ps: &PlaybackSession) -> Option<&'static str> {
+    if ps.cur_sub_sid == 0 || ps.cur_sub_sidecar || !is_transcoding(ps) {
+        return None;
+    }
+    let link_local = cur_client(ps).is_some_and(|c| c.link() == Some(plx_plex::plex::probe::Location::Local));
+    let part = ps.auto_original.as_ref().map_or("", |c| c.probe_part.as_str());
+    [
+        (!ps.cur_sub_client_drawable, "not drawable"),
+        (ps.side_subs_refused, "refused earlier"),
+        (!enhancement_quality(), "quality"),
+        (ps.auto_original.is_none(), "no original candidate"),
+        (ps.cur_contract.ceiling.is_some(), "ceiling"),
+        (cur_delivery(ps) != plx_plex::plex::TranscodeDelivery::ProgressiveMkv, "delivery"),
+        (is_no_video_copy(ps), "video re-encoded"),
+        (!ps.cur_contract.remux, "not a remux"),
+        (!link_local, "link not local"),
+        (!part.starts_with('/'), "no server part"),
+        (!(1..=SIDE_MAX_PART_KBPS).contains(&ps.cur_transport_kbps), "part bitrate"),
+        (ps.cur_sub_ordinal < 0, "no ordinal"),
+        (ps.tsession.is_empty(), "no session"),
+        (ps.request.as_ref().is_none_or(|r| r.part.is_empty()), "no request part"),
+    ]
+    .into_iter()
+    .find_map(|(failed, why)| failed.then_some(why))
 }
 
 /// Log the harness-readable pair every enhancement-graded decision produces, shared by
