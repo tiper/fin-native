@@ -3267,6 +3267,37 @@ fn forced_resolve_decodes_dts_in_the_app_when_the_set_has_no_dts_row() {
     assert!(!probes.is_empty() && probes.iter().all(|l| query_param(l, "audioStreamID") == Some("1")), "{requests:?}");
 }
 
+/// **"Convert audio: on the TV" keeps an Opus 5.1 original a direct play under Auto.** The C1 takes
+/// Opus only in stereo; with the setting on the app converts the 5.1 track to AC3 itself, so the
+/// planner must pick it and play the Part. It used to leave the pick empty and ask the server for a
+/// remux (video and audio copied, the app converting anyway), whose every seek is a fresh Load: the
+/// TV then announced Dolby Vision again on each seek.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn auto_direct_plays_an_opus_51_track_the_app_converts_on_the_tv() {
+    let resolve = |conversion: bool, name: &'static str, requests: usize| {
+        let mut ps = crate::route::PlaybackSession::IDLE;
+        let _g = fresh_registry(&mut ps);
+        plx_os::devcaps::set_tv_audio_converter(true);
+        plx_os::devcaps::set_tv_audio_conversion(conversion);
+        let (plan, _) = cold_audio_resolve_held(&ps, name, requests, MDE_DIRECTPLAY,
+            vec![cold_track(1, "opus", "eng", true, "")], Vec::new(), "opus", |env, _| {
+                env.caps = std::sync::Arc::new(plx_os::devcaps::Caps {
+                    audio: "aac,ac3,eac3,dts,flac,opus".into(),
+                    audio_channels: [("opus".into(), 2)].into(),
+                    ..plx_os::devcaps::Caps::assumed()
+                });
+            });
+        plx_os::devcaps::set_tv_audio_conversion(false);
+        plx_os::devcaps::set_tv_audio_converter(false);
+        plan
+    };
+    let converted = resolve(true, "cold-opus51-tv-convert", 2);
+    assert!(converted.verdict.is_none(), "{:?}", converted.verdict);
+    assert!(converted.url.contains("/library/parts/36013/"), "the Part reaches the Load: {}", converted.url);
+    assert!(converted.tsession.is_empty(), "no server session: a seek stays in place");
+}
+
 /// **Force Direct Play never mixes a surround source down** (owner, 2026-10-28, #1082). The same set (no
 /// DTS row, the lossy policy admitting DTS) with a 5.1 DTS track: the app does not decode it to stereo,
 /// so Force shows its refusal exactly as it did before the app decoded anything, naming the codec,

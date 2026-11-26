@@ -30,7 +30,7 @@ use std::sync::atomic::Ordering;
 use super::decision::{
     measure_remote_original, measure_remote_remux, put_selection, resolve_playqueue,
     server_decision, forced_server_decision, ActiveEncoderState, AutomaticRouteIntent, MdeVerdict, PlayerControl, QueueInfo,
-    ENCODER_GENERATION,
+    ENCODER_GENERATION, audio_direct_plays_or_converted,
 };
 
 /// The selected source Part and streams before any executor chooses a playable wire recipe.
@@ -2351,7 +2351,8 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                 audio_natively_plays_with(&env.caps, env.direct_play_mode, codec, channels, rate)
             };
             let eligible = |codec: &str, channels: i64, rate: i64| {
-                audio_direct_plays_with(&env.caps, env.direct_play_mode, codec, channels, rate)
+                audio_direct_plays_or_converted(
+                    &env.caps, plx_os::devcaps::tv_audio_conversion(), env.direct_play_mode, codec, channels, rate)
             };
             let copy_blocked = forced || no_video_copy;
             let pick_audio = |stand_in: StandIn, plays: &dyn Fn(&str, i64, i64) -> bool| {
