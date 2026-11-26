@@ -2495,7 +2495,7 @@ mod tests {
         let missing = edit(MINIMAL, &[(r#""format": "1.0","#, ""), other_mistake]);
         refuses(&missing, &codes::E0401, "/hud/format");
 
-        for newer_minor in ["1.2", "1.7", "1.255", "1.99999999999999999999999"] {
+        for newer_minor in ["1.3", "1.7", "1.255", "1.99999999999999999999999"] {
             let text = with_format(&format!(r#""format": "{newer_minor}""#));
             let finding = refuses(&text, &codes::E0402, "/hud/format");
             assert_eq!(finding.message, REASON_NEWER, "{newer_minor}");

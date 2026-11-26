@@ -308,6 +308,18 @@ fn face_in(cx: &LocaleContext, unix_s: i64, offset_s: i64) -> Option<String> {
     cx.time_of_day(clock_hm(unix_s, offset_s)?)
 }
 
+/// A Unix instant as the viewer's clock face ("21:38", or "9:38 PM" where the TV's format says so), in
+/// the `offset_s` of a frame's [`Wall`]: the face every airing line is made of ([`airing_line_in`]), here
+/// for the player banner's clock and its "Next at" line. `None` only where the sum overflows.
+pub fn clock_face_in(cx: &LocaleContext, unix_s: i64, offset_s: i64) -> Option<String> {
+    face_in(cx, unix_s, offset_s)
+}
+
+/// [`clock_face_in`] in the thread's locale.
+pub fn clock_face(unix_s: i64, offset_s: i64) -> Option<String> {
+    clock_face_in(plx_os::i18n::current(), unix_s, offset_s)
+}
+
 /// **The one line that words an airing against the clock**, for either surface ([`Airing`]), from
 /// its [`phase`]: within ten minutes of the start it says how long ago it started, while on air
 /// otherwise the clock times and how long is left, and before the start or after the end the clock

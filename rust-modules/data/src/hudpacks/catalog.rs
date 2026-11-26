@@ -73,7 +73,7 @@ pub struct Package {
 }
 
 /// Latest HUD document version understood by the runtime and registry filter.
-pub const HUD_FORMAT: (u8, u8) = (1, 1);
+pub const HUD_FORMAT: (u8, u8) = (1, 2);
 
 impl Package {
     pub fn sha(&self) -> Sha {

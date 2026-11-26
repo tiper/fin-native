@@ -1,0 +1,13 @@
+{
+  "ordinal.first": "en première position",
+  "ordinal.second": "en deuxième position",
+  "ordinal.third": "en troisième position",
+  "ordinal.fourth": "en quatrième position",
+  "ordinal.fifth": "en cinquième position",
+  "ordinal.sixth": "en sixième position",
+  "ordinal.seventh": "en septième position",
+  "ordinal.eighth": "en huitième position",
+  "ordinal.ninth": "en neuvième position",
+  "ordinal.tenth": "en dixième position",
+  "ordinal.other": "en position n° {n}"
+}

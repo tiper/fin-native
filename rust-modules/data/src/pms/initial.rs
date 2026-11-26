@@ -181,7 +181,7 @@ fn source_build(b: &SourceBuild, w: &mut impl Sink) {
     for shelf in shelves {
         // `row` is paging state a row only has after a user asked for more; a boot capture has none,
         // so the canonical encoding (and every recorded hash) stays what it was.
-        let Shelf { title, hub_id, key, items, positions, total, offset, end, more, shown: _, row: _, epoch: _ } = shelf;
+        let Shelf { title, hub_id, key, items, positions, total, offset, end, more, shown: _, row: _, epoch: _, library: _ } = shelf;
         for text in [title, hub_id, key] { w.text(text); }
         movies(items, w);
         w.u64(positions.len() as u64); for position in positions { w.u64(*position as u64); }

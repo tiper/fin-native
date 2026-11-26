@@ -258,5 +258,10 @@
   "widgets.failure.change_quality": "Cambia qualità",
   "widgets.watch.intro": "Guarda introduzione",
   "widgets.verdict.tuners_busy": "Tutti i sintonizzatori sono occupati",
-  "widgets.live.channel_context": "{number} · {programme}"
+  "widgets.live.channel_context": "{number} · {programme}",
+  "widgets.live.badge": "IN DIRETTA",
+  "widgets.live.next_at": "Dopo, alle {time}",
+  "widgets.live.entry_none": "Nessun canale {number}",
+  "widgets.live.entry_more": "+{count} altri · ▲ ▼ per scorrere",
+  "widgets.live.playing": "In riproduzione"
 }

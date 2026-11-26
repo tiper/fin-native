@@ -61,15 +61,6 @@ impl Order {
         self.groups().last().copied()
     }
 
-    pub fn retaining(self, mut present: impl FnMut(GroupId) -> bool) -> Self {
-        let mut order = Self::EMPTY;
-        for group in self.groups().iter().copied().filter(|group| present(*group)) {
-            order.groups[order.len] = group;
-            order.len += 1;
-        }
-        order
-    }
-
     /// **The direction from the page to the tabs**: [`Dir::Up`] when the tabs are compiled ABOVE the page an open
     /// section draws (the strip or the section's buttons), [`Dir::Down`] when they are below it, and `Down` when
     /// the state has no tabs or no page, which is the way a modal page has always been left. A modal page is

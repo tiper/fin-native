@@ -21,6 +21,7 @@ DVR = "/livetv/dvrs/7"
 EPG = "/tv.plex.providers.epg.xmltv:7"
 NOW = 1792523168  # 368 s into its half hour, so an airing's begin is not `now`
 UNSORTED = ["C102.243.mock.tv", "C101.242.mock.tv", "C105.246.mock.tv", "C103.244.mock.tv", "C104.245.mock.tv"]
+LATER = [f"C{v}.{v + 141}.mock.tv" for v in range(106, 117)]  # the eleven channels after the unsorted five
 SESSION_KEY = re.compile(r"^/livetv/sessions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 NO_SEGMENT = (404, "text/plain", b"mock_pms: no live segments")
 GONE = "00000000-0000-4000-8000-000000000000"  # a uuid no tune minted
@@ -108,23 +109,47 @@ class LiveTvMock(unittest.TestCase):
         device = dvr["Device"][0]
         self.assertEqual(device["status"], "dead", "discovery status is history, not health (§10)")
         self.assertEqual(device["tuners"], "2")
-        self.assertEqual([m["enabled"] for m in device["ChannelMapping"]], ["1"] * 5)
+        self.assertEqual([m["enabled"] for m in device["ChannelMapping"]], ["1"] * 16)
 
     def test_lineup_order(self):
         mc = jcall(make_live(), "GET", f"{EPG}/lineups/dvr/channels")
-        self.assertEqual(mc["size"], 5)
-        self.assertEqual([c["id"] for c in mc["Channel"]], UNSORTED)
+        self.assertEqual(mc["size"], 16)
+        self.assertEqual([c["id"] for c in mc["Channel"]], UNSORTED + LATER)
         self.assertTrue(all(c["gridKey"] == c["id"] for c in mc["Channel"]))
 
-    def test_grid_four_airings(self):
+    def test_grid_fifteen_airings(self):
         rows = guide(make_live())
-        self.assertEqual(sorted(r["Media"][0]["channelVcn"] for r in rows), ["101", "102", "104", "105"])
+        self.assertEqual(sorted(r["Media"][0]["channelVcn"] for r in rows),
+                         ["101", "102", "104", "105"] + [str(v) for v in range(106, 117)])
+
+    def test_grid_start_times_are_mixed(self):
+        """The first five share their half hour; the other eleven began at eleven different minutes."""
+        rows = {r["Media"][0]["channelVcn"]: r["Media"][0] for r in guide(make_live())}
+        self.assertEqual(len({rows[v]["beginsAt"] for v in ("101", "102", "104", "105")}), 1)
+        self.assertEqual(len({rows[str(v)]["beginsAt"] for v in range(106, 117)}), 11)
+        self.assertEqual({rows[str(v)]["endsAt"] - rows[str(v)]["beginsAt"] for v in range(106, 117)},
+                         {1800, 3600, 5400, 7200})
 
     def test_grid_covers_now(self):
         for row in guide(make_live()):
             for m in row["Media"]:
                 self.assertLessEqual(m["beginsAt"], NOW)
                 self.assertLessEqual(NOW, m["endsAt"])
+
+    def test_a_long_session_sees_programmes_move_on_and_not_restart(self):
+        """The `ago` airings are measured from the first read, so a later read sees the same programme still
+        running (not "started a few minutes ago" again) and, past its end, the next one of its length."""
+        live = make_live().livetv
+        first = {r["Media"][0]["channelVcn"]: r["Media"][0] for r in live.grid(NOW)}
+        later = {r["Media"][0]["channelVcn"]: r["Media"][0] for r in live.grid(NOW + 600)}
+        again = {r["Media"][0]["channelVcn"]: r["Media"][0] for r in live.grid(NOW + 8 * 3600)}
+        for vcn in (str(v) for v in range(106, 117)):
+            length = first[vcn]["endsAt"] - first[vcn]["beginsAt"]
+            if NOW + 600 < first[vcn]["endsAt"]:
+                self.assertEqual(later[vcn]["beginsAt"], first[vcn]["beginsAt"], vcn)
+            self.assertLessEqual(again[vcn]["beginsAt"], NOW + 8 * 3600, vcn)
+            self.assertGreater(again[vcn]["endsAt"], NOW + 8 * 3600, vcn)
+            self.assertEqual(again[vcn]["endsAt"] - again[vcn]["beginsAt"], length, vcn)
 
     def test_grid_episode(self):
         ep = next(r for r in guide(make_live()) if r["Media"][0]["channelVcn"] == "101")
@@ -133,7 +158,7 @@ class LiveTvMock(unittest.TestCase):
 
     def test_grid_encoded_and_literal_keys(self):
         pms = make_live()
-        self.assertEqual(len(guide(pms)), 4)
+        self.assertEqual(len(guide(pms)), 15)
         self.assertEqual(guide(pms, encoded=False), guide(pms))
 
     def test_tune_needs_session_id(self):

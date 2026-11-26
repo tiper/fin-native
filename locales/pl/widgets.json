@@ -262,5 +262,10 @@
   "widgets.failure.change_quality": "Zmień jakość",
   "widgets.watch.intro": "Oglądaj czołówkę",
   "widgets.verdict.tuners_busy": "Wszystkie tunery są zajęte",
-  "widgets.live.channel_context": "{number} · {programme}"
+  "widgets.live.channel_context": "{number} · {programme}",
+  "widgets.live.badge": "NA ŻYWO",
+  "widgets.live.next_at": "Następnie o {time}",
+  "widgets.live.entry_none": "Brak kanału {number}",
+  "widgets.live.entry_more": "+{count} więcej · ▲ ▼ aby przewijać",
+  "widgets.live.playing": "Odtwarzany"
 }

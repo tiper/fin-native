@@ -1,0 +1,13 @@
+{
+  "ordinal.first": "na prvom mjestu",
+  "ordinal.second": "na drugom mjestu",
+  "ordinal.third": "na trećem mjestu",
+  "ordinal.fourth": "na četvrtom mjestu",
+  "ordinal.fifth": "na petom mjestu",
+  "ordinal.sixth": "na šestom mjestu",
+  "ordinal.seventh": "na sedmom mjestu",
+  "ordinal.eighth": "na osmom mjestu",
+  "ordinal.ninth": "na devetom mjestu",
+  "ordinal.tenth": "na desetom mjestu",
+  "ordinal.other": "na mjestu br. {n}"
+}

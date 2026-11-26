@@ -1,0 +1,17 @@
+{
+  "library_order.title": "Ordine librerie",
+  "library_order.value_server": "Ordine del server",
+  "library_order.value_first": "{title} in testa",
+  "library_order.row_detail": "Scegli l’ordine delle tue librerie preferite in Home e nell’intestazione Libreria.",
+  "library_order.reset": "Ripristina ordine",
+  "library_order.state_idle": "Premi OK per spostare {title} in su o in giù. Home e l’intestazione {kind} mostrano le tue librerie preferite in quest’ordine.",
+  "library_order.state_reset": "Riporta le tue librerie preferite nell’ordine in cui le elencano i tuoi server.",
+  "library_order.state_moving": "Spostamento di {title}. Su e Giù cambiano la posizione, OK la conferma e Indietro annulla.",
+  "library_order.state_unnamed": "{title} non può ancora essere spostata: il suo server non ha ancora finito di connettersi.",
+  "library_order.state_dropped": "{title} ora è {home} in Home e {header} nell’intestazione {kind}.",
+  "library_order.state_confirm": "Premi di nuovo OK per riportare le tue librerie preferite nell’ordine dei tuoi server. Qualsiasi altro pulsante mantiene il tuo ordine.",
+  "library_order.state_reset_done": "Le tue librerie preferite sono tornate nell’ordine in cui le elencano i tuoi server.",
+  "library_order.state_unsaved": "Impossibile salvare questo ordine; vale finché PlxNative non viene riavviato.",
+  "library_order.preview_caption": "{kind} · Intestazione Libreria",
+  "library_order.preview_more": "Le librerie che non entrano sono dietro …."
+}

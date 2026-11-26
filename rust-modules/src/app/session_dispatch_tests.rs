@@ -646,7 +646,14 @@ fn endpoint_outcomes_cross_central_dispatch_machine_bridge_and_boot() {
     let a = plx_plex::plex::register_for_test("endpoint-a", "127.0.0.1", 9, "synthetic", "cid");
     let b = plx_plex::plex::register_for_test("endpoint-b", "127.0.0.1", 10, "synthetic", "cid");
     plx_plex::plex::describe_server(a, "Synthetic", "Synthetic share", plx_plex::plex::GrantEvidence::outside());
-    let expected = [b, a]; // Home's own-first observation order, deliberately not slot order.
+    // Home's observation order is its roster's, `browse::source_rank`: Browse's household verdict first,
+    // then the slot. Until Browse has classified the sources (every step before its discovery step reads
+    // a directory that holds no verdict) both are unclassified, which ranks them in slot order and never
+    // guesses a verdict from the handle (the roster used to put the handle-less `b` first here). Once
+    // Browse's table holds them (its discovery step, at the end), the household's own `b` leads the
+    // share `a`: deliberately not slot order. The order the roster observes is the order dispatched.
+    let expected = [a, b];
+    let classified = [b, a];
     crate::app::adapters::stores::with_refused_hubs_launches_for_test(|| {
         let mut harness = crate::app::runtime_owners::Harness::new(|| 0);
         let mut rig = harness.bridge();
@@ -731,8 +738,9 @@ fn endpoint_outcomes_cross_central_dispatch_machine_bridge_and_boot() {
         rig.deliver(MachineId::Store(StoreId::Hubs.ord()), &AppMsg::HubsResult(result), &parts, &mut fx);
         drop(fx);
         assert_eq!(out.len(), 1);
+        // the test landing is the roster's FIRST source's (`queue_test_landing` reads `srcs[0]`)
         assert!(matches!(out[0].fx, Fx::App(AppFx::Session(
-            plx_session::auth::SessionCmd::RequestEndpoint { sid })) if sid == b));
+            plx_session::auth::SessionCmd::RequestEndpoint { sid })) if sid == expected[0]));
         {
             let client = plx_plex::plex::client_for(a).unwrap();
             rig.stores.browse.borrow_mut().queue_discovery_for_test(
@@ -767,7 +775,7 @@ fn endpoint_outcomes_cross_central_dispatch_machine_bridge_and_boot() {
             assert_eq!(after.iter().map(|e| match &e.fx {
                 Fx::App(AppFx::Session(plx_session::auth::SessionCmd::RequestEndpoint { sid })) => *sid,
                 _ => panic!("the settled refusals were not translated into Session commands"),
-            }).collect::<Vec<_>>(), expected);
+            }).collect::<Vec<_>>(), classified);
         }
     });
     plx_plex::plex::reset_servers_for_test();

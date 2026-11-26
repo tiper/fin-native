@@ -89,6 +89,7 @@ pub mod grant;
 // persisted answer — no store, no screen — so the household default, the recorded answer and the
 // never-empty floor are graded on the host rather than observed on a television.
 pub mod pins;
+pub mod library_order;
 
 // The plex.tv METADATA PROVIDER (`discover.provider.plex.tv`) — a third service, but one that
 // shares the account API's transport + identity headers exactly, so it only adds an
@@ -256,10 +257,11 @@ pub use timeline::{queue_index_of, QueueRow};
 // `DP_SUBTITLE_CODECS` / `is_dp_subtitle` are the subtitle twin: the profile's `subtitleCodec=`
 // list and route's MDE `subtitleStreamID` gate, so a selected PGS cannot be advertised in one
 // and omitted from the other.
-// `is_dp_audio_track_with` checks normal codec/channel eligibility, while `link_policy` constrains
+// `is_dp_audio_track_with` checks normal codec/channel eligibility for a direct play
+// (`is_session_audio_track_with` for what an encoder session copies), while `link_policy` constrains
 // the connection. Forced mode retains software feed limits and uses a separate PMS profile.
 #[allow(unused_imports)]
 pub use transcoder::{
     DP_AUDIO_CODECS, DP_SUBTITLE_CODECS, LinkPolicy, direct_play_video_codecs, is_dp_audio_track_with,
-    is_dp_subtitle, link_policy,
+    is_dp_subtitle, is_session_audio_track_with, link_policy,
 };

@@ -1,0 +1,13 @@
+{
+  "ordinal.first": "al primo posto",
+  "ordinal.second": "al secondo posto",
+  "ordinal.third": "al terzo posto",
+  "ordinal.fourth": "al quarto posto",
+  "ordinal.fifth": "al quinto posto",
+  "ordinal.sixth": "al sesto posto",
+  "ordinal.seventh": "al settimo posto",
+  "ordinal.eighth": "all’ottavo posto",
+  "ordinal.ninth": "al nono posto",
+  "ordinal.tenth": "al decimo posto",
+  "ordinal.other": "al posto n. {n}"
+}

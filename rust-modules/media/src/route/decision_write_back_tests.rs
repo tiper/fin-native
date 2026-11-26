@@ -1017,6 +1017,33 @@ fn a_queued_put_is_dropped_when_the_slot_is_re_pointed_at_a_new_client() {
     assert!(w.log().contains("select streams: dropped (credential changed since queued)"), "{}", w.log());
 }
 
+// ---- a pick made before playback (#1532) ----------------------------------------------------
+
+/// The before-playback picker is the in-player pick's door with no session: its PUT carries both ids
+/// (Off = `subtitleStreamID=0`), and a movie, having no show, writes no track memory.
+#[test]
+fn a_preplay_pick_puts_both_ids_and_subtitles_off_is_zero() {
+    let w = world(part(55002));
+    let item = PreplayItem { sid: w.sid, kind: "movie", show_rk: "", part_id: PART };
+    assert!(commit_preplay_pick(&item, 36015, 0, None, Some(SubtitleMemo::Off)));
+    wait_idle();
+    let puts = w.pms.puts();
+    assert_eq!(puts.len(), 1, "{puts:?}");
+    assert_eq!(param(&puts[0], "audioStreamID"), Some("36015"));
+    assert_eq!(param(&puts[0], "subtitleStreamID"), Some("0"), "Off is subtitleStreamID=0: {puts:?}");
+    assert_eq!(w.pms.selection(PART), (36015, 0));
+}
+
+/// A part the picker could not name has nothing to PUT on.
+#[test]
+fn a_preplay_pick_without_a_part_sends_nothing() {
+    let w = world(part(55002));
+    let item = PreplayItem { sid: w.sid, kind: "movie", show_rk: "", part_id: 0 };
+    assert!(!commit_preplay_pick(&item, 36015, 0, None, None));
+    wait_idle();
+    assert!(w.pms.puts().is_empty());
+}
+
 // ---- the remembered pick is not shown -----------------------------------------------------------
 
 #[test]
@@ -1031,4 +1058,99 @@ fn a_parked_write_is_dropped_while_the_memory_note_is_up() {
     assert!(w.pms.puts().is_empty(), "{:?}", w.pms.puts());
     assert!(!w.parked(), "the value is spent");
     assert!(w.log().contains("write-back dropped (the remembered pick is not shown)"), "{}", w.log());
+}
+
+/// An episode's pick before playback goes out as the same PUT, and the memo it carries (`Off`) is the
+/// show's memory rung, which outranks PMS's still-selected track: the first start draws nothing.
+/// (Where the memo is stored is `remember_show_pick`'s, graded with the in-player picks.)
+#[test]
+fn a_preplay_subtitles_off_on_an_episode_puts_off_and_its_memory_rung_draws_none() {
+    let w = world(part(55002));
+    let item = PreplayItem { sid: w.sid, kind: "episode", show_rk: SHOW, part_id: PART };
+    assert!(commit_preplay_pick(&item, 36014, 0, None, Some(SubtitleMemo::Off)));
+    wait_idle();
+    assert_eq!(w.pms.selection(PART), (36014, 0), "the server holds Off");
+    let subs = vec![
+        plx_data::metadata::Stream { id: 55001, index: 0, codec: "srt".into(), lang_code: "eng".into(), ..Default::default() },
+        plx_data::metadata::Stream { id: 55002, index: 1, codec: "srt".into(), lang_code: "fra".into(), selected: true, ..Default::default() },
+    ];
+    let playing = plx_data::metadata::PlayingItem {
+        kind: "episode".into(),
+        show_rk: SHOW.into(),
+        ..plx_data::metadata::PlayingItem::with_subs(subs)
+    };
+    let decision = crate::route::plan::pick_subtitle(
+        &playing, &plx_plex::plex::ShowLangPrefs::default(), crate::route::plan::SubtitleLangPrefs::default(), "jpn", None, Some(&SubtitleMemo::Off),
+    );
+    assert_eq!(decision.pick, None, "the viewer's Off outranks PMS's still-selected track");
+}
+
+/// **A pick on no file holds nothing** (`hold_pick_for_retry`): a pick whose part is unknown (`0`) names no
+/// file a retry could play, so the retry keeps carrying the attempt's own pair and nothing is held.
+#[test]
+fn a_pick_on_no_file_is_not_held_for_the_retry() {
+    let mut ps = PlaybackSession::default();
+    ps.request = Some(PlaybackRequest {
+        sid: ServerId::UNSET, rk: RK.into(), part: String::new(), vcodec: "h264".into(), acodec: "ac3".into(),
+        title: "Film".into(), ctx: String::new(), preview: false, live: None, version: None, show_rk: String::new(),
+    });
+    ps.source_selection = Some(SourceSelection {
+        server: ServerId::UNSET, part_id: PART, audio_sid: 11, subtitle_sid: 12, audio_contract: Default::default(),
+    });
+    for part_id in [0, -1] {
+        memory::hold_pick_for_retry(&mut ps, &plx_data::metadata::PreplayPick { part_id, audio_sid: 21, sub: plx_data::metadata::SubPick::Off });
+        assert!(ps.held_pick.is_none(), "part {part_id}: nothing held");
+        let held = current_retry_context(&ps, 0).selection.map(|s| (s.part_id, s.audio_sid, s.sub_sid));
+        assert_eq!(held, Some((PART, 11, 12)), "part {part_id}: the retry carries the attempt's own pair");
+    }
+}
+
+/// **An audio-only pick inherits the attempt's subtitle only from the same file**: the standing subtitle is a
+/// track of the attempt's file, so a `Server` pick on ANOTHER file of the item holds no subtitle override.
+#[test]
+fn a_server_pick_on_another_file_does_not_inherit_the_attempts_subtitle() {
+    let mut ps = PlaybackSession::default();
+    ps.request = Some(PlaybackRequest {
+        sid: ServerId::UNSET, rk: RK.into(), part: String::new(), vcodec: "h264".into(), acodec: "ac3".into(),
+        title: "Film".into(), ctx: String::new(), preview: false, live: None, version: None, show_rk: String::new(),
+    });
+    ps.source_selection = Some(SourceSelection {
+        server: ServerId::UNSET, part_id: PART, audio_sid: 11, subtitle_sid: 12, audio_contract: Default::default(),
+    });
+    let server = |part_id| plx_data::metadata::PreplayPick { part_id, audio_sid: 22, sub: plx_data::metadata::SubPick::Server };
+    memory::hold_pick_for_retry(&mut ps, &server(PART));
+    assert_eq!(held_pick(&ps).map(|h| (h.part_id, h.sub_sid)), Some((PART, 12)), "control: the same file keeps its subtitle");
+    memory::hold_pick_for_retry(&mut ps, &server(PART + 1));
+    assert_eq!(held_pick(&ps).map(|h| (h.part_id, h.sub_sid)), Some((PART + 1, 0)), "another file: no subtitle override");
+}
+
+/// **A pick on the failure screen is what Try again plays** (`hold_pick_for_retry`): the retry's
+/// selection is the viewer's pair instead of the failed attempt's, Off included; an audio-only pick keeps
+/// the subtitle the attempt stood on; and the request that consumes it clears the hold, so it never
+/// outlives its retry.
+#[test]
+fn a_pick_held_on_the_failure_screen_is_the_selection_the_retry_carries() {
+    let mut ps = PlaybackSession::default();
+    ps.request = Some(PlaybackRequest {
+        sid: ServerId::UNSET, rk: RK.into(), part: String::new(), vcodec: "h264".into(), acodec: "ac3".into(),
+        title: "Film".into(), ctx: String::new(), preview: false, live: None, version: None, show_rk: String::new(),
+    });
+    ps.source_selection = Some(SourceSelection {
+        server: ServerId::UNSET, part_id: PART, audio_sid: 11, subtitle_sid: 12, audio_contract: Default::default(),
+    });
+    let held = |sel: Option<HeldSelection>| sel.map(|s| (s.part_id, s.audio_sid, s.sub_sid));
+    assert_eq!(held(current_retry_context(&ps, 0).selection), Some((PART, 11, 12)), "nothing held: the attempt's own pair");
+
+    let pick = |audio_sid, sub| plx_data::metadata::PreplayPick { part_id: PART, audio_sid, sub };
+    memory::hold_pick_for_retry(&mut ps, &pick(21, plx_data::metadata::SubPick::Off));
+    assert_eq!(held(current_retry_context(&ps, 0).selection), Some((PART, 21, 0)), "Off is the viewer's, not the attempt's track");
+
+    memory::hold_pick_for_retry(&mut ps, &pick(22, plx_data::metadata::SubPick::Server));
+    assert_eq!(memory::failed_pick(&ps).map(|p| (p.audio_sid, p.sub)), Some((22, plx_data::metadata::SubPick::Track(12))), "the picker reopens on the held pair");
+    assert_eq!(held(current_retry_context(&ps, 0).selection), Some((PART, 22, 12)), "an audio-only pick leaves subtitles alone");
+
+    let retry = current_retry_context(&ps, 0);
+    begin_track_selection(&mut ps, Some(retry));
+    assert!(ps.held_pick.is_some(), "the request does not clear it: only the landing that consumes it does");
+    assert_eq!(held(ps.carried_selection), Some((PART, 22, 12)), "into the pair the new attempt carries");
 }

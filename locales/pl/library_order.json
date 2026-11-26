@@ -1,0 +1,17 @@
+{
+  "library_order.title": "Kolejność bibliotek",
+  "library_order.value_server": "Kolejność serwerów",
+  "library_order.value_first": "{title} na początku",
+  "library_order.row_detail": "Wybierz kolejność ulubionych bibliotek na ekranie „Główna” i w nagłówku biblioteki.",
+  "library_order.reset": "Przywróć kolejność",
+  "library_order.state_idle": "Naciśnij OK, aby przesunąć „{title}” w górę lub w dół. Ekran „Główna” i nagłówek „{kind}” pokazują ulubione biblioteki w tej kolejności.",
+  "library_order.state_reset": "Przywraca ulubione biblioteki do kolejności, w jakiej wymieniają je serwery.",
+  "library_order.state_moving": "Przesuwanie: „{title}”. Góra i Dół zmieniają pozycję, OK ją zatwierdza, a Wstecz anuluje.",
+  "library_order.state_unnamed": "„{title}” nie może jeszcze zostać przesunięta: jej serwer nie zakończył łączenia.",
+  "library_order.state_dropped": "„{title}” jest teraz {home} na ekranie „Główna” i {header} w nagłówku „{kind}”.",
+  "library_order.state_confirm": "Naciśnij OK jeszcze raz, aby przywrócić ulubione biblioteki do kolejności serwerów. Każdy inny przycisk zachowa Twoją kolejność.",
+  "library_order.state_reset_done": "Ulubione biblioteki wróciły do kolejności, w jakiej wymieniają je serwery.",
+  "library_order.state_unsaved": "Nie udało się zapisać kolejności; obowiązuje do ponownego uruchomienia PlxNative.",
+  "library_order.preview_caption": "{kind} · Nagłówek biblioteki",
+  "library_order.preview_more": "Biblioteki, które się nie mieszczą, kryją się za …."
+}

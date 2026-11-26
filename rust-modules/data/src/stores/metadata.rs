@@ -88,6 +88,10 @@
 //!   change, answers whether it actually changed anything.
 //! - `InstallPlaying(Option<PlayingItem>)` → `metadata::install_playing` — the playback plan's leaf
 //!   (`route.rs`).
+//! - `PatchTracks{sid, rk, pick}` / `SpendPick{sid, rk, part_id}` → `metadata::pick_step` — the pre-play
+//!   pick's events: the viewer's choice in the Audio & Subtitles panel, and the start of a playback of its
+//!   file. Its third event is the page's end: `Clear`, `ClearItem`, `Reset` and the landing of another
+//!   item drop every pick. `pick_step` is the one writer of all three.
 //! - `MarkSkipped(Marker)` → `metadata::mark_skipped`.
 //! - `RetirePlaying` → `metadata::retire_playing`, `RetirePlayingItem` → `metadata::retire_playing_item`
 //!   — see that function's doc for why the two descriptions of "what was playing" must retire
@@ -230,6 +234,20 @@ pub enum MetadataCmd {
     /// leaf — and lands only on the same `(sid, rk)`. A stream that is the SAME subtitle as one
     /// already listed (`Stream::same_subtitle`, under a new id) replaces it rather than joining it.
     AppendPlayingSub { sid: ServerId, rk: String, stream: crate::metadata::Stream },
+    /// A track pick made BEFORE playback (the Audio & Subtitles panel, #1532) was taken by the
+    /// server: held as the store's [`crate::metadata::PreplayPick`] for `(sid, rk)`'s file (every write
+    /// of the picks goes through `metadata::pick_step`).
+    /// Lands only when the loaded page holds that item's streams (the item's own page, or the show
+    /// page whose backfilled streams are that episode's). Readers: the panel's seed and the resolve,
+    /// which applies it to the item it plans.
+    PatchTracks { sid: ServerId, rk: String, pick: crate::metadata::PreplayPick },
+    /// A playable, non-preview playback of `(sid, rk)` has STARTED on the file whose part is `part_id`
+    /// (sent by the loop once the engine confirmed it, `route::spend_confirmed_picks`; a plan that landed
+    /// but never started spends nothing): a pick is the viewer's word for the first start and no more, so the
+    /// pick held for that file is spent, whether or not that playback was planned under it (a retry that
+    /// carries the failure screen's pair is not). The only spend; nothing else but the page's own close or
+    /// replacement removes a pick.
+    SpendPick { sid: ServerId, rk: String, part_id: i64 },
     MarkSkipped(crate::metadata::Marker),
     RetirePlaying,
     RetirePlayingItem,

@@ -158,8 +158,8 @@ fn the_signed_in_root_carries_no_sub_line_and_its_sentences_fit_elsewhere() {
         }
     }
     assert_eq!(
-        rows, 11,
-        "Favorite libraries, Under posters, Video & playback, Audio & subtitles, Language, \
+        rows, 12,
+        "Favorite libraries, Library order, Under posters, Video & playback, Audio & subtitles, Language, \
          Automatically Sign In, Play trailers automatically, Privacy & data, Diagnostics, Legal \
          notices and About PlxNative (this host is not webOS 1-3, so no Interface resolution row; \
          its fit is `settings_text_fit_tests`) - got {rows}; did the signed-in multi-user fixture \

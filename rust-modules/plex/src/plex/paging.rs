@@ -38,9 +38,37 @@ pub(super) fn without_window(key: &str) -> String {
     if query.is_empty() { path.to_owned() } else { format!("{path}?{query}") }
 }
 
+/// The value of the query parameter `name` in `key`, as written (the first one when it is repeated):
+/// `query_value("/hubs/home/recentlyAdded?type=2&sectionID=7", "sectionID")` is `Some("7")`. `None`
+/// for a key with no query, no such parameter, or a bare `name` with no `=`; a parameter whose name only
+/// begins with `name` (`sectionIDs=`) is another parameter.
+pub fn query_value<'a>(key: &'a str, name: &str) -> Option<&'a str> {
+    key.split_once('?')?.1.split('&').find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{paged_path, PageReq};
+    use super::{paged_path, query_value, PageReq};
+
+    #[test]
+    fn a_query_value_is_the_text_after_the_equals_of_the_named_parameter() {
+        let key = "/hubs/home/recentlyAdded?type=2&sectionID=7&sectionIDs=8";
+        assert_eq!(query_value(key, "sectionID"), Some("7"));
+        assert_eq!(query_value(key, "type"), Some("2"));
+        assert_eq!(query_value(key, "sectionIDs"), Some("8"));
+        assert_eq!(query_value("/a?x=1&x=2", "x"), Some("1"), "the first of a repeated parameter");
+        assert_eq!(query_value("/a?x=", "x"), Some(""), "an empty value is a value");
+    }
+
+    #[test]
+    fn a_query_value_is_none_without_that_parameter() {
+        assert_eq!(query_value("/hubs/home/recentlyAdded", "sectionID"), None, "no query");
+        assert_eq!(query_value("/hubs/home/recentlyAdded?type=2", "sectionID"), None);
+        assert_eq!(query_value("/a?sectionID", "sectionID"), None, "a bare name has no value");
+        assert_eq!(query_value("/a?xsectionID=3", "sectionID"), None, "a longer name is another parameter");
+        assert_eq!(query_value("/a?sectionIDx=3", "sectionID"), None);
+        assert_eq!(query_value("", "sectionID"), None);
+    }
 
     #[test]
     fn a_bare_path_takes_the_window_after_a_question_mark() {

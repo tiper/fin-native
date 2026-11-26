@@ -577,7 +577,8 @@ Step 1's registry now has its first real consumer, and deliverable A of the desi
   a discovered row, so it survives reset and failed/delayed discovery — but a type with no favourite
   library draws no pill at all, so the row is `Home … Search` (the Watchlist bookmark sits before Search) with the row three to five stops in all.
   Store a `Pill`, never a `usize`. The
-  selected type resolves to the library this profile last chose, else household-first, then to the
+  selected type resolves to the library this profile last chose, else (with a recorded Library order) the
+  first-ordered favourite of the type, else household-first, then to the
   first usable outside section; the Source panel
   selects alternatives.
 - **The library pill strip and its Sources panel** are `screens/library/toolbar.rs` (the strip) and
@@ -997,10 +998,11 @@ Then, per cache:
 ### What is NOT fixed, and is worth knowing
 
 - **An empty credit means three different things** — our own server, the household's, and an
-  external share plex.tv did not name — and two places still read that emptiness as *ours*:
-  `pms::roster` groups Home's shelves by it, and `metadata::alt_copies` turns it into the
-  "This account" row. For the household server that is now the right answer; for an unnamed external
-  share it is wrong, and it was wrong before this change too (`ServerFacts::owned` has always
+  external share plex.tv did not name. Home's roster (`pms::roster_with_scope`) no longer reads that
+  emptiness: it ranks by Browse's household verdict (`browse::source_rank`), so an unnamed external
+  share sorts with the shares on Home. One reader still treats an empty credit as *ours*:
+  `metadata::alt_copies` turns it into the "This account" row. For the household server that is now
+  the right answer; for an unnamed external share it is wrong, and it was wrong before this change too (`ServerFacts::owned` has always
   documented that a share with no `sourceTitle` is still a share). This paragraph used to say the
   proper fix meant a three-state `Owned | Household | External` relation *carried* on `ServerFacts`
   and `SourceRef`, and named the blocker: the evidence that would grade a stored entry was never
@@ -1011,8 +1013,8 @@ Then, per cache:
   the moment the Home roster changed under it, which is precisely why the verdict is derived and
   only the evidence is kept. What the pins and the tab destination read is that derivation
   (`BrowseSource::household`), and `owned` has stopped meaning "prefer this" on both of them. So
-  what is left here is genuinely only the two empty-credit READERS above — a scoped follow-up whose
-  cost is teaching those two surfaces the third state, not a data-model change — and it stays a
+  what is left here is genuinely only the one empty-credit READER above (`metadata::alt_copies`) — a
+  scoped follow-up whose cost is teaching that one surface the third state, not a data-model change — and it stays a
   follow-up because it changes what "This account" says on a user-facing row, which nobody has
   asked for. `screens::alt_sources_tests`'
   `an_unnamed_external_share_is_drawn_like_the_household_and_that_is_the_open_bug` pins the current

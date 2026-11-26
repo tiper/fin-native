@@ -58,10 +58,37 @@ pub fn native_index(tracks: &[NativeTrackIndex], selected: TrackSelection) -> Op
     (first.index >= 0 && matches.next().is_none()).then_some(first.index)
 }
 
-/// The authorized URL stays opaque; callers provide the exact native track map with it.
-pub struct UriSource { url: String, tracks: Vec<NativeTrackIndex> }
+/// What a driver whose native track order is not proven must check before it trusts a [`NativeTrackIndex`]: the
+/// identity evidence the source states for one selected track. A driver that trusts its map ignores it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NativeTrackCheck {
+    /// The source has one track of this kind, so its index needs no other evidence.
+    Sole,
+    /// The track's language as the server states it (ISO 639, e.g. `ger`; empty when unknown): the native track
+    /// the driver selects must report the same language.
+    Language(String),
+}
+
+/// The authorized URL stays opaque; callers provide the exact native track map with it, and may state for a track
+/// the [`NativeTrackCheck`] a driver that does not trust the map uses.
+pub struct UriSource { url: String, tracks: Vec<NativeTrackIndex>, checks: Vec<(TrackSelection, NativeTrackCheck)> }
 impl UriSource {
-    pub fn new(url: String, tracks: Vec<NativeTrackIndex>) -> Self { Self { url, tracks } }
+    pub fn new(url: String, tracks: Vec<NativeTrackIndex>) -> Self { Self { url, tracks, checks: Vec::new() } }
+
+    /// This source with `check` stated for `selection`, replacing any check stated for it before.
+    pub fn with_check(mut self, selection: TrackSelection, check: NativeTrackCheck) -> Self {
+        self.checks.retain(|(stated, _)| *stated != selection);
+        self.checks.push((selection, check));
+        self
+    }
+
+    /// The identity check stated for `selection`, if any.
+    pub fn check_of(&self, selection: TrackSelection) -> Option<&NativeTrackCheck> {
+        self.checks.iter().find(|(stated, _)| *stated == selection).map(|(_, check)| check)
+    }
+
+    /// Every identity check this source states, for a driver that keeps them past [`Self::into_parts`].
+    pub fn checks(&self) -> &[(TrackSelection, NativeTrackCheck)] { &self.checks }
 
     pub fn has_url(&self) -> bool { !self.url.is_empty() }
 

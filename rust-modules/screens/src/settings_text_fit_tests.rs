@@ -16,7 +16,7 @@ use plx_ui::route_screen::RouteLayout;
 use plx_ui::table::TableView;
 
 /// The app-owned findings for `table` at the Settings column's width.
-fn overflowing(page: &str, table: &TableView, out: &mut Vec<String>) {
+pub(super) fn overflowing(page: &str, table: &TableView, out: &mut Vec<String>) {
     let frame_w = RouteLayout::screen().sectioned_table().w;
     out.extend(table.app_fit_failures(frame_w, page));
 }
@@ -29,13 +29,14 @@ const ALL_TRACE_STATUSES: [plx_os::playback_trace::Status; 7] = {
 
 /// The baseline `RootInputs` each variant below changes one field of (a sum over fields, not a
 /// product).
-fn base_root_inputs() -> RootInputs {
+pub(super) fn base_root_inputs() -> RootInputs {
     RootInputs {
         trace: plx_os::playback_trace::Status::Off,
         signed_in: true, multi_user: false, library_count: 0,
         auto_sign_in: false, trailer_autoplay: true, resolution: UiResolution::Auto, resolution_offered: true,
         language: plx_os::i18n::Preference::System,
         under_posters: plx_plex::plex::session::UnderPosters::DEFAULT, plaintext: Vec::new(),
+        library_order: plx_os::i18n::msg::library_order_value_server().to_string(),
     }
 }
 

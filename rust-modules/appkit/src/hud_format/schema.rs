@@ -958,9 +958,55 @@ pub static LAYOUT: Node = Node {
             Ty::Object("up_next"),
             "How the Up Next offer and the Skip pill replace segments of the row (R4: both buttons are placed here).",
         ),
+        Field::opt(
+            "live",
+            Ty::Object("live"),
+            "Where the live-channel banner stands. Absent: classic's placement. Its inside (LIVE badge, number, station, title, time line, progress, next, clock) is app-owned.",
+        )
+        .at((1, 2)),
     ],
     rules: &[],
     doc: "Where the HUD sits and what it holds.",
+};
+
+/// `layout.live`: where the Live TV banner stands. Format 1.2.
+pub static LIVE: Node = Node {
+    name: "live",
+    kind: NodeKind::Plain,
+    fields: &[
+        Field::req(
+            "inset",
+            Ty::Int { min: 0, max: 540 },
+            "The banner block's distance above the bottom edge of the screen, and the clock's: px.",
+        )
+        .at((1, 2)),
+        Field::req(
+            "x_inset",
+            Ty::Int { min: 0, max: 960 },
+            "The banner block's distance from the left edge of the screen, and the clock's from the right: px.",
+        )
+        .at((1, 2)),
+        Field::req(
+            "scrim",
+            Ty::Int { min: 0, max: 1080 },
+            "The darkening behind the banner: its height from the screen bottom in px, from transparent at its top to the app's live scrim at its foot.",
+        )
+        .at((1, 2)),
+        Field::req(
+            "title_width",
+            PX_W,
+            "The programme title's widest extent in px before it elides to one line.",
+        )
+        .at((1, 2)),
+        Field::req(
+            "progress_width",
+            PX_W,
+            "The progress bar's width in px.",
+        )
+        .at((1, 2)),
+    ],
+    rules: &[],
+    doc: "The live-channel banner's placement: `{\"inset\": px, \"x_inset\": px, \"scrim\": px, \"title_width\": px, \"progress_width\": px}`.",
 };
 
 /// `layout.scrim`: a tagged union on `cover`.
@@ -1609,6 +1655,7 @@ static NODES: &[&Node] = &[
     &ITEM,
     &UP_NEXT,
     &UP_NEXT_BUTTON,
+    &LIVE,
 ];
 
 /// Every node of the table, [`ROOT`] first.
@@ -1841,7 +1888,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(all_nodes().len(), 26);
+        assert_eq!(all_nodes().len(), 27);
     }
 
     #[test]
@@ -1960,8 +2007,13 @@ mod tests {
         assert!(CONDITIONS.iter().all(|c| c.since <= CURRENT));
         assert!(BINDINGS.iter().all(|b| b.since <= CURRENT));
         assert!(
-            every_field().iter().filter(|(_, f)| f.since > V1_0).all(|(_, f)| f.key == "end_time_width" && f.since == (1, 1)),
-            "the end-time lane is the only 1.1 addition"
+            every_field().iter().filter(|(_, f)| f.since > V1_0).all(|(owner, f)| match (*owner, f.key) {
+                ("playbar", "end_time_width") => f.since == (1, 1),
+                ("layout", "live") => f.since == (1, 2),
+                ("live", _) => f.since == (1, 2),
+                _ => false,
+            }),
+            "the end-time lane is the only 1.1 addition; the live banner's placement (`layout.live` and its node) the only 1.2"
         );
     }
 
@@ -2408,7 +2460,7 @@ mod tests {
         };
         assert_eq!(
             keys(&LAYOUT),
-            ["anchor", "inset", "x_inset", "band", "sections", "scrim", "block", "up_next"]
+            ["anchor", "inset", "x_inset", "band", "sections", "scrim", "block", "up_next", "live"]
         );
         assert_eq!(
             field(&LAYOUT, "anchor").unwrap().ty,

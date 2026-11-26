@@ -733,3 +733,41 @@ observed being refused in both modes (`replay: REFUSED — replay measurement ta
 recorded afresh the same way (`tests/focusfp.sh --rec --only 12`, `plxnative-rec import`, `anchor:
 true` restored), then replayed SAME in Targets and Resolve on three consecutive runs.
 `docs/ui-replay-v13-anchor.md` has the record.
+
+The Live TV What's on page (its Recent row replaces the lineup shelf) added the Recent channels to the Live TV
+screen's shape, so `SCREEN_SHAPES_PIN` moved and the two current anchors, `v13-owned-input-content` and
+`13-by-id-filmography`, were observed refused and recorded afresh (`tests/focusfp.sh --rec --only 12,13`,
+`plxnative-rec rerecord`, `anchor: true` preserved; shape `2884821880834123965`). `make check-replay` replays
+them SAME in Targets and Resolve (925 and 1210 frames, every difference counter zero); the four historical
+fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md` has the record.
+
+The What's on page's Channels shelf (a third shelf on the Live TV screen, so every channel stays reachable) moved
+`SCREEN_SHAPES_PIN` again, so the two current anchors, `v13-owned-input-content` and `13-by-id-filmography`, were observed
+refused and recorded afresh (`tests/focusfp.sh --rec --only 12,13`, `plxnative-rec rerecord`, `anchor: true` preserved; shape
+`13368307521658900119`). `make check-replay` replays them SAME in Targets and Resolve (919 and 1138 frames, every difference
+counter zero); the four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md` has the record.
+
+The recorded Home result's shape then gained a shelf's decided `library` (`record::SHAPE`), on top of the What's on page, its
+Channels shelf and the hero row (merged 2026-11-26), which moved the state shape from `12734002143041661619` to `15567541324829359259`; the Home roster's key also began
+to fold Browse's household verdicts before a pin table, which republishes Home once more on the verdict's landing. Both current anchors,
+`v13-owned-input-content` and `13-by-id-filmography`, no longer match the shape (`plxnative-rec rerecord` accepts a fixture only when its
+shape moved), so they were recorded afresh on the merged tree (`tests/focusfp.sh --rec --only 12,13`) and installed with
+`tools/plxnative-rec rerecord`, anchors kept. The closed alphabet gained the one string `Mixed` (a `ShelfLibrary` variant name). Targets
+and Resolve both report SAME with every difference counter at zero (892 and 1304 frames). `docs/ui-replay-v13-anchor.md` has the record.
+The Library order Settings page (`SettingsPage::LibraryOrder`, `ScreenId` 122, #1554) then moved the shape once more (to
+`14642991569603421247`, the screen half only: the Settings argument shape's new variant and `TableView::MOTION_SHAPE`'s new lift and
+glide springs); both anchors were re-recorded the same way, and the closed alphabet's owner-word pattern gained `library-order`. Targets and
+Resolve report SAME again with every difference counter at zero (977 and 1328 frames). `docs/ui-replay-v13-anchor.md` has the record.
+
+The live player's banner, zap and art phases (Live TV PR4) joined the Player and Live TV screens' canon, which moved
+`SCREEN_SHAPES_PIN` again, so the two current anchors, `v13-owned-input-content` and `13-by-id-filmography`, were
+observed refused and recorded afresh (`tests/focusfp.sh --rec --only 12,13`, `plxnative-rec rerecord`, `anchor: true`
+preserved; shape `5605084147580227429`). `make check-replay` replays them SAME in Targets and Resolve (902 and 1204 frames,
+every difference counter zero); the four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md`
+has the record.
+
+Number entry (Live TV PR5) added the registered surface `AppArg::ChannelEntry` to the screen census, which moved
+`SCREEN_SHAPES_PIN` again, so the two current anchors were recorded afresh
+(`tests/focusfp.sh --rec --only 12,13`, `plxnative-rec rerecord`, `anchor: true` preserved; shape `8097297399644097420`).
+`make check-replay` replays them SAME in Targets and Resolve (908 and 1204 frames, every difference counter zero); the
+four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md` has the record.

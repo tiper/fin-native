@@ -719,6 +719,7 @@ fn text_fit_inputs() -> RootInputs {
         auto_sign_in: false, trailer_autoplay: true, resolution: UiResolution::Auto, resolution_offered: false,
         language: plx_os::i18n::Preference::System,
         under_posters: plx_plex::plex::session::UnderPosters::DEFAULT, plaintext: Vec::new(),
+        library_order: plx_os::i18n::msg::library_order_value_server().to_string(),
     }
 }
 

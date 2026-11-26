@@ -83,7 +83,7 @@ pub(super) fn pump_navigation(d: &mut Dispatcher<AppHost>, rig: &mut Bridge) -> 
 
 
 /// Fixture-owned physical resources, borrowed by the same CommandRig as the product frame.
-pub(super) struct TestCommandResources {
+pub(crate) struct TestCommandResources {
     player: plx_media::player::machine::Player,
     adapters: crate::app::Adapters,
     menu_play_await: Option<crate::app::input::MenuPlayAwait>,
@@ -96,7 +96,7 @@ pub(super) struct TestCommandResources {
 }
 
 impl TestCommandResources {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         // SAFETY: this serial fixture thread owns its no-sink player adapter.
         let mt = unsafe { plx_base::task::MainThread::assume() };
         Self { player: Default::default(), adapters: crate::app::Adapters {
@@ -105,7 +105,10 @@ impl TestCommandResources {
                     repause_at: 0, refresh_hubs: false, ptr: crate::app::input::Pointer::IDLE,
                     rec: crate::app::recorder::Recplay::Off, boot_initial: None }
     }
-    pub(super) fn borrow(&mut self) -> crate::app::content::CommandResources<'_> {
+    /// The session the commands in this fixture act on.
+    pub(crate) fn session(&self) -> &plx_media::route::PlaybackSession { &self.player.session }
+    pub(crate) fn session_mut(&mut self) -> &mut plx_media::route::PlaybackSession { &mut self.player.session }
+    pub(crate) fn borrow(&mut self) -> crate::app::content::CommandResources<'_> {
         crate::app::content::CommandResources { player: &mut self.player,
             adapters: &mut self.adapters, menu_play_await: &mut self.menu_play_await, playback: &mut self.playback,
                         repause_at: &mut self.repause_at, refresh_hubs: &mut self.refresh_hubs, ptr: &mut self.ptr,

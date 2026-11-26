@@ -892,7 +892,7 @@ impl Grid {
         // (`card_row::lead_focused`). It still resolves once; the draw below reuses the answer.
         let lead = paints.last().filter(|&&(.., focused, _)| focused).and_then(|(i, s, _, paint)| {
             let CardPaint { rect, p, .. } = paint.as_ref()?;
-            Some(card_row::lead_focused(*p, &src.art(*i), *rect, *s))
+            Some(card_row::lead_focused(*p, &src.art(*i), *rect, *s, &self.spec.style))
         });
         // Captions BENEATH the tiles: every caption of the frame is painted before any tile, so a
         // line that is still arriving (the band opening under the focused row) never paints over

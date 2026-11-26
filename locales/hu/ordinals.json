@@ -1,0 +1,13 @@
+{
+  "ordinal.first": "első helyen",
+  "ordinal.second": "második helyen",
+  "ordinal.third": "harmadik helyen",
+  "ordinal.fourth": "negyedik helyen",
+  "ordinal.fifth": "ötödik helyen",
+  "ordinal.sixth": "hatodik helyen",
+  "ordinal.seventh": "hetedik helyen",
+  "ordinal.eighth": "nyolcadik helyen",
+  "ordinal.ninth": "kilencedik helyen",
+  "ordinal.tenth": "tizedik helyen",
+  "ordinal.other": "{n}. helyen"
+}

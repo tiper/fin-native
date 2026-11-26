@@ -88,7 +88,7 @@ fn a_deck_removal_leaves_the_deck_only_and_keeps_the_resume_point() {
                 position: 0,
             },
         ],
-        shelves: vec![Shelf { epoch: 0, positions: Vec::new(),
+        shelves: vec![Shelf { library: ShelfLibrary::Unknown, epoch: 0, positions: Vec::new(),
             title: "Recently Added".into(),
             hub_id: "home.movies.recent".into(),
             key: String::new(),

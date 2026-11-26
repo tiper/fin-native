@@ -281,17 +281,16 @@ fn the_watchlists_sort_and_filter_lifts_its_pill_while_the_menu_is_up() {
     assert_eq!(w.elem(), Some(PILL_ELEM), "with focus back on the pill");
 }
 
-/// **An episode page's Go to Show disc, by keys**: Right from Play reaches the disc (the row is
-/// Play, Go to Show, the watch disc; no bookmark without a catalog guid), its verb unfurls inside the capsule and
+/// **An episode page's Go to Show disc, by keys**: two Rights from Play reach the disc (the row is
+/// Play, the watch toggle, Go to Show; no bookmark without a catalog guid), its verb unfurls inside the capsule and
 /// nothing is drawn in the band under the row (a focused icon-only control draws no caption), OK
 /// opens the SHOW's page seeded on the episode's season, and BACK returns to the episode page with
 /// the disc focused. Inspect the mounted Detail's restored season, not a consumed mounter seed.
 #[test]
 fn an_episode_pages_go_to_show_disc_opens_the_show_on_the_episodes_season_and_back_returns_to_it() {
     use plx_os::i18n::msg::browse_menu_go_show;
-    // `detail::hero::ELEM_GO_TO_SHOW`: the hero is private to the screens crate, and a hero control's
-    // elem is its own engine key.
-    const GO_SHOW: u32 = 8;
+    // A hero control's elem is its own engine key, the one `HeroCtl::elem` names.
+    const GO_SHOW: u32 = plx_screens::registry::HeroCtl::GoToShow.elem();
     let sid = ServerId::from_raw(1);
     let episode = detail_arg_for(sid, "ep-5");
     let mut w = World::detail_episode("go-to-show-route", sid, "ep-5", "show-7", 3);
@@ -302,8 +301,11 @@ fn an_episode_pages_go_to_show_disc_opens_the_show_on_the_episodes_season_and_ba
     let play_key = w.elem();
     assert!(play_key.is_some(), "premise: focus is on the hero");
 
+    // The row is Play, the watch toggle, Go to Show (no bookmark without a catalog guid).
     w.press(Key::Right);
-    assert_eq!(w.elem(), Some(GO_SHOW), "one Right from Play reaches the Go to Show disc");
+    assert_ne!(w.elem(), Some(GO_SHOW), "premise: the watch toggle stands between Play and Go to Show");
+    w.press(Key::Right);
+    assert_eq!(w.elem(), Some(GO_SHOW), "two Rights from Play reach the Go to Show disc");
     w.frames(90);
     let drawn = w.drawn();
     let verb = browse_menu_go_show().to_string();

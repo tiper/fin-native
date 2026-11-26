@@ -1,0 +1,17 @@
+{
+  "library_order.title": "Ordre d’affichage",
+  "library_order.value_server": "Ordre du serveur",
+  "library_order.value_first": "{title} en premier",
+  "library_order.row_detail": "Choisissez l’ordre de vos bibliothèques favorites sur l’Accueil et dans l’en-tête Bibliothèque.",
+  "library_order.reset": "Rétablir l’ordre",
+  "library_order.state_idle": "Appuyez sur OK pour déplacer {title} vers le haut ou vers le bas. L’Accueil et l’en-tête {kind} affichent vos bibliothèques favorites dans cet ordre.",
+  "library_order.state_reset": "Remet vos bibliothèques favorites dans l’ordre indiqué par vos serveurs.",
+  "library_order.state_moving": "Déplacement de {title}. Haut et Bas changent sa position, OK la confirme et Retour annule.",
+  "library_order.state_unnamed": "{title} ne peut pas encore être déplacée : son serveur n’a pas fini de se connecter.",
+  "library_order.state_dropped": "{title} est maintenant {home} sur l’Accueil et {header} dans l’en-tête {kind}.",
+  "library_order.state_confirm": "Appuyez de nouveau sur OK pour remettre vos bibliothèques favorites dans l’ordre indiqué par vos serveurs. Tout autre bouton conserve votre ordre.",
+  "library_order.state_reset_done": "Vos bibliothèques favorites sont revenues dans l’ordre indiqué par vos serveurs.",
+  "library_order.state_unsaved": "Impossible d’enregistrer cet ordre ; il s’applique jusqu’au redémarrage de PlxNative.",
+  "library_order.preview_caption": "{kind} · En-tête Bibliothèque",
+  "library_order.preview_more": "Les bibliothèques qui ne tiennent pas passent derrière …."
+}

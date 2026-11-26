@@ -49,6 +49,12 @@ pub enum Scope<'a> {
     Section,
 }
 
+/// The per-library Recently Added hub identifiers' prefixes (`movie.recentlyadded.<id>`,
+/// `show.recentlyadded.<id>`, `tv.recentlyadded.<id>`): the ONE list, read by
+/// [`is_recently_added_hub`] here and by `library_order::hub_library`, which parses the library out
+/// of the same identifiers.
+pub const PER_LIBRARY_PREFIXES: [&str; 3] = ["movie.recentlyadded.", "show.recentlyadded.", "tv.recentlyadded."];
+
 /// The "Recently Added" hubIdentifier family: the whole-server `home.*.recent` hubs AND the
 /// per-library `movie.recentlyadded.<id>` / `show.recentlyadded.<id>` / `tv.recentlyadded.<id>`
 /// ones (`docs/plex-openapi.json`: `movie.recentlyadded.1` → "Recently Added in Movies" on Home,
@@ -66,8 +72,6 @@ pub fn is_recently_added_hub(hub_identifier: &str) -> bool {
         "home.videos.recent",
         "home.photos.recent",
     ];
-    const PER_LIBRARY_PREFIXES: [&str; 3] =
-        ["movie.recentlyadded.", "show.recentlyadded.", "tv.recentlyadded."];
     WHOLE_SERVER.contains(&hub_identifier)
         || PER_LIBRARY_PREFIXES.iter().any(|p| hub_identifier.starts_with(p))
 }

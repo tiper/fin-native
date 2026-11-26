@@ -56,8 +56,10 @@ Copied unchanged from [edde746/openwatchparty](https://github.com/edde746/openwa
 | `relays.json` | `relays.json` | `755585e878bb9290b0461ecd9e863e79e85cb09d962bd00e37ada9e201e6a1a3` |
 | `vectors/clock-sync.json` | `conformance/vectors/clock-sync.json` | `3bd79ab3481c268322def5940137258c8e9a2e2788a12f176d6d04ed36d52991` |
 | `vectors/code-routing.json` | `conformance/vectors/code-routing.json` | `11192c267fe46165d7939afd089a140c069232149a77e3d90afdd55da3cb78e1` |
+| `vectors/matching.json` | `conformance/vectors/matching.json` | `ea716f0a5a955c33b1fd380b4d034a9ec420fd11dc1f0d69ba0fa5ce4cd7539a` |
 | `vectors/media-check.json` | `conformance/vectors/media-check.json` | `c20ac0be6676e073f2b88f0475e0335862db88ee4361961ff0f4e746842f2a11` |
 | `vectors/names.json` | `conformance/vectors/names.json` | `9193de5a447f3cba67f2aaffb48efbe1932df17030f14bce1bf2b8dd72eb7bf2` |
+| `vectors/reconcile.json` | `conformance/vectors/reconcile.json` | `7c90f69d5418df51faebd0aba076e36f5c0e36db1274ccbd964617440bf85970` |
 | `vectors/relay-list.json` | `conformance/vectors/relay-list.json` | `d8f962bbb6e129ce2a71dcc2e893090c0a913475e04a877a276bbc77e930686e` |
 | `vectors/room-check.json` | `conformance/vectors/room-check.json` | `6b903bc22e8f861d924e57b8508e79b3924a1d72050f65867617308537498b70` |
 | `vectors/same-title.json` | `conformance/vectors/same-title.json` | `2b449084b1a459a0bdc1ef20bddec4302597bd3bf552d37cf6ca08fff47be658` |

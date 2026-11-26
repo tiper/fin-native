@@ -264,7 +264,9 @@ impl JfBackend {
         let dev = transcode::Device {
             video_copy: &video_copy,
             audio_target: audio_encode_target(spec.caps),
-            audio_ok: &|codec: &str, channels: i64, rate: i64| plx_plex::plex::is_dp_audio_track_with(spec.caps, codec, channels, rate),
+            // A server session's copy may reach the TV's own player whole: judged as a session, never
+            // by the direct-play ask, which admits a DTS-HD wider than the row for its core (#1537).
+            audio_ok: &|codec: &str, channels: i64, rate: i64| plx_plex::plex::is_session_audio_track_with(spec.caps, codec, channels, rate),
             force_video_encode: server.as_ref().is_some_and(|v| v.video_encode),
             force_audio_encode: server.as_ref().is_some_and(|v| v.audio_encode),
             encoders,

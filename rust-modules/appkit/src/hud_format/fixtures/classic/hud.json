@@ -59,6 +59,7 @@
     ],
     "up_next": { "replaces": [ "row" ], "band": "top", "align": "end", "still": true, "caption": true,
                  "watch_credits": { "rest": "film", "focus": "accent" }, "play_next": { "rest": "film", "focus": "accent" },
-                 "countdown": "fill_sweep" }
+                 "countdown": "fill_sweep" },
+    "live": { "inset": 96, "x_inset": 96, "scrim": 520, "title_width": 1200, "progress_width": 560 }
   }
 }
