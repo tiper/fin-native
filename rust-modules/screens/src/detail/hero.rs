@@ -24,7 +24,7 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
 
-use plx_data::metadata::{Detail, Episode, Extra};
+use plx_data::metadata::{Detail, Extra, PreplayPick};
 use plx_ui::hstack::{Flow, Item, Span};
 use plx_ui::label::HAlign;
 use plx_machine::machine::{GroupId, Measure};
@@ -52,9 +52,11 @@ pub const ELEM_VERSION: u32 = 7;
 /// `show_rk`), never on a show's page, whose hero is already about the show.
 pub const ELEM_GO_TO_SHOW: u32 = 8;
 pub const ELEM_MORE: u32 = 9;
-/// The favourite toggle's two faces.
-pub const ELEM_FAVORITE: u32 = 10;
-pub const ELEM_UNFAVORITE: u32 = 11;
+/// The Audio & Subtitles disc: opens the picker for the tracks the page's Play starts with (#1532).
+pub const ELEM_AUDIO_SUBTITLES: u32 = 10;
+/// The favourite toggle's two faces (FinNative: present only where the server keeps favourites).
+pub const ELEM_FAVORITE: u32 = 11;
+pub const ELEM_UNFAVORITE: u32 = 12;
 
 /// The hero's one focus group. Local to this screen — nothing outside `screens::detail` ever names
 /// it — so, like `screens::profiles`'s `ROSTER_GROUP`/`FOOTER_GROUP`, any small integer would do;
@@ -88,18 +90,41 @@ fn mark_episode_watched_label() -> &'static CStr { plx_os::i18n::msg::browse_det
 fn mark_episode_unwatched_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_mark_episode_unwatched_c() }
 fn play_from_start_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_play_start_c() }
 fn trailer_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_trailer_c() }
-fn play_version_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_play_version_c() }
+fn select_version_label() -> &'static CStr { plx_os::i18n::msg::browse_detail_select_version_c() }
 fn go_to_show_label() -> &'static CStr { plx_os::i18n::msg::browse_menu_go_show_c() }
+pub fn audio_subtitles_label() -> &'static CStr { plx_os::i18n::msg::settings_audio_title_c() }
+fn favorite_add_label() -> &'static CStr { plx_os::i18n::msg::browse_jf_favorite_add_c() }
+fn favorite_remove_label() -> &'static CStr { plx_os::i18n::msg::browse_jf_favorite_remove_c() }
 
-/// The Play Version disc's mark: a portrait card with another behind it — several copies of one
+/// The Select Version disc's mark: a portrait card with another behind it — several copies of one
 /// title, which is what a version list is. It used to be [`plx_ui::icons::Icon::Show`], the item
 /// menu's own *Go to Show* glyph; that mark is now the Go to Show disc's, and two identical glyphs
 /// in one row would make the only icon-only pair of controls indistinguishable at three metres.
-pub const VERSION_ICON: plx_ui::icons::Icon = plx_ui::icons::Icon::Collection;
+const VERSION_ICON: plx_ui::icons::Icon = plx_ui::icons::Icon::Collection;
 
 /// The Go to Show disc's mark: the same stack-of-episodes glyph the item menu's *Go to Show* row
 /// wears, so the row and the disc name one destination with one mark.
-pub const GO_TO_SHOW_ICON: plx_ui::icons::Icon = plx_ui::icons::Icon::Show;
+const GO_TO_SHOW_ICON: plx_ui::icons::Icon = plx_ui::icons::Icon::Show;
+
+/// **The one table of a hero action's mark and verb**: the round disc draws it (`DetailScreen::draw_hero`,
+/// [`disc_verb`]'s label) and the … menu's row wears it (`item_menu::build_hero_overflow`, through
+/// `registry::hero_face`), so a control and the row that replaces it cannot disagree. The actions that
+/// can move into the … menu, plus the glyph-only discs with a fixed mark; `None` for the pills, the
+/// Watchlist disc (its face animates) and the watched toggle (its mark follows the state).
+/// Exhaustive: a new control must be placed here.
+pub fn face(ctl: HeroCtl) -> Option<(plx_ui::icons::Icon, &'static CStr)> {
+    use plx_ui::icons::Icon;
+    match ctl {
+        HeroCtl::Restart => Some((Icon::Restart, play_from_start_label())),
+        HeroCtl::Trailer => Some((Icon::Trailer, trailer_label())),
+        HeroCtl::Version => Some((VERSION_ICON, select_version_label())),
+        HeroCtl::GoToShow => Some((GO_TO_SHOW_ICON, go_to_show_label())),
+        HeroCtl::AudioSubtitles => Some((Icon::Audio, audio_subtitles_label())),
+        HeroCtl::Favorite => Some((Icon::Heart, favorite_add_label())),
+        HeroCtl::Unfavorite => Some((Icon::HeartFill, favorite_remove_label())),
+        HeroCtl::Play | HeroCtl::Alt | HeroCtl::More | HeroCtl::Watchlist | HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => None,
+    }
+}
 
 /// A control in the hero action row, named rather than numbered — ported verbatim from
 /// `ui/detail.rs::HeroCtl`.
@@ -111,8 +136,7 @@ pub enum HeroCtl {
     Restart,
     /// the Trailer disc, present only while the loaded item has a playable extra
     Trailer,
-    /// the *Also available* pill, present only while a second pinned source holds this item or
-    /// the item has versions to choose between
+    /// the *Also available* pill, present only while a second pinned source holds this item
     Alt,
     /// the ✓ face of the watched TOGGLE — worn while the item is not watched (part-watched
     /// included)
@@ -129,6 +153,9 @@ pub enum HeroCtl {
     /// the Play Version disc, present only while the loaded movie or episode has two or more
     /// versions; it opens the list of them (`screens::versions_panel`)
     Version,
+    /// The Audio & Subtitles disc, present wherever the page has tracks to show
+    /// (`MetadataView::preplay_tracks`); it opens the picker (`screens::preplay_panel`)
+    AudioSubtitles,
     /// The remaining item actions, through the shared item menu.
     More,
     /// the outlined-heart face of the favourite TOGGLE — worn while the item is not a favourite,
@@ -151,6 +178,7 @@ impl HeroCtl {
             HeroCtl::Watchlist => ELEM_WATCHLIST,
             HeroCtl::GoToShow => ELEM_GO_TO_SHOW,
             HeroCtl::Version => ELEM_VERSION,
+            HeroCtl::AudioSubtitles => ELEM_AUDIO_SUBTITLES,
             HeroCtl::More => ELEM_MORE,
             HeroCtl::Favorite => ELEM_FAVORITE,
             HeroCtl::Unfavorite => ELEM_UNFAVORITE,
@@ -170,6 +198,7 @@ impl HeroCtl {
             ELEM_WATCHLIST => Some(HeroCtl::Watchlist),
             ELEM_GO_TO_SHOW => Some(HeroCtl::GoToShow),
             ELEM_VERSION => Some(HeroCtl::Version),
+            ELEM_AUDIO_SUBTITLES => Some(HeroCtl::AudioSubtitles),
             ELEM_MORE => Some(HeroCtl::More),
             ELEM_FAVORITE => Some(HeroCtl::Favorite),
             ELEM_UNFAVORITE => Some(HeroCtl::Unfavorite),
@@ -221,6 +250,7 @@ impl HeroCtl {
             HeroCtl::Watchlist => "watchlist",
             HeroCtl::GoToShow => "go_to_show",
             HeroCtl::Version => "version",
+            HeroCtl::AudioSubtitles => "audio_subtitles",
             HeroCtl::More => "more",
             HeroCtl::Favorite => "favorite",
             HeroCtl::Unfavorite => "unfavorite",
@@ -229,7 +259,7 @@ impl HeroCtl {
     /// The inverse of [`a11y_name`](Self::a11y_name): the control a word names, whether the row
     /// shows it or not (the caller checks that).
     pub fn of_a11y_name(word: &str) -> Option<Self> {
-        const ALL: [HeroCtl; 12] = [
+        const ALL: [HeroCtl; 13] = [
             HeroCtl::Play,
             HeroCtl::Restart,
             HeroCtl::Trailer,
@@ -239,6 +269,7 @@ impl HeroCtl {
             HeroCtl::Watchlist,
             HeroCtl::GoToShow,
             HeroCtl::Version,
+            HeroCtl::AudioSubtitles,
             HeroCtl::More,
             HeroCtl::Favorite,
             HeroCtl::Unfavorite,
@@ -249,7 +280,8 @@ impl HeroCtl {
 
 /// Which of the conditional controls the row is showing: the independent bits (bookmark, Go to
 /// Show, Play Version, restart, trailer, Also available), plus the item's watch state, which
-/// decides which FACE the watched toggle wears.
+/// decides which FACE the watched toggle wears. Whether the row carries a More (…) button is NOT a
+/// bit: it follows from how many actions the page has ([`actions`], [`split_actions`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct HeroSet {
     /// the item carries a `plex://movie|show` guid the Watchlist takes — the bookmark disc exists only then
@@ -258,57 +290,95 @@ pub struct HeroSet {
     pub go_show: bool,
     /// the loaded movie or episode has two or more versions — the Play Version disc exists only then
     pub version: bool,
+    /// the page has tracks to show — the Audio & Subtitles disc exists only then
+    pub tracks: bool,
     pub restart: bool,
     pub trailer: bool,
     pub alt: bool,
     pub mark: PosterMark,
     /// The favourite toggle's face — `None` where the server keeps no favourites (Plex), so the
-    /// row has no such control at all.
+    /// page has no such action at all.
     pub favorite: Option<bool>,
-    pub more: bool,
+}
+
+/// How many round buttons follow Play/Resume. A page with more actions than this shows
+/// `ROUND_SLOTS - 1` of them and a More (…) button that holds the rest (VER-8).
+pub const ROUND_SLOTS: usize = 3;
+
+/// The longest action list a page can have: Watchlist, the watch toggle and the movable ones.
+const MAX_ACTIONS: usize = 9;
+
+/// **The page's actions, in priority order**: Watchlist, the watch toggle, then the movable ones —
+/// Go to Show, Play from Start, Play Version, Audio & Subtitles. A new action is one more `push` at
+/// the END of this list; [`split_actions`] and the row follow from it. Play/Resume, the hidden
+/// Trailer and *Also available* are not actions in this sense: they never count toward
+/// [`ROUND_SLOTS`] and are never moved.
+pub fn actions(set: HeroSet) -> ([HeroCtl; MAX_ACTIONS], usize) {
+    let mut v = [HeroCtl::Play; MAX_ACTIONS];
+    let mut n = 0;
+    let mut push = |c: HeroCtl, on: bool| {
+        if on {
+            v[n] = c;
+            n += 1;
+        }
+    };
+    push(HeroCtl::Watchlist, set.watchlist);
+    push(if set.mark == PosterMark::Watched { HeroCtl::MarkUnwatched } else { HeroCtl::MarkWatched }, true);
+    // FinNative: the favourite toggle follows the watch toggle. A Jellyfin page has no bookmark, so
+    // it keeps a round button of its own wherever the row has room for two.
+    push(if set.favorite == Some(true) { HeroCtl::Unfavorite } else { HeroCtl::Favorite }, set.favorite.is_some());
+    push(HeroCtl::GoToShow, set.go_show);
+    push(HeroCtl::Restart, set.restart);
+    push(HeroCtl::Version, set.version);
+    push(HeroCtl::AudioSubtitles, set.tracks);
+    (v, n)
+}
+
+/// **The overflow rule**: up to [`ROUND_SLOTS`] actions are all round buttons; more than that shows
+/// the first `ROUND_SLOTS - 1` and moves the rest under …, which takes the last slot. So … exists
+/// only when at least two actions move into it (4 actions move 2, 5 move 3) and never holds a single
+/// one. Generic over the element so the rule is pinned independent of which actions exist.
+pub fn split_actions<T>(all: &[T]) -> (&[T], &[T]) {
+    if all.len() <= ROUND_SLOTS {
+        return (all, &[]);
+    }
+    let (round, moved) = all.split_at(ROUND_SLOTS - 1);
+    debug_assert!(moved.len() >= 2, "… never holds a single item");
+    (round, moved)
+}
+
+/// The actions that live under … for this set, in menu order (empty when the row has no …).
+pub fn overflow_ctls(set: HeroSet) -> ([HeroCtl; MAX_ACTIONS], usize) {
+    let (all, n) = actions(set);
+    let (_, moved) = split_actions(&all[..n]);
+    let mut v = [HeroCtl::Play; MAX_ACTIONS];
+    v[..moved.len()].copy_from_slice(moved);
+    (v, moved.len())
 }
 
 /// The row's controls, in drawn order, for a given set. A fixed [`MAX_CTLS`]-slot array plus a
-/// live count, so no per-frame allocation. The bookmark disc (only when `set.watchlist`) is SECOND, after Play/Resume;
-/// whether it wears the outline or the filled face is membership ([`face`]), not presence. The Go to
-/// Show disc (only when `set.go_show`) follows the bookmark, before the state discs: it names the
-/// page the episode belongs to, which is navigation rather than an action on the item. The Play
-/// Version disc follows the watched toggle, then More. Also available is the trailing pill when
-/// present, so it leaves the disc positions intact as its result lands.
+/// live count, so no per-frame allocation. After Play/Resume come the page's round buttons per the
+/// overflow rule ([`split_actions`]) — Watchlist, the watch toggle, then the movable actions, or the
+/// first two and then More (…) — and Also available is the trailing pill when present, so it leaves
+/// the disc positions intact as its result lands. The hidden Trailer (never set by the page today)
+/// sits after the round buttons and does not count.
 pub fn hero_ctls(set: HeroSet) -> ([HeroCtl; MAX_CTLS], usize) {
     let mut v = [HeroCtl::Play; MAX_CTLS];
     let mut n = 1;
-    if set.watchlist {
-        v[n] = HeroCtl::Watchlist;
-        n += 1;
-    }
-    if set.go_show {
-        v[n] = HeroCtl::GoToShow;
-        n += 1;
-    }
-    if set.restart {
-        v[n] = HeroCtl::Restart;
+    let (all, count) = actions(set);
+    let (round, moved) = split_actions(&all[..count]);
+    for &c in round {
+        v[n] = c;
         n += 1;
     }
     if set.trailer {
         v[n] = HeroCtl::Trailer;
         n += 1;
     }
-    v[n] = if set.mark == PosterMark::Watched {
-        HeroCtl::MarkUnwatched
-    } else {
-        HeroCtl::MarkWatched
-    };
-    n += 1;
-    if set.version {
-        v[n] = HeroCtl::Version;
+    if !moved.is_empty() {
+        v[n] = HeroCtl::More;
         n += 1;
     }
-    if let Some(favourite) = set.favorite {
-        v[n] = if favourite { HeroCtl::Unfavorite } else { HeroCtl::Favorite };
-        n += 1;
-    }
-    if set.more { v[n] = HeroCtl::More; n += 1; }
     if set.alt {
         v[n] = HeroCtl::Alt;
         n += 1;
@@ -404,7 +474,7 @@ pub fn first_stop(set: HeroSet, stops: Stops) -> HeroCtl {
 
 /// The row's stop the page opens on when nothing says which: its first stop that does not write to
 /// the account ([`HeroCtl::writes_account`]). That is Play with a playback driver composed, and
-/// without one Go to Show, More, the versions control or Also available, whichever the row has.
+/// without one Go to Show, More, the versions or tracks control or Also available, whichever the row has.
 /// `None` when every stop the row has writes (a movie with no driver: the bookmark and the watched
 /// toggle), which sends the page's default below the row (`DetailScreen::default_elem`).
 pub fn default_stop(set: HeroSet, stops: Stops) -> Option<HeroCtl> {
@@ -456,7 +526,7 @@ pub fn watch_index(set: HeroSet) -> Option<usize> {
 }
 
 /// The control in `set` doing `ctl`'s job: `ctl` itself, or the other face of a two-faced toggle
-/// whose press flipped it. `None` when `set` has no such control. This is what
+/// whose press flipped it. `None` when `set` shows no such control. This is what
 /// [`DetailScreen::reconcile`](super::DetailScreen) carries the focus by.
 pub fn carried(set: HeroSet, ctl: HeroCtl) -> Option<HeroCtl> {
     if index_of(set, ctl).is_some() {
@@ -466,19 +536,19 @@ pub fn carried(set: HeroSet, ctl: HeroCtl) -> Option<HeroCtl> {
         let (v, _) = hero_ctls(set);
         return watch_index(set).map(|i| v[i]);
     }
-    if ctl.is_favorite() {
-        return set.favorite.map(|f| if f { HeroCtl::Unfavorite } else { HeroCtl::Favorite });
-    }
-    None
+    let other = match ctl {
+        HeroCtl::Favorite => HeroCtl::Unfavorite,
+        HeroCtl::Unfavorite => HeroCtl::Favorite,
+        _ => return None,
+    };
+    index_of(set, other).map(|_| other)
 }
-
-pub(super) fn hero_episode(d: &Detail) -> Option<&Episode> { d.resume_episode() }
 
 /// The resume position (ns) the hero's Play control would ACTUALLY apply. Ported verbatim from
 /// `ui/detail.rs::hero_resume_ns`.
 pub fn hero_resume_ns(d: &Detail) -> i64 {
     if d.is_show {
-        hero_episode(d)
+        d.resume_episode()
             .map(|e| plx_data::metadata::resume_ns(e.resume_ms, e.dur_ms))
             .unwrap_or(0)
     } else {
@@ -511,14 +581,14 @@ pub fn hero_watch_state(
 
 /// Watch state of the episode displayed by the hero, or the series when there is no on-deck subject.
 pub fn hero_mark(d: &Detail) -> PosterMark {
-    if let Some(ep) = hero_episode(d) {
+    if let Some(ep) = d.resume_episode() {
         hero_watch_state(false, false, ep.watched, plx_data::metadata::resume_ns(ep.resume_ms, ep.dur_ms))
     } else { hero_watch_state(d.is_show, d.show_started(), d.watched, hero_resume_ns(d)) }
 }
 
 /// Name the episode explicitly when the hero presents a leaf, including a show's on-deck item.
 pub fn watch_names_episode(d: &Detail) -> bool {
-    d.kind == "episode" || hero_episode(d).is_some()
+    d.kind == "episode" || d.resume_episode().is_some()
 }
 
 /// The Go to Show disc's target: `(show_rk, season)` for an EPISODE's own page, `None` for a
@@ -533,15 +603,30 @@ pub fn go_to_show_target(d: &Detail) -> Option<(&str, i64)> {
 /// name: it is its glyph and its focus fill.
 pub fn disc_verb(ctl: HeroCtl, name_episode: bool) -> Option<(usize, &'static CStr)> {
     match (ctl, name_episode) {
-        (HeroCtl::Restart, _) => Some((0, play_from_start_label())),
-        (HeroCtl::Trailer, _) => Some((1, trailer_label())),
+        (HeroCtl::Restart | HeroCtl::Trailer, _) => face(ctl).map(|f| (if ctl == HeroCtl::Restart { 0 } else { 1 }, f.1)),
         (HeroCtl::MarkWatched, false) => Some((2, mark_watched_label())),
         (HeroCtl::MarkWatched, true) => Some((2, mark_episode_watched_label())),
         (HeroCtl::MarkUnwatched, false) => Some((2, mark_unwatched_label())),
         (HeroCtl::MarkUnwatched, true) => Some((2, mark_episode_unwatched_label())),
-        (HeroCtl::Version, _) => Some((3, play_version_label())),
-        (HeroCtl::GoToShow, _) => Some((4, go_to_show_label())),
+        (HeroCtl::Version, _) => face(ctl).map(|f| (3, f.1)),
+        (HeroCtl::GoToShow, _) => face(ctl).map(|f| (4, f.1)),
+        (HeroCtl::AudioSubtitles, _) => face(ctl).map(|f| (5, f.1)),
         _ => None,
+    }
+}
+
+/// **The disc slot a control's width is read from** (`HeroWidths::disc`): the one index rule
+/// [`disc_verb`]'s slots, [`control_widths`] and the tests' reference layout all follow. `None` for the
+/// two pills and for the circles that never unfurl (the bookmark, …).
+pub const fn disc_slot(ctl: HeroCtl) -> Option<usize> {
+    match ctl {
+        HeroCtl::Restart => Some(0),
+        HeroCtl::Trailer => Some(1),
+        HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => Some(2),
+        HeroCtl::Version => Some(3),
+        HeroCtl::GoToShow => Some(4),
+        HeroCtl::AudioSubtitles => Some(5),
+        HeroCtl::Play | HeroCtl::Alt | HeroCtl::Watchlist | HeroCtl::More | HeroCtl::Favorite | HeroCtl::Unfavorite => None,
     }
 }
 
@@ -573,6 +658,10 @@ pub fn press(guid: &str, m: Membership) -> Option<crate::registry::ItemMenuActio
 #[path = "hero_watchlist_tests.rs"]
 mod watchlist_tests;
 
+#[cfg(test)]
+#[path = "hero_overflow_tests.rs"]
+mod overflow_tests;
+
 /// The Trailer disc's play fields — extra identity and HUD title, always from start.
 /// `None` when the loaded item has no playable trailer (no button, no-op activate).
 pub fn trailer_play(d: &Detail) -> Option<(&Extra, &str)> {
@@ -601,15 +690,9 @@ fn control_widths(set: HeroSet, cw: HeroWidths) -> ([f32; MAX_CTLS], usize) {
         *slot = match c {
             HeroCtl::Play => cw.pill,
             HeroCtl::Alt => cw.alt,
-            HeroCtl::Restart => cw.disc[0],
             // no verb to unfurl: a circle at every instant
-            HeroCtl::Watchlist | HeroCtl::More => CD,
-            HeroCtl::Trailer => cw.disc[1],
-            HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => cw.disc[2],
-            HeroCtl::Version => cw.disc[3],
-            HeroCtl::GoToShow => cw.disc[4],
-            // An icon-only disc: it never unfurls to a verb, so it is always the closed disc.
-            HeroCtl::Favorite | HeroCtl::Unfavorite => CD,
+            HeroCtl::Watchlist | HeroCtl::More | HeroCtl::Favorite | HeroCtl::Unfavorite => CD,
+            disc => cw.disc[disc_slot(*disc).expect("every other control is a disc")],
         };
     }
     (widths, n)
@@ -760,7 +843,7 @@ fn people_view<'a>(names: &'a str, label: &'a str, measure: &'a dyn Measure) -> 
 }
 
 fn hero_facts(d: &Detail) -> (String, Option<String>) {
-    plx_appkit::hero_layout::meta_facts(d, hero_episode(d))
+    plx_appkit::hero_layout::meta_facts(d, d.resume_episode())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -806,14 +889,37 @@ enum Bit {
 
 const FACTS_BITS: usize = 8;
 
-fn play_mode_bits(d: &Detail, playable: bool, after: bool) -> ([Bit; FACTS_BITS], usize) {
+/// **What the facts line says of the route Play would take, read ONCE per draw.** Reading the route
+/// (`detail_playback_preview`) applies the viewer's pick over the file's flags, so the draw resolves it
+/// here and derives every width and every painted bit of the clause from the value, with or without the
+/// separator in front ([`Self::bits`]); nothing is kept between draws.
+#[derive(Clone, Copy)]
+enum PlayMode {
+    /// Nothing to say: the route direct plays or remuxes, or no route can be read for the item.
+    Quiet,
+    /// No playback driver is composed: the one reason word, whatever the item.
+    NoPlayback,
+    Route { preview: plx_media::route::Preview, hdr: bool, subscription: plx_plex::plex::serverinfo::Subscription },
+}
+
+fn play_mode(d: &Detail, picks: &[PreplayPick], playable: bool) -> PlayMode {
     if !playable {
-        return no_playback_bits(after);
+        return PlayMode::NoPlayback;
     }
-    match plx_media::route::detail_playback_preview(d) {
-        Some((plx_media::route::Preview::DirectPlay | plx_media::route::Preview::Remux, _)) => ([Bit::Air(0.0); FACTS_BITS], 0),
-        Some((preview, file)) => play_mode_bits_for(preview, file.hdr, item_subscription(d), after),
-        None => ([Bit::Air(0.0); FACTS_BITS], 0),
+    match plx_media::route::detail_playback_preview(d, picks) {
+        Some((plx_media::route::Preview::DirectPlay | plx_media::route::Preview::Remux, _)) | None => PlayMode::Quiet,
+        Some((preview, file)) => PlayMode::Route { preview, hdr: file.hdr, subscription: item_subscription(d) },
+    }
+}
+
+impl PlayMode {
+    /// The clause's bits, behind a separator of its own when something already stands in front of it (`after`).
+    fn bits(self, after: bool) -> ([Bit; FACTS_BITS], usize) {
+        match self {
+            PlayMode::Quiet => ([Bit::Air(0.0); FACTS_BITS], 0),
+            PlayMode::NoPlayback => no_playback_bits(after),
+            PlayMode::Route { preview, hdr, subscription } => play_mode_bits_for(preview, hdr, subscription, after),
+        }
     }
 }
 
@@ -831,7 +937,7 @@ fn no_playback_bits(after: bool) -> ([Bit; FACTS_BITS], usize) {
     (bits, n + 1)
 }
 
-/// [`play_mode_bits`] once the item's route has been read: the line's play-mode clause, behind a
+/// [`PlayMode::bits`] once the item's route has been read: the line's play-mode clause, behind a
 /// separator of its own when something already stands in front of it (`after`).
 fn play_mode_bits_for(
     preview: plx_media::route::Preview,
@@ -919,21 +1025,20 @@ fn bits_flow(
     flow.end() - x
 }
 
-fn play_mode_w(d: &Detail, playable: bool, after: bool, measure: &dyn plx_machine::machine::Measure) -> f32 {
-    let (bits, n) = play_mode_bits(d, playable, after);
+fn play_mode_w(mode: PlayMode, after: bool, measure: &dyn plx_machine::machine::Measure) -> f32 {
+    let (bits, n) = mode.bits(after);
     bits_flow(&bits[..n], 0.0, measure, |_, _| {})
 }
 
 fn draw_play_mode(
     p: Painter,
-    d: &Detail,
-    playable: bool,
+    mode: PlayMode,
     x: f32,
     y: f32,
     after: bool,
     measure: &dyn plx_machine::machine::Measure,
 ) -> f32 {
-    let (bits, n) = play_mode_bits(d, playable, after);
+    let (bits, n) = mode.bits(after);
     paint_bits(p, &bits[..n], x, y, measure)
 }
 
@@ -1026,12 +1131,15 @@ fn facts_flow(
 }
 
 /// Draw the facts line at `y`; the width it draws from the margin.
-pub fn draw_facts(p: Painter, d: &Detail, playable: bool, y: f32, measure: &dyn plx_machine::machine::Measure) -> f32 {
+pub fn draw_facts(
+    p: Painter, d: &Detail, picks: &[PreplayPick], playable: bool, y: f32, measure: &dyn plx_machine::machine::Measure,
+) -> f32 {
     let (date, extent) = hero_facts(d);
     let extent = extent.as_deref().unwrap_or("");
     let credit = plx_ui::fmt::shared_by(&d.source()).unwrap_or_default();
     let column = Rect::new(plx_ui::consts::MARGIN_X, y, FACTS_R - plx_ui::consts::MARGIN_X, theme::hero::FACTS_H);
-    if play_mode_w(d, playable, false, measure) == 0.0 {
+    let mode = play_mode(d, picks, playable);
+    if play_mode_w(mode, false, measure) == 0.0 {
         let resumes = hero_resume_ns(d) > 0;
         return plx_ui::widgets::hero_facts(p, column, &date, extent, resumes, &credit, measure);
     }
@@ -1040,7 +1148,7 @@ pub fn draw_facts(p: Painter, d: &Detail, playable: bool, y: f32, measure: &dyn 
             &[date.as_str(), if fit.extent { extent } else { "" }],
             if fit.credit { &credit } else { "" },
             |text, _, size, _| measure.width_str(text, size, false),
-            |_, after| play_mode_w(d, playable, after, measure),
+            |_, after| play_mode_w(mode, after, measure),
         )
     };
     let fit = facts_fit(
@@ -1050,7 +1158,7 @@ pub fn draw_facts(p: Painter, d: &Detail, playable: bool, y: f32, measure: &dyn 
     );
     let elided;
     let date = if fit.elide {
-        let budget = (column.w - play_mode_w(d, playable, true, measure)).max(0.0);
+        let budget = (column.w - play_mode_w(mode, true, measure)).max(0.0);
         elided = plx_gfx::text::elide_by(&date, budget, false, |t| {
             measure.width_str(t, theme::size::CAPTION, false)
         });
@@ -1077,13 +1185,24 @@ pub fn draw_facts(p: Painter, d: &Detail, playable: bool, y: f32, measure: &dyn 
                 })
                 .unwrap_or(0.0)
         },
-        |dx, after| draw_play_mode(p, d, playable, plx_ui::consts::MARGIN_X + dx, y, after, measure),
+        |dx, after| draw_play_mode(p, mode, plx_ui::consts::MARGIN_X + dx, y, after, measure),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plx_data::metadata::Episode;
+
+    /// The round disc's verb and the menu row are one table: every control with a face unfurls
+    /// the face's own label (the watched toggle and the pills have none).
+    #[test]
+    fn a_discs_verb_is_its_faces_label() {
+        for ctl in [HeroCtl::Restart, HeroCtl::Trailer, HeroCtl::Version, HeroCtl::GoToShow, HeroCtl::AudioSubtitles] {
+            assert_eq!(disc_verb(ctl, false).map(|v| v.1), face(ctl).map(|f| f.1), "{ctl:?}");
+        }
+        assert!(face(HeroCtl::Play).is_none() && face(HeroCtl::MarkWatched).is_none());
+    }
 
     #[test]
     fn the_hdr_warning_follows_the_version_play_starts() {
@@ -1129,12 +1248,11 @@ mod tests {
     }
 
     fn set_full(restart: bool, alt: bool, mark: PosterMark, trailer: bool) -> HeroSet {
-        HeroSet {
-            more: false,
+        HeroSet { favorite: None,
             watchlist: true,
             go_show: false,
             version: false,
-            favorite: None,
+            tracks: false,
             restart,
             trailer,
             alt,
@@ -1142,30 +1260,48 @@ mod tests {
         }
     }
 
-    /// The favourite toggle: absent where the server keeps no favourites (Plex), else last in the
-    /// row wearing the face of the mark its press would set, as a closed disc that never unfurls.
+    /// **The row offers exactly ONE watched toggle, never both faces at once** — the property
+    /// `ui/detail.rs`'s own module doc calls out by name ("this row briefly drew the two faces
+    /// side by side for a part-watched item, and that was wrong").
+    /// The favourite toggle: absent where the server keeps no favourites (Plex), else the action right
+    /// after the watch toggle, wearing the face of the mark its press would set, as a closed disc that
+    /// never unfurls. With more actions than round slots it moves under … with its own face.
     #[test]
     fn the_favourite_toggle_is_offered_only_where_favourites_exist() {
         let base = set(false, false, PosterMark::None);
         let (v, n) = hero_ctls(base);
-        assert!(!v[..n].iter().any(|c| matches!(c, HeroCtl::Favorite | HeroCtl::Unfavorite)));
-        for (fav, face) in [(false, HeroCtl::Favorite), (true, HeroCtl::Unfavorite)] {
-            let s = HeroSet { favorite: Some(fav), ..base };
-            let (v, n) = hero_ctls(s);
-            assert_eq!(v[n - 1], face);
-            assert_eq!(HeroCtl::of_elem(face.elem()), Some(face));
-            assert_eq!(disc_verb(face, false), None, "an icon-only disc");
+        assert!(!v[..n].iter().any(|c| c.is_favorite()));
+        for (fav, face_ctl) in [(false, HeroCtl::Favorite), (true, HeroCtl::Unfavorite)] {
+            let s = HeroSet { favorite: Some(fav), watchlist: false, ..base };
+            let (all, count) = actions(s);
+            assert_eq!(&all[..2], &[HeroCtl::MarkWatched, face_ctl]);
+            assert!(count >= 2);
+            assert_eq!(HeroCtl::of_elem(face_ctl.elem()), Some(face_ctl));
+            assert_eq!(HeroCtl::of_a11y_name(face_ctl.a11y_name()), Some(face_ctl));
+            assert_eq!(disc_verb(face_ctl, false), None, "an icon-only disc");
+            assert!(face(face_ctl).is_some(), "it can be an overflow row");
+            let i = index_of(s, face_ctl).expect("a round button while the row has room");
             let cw = HeroWidths { pill: 200.0, alt: 300.0, disc: [CD; DISCS] };
-            assert_eq!(hero_btn_rect_at(s, n - 1, 0.0, cw).w, CD);
+            assert_eq!(hero_btn_rect_at(s, i, 0.0, cw).w, CD);
         }
-        // The widest row fits the fixed array.
-        let all = HeroSet { more: true, watchlist: true, version: true, restart: true, trailer: true, alt: true, mark: PosterMark::InProgress, favorite: Some(true), go_show: true };
-        assert_eq!(hero_ctls(all).1, MAX_CTLS);
     }
 
-    /// **The row offers exactly ONE watched toggle, never both faces at once** — the property
-    /// `ui/detail.rs`'s own module doc calls out by name ("this row briefly drew the two faces
-    /// side by side for a part-watched item, and that was wrong").
+    /// A press flips a toggle's face, and the focus stays on the toggle: both faces of the watch
+    /// and the favourite toggles carry over to the other, and a control the set dropped does not.
+    #[test]
+    fn a_flipped_toggle_carries_the_focus_to_its_other_face() {
+        let unwatched = set(false, false, PosterMark::None);
+        let watched = set(false, false, PosterMark::Watched);
+        assert_eq!(carried(watched, HeroCtl::MarkWatched), Some(HeroCtl::MarkUnwatched));
+        assert_eq!(carried(unwatched, HeroCtl::MarkUnwatched), Some(HeroCtl::MarkWatched));
+        let not_fav = HeroSet { favorite: Some(false), ..unwatched };
+        let fav = HeroSet { favorite: Some(true), ..unwatched };
+        assert_eq!(carried(fav, HeroCtl::Favorite), Some(HeroCtl::Unfavorite));
+        assert_eq!(carried(not_fav, HeroCtl::Unfavorite), Some(HeroCtl::Favorite));
+        assert_eq!(carried(unwatched, HeroCtl::Favorite), None, "no favourites on this server");
+        assert_eq!(carried(fav, HeroCtl::Play), Some(HeroCtl::Play));
+    }
+
     #[test]
     fn the_row_offers_exactly_one_watched_toggle() {
         for mark in [
@@ -1284,23 +1420,6 @@ mod tests {
         assert_eq!(ctl_at(watched, i_watched), Some(HeroCtl::MarkUnwatched));
     }
 
-    /// A press flips a toggle's face, and the focus stays on the toggle: both faces of the watch
-    /// and the favourite toggles carry over to the other, and a control the set dropped does not.
-    #[test]
-    fn a_flipped_toggle_carries_the_focus_to_its_other_face() {
-        let unwatched = set(false, false, PosterMark::None);
-        let watched = set(false, false, PosterMark::Watched);
-        assert_eq!(carried(watched, HeroCtl::MarkWatched), Some(HeroCtl::MarkUnwatched));
-        assert_eq!(carried(unwatched, HeroCtl::MarkUnwatched), Some(HeroCtl::MarkWatched));
-        let not_fav = HeroSet { favorite: Some(false), ..unwatched };
-        let fav = HeroSet { favorite: Some(true), ..unwatched };
-        assert_eq!(carried(fav, HeroCtl::Favorite), Some(HeroCtl::Unfavorite));
-        assert_eq!(carried(not_fav, HeroCtl::Unfavorite), Some(HeroCtl::Favorite));
-        assert_eq!(carried(unwatched, HeroCtl::Favorite), None, "no favourites on this server");
-        assert_eq!(carried(unwatched, HeroCtl::Restart), None);
-        assert_eq!(carried(fav, HeroCtl::Play), Some(HeroCtl::Play));
-    }
-
     /// A finished-then-restarted item reads `InProgress`, never `Watched` — the viewer is
     /// part-way through a re-watch, and "not watched" is the honest state for the toggle to read.
     #[test]
@@ -1342,7 +1461,7 @@ mod tests {
         assert!(has_restart(1), "any positive resume position offers one");
         let with = set(true, false, PosterMark::None);
         let without = set(false, false, PosterMark::None);
-        assert_eq!(index_of(with, HeroCtl::Restart), Some(2), "after Play and the bookmark disc");
+        assert_eq!(index_of(with, HeroCtl::Restart), Some(3), "after Play, the bookmark disc and the watch toggle");
         assert_eq!(
             index_of(without, HeroCtl::Restart),
             None,
@@ -1382,7 +1501,7 @@ mod tests {
     /// the unfurl budget. A set's logical order and its measured width order must agree.
     #[test]
     fn the_row_geometry_uses_shared_spacing_for_every_control_set() {
-        let cw = HeroWidths { pill: 211.0, alt: 263.0, disc: [57.0, 61.0, 67.0, 71.0, 73.0] };
+        let cw = HeroWidths { pill: 211.0, alt: 263.0, disc: [57.0, 61.0, 67.0, 71.0, 73.0, 79.0] };
         for restart in [false, true] {
             for alt in [false, true] {
                 for trailer in [false, true] {
@@ -1392,12 +1511,8 @@ mod tests {
                         let widths: Vec<f32> = controls[..n].iter().map(|ctl| match ctl {
                             HeroCtl::Play => cw.pill,
                             HeroCtl::Alt => cw.alt,
-                            HeroCtl::Restart => cw.disc[0],
-                            HeroCtl::Trailer => cw.disc[1],
                             HeroCtl::Watchlist | HeroCtl::More | HeroCtl::Favorite | HeroCtl::Unfavorite => CD,
-                            HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => cw.disc[2],
-                            HeroCtl::Version => cw.disc[3],
-                            HeroCtl::GoToShow => cw.disc[4],
+                            disc => cw.disc[disc_slot(*disc).unwrap()],
                         }).collect();
                         for i in 0..=n + 1 {
                             let got = hero_btn_rect_at(set, i, 13.0, cw);
@@ -1657,11 +1772,11 @@ mod tests {
 
     #[test]
     fn restart_and_the_watch_tail_are_independent() {
-        let set = HeroSet { more: false,
+        let set = HeroSet { favorite: None,
             watchlist: true,
             go_show: false,
             version: false,
-            favorite: None,
+            tracks: false,
             restart: true,
             trailer: false,
             alt: false,
@@ -1670,17 +1785,17 @@ mod tests {
         let (controls, n) = hero_ctls(set);
         assert_eq!(
             &controls[..n],
-            &[HeroCtl::Play, HeroCtl::Watchlist, HeroCtl::Restart, HeroCtl::MarkUnwatched]
+            &[HeroCtl::Play, HeroCtl::Watchlist, HeroCtl::MarkUnwatched, HeroCtl::Restart]
         );
     }
 
     #[test]
     fn the_actions_row_grows_an_also_available_control_only_for_a_second_source() {
-        let without = HeroSet { more: false,
+        let without = HeroSet { favorite: None,
             watchlist: true,
             go_show: false,
             version: false,
-            favorite: None,
+            tracks: false,
             restart: false,
             trailer: false,
             alt: false,
@@ -1690,7 +1805,7 @@ mod tests {
             watchlist: true,
             go_show: false,
             version: false,
-            favorite: None,
+            tracks: false,
             alt: true,
             ..without
         };
@@ -1702,11 +1817,11 @@ mod tests {
     fn the_hero_row_carries_no_track_information_disc() {
         for alt in [false, true] {
             for trailer in [false, true] {
-                let set = HeroSet { more: false,
+                let set = HeroSet { favorite: None,
                     watchlist: true,
                     go_show: false,
                     version: false,
-                    favorite: None,
+            tracks: false,
                     restart: true,
                     trailer,
                     alt,
@@ -1746,14 +1861,14 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            hero_episode(&d).is_none(),
+            d.resume_episode().is_none(),
             "an untouched show is about the series"
         );
         d.seasons[0].viewed_leaf_count = 1;
-        assert_eq!(hero_episode(&d).map(|ep| ep.rk.as_str()), Some("e1"));
+        assert_eq!(d.resume_episode().map(|ep| ep.rk.as_str()), Some("e1"));
         d.seasons[0].viewed_leaf_count = 0;
         d.on_deck.as_mut().unwrap().watched = true;
-        assert_eq!(hero_episode(&d).map(|ep| ep.rk.as_str()), Some("e1"),
+        assert_eq!(d.resume_episode().map(|ep| ep.rk.as_str()), Some("e1"),
             "an optimistic watched flip retains the displayed leaf until the server replaces OnDeck");
         assert_eq!(hero_mark(&d), PosterMark::Watched);
     }
@@ -1838,21 +1953,21 @@ mod tests {
 
     #[test]
     fn hero_indices_mean_different_actions_in_the_two_control_sets() {
-        let compact = HeroSet { more: false,
+        let compact = HeroSet { favorite: None,
             watchlist: true,
             go_show: false,
             version: false,
-            favorite: None,
+            tracks: false,
             restart: false,
             trailer: false,
             alt: false,
             mark: PosterMark::None,
         };
-        let wide = HeroSet { more: false,
+        let wide = HeroSet { favorite: None,
             watchlist: true,
             go_show: false,
             version: false,
-            favorite: None,
+            tracks: false,
             restart: true,
             trailer: false,
             alt: true,
@@ -1861,18 +1976,18 @@ mod tests {
         assert_eq!(ctl_at(compact, 1), Some(HeroCtl::Watchlist));
         assert_eq!(ctl_at(compact, 2), Some(HeroCtl::MarkWatched));
         assert_eq!(ctl_at(wide, 1), Some(HeroCtl::Watchlist));
-        assert_eq!(ctl_at(wide, 2), Some(HeroCtl::Restart));
-        assert_eq!(ctl_at(wide, 3), Some(HeroCtl::MarkWatched));
+        assert_eq!(ctl_at(wide, 2), Some(HeroCtl::MarkWatched));
+        assert_eq!(ctl_at(wide, 3), Some(HeroCtl::Restart));
         assert_eq!(ctl_at(wide, 4), Some(HeroCtl::Alt));
     }
 
     #[test]
     fn the_actions_row_accumulates_around_a_variable_width_control() {
-        let set = HeroSet { more: false,
+        let set = HeroSet { favorite: None,
             watchlist: true,
             go_show: false,
             version: false,
-            favorite: None,
+            tracks: false,
             restart: true,
             trailer: false,
             alt: true,
@@ -1881,7 +1996,7 @@ mod tests {
         let widths = HeroWidths {
             pill: 210.0,
             alt: 300.0,
-            disc: [90.0, 120.0, 120.0, 150.0, 160.0],
+            disc: [90.0, 120.0, 120.0, 150.0, 160.0, 170.0],
         };
         let (controls, n) = hero_ctls(set);
         for i in 1..n {
@@ -1907,24 +2022,24 @@ mod tests {
                             let set = HeroSet { version, go_show, ..set_full(restart, alt, mark, trailer) };
                             let (_, n) = hero_ctls(set);
                             for labels in [
-                                [10.0, 12.0, 12.0, 11.0, 10.0],
-                                [201.0, 80.0, 316.0, 150.0, 132.0],
-                                [400.0, 400.0, 400.0, 400.0, 400.0],
-                                [900.0, 40.0, 40.0, 40.0, 40.0],
-                                [40.0, 40.0, 40.0, 900.0, 40.0],
-                                [40.0, 40.0, 40.0, 40.0, 900.0],
+                                [10.0, 12.0, 12.0, 11.0, 10.0, 0.0],
+                                [201.0, 80.0, 316.0, 150.0, 132.0, 0.0],
+                                [400.0, 400.0, 400.0, 400.0, 400.0, 0.0],
+                                [900.0, 40.0, 40.0, 40.0, 40.0, 0.0],
+                                [40.0, 40.0, 40.0, 900.0, 40.0, 0.0],
+                                [40.0, 40.0, 40.0, 40.0, 900.0, 0.0],
                             ] {
                                 for e in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
                                     for unfurl in [
-                                        [e, 0.0, 1.0 - e, 0.0, 0.0],
-                                        [1.0 - e, 0.0, e, 0.0, 0.0],
-                                        [e, e, 0.0, 0.0, 0.0],
-                                        [0.0, e, e, 0.0, 0.0],
-                                        [0.0, 0.0, 1.0 - e, e, 0.0],
-                                        [1.0 - e, 0.0, 0.0, e, 0.0],
-                                        [e, e, e, e, e],
-                                        [0.0, 0.0, 0.0, 0.0, e],
-                                        [0.0, 0.0, 0.0, 0.0, 1.0 - e],
+                                        [e, 0.0, 1.0 - e, 0.0, 0.0, 0.0],
+                                        [1.0 - e, 0.0, e, 0.0, 0.0, 0.0],
+                                        [e, e, 0.0, 0.0, 0.0, 0.0],
+                                        [0.0, e, e, 0.0, 0.0, 0.0],
+                                        [0.0, 0.0, 1.0 - e, e, 0.0, 0.0],
+                                        [1.0 - e, 0.0, 0.0, e, 0.0, 0.0],
+                                        [e, e, e, e, e, 0.0],
+                                        [0.0, 0.0, 0.0, 0.0, e, 0.0],
+                                        [0.0, 0.0, 0.0, 0.0, 1.0 - e, 0.0],
                                     ] {
                                         let disc = disc_caps_at(set, PW + 62.0, 340.0, unfurl, labels);
                                         let last = hero_btn_rect_at(
@@ -1948,43 +2063,37 @@ mod tests {
 
     /// **The widest row with all five discs** (bookmark, Go to Show, Play Version, Restart, Alt,
     /// the watch toggle, Trailer drawn as well): every real verb, measured, either unfurls inside
-    /// the People column or the row stays circles. Never across. The favourite face is a server's
-    /// that keeps favourites (Jellyfin), which has no plex.tv bookmark and no Also available, so
-    /// its widest row trades those two for the heart.
+    /// the People column or the row stays circles. Never across.
     #[test]
     fn five_discs_never_cross_the_people_column_in_any_language() {
         use plx_os::i18n::{language_on_this_thread_for_test, SHIPPED};
         let measure = plx_base::fontcov::advances::ShippedMeasure;
         // Go to Show belongs to an episode page; the on-deck More disc is absent there.
-        let plex = HeroSet { more: false,
+        let wide = HeroSet { favorite: None,
             watchlist: true,
             go_show: true,
             version: true,
+            tracks: true,
             restart: true,
             trailer: true,
             alt: true,
             mark: PosterMark::InProgress,
-            favorite: None,
         };
-        let favourites = HeroSet { watchlist: false, alt: false, favorite: Some(true), ..plex };
-        let on_deck = HeroSet { go_show: false, more: true, ..favourites };
-        for wide in [plex, favourites, on_deck] {
-            for language in SHIPPED {
-                let _guard = language_on_this_thread_for_test(language);
-                for named_episode in [false, true] {
-                    for focus in 0..DISCS {
-                        let mut unfurl = [0.0; DISCS];
-                        unfurl[focus] = 1.0;
-                        let caps = disc_caps(&measure, wide, unfurl, named_episode);
-                        let (_, n) = hero_ctls(wide);
-                        let last = hero_btn_rect_at(
-                            wide,
-                            n - 1,
-                            0.0,
-                            HeroWidths { pill: hero_pill_w(&measure, true), alt: alt_pill_w(&measure), disc: caps },
-                        );
-                        assert!(last.x + last.w <= FACTS_R + 0.01, "{} slot {focus} {wide:?}", language.tag());
-                    }
+        for language in SHIPPED {
+            let _guard = language_on_this_thread_for_test(language);
+            for named_episode in [false, true] {
+                for focus in 0..DISCS {
+                    let mut unfurl = [0.0; DISCS];
+                    unfurl[focus] = 1.0;
+                    let caps = disc_caps(&measure, wide, unfurl, named_episode);
+                    let (_, n) = hero_ctls(wide);
+                    let last = hero_btn_rect_at(
+                        wide,
+                        n - 1,
+                        0.0,
+                        HeroWidths { pill: hero_pill_w(&measure, true), alt: alt_pill_w(&measure), disc: caps },
+                    );
+                    assert!(last.x + last.w <= FACTS_R + 0.01, "{} slot {focus}", language.tag());
                 }
             }
         }
@@ -1993,11 +2102,11 @@ mod tests {
     #[test]
     fn the_real_verbs_all_fit_the_widest_row() {
         let measure = plx_ui::fixture::FixtureMeasure;
-        let wide = HeroSet { more: false,
+        let wide = HeroSet { favorite: None,
             watchlist: true,
             go_show: false,
             version: false,
-            favorite: None,
+            tracks: true,
             restart: true,
             trailer: true,
             alt: true,
@@ -2020,11 +2129,11 @@ mod tests {
             "the 5-control row collapses rather than crossing People"
         );
 
-        let roomy = HeroSet { more: false,
+        let roomy = HeroSet { favorite: None,
             watchlist: true,
             go_show: false,
             version: false,
-            favorite: None,
+            tracks: false,
             restart: false,
             trailer: true,
             alt: false,
@@ -2050,11 +2159,11 @@ mod tests {
 
     #[test]
     fn a_verb_that_does_not_fit_is_dropped_whole() {
-        let set = HeroSet { more: false,
+        let set = HeroSet { favorite: None,
             watchlist: true,
             go_show: false,
             version: false,
-            favorite: None,
+            tracks: false,
             restart: true,
             trailer: true,
             alt: true,
@@ -2093,11 +2202,11 @@ mod tests {
 
     #[test]
     fn the_widest_action_row_clears_the_people_column() {
-        let set = HeroSet { more: false,
+        let set = HeroSet { favorite: None,
             watchlist: true,
             go_show: false,
             version: false,
-            favorite: None,
+            tracks: false,
             restart: true,
             trailer: true,
             alt: true,
@@ -2126,15 +2235,15 @@ mod tests {
             &[
                 HeroCtl::Play,
                 HeroCtl::Watchlist,
-                HeroCtl::Restart,
                 HeroCtl::MarkWatched,
+                HeroCtl::Restart,
                 HeroCtl::Alt
             ]
         );
     }
 
     #[test]
-    fn trailer_true_inserts_between_restart_and_watch() {
+    fn trailer_true_follows_the_round_buttons() {
         let set = set_full(true, true, PosterMark::None, true);
         let (controls, n) = hero_ctls(set);
         assert_eq!(
@@ -2142,9 +2251,9 @@ mod tests {
             &[
                 HeroCtl::Play,
                 HeroCtl::Watchlist,
+                HeroCtl::MarkWatched,
                 HeroCtl::Restart,
                 HeroCtl::Trailer,
-                HeroCtl::MarkWatched,
                 HeroCtl::Alt
             ]
         );
@@ -2157,9 +2266,9 @@ mod tests {
         assert_eq!(index_of(before, HeroCtl::Play), Some(0));
         assert_eq!(index_of(after, HeroCtl::Play), Some(0));
         assert_eq!(index_of(before, HeroCtl::Trailer), None);
-        assert_eq!(index_of(after, HeroCtl::Trailer), Some(2));
+        assert_eq!(index_of(after, HeroCtl::Trailer), Some(3), "after the round buttons, and it never counts");
         let watch = index_of(after, HeroCtl::MarkWatched).unwrap();
-        assert_eq!(watch, index_of(before, HeroCtl::MarkWatched).unwrap() + 1);
+        assert_eq!(watch, index_of(before, HeroCtl::MarkWatched).unwrap(), "the hidden trailer moves nothing before it");
         assert_eq!(ctl_at(after, watch).unwrap().elem(), ELEM_MARK_WATCHED);
     }
 
@@ -2167,7 +2276,7 @@ mod tests {
     fn losing_the_trailer_disc_drops_its_identity() {
         let with = set_full(true, false, PosterMark::None, true);
         let without = set(true, false, PosterMark::None);
-        assert_eq!(index_of(with, HeroCtl::Trailer), Some(3));
+        assert_eq!(index_of(with, HeroCtl::Trailer), Some(4));
         assert_eq!(index_of(without, HeroCtl::Trailer), None);
     }
 
@@ -2321,10 +2430,10 @@ mod tests {
 
         let bare = HeroSet { go_show: true, ..Default::default() };
         let (ctls, n) = hero_ctls(bare);
-        assert_eq!(&ctls[..n], &[HeroCtl::Play, HeroCtl::GoToShow, HeroCtl::MarkWatched]);
+        assert_eq!(&ctls[..n], &[HeroCtl::Play, HeroCtl::MarkWatched, HeroCtl::GoToShow]);
         let with_bookmark = HeroSet { watchlist: true, go_show: true, ..Default::default() };
         let (ctls, n) = hero_ctls(with_bookmark);
-        assert_eq!(&ctls[..n], &[HeroCtl::Play, HeroCtl::Watchlist, HeroCtl::GoToShow, HeroCtl::MarkWatched]);
+        assert_eq!(&ctls[..n], &[HeroCtl::Play, HeroCtl::Watchlist, HeroCtl::MarkWatched, HeroCtl::GoToShow]);
         assert_eq!(HeroCtl::GoToShow.elem(), ELEM_GO_TO_SHOW);
         assert_eq!(HeroCtl::of_elem(ELEM_GO_TO_SHOW), Some(HeroCtl::GoToShow));
         assert_eq!(disc_verb(HeroCtl::GoToShow, false), Some((4, go_to_show_label())));
@@ -2399,8 +2508,9 @@ mod tests {
         let measure = plx_base::fontcov::advances::ShippedMeasure;
         for restart in [false, true] {
             for version in [false, true] {
+              for tracks in [false, true] {
                 for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
-                    let set = HeroSet { more: false, watchlist: false, version, restart, trailer: false, alt: false, mark, go_show: true, favorite: None };
+                    let set = HeroSet { favorite: None, watchlist: false, version, tracks, restart, trailer: false, alt: false, mark, go_show: true };
                     for language in SHIPPED {
                         let _guard = language_on_this_thread_for_test(language);
                         let mut unfurl = [0.0; DISCS];
@@ -2408,6 +2518,34 @@ mod tests {
                         let caps = disc_caps(&measure, set, unfurl, false);
                         assert!(caps[4] > CD, "{} {set:?}: the verb unfurls (cap {})", language.tag(), caps[4]);
                     }
+                }
+              }
+            }
+        }
+    }
+
+    /// The Audio & Subtitles disc (slot 5) is fitted like every other verb: in each shipped language its
+    /// own verb unfurls when the row is the one a movie shows (no Alt), and no unfurl of any slot
+    /// pushes the widest tracks-bearing row across the People column.
+    #[test]
+    fn audio_and_subtitles_unfurls_in_every_language_when_the_row_has_no_alt() {
+        use plx_os::i18n::{language_on_this_thread_for_test, SHIPPED};
+        let measure = plx_base::fontcov::advances::ShippedMeasure;
+        for restart in [false, true] {
+            for version in [false, true] {
+                // Restart + Play Version + Audio & Subtitles + the watch toggle leave no room for a
+                // verb even in English (cap 60 = the bare circle): the designed degradation (a verb
+                // that does not fit is dropped whole), reported rather than shortened.
+                if restart && version {
+                    continue;
+                }
+                let set = HeroSet { favorite: None, watchlist: false, version, tracks: true, restart, trailer: false, alt: false, mark: PosterMark::None, go_show: false };
+                for language in SHIPPED {
+                    let _guard = language_on_this_thread_for_test(language);
+                    let mut unfurl = [0.0; DISCS];
+                    unfurl[5] = 1.0;
+                    let caps = disc_caps(&measure, set, unfurl, false);
+                    assert!(caps[5] > CD, "{} {set:?}: the verb unfurls (cap {})", language.tag(), caps[5]);
                 }
             }
         }
@@ -2420,14 +2558,14 @@ mod tests {
     fn no_playback_replaces_the_play_mode_clause_with_one_reason_word() {
         let d = Detail::default();
         let measure = plx_ui::fixture::FixtureMeasure;
-        assert_eq!(play_mode_w(&d, true, false, &measure), 0.0, "today: nothing to say for this item");
-        assert!(play_mode_w(&d, false, false, &measure) > 0.0, "no driver: the reason is drawn");
-        let (bits, n) = play_mode_bits(&d, false, false);
+        assert_eq!(play_mode_w(play_mode(&d, &[], true), false, &measure), 0.0, "today: nothing to say for this item");
+        assert!(play_mode_w(play_mode(&d, &[], false), false, &measure) > 0.0, "no driver: the reason is drawn");
+        let (bits, n) = play_mode(&d, &[], false).bits(false);
         assert_eq!(n, 1);
         assert!(matches!(bits[0], Bit::Word(word, ink, 0)
             if word == plx_os::i18n::msg::browse_detail_no_playback_c()
                 && ink == plx_ui::detail_layout::FACTS_INK), "one word in the facts line's own ink");
-        let (after, n) = play_mode_bits(&d, false, true);
+        let (after, n) = play_mode(&d, &[], false).bits(true);
         assert!(n == 2 && matches!(after[0], Bit::Sep) && matches!(after[1], Bit::Word(..)));
     }
 
@@ -2443,5 +2581,22 @@ mod tests {
         }
         assert!(!ScreenInputs::default().same_facts(&ScreenInputs { backends: BackendSet::NONE, ..Default::default() }),
             "the set is a screen-visible fact, so a change of it presents");
+    }
+
+    /// **Whatever the page can move under …, the menu can draw**: every control any set of the hero's
+    /// actions moves into the overflow has a round-button face, so `build_hero_overflow` never meets one
+    /// without (it asserts that in debug builds and skips it in release).
+    #[test]
+    fn overflow_faces_are_total() {
+        for bits in 0u32..(1 << 5) {
+            let on = |n: u32| bits & (1 << n) != 0;
+            for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
+                let set = HeroSet { watchlist: on(0), go_show: on(1), version: on(2), tracks: on(3), restart: on(4), mark, ..HeroSet::default() };
+                let (ctls, n) = overflow_ctls(set);
+                for ctl in &ctls[..n] {
+                    assert!(face(*ctl).is_some(), "{ctl:?} can move under … and must have a face: {set:?}");
+                }
+            }
+        }
     }
 }

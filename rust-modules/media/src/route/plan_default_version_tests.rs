@@ -67,7 +67,7 @@ fn played_video_uses_the_chosen_versions_range_and_resolution_together() {
         versions: vec![uhd_with(17, profile_5()), MediaVersion { hdr: true, ..full_hd() }],
         ..Default::default()
     };
-    let facts = |mode, capability| played_video(&d, mode, &Caps::assumed(), DolbyVisionMode::Auto, capability).unwrap();
+    let facts = |mode, capability| played_video(&d, mode, &Caps::assumed(), DolbyVisionMode::Auto, capability, None).unwrap();
     let alternate = facts(DirectPlayMode::Auto, DvCapability::Unsupported);
     assert_eq!((alternate.version.unwrap().id, alternate.resolution, alternate.range()),
                (MediaId(2), "1080", DynamicRange::Hdr));
@@ -85,9 +85,9 @@ fn played_video_reports_the_on_deck_episodes_base_layer_when_dv_is_unavailable()
     use plx_data::metadata::{Detail, Episode, EpisodeStreams};
     let caps = Caps::assumed();
     let mut d = Detail { hdr: true, dovi: profile_8(), ..Default::default() };
-    assert!(played_video(&d, DirectPlayMode::Auto, &caps, DolbyVisionMode::Auto, DvCapability::Supported).is_none());
+    assert!(played_video(&d, DirectPlayMode::Auto, &caps, DolbyVisionMode::Auto, DvCapability::Supported, None).is_none());
     d.on_deck = Some(Episode { rk: "episode".into(), resume_ms: 5000, part: "/episode".into(), vcodec: "hevc".into(), acodec: "aac".into(), ..Default::default() });
-    assert!(played_video(&d, DirectPlayMode::Auto, &caps, DolbyVisionMode::Auto, DvCapability::Supported).is_none(),
+    assert!(played_video(&d, DirectPlayMode::Auto, &caps, DolbyVisionMode::Auto, DvCapability::Supported, None).is_none(),
             "an on-deck episode does not make an unsuccessful backfill available");
     d.episode_streams = EpisodeStreams::Loaded("episode".into());
     for (mode, capability, range) in [
@@ -95,7 +95,7 @@ fn played_video_reports_the_on_deck_episodes_base_layer_when_dv_is_unavailable()
         (DolbyVisionMode::Off, DvCapability::Supported, DynamicRange::Hdr),
         (DolbyVisionMode::Auto, DvCapability::Unsupported, DynamicRange::Hdr),
     ] {
-        let file = played_video(&d, DirectPlayMode::Auto, &caps, mode, capability).unwrap();
+        let file = played_video(&d, DirectPlayMode::Auto, &caps, mode, capability, None).unwrap();
         assert_eq!((file.primary_part, file.vcodec, file.acodec), ("/episode", "hevc", "aac"));
         assert!(file.dovi.present);
         assert_eq!(file.range(), range);
@@ -212,7 +212,7 @@ fn played_video_follows_the_first_episode_of_an_unstarted_show() {
         video_resolution: "720".into(), ..Default::default()
     };
     fn facts(d: &Detail) -> Option<PlayedVideo<'_>> {
-        played_video(d, DirectPlayMode::Auto, &Caps::assumed(), DolbyVisionMode::Auto, DvCapability::Unknown)
+        played_video(d, DirectPlayMode::Auto, &Caps::assumed(), DolbyVisionMode::Auto, DvCapability::Unknown, None)
     }
     assert_eq!(facts(&d).unwrap().resolution, "720");
     d.episode_streams = EpisodeStreams::LegacyOnDeck;

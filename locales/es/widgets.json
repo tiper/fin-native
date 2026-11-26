@@ -258,5 +258,10 @@
   "widgets.failure.change_quality": "Cambiar calidad",
   "widgets.watch.intro": "Ver introducción",
   "widgets.verdict.tuners_busy": "Todos los sintonizadores están ocupados",
-  "widgets.live.channel_context": "{number} · {programme}"
+  "widgets.live.channel_context": "{number} · {programme}",
+  "widgets.live.badge": "EN DIRECTO",
+  "widgets.live.next_at": "Después, a las {time}",
+  "widgets.live.entry_none": "Ningún canal {number}",
+  "widgets.live.entry_more": "+{count} más · ▲ ▼ para desplazar",
+  "widgets.live.playing": "Reproduciendo"
 }

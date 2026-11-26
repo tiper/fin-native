@@ -262,5 +262,10 @@
   "widgets.failure.change_quality": "Змяніць якасць",
   "widgets.watch.intro": "Глядзець уступ",
   "widgets.verdict.tuners_busy": "Усе цюнэры занятыя",
-  "widgets.live.channel_context": "{number} · {programme}"
+  "widgets.live.channel_context": "{number} · {programme}",
+  "widgets.live.badge": "У ЭФІРЫ",
+  "widgets.live.next_at": "Далей: {time}",
+  "widgets.live.entry_none": "Няма канала {number}",
+  "widgets.live.entry_more": "Яшчэ +{count} · ▲ ▼ для пракруткі",
+  "widgets.live.playing": "Цяпер"
 }

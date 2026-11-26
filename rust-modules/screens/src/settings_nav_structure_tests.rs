@@ -187,6 +187,12 @@ fn every_audio_and_subtitles_field_pushes_its_picker() {
     });
 }
 
+/// Library order's rows are actions, not doors: the page declares no row that pushes another page.
+#[test]
+fn the_library_order_page_declares_no_door() {
+    assert_eq!(super::library_order::nav_items_for_test(), [], "its rows pick a library up or reset the order");
+}
+
 #[test]
 fn the_under_posters_details_rows_push_their_pickers() {
     let _g = plx_base::testlock::serial();

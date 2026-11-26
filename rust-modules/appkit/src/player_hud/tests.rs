@@ -918,7 +918,7 @@ fn a_dead_producer_reads_out_whether_or_not_a_picture_was_up() {
 }
 
 fn readout_of(e: &plx_media::player::ErrorShape) -> FailureReadout {
-    let cx = plx_media::player::FailureContext { forced: true, can_retry: true, quality_carriable: true, repair_idle: true };
+    let cx = plx_media::player::FailureContext { forced: true, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
     FailureReadout::of(e, plx_media::player::failure_actions(e.kind, cx), "0.7.0 · webOS 4.5 · code".into())
 }
 
@@ -969,9 +969,10 @@ fn every_failure_row_fits_the_screen_in_every_language() {
     use plx_ui::fit::HEADROOM;
     use plx_os::i18n::{language_on_this_thread_for_test};
     use plx_media::player::FailureAction as A;
-    let rows: [&[A]; 3] = [
+    let rows: [&[A]; 4] = [
         &[A::PlayAutomatically, A::TryAgain, A::Back],
         &[A::TryAgain, A::ChangeQuality, A::Back],
+        &[A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::Back],
         &[A::Repair, A::Back],
     ];
     let mut out = Vec::new();

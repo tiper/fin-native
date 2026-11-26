@@ -706,6 +706,7 @@ fn inputs_for(signed_in: bool) -> RootInputs {
         signed_in, multi_user: true, library_count: 3, auto_sign_in: false, trailer_autoplay: true, resolution: UiResolution::Auto, resolution_offered: true,
         language: plx_os::i18n::Preference::System,
         under_posters: plx_plex::plex::session::UnderPosters::DEFAULT, plaintext: Vec::new(),
+        library_order: plx_os::i18n::msg::library_order_value_server().to_string(),
     }
 }
 
@@ -1071,6 +1072,7 @@ fn every_page_the_surface_mounts_conforms_and_answers_a_namespace_of_its_own() {
     let pages = [
         SettingsPage::Root,
         SettingsPage::Language,
+        SettingsPage::LibraryOrder,
         SettingsPage::UnderPosters,
         SettingsPage::UnderPostersDetails(PosterKind::Movie),
         SettingsPage::UnderPostersDetails(PosterKind::Show),

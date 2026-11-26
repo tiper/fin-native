@@ -1,0 +1,17 @@
+{
+  "library_order.title": "Ordem das bibliotecas",
+  "library_order.value_server": "Ordem do servidor",
+  "library_order.value_first": "{title} primeiro",
+  "library_order.row_detail": "Escolha a ordem das suas bibliotecas favoritas no Início e no cabeçalho da Biblioteca.",
+  "library_order.reset": "Repor ordem",
+  "library_order.state_idle": "Prima OK para mover {title} para cima ou para baixo. O Início e o cabeçalho de {kind} mostram as suas bibliotecas favoritas por esta ordem.",
+  "library_order.state_reset": "Repõe as suas bibliotecas favoritas pela ordem em que os servidores as listam.",
+  "library_order.state_moving": "A mover {title}. Cima e Baixo mudam a posição, OK confirma-a e Voltar cancela.",
+  "library_order.state_unnamed": "{title} ainda não pode ser movida: o servidor ainda não terminou de ligar.",
+  "library_order.state_dropped": "{title} está agora em {home} no Início e em {header} no cabeçalho de {kind}.",
+  "library_order.state_confirm": "Prima OK novamente para repor as suas bibliotecas favoritas pela ordem dos servidores. Qualquer outro botão mantém a sua ordem.",
+  "library_order.state_reset_done": "As suas bibliotecas favoritas voltaram à ordem em que os servidores as listam.",
+  "library_order.state_unsaved": "Não foi possível guardar esta ordem; aplica-se até o PlxNative reiniciar.",
+  "library_order.preview_caption": "{kind} · Cabeçalho da Biblioteca",
+  "library_order.preview_more": "As bibliotecas que não cabem ficam atrás de …."
+}

@@ -519,6 +519,26 @@ const NL_LONG: [&str; 12] = [
     "januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september",
     "oktober", "november", "december",
 ];
+/// **The word for a place in a list** (`place` counts from 1: first, second, ... tenth), from the
+/// catalog's `ordinal.*` keys, so each language writes its own positional forms. Past tenth the
+/// catalog's `ordinal.other` ("number 11") states the figure instead: a language that has an
+/// ordinal suffix for every number is a different mechanism, and none of the shipped ones needs it
+/// for the short lists this serves (a favourite library's place on Home). Zero reads as the first.
+pub fn ordinal(place: usize) -> String {
+    match place.max(1) {
+        1 => msg::ordinal_first().to_string(),
+        2 => msg::ordinal_second().to_string(),
+        3 => msg::ordinal_third().to_string(),
+        4 => msg::ordinal_fourth().to_string(),
+        5 => msg::ordinal_fifth().to_string(),
+        6 => msg::ordinal_sixth().to_string(),
+        7 => msg::ordinal_seventh().to_string(),
+        8 => msg::ordinal_eighth().to_string(),
+        9 => msg::ordinal_ninth().to_string(),
+        10 => msg::ordinal_tenth().to_string(),
+        n => msg::ordinal_other(i64::try_from(n).unwrap_or(i64::MAX)),
+    }
+}
 /// Reject control bytes and invalid tags before they can become HTTP headers. POSIX suffixes
 /// are only used at this input boundary; callers retain canonical BCP-47 tags.
 pub fn normalize(s: &str) -> Option<String> {

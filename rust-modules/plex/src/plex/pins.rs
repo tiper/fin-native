@@ -261,6 +261,16 @@ pub fn record(
     out
 }
 
+/// Is an entry's machine one the table cannot currently SEE: it names a machine (an entry with none
+/// can never be carried) and `present`, the machines the table holds, does not. The one rule for
+/// "silence is not an answer", shared by [`carry_forward`] and the Library order writer
+/// (`library_order::merged`).
+pub fn is_absent_machine<'a>(machine_id: &str, present: impl IntoIterator<Item = &'a str>) -> bool {
+    // an entry with no machine can never be WRITTEN (see [`record`]), so it can never be
+    // carried either — and matching it against a table row's empty id would adopt a neighbour's
+    !machine_id.is_empty() && !present.into_iter().any(|machine| machine == machine_id)
+}
+
 /// Carry forward the answers this profile gave about servers the table cannot currently SEE.
 ///
 /// [`record`] writes down the answers about rows the section table HOLDS, and that table holds
@@ -280,11 +290,7 @@ pub fn carry_forward(
     libs: &[LibRef<'_>],
 ) -> HomePins {
     let Some(prev) = prev else { return rec };
-    let absent = |p: &&PinnedLib| {
-        // an entry with no machine can never be WRITTEN (see [`record`]), so it can never be
-        // carried either — and matching it against a table row's empty id would adopt a neighbour's
-        !p.machine_id.is_empty() && !libs.iter().any(|l| l.machine_id == p.machine_id)
-    };
+    let absent = |p: &&PinnedLib| is_absent_machine(&p.machine_id, libs.iter().map(|l| l.machine_id));
     rec.on.extend(prev.on.iter().filter(absent).cloned());
     rec.off.extend(prev.off.iter().filter(absent).cloned());
     rec

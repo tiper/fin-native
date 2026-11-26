@@ -1,0 +1,84 @@
+{
+  "library_order.title": {
+    "value": "Library order",
+    "description": "Settings > Libraries row and page title: the setting for the order of the favorite libraries on Home and in the Library header. Row label, short."
+  },
+  "library_order.value_server": {
+    "value": "Server order",
+    "description": "Trailing read-out of the Library order row when the profile has no saved order: the libraries stand in the order the servers list them. Short."
+  },
+  "library_order.value_first": {
+    "value": "{title} first",
+    "description": "Trailing read-out of the Library order row when an order is in effect: the library shown first, then a word that says it comes first. {title} is a library name. Short; the row is narrow.",
+    "args": {
+      "title": "str"
+    }
+  },
+  "library_order.row_detail": {
+    "value": "Choose the order of your favorite libraries on Home and in the Library header.",
+    "description": "Sentence beside the Settings root while the Library order row has focus. One sentence naming where the order applies: Home and the Library page's header of library names."
+  },
+  "library_order.reset": {
+    "value": "Reset Order",
+    "description": "Button row at the end of the Library order page: it puts the favorite libraries back in the order the servers list them. Short imperative."
+  },
+  "library_order.state_idle": {
+    "value": "Press OK to move {title} up or down. Home and the {kind} header show your favorite libraries in this order.",
+    "description": "Sentence on the Library order page while a library row has focus. {title} is the focused library's name; {kind} is the plural kind word (Movies or TV Shows) of the header it appears in.",
+    "args": {
+      "title": "str",
+      "kind": "str"
+    }
+  },
+  "library_order.state_reset": {
+    "value": "Puts your favorite libraries back in the order your servers list them.",
+    "description": "Sentence on the Library order page while the Reset Order row has focus."
+  },
+  "library_order.state_moving": {
+    "value": "Moving {title}. Up and Down move it, OK puts it here, and Back puts it back.",
+    "description": "Sentence on the Library order page while a library has been picked up to be moved. Up and Down, OK and Back name the remote's buttons. {title} is the library's name.",
+    "args": {
+      "title": "str"
+    }
+  },
+  "library_order.state_unnamed": {
+    "value": "{title} can't be moved yet: its server hasn't finished connecting.",
+    "description": "Sentence on the Library order page while a library whose server has not finished connecting has focus: it cannot be moved yet, because the saved order names a library by its server. {title} is the library's name.",
+    "args": {
+      "title": "str"
+    }
+  },
+  "library_order.state_dropped": {
+    "value": "{title} is now {home} on Home and {header} in the {kind} header.",
+    "description": "Sentence on the Library order page right after a library was put down. {home} and {header} are ordinals from the ordinal.* words (first, second, ... or number 11); {kind} is the plural kind word (Movies or TV Shows).",
+    "args": {
+      "title": "str",
+      "home": "str",
+      "header": "str",
+      "kind": "str"
+    }
+  },
+  "library_order.state_confirm": {
+    "value": "Press OK again to put your favorite libraries back in the order your servers list them. Any other button keeps your order.",
+    "description": "Sentence on the Library order page after OK on Reset Order: the second OK resets, any other button cancels."
+  },
+  "library_order.state_reset_done": {
+    "value": "Your favorite libraries are back in the order your servers list them.",
+    "description": "Sentence on the Library order page right after the order was reset."
+  },
+  "library_order.state_unsaved": {
+    "value": "Couldn't save this order; it applies until PlxNative restarts.",
+    "description": "Sentence added on the Library order page when the order could not be written to disk: it still applies, but only until the app restarts."
+  },
+  "library_order.preview_caption": {
+    "value": "{kind} · Library header",
+    "description": "Small caps caption over the preview of the Library page's header of library names. {kind} is the plural kind word (Movies or TV Shows); the dot separates it from the words Library header.",
+    "args": {
+      "kind": "str"
+    }
+  },
+  "library_order.preview_more": {
+    "value": "Libraries that don't fit go behind ….",
+    "description": "Caption under the header preview, shown only when the real Library header would not hold every library of the kind: the ones that do not fit are in the menu opened by the three-dots button. Keep the … character."
+  }
+}

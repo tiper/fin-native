@@ -213,3 +213,22 @@ fn the_rise_starts_displaced_toward_the_openers_side() {
         assert_eq!(Popover::rise_offset(Side::Above, r, a), (0.0, r * (1.0 - a)), "the vertical rise is the old one at appear {a}");
     }
 }
+
+/// A panel no control opened (Live TV's number entry, SPEC-5): its top-right corner is the safe frame's, at any
+/// height it asks for, and it settles down (the side is `Below`).
+#[test]
+fn a_corner_panel_stands_in_the_safe_frames_top_right_and_settles_down() {
+    for h in [120.0f32, 399.0, 640.0] {
+        let a = corner_panel(560.0, h);
+        assert_eq!(a.side, Side::Below);
+        assert_eq!((a.rect.x, a.rect.y, a.rect.w, a.rect.h), (right(SAFE) - 560.0, SAFE.y, 560.0, h), "h {h}");
+        assert!(inside(a.rect, SAFE));
+    }
+    // the safe frame is 96 from the right edge and 54 from the top: the spec's own numbers
+    let a = corner_panel(560.0, 300.0);
+    assert_eq!((SCR_W - right(a.rect), a.rect.y), (96.0, 54.0));
+    // taller than the room: cut to it, still on the corner
+    let tall = corner_panel(560.0, 5_000.0);
+    assert_eq!(tall.rect.y, SAFE.y);
+    assert_eq!(bottom(tall.rect), bottom(SAFE));
+}

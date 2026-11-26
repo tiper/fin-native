@@ -1215,6 +1215,8 @@ mod tests {
         assert_eq!(w.hosted.player_open(4, "http://h/a", AREA), Ok(()));
         assert_eq!(post(host_abi::EVENT_PLAYER_PREPARED, 4, 7_200_000, 0), host_abi::OK);
         assert_eq!(post(host_abi::EVENT_PLAYER_VIDEO_SIZE, 4, 1920, 1080), host_abi::OK);
+        assert_eq!(post(host_abi::EVENT_PLAYER_TRACK, 4, 2, 1), host_abi::OK, "a track answer is a player event");
+        assert_eq!(post(host_abi::EVENT_PLAYER_AUDIO_LANGUAGE, 4, 1, 0x0075_6564), host_abi::OK, "so is a track's language");
         assert_eq!(post(host_abi::EVENT_PLAYER_STARTED, 4, 0, 0), host_abi::OK);
         assert_eq!(post(host_abi::EVENT_PLAYER_CLOSED, 4, 0, 0), host_abi::OK);
         assert_eq!(post(host_abi::EVENT_PLAYER_COMPLETED, 4, 0, 0), host_abi::E_STALE, "late: its player is closed");
@@ -1231,6 +1233,8 @@ mod tests {
             [
                 (4, host_abi::PlayerKind::Prepared, 7_200_000, 0),
                 (4, host_abi::PlayerKind::VideoSize, 1920, 1080),
+                (4, host_abi::PlayerKind::Track, 2, 1),
+                (4, host_abi::PlayerKind::AudioLanguage, 1, 0x0075_6564),
                 (4, host_abi::PlayerKind::Started, 0, 0),
                 (4, host_abi::PlayerKind::Closed, 0, 0)
             ]

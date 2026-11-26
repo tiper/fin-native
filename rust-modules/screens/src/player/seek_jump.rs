@@ -559,6 +559,7 @@ mod tests {
             page.hud.visible_at_press = true;
             page.handle_key::<TestHost>(
                 &ps,
+                &plx_ui::fixture::FixtureMeasure,
                 consts::Key::Ok,
                 Edge::Down,
                 false,

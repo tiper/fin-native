@@ -37,8 +37,6 @@ pub struct HudModel {
     pub skip_progress: Option<f32>,
     /// The playing metadata is a genuine episode, independent of queue neighbours.
     pub is_episode: bool,
-    /// The source is a channel with no seek bar or library-only controls.
-    pub is_live: bool,
     /// The projected local wall-clock finish time (`plx_ui::fmt::clock_hm` of the projected Unix
     /// second in the zone in force AT that second, `wall`'s own offset where the zone cannot say),
     /// supplied by the app for this frame and worded at draw.
@@ -104,7 +102,6 @@ impl Default for HudModel {
             paused: false,
             marker_prefs: Default::default(), playback_id: 0, advancing: false, seeking: false, covered: false, skip_progress: None,
             is_episode: false,
-            is_live: false,
             end_time: None,
             wall: None,
             scrub_ns: -1,

@@ -4,6 +4,7 @@
 #[cfg(test)]
 use plx_play_feed::shared::FEED_TX;
 use super::adapter::PlayerAdapter;
+use crate::route::StopKind;
 use plx_playback_contract::feed::ResetScope;
 use super::{engine, SHARED};
 use plx_base::eventlog::log;
@@ -744,7 +745,7 @@ fn reload_transcode_start(ps: &mut crate::route::PlaybackSession, pa: &mut super
         "reload_transcode: fresh Load at offset {}s",
         offset_ns / 1_000_000_000
     ));
-    teardown(ps, pa, true, plx_playback_contract::StopReason::Replace); // keep the session; reload mode
+    teardown(ps, pa, Teardown::Reload, plx_playback_contract::StopReason::Replace); // keep the session; reload mode
     super::rebase_transcode(ps, pa, offset_ns); // transcode is 0-based at content=offset
     Some(start_bufferfeed_for(ps, pa, ticket))
 }
@@ -793,7 +794,7 @@ pub fn reload_at(ps: &mut crate::route::PlaybackSession, pa: &mut super::adapter
         target_ns / 1_000_000_000
     ));
     let reload_is_seek = ps.readout().unconfirmed_seek_target().is_some();
-    teardown(ps, pa, true, plx_playback_contract::StopReason::Replace); // reload mode: preserve the session (no url-clear / stop-scrobble)
+    teardown(ps, pa, Teardown::Reload, plx_playback_contract::StopReason::Replace); // reload mode: preserve the session (no url-clear / stop-scrobble)
     if reload_is_seek {
         ps.step_readout(super::readout::ReadoutEvent::ReloadSeek { target_ns });
     }
@@ -864,7 +865,7 @@ pub fn reload_transcode_tracked(ps: &mut crate::route::PlaybackSession, pa: &mut
 /// that needs it gone is queued behind it in the release machine (`Deferred`), never waited for.
 pub fn stop_bufferfeed(ps: &mut crate::route::PlaybackSession, pa: &mut super::adapter::PlayerAdapter) {
     super::accept_server_stop(ps);
-    teardown(ps, pa, false, plx_playback_contract::StopReason::Stop);
+    teardown(ps, pa, Teardown::Stop(StopKind::Visit), plx_playback_contract::StopReason::Stop);
 }
 
 /// A retry or queue handoff may replace the outgoing playback only while it owns that decision.
@@ -872,8 +873,7 @@ pub fn stop_for_replacement(ps: &mut crate::route::PlaybackSession, pa: &mut sup
     if retire_if_server_stopped(ps, pa) {
         return false;
     }
-    crate::route::retaining_request_for_replacement(ps, |ps|
-        teardown(ps, pa, false, plx_playback_contract::StopReason::Stop));
+    teardown(ps, pa, Teardown::Stop(StopKind::Replacement), plx_playback_contract::StopReason::Stop);
     true
 }
 
@@ -896,7 +896,7 @@ pub(super) fn release_server_stopped_engine(
 ) {
     if pa.is_live() || pa.active_uri_attempt().is_some() || (ps.backends().feed && ps.readout().start_queued()) {
         super::abandon_seek(ps, pa);
-        teardown(ps, pa, true, plx_playback_contract::StopReason::Replace);
+        teardown(ps, pa, Teardown::Reload, plx_playback_contract::StopReason::Replace);
     }
 }
 
@@ -905,7 +905,7 @@ pub(super) fn release_server_stopped_engine(
 /// don't scrobble "stopped". This makes the foreground restore a clean same-item reload
 /// (begin_resume + start_bufferfeed), the known-good path, instead of resurrecting a stopped session.
 pub fn suspend_bufferfeed(ps: &mut crate::route::PlaybackSession, pa: &mut super::adapter::PlayerAdapter) {
-    teardown(ps, pa, true, plx_playback_contract::StopReason::Suspend);
+    teardown(ps, pa, Teardown::Reload, plx_playback_contract::StopReason::Suspend);
 }
 
 
@@ -1327,7 +1327,7 @@ pub fn release_failed_engine(ps: &mut crate::route::PlaybackSession, pa: &mut su
     let cause = super::live_runtime_failure(ps);
     crate::route::note_engine_failure(ps, cause, super::intended_pos_ns(ps));
     log("player: the failed Engine's pipeline is released under the failure read-out");
-    teardown(ps, pa, true, plx_playback_contract::StopReason::Replace);
+    teardown(ps, pa, Teardown::Reload, plx_playback_contract::StopReason::Replace);
     true
 }
 
@@ -1341,7 +1341,7 @@ pub fn suspend_bufferfeed_if_attempt(
 ) -> bool {
     let owns_attempt = pa.active_feed_attempt() == Some(attempt);
     if owns_attempt {
-        teardown(ps, pa, true, plx_playback_contract::StopReason::Suspend);
+        teardown(ps, pa, Teardown::Reload, plx_playback_contract::StopReason::Suspend);
     }
     owns_attempt
 }
@@ -1352,7 +1352,7 @@ pub fn suspend_playback_if_attempt(ps: &mut crate::route::PlaybackSession,
     pa: &mut super::adapter::PlayerAdapter,
     attempt: crate::route::RouteStartAttempt) -> bool {
     if pa.active_uri_attempt() == Some(attempt) {
-        teardown(ps, pa, true, plx_playback_contract::StopReason::Suspend);
+        teardown(ps, pa, Teardown::Reload, plx_playback_contract::StopReason::Suspend);
         return true;
     }
     suspend_bufferfeed_if_attempt(ps, pa, attempt)
@@ -1366,10 +1366,29 @@ pub fn foreground_follows_load(pa: &mut super::adapter::PlayerAdapter, attempt: 
     pa.mark_foreground_follows_feed_load(attempt)
 }
 
+/// What a [`teardown`] is for: the three real states, so the impossible fourth (a reload that names
+/// a stop kind) cannot be written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Teardown {
+    /// Destroys the ENGINE and keeps the playback: a seek or quality reload, a rollback, an app-switch
+    /// suspend, a server-stop release. The session, the transcode and the viewer transport stay.
+    Reload,
+    /// Ends the playback: a full stop, which says whether it ends the player visit or replaces the
+    /// playback inside it ([`StopKind`]).
+    Stop(StopKind),
+}
+
+impl Teardown {
+    fn is_reload(self) -> bool { matches!(self, Teardown::Reload) }
+}
+
 /// Common teardown owns the route fence, final report and scrobble ordering. The opaque native
 /// stop owns the Engine, worker joins, transport close, native release and AU destruction.
+/// `how` is a [`Teardown::Reload`] (seven reload and suspend sites) or a [`Teardown::Stop`]
+/// (`stop_bufferfeed` and the replacement stop), the only one that carries a [`StopKind`].
 pub(super) fn teardown(ps: &mut crate::route::PlaybackSession, pa: &mut PlayerAdapter,
-    for_reload: bool, reason: plx_playback_contract::StopReason) {
+    how: Teardown, reason: plx_playback_contract::StopReason) {
+    let for_reload = how.is_reload();
     engine::clear_failed_engine_release_arm();
     pa.cancel_uri_recovery(ps);
     // A stop that is not a park ends a restore owed to a parked URI original (a Back while it re-resolves).
@@ -1380,7 +1399,7 @@ pub(super) fn teardown(ps: &mut crate::route::PlaybackSession, pa: &mut PlayerAd
             backend: plx_playback_contract::BackendKind::Uri,
             attempt: route_attempt.contract_id(), reason,
         }, super::attempt_metrics::Origin::Fresh, at);
-        let _ = begin_teardown(ps, pa, for_reload);
+        let _ = begin_teardown(ps, pa, how);
         let at = pa.backend_tick();
         let _ = pa.backend_poll_session_at(ps, at);
         return;
@@ -1402,7 +1421,7 @@ pub(super) fn teardown(ps: &mut crate::route::PlaybackSession, pa: &mut PlayerAd
     // The server ended this playback: the stop keeps the session for the read-out (`for_reload`), but
     // the Feed releases it as a terminal one (off the frame, an in-flight Load parked).
     let server_stopped = super::server_stop_applies(ps);
-    if !begin_teardown(ps, pa, for_reload) { return; }
+    if !begin_teardown(ps, pa, how) { return; }
     {
     // An abandoned preview Load is never joined on the frame while native Load is in flight.
     if crate::route::is_preview(ps) && pa.defer_preview_join() {
@@ -1447,7 +1466,7 @@ pub(super) fn teardown(ps: &mut crate::route::PlaybackSession, pa: &mut PlayerAd
         super::claim_hold::clear();
     }
     ps.step_readout(super::readout::ReadoutEvent::SessionReset);
-    finish_feed_teardown(ps, for_reload, report_th);
+    finish_feed_teardown(ps, how, report_th);
     pa.stop_finish(ps, for_reload);
     let at = pa.backend_tick();
     let _ = pa.backend_poll_at(ps, at);
@@ -1456,7 +1475,8 @@ pub(super) fn teardown(ps: &mut crate::route::PlaybackSession, pa: &mut PlayerAd
 
 
 /// Settle queued and engine-less playback ownership before a physical stop.
-pub(super) fn begin_teardown(ps: &mut crate::route::PlaybackSession, pa: &mut PlayerAdapter, for_reload: bool) -> bool {
+pub(super) fn begin_teardown(ps: &mut crate::route::PlaybackSession, pa: &mut PlayerAdapter, how: Teardown) -> bool {
+    let for_reload = how.is_reload();
     // A URI-mode probe session (dev trigger `plxnative-uriprobe`) ends with the playback it stands
     // in for, whatever ended it (Back, an app switch, the next Play): its machine settles a start
     // still pending and requests unload/close; the adapter retains its window until release. It owns no Engine, so the
@@ -1492,7 +1512,7 @@ pub(super) fn begin_teardown(ps: &mut crate::route::PlaybackSession, pa: &mut Pl
             || ps.attempt_view().backend() == Some(super::attempt_view::Backend::Uri)) {
             crate::route::begin_engine_teardown(true);
         }
-        if !for_reload {
+        if let Teardown::Stop(kind) = how {
             // A seek reload can still be queued, and a failed Engine may already be released.
             // The session owns the final position in both cases, even without a live Engine.
             let feed_seek = uri_attempt.is_none()
@@ -1517,7 +1537,7 @@ pub(super) fn begin_teardown(ps: &mut crate::route::PlaybackSession, pa: &mut Pl
             crate::route::scrobble_stop(ps, final_report, uri_report_th.take());
             crate::route::begin_engine_teardown(false);
             crate::route::drop_original_recovery(ps);
-            crate::route::retire_stopped_playback(ps);
+            crate::route::retire_stopped_playback(ps, kind);
             pa.reset_session(ResetScope::Stop, &mut || SHARED.reset_session());
             stop_transport(ps);
             ps.step_readout(super::readout::ReadoutEvent::SessionReset);
@@ -1535,11 +1555,17 @@ pub(super) fn begin_teardown(ps: &mut crate::route::PlaybackSession, pa: &mut Pl
 
 /// A logical stop leaves the last addressed evidence available for the next report tick. The
 /// next physical start calls `begin_attempt_view` and clears it to Unknown for the new attempt.
+///
+/// The end of stream is the exception: a stop ends the playback and its end with it, as the Feed's
+/// `SessionReset` does for its readout. A URI attempt's `ended` left standing is what the next play
+/// finds while its resolve is in flight (no new attempt has replaced the view yet), and the loop's
+/// end-of-stream rule exits that play's page at once.
 fn mark_attempt_stopped(ps: &mut crate::route::PlaybackSession) {
     let Some(attempt) = ps.attempt_view().attempt() else { return; };
     let Some(backend) = ps.attempt_view().backend() else { return; };
     let mut facts = *ps.attempt_view().facts();
     facts.started = Some(false);
+    facts.ended = None;
     if backend == super::attempt_view::Backend::Uri && facts.runtime_failure.is_none() {
         facts.status = Some(plx_playback_contract::readout::PlaybackState::Idle);
     }
@@ -1630,9 +1656,10 @@ pub(super) fn stop_feed_timeline(
 /// Finish route ownership only after physical release and the shared facts have reset.
 pub(super) fn finish_feed_teardown(
     ps: &mut crate::route::PlaybackSession,
-    for_reload: bool,
+    how: Teardown,
     report_th: Option<std::thread::JoinHandle<()>>,
 ) {
+    let for_reload = how.is_reload();
     // The worker has stopped, so a reload hands route the last estimate it published, which the
     // replacement controller starts from (I8); a stop carries none.
     if for_reload {
@@ -1640,7 +1667,7 @@ pub(super) fn finish_feed_teardown(
     } else {
         ps.observe_link_seed(None);
     }
-    if !for_reload {
+    if let Teardown::Stop(kind) = how {
         // **The carried link estimate dies with the PLAYBACK, not with the engine** (I8). A reload
         // is the same item on the same link at a new position — a seek, a quality pick, an
         // app-switch resume — and re-measuring the link from nothing across one is what made every
@@ -1657,7 +1684,7 @@ pub(super) fn finish_feed_teardown(
         // encoder it was holding is still running on the server, which is why this RETIRES rather
         // than forgets — see `route::drop_original_recovery`.
         crate::route::drop_original_recovery(ps);
-        crate::route::retire_stopped_playback(ps); // the transcode stop rode out with `scrobble_stop` above
+        crate::route::retire_stopped_playback(ps, kind); // the transcode stop rode out with `scrobble_stop` above
     } else if let Some(t) = report_th {
         // A reload posts no `stopped`, so there is nothing to order against: detach. Its own
         // ReportStop is already set, so it exits after its current POST and cannot be revived by

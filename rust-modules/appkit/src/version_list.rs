@@ -1,7 +1,7 @@
-//! **The Play Version list**: one row per version (`Media[]` entry) of a movie or episode, drawn
-//! on two surfaces — the item menu's Play Version page (`screens::item_menu`) and the panel the
-//! Detail hero's Play Version disc opens (`screens::versions_panel`). One builder, so the two can
-//! never word one version two ways.
+//! **The Select Version list**: one row per version (`Media[]` entry) of a movie or episode, drawn
+//! on two surfaces — the item menu's Select Version page (`screens::item_menu`) and the panel the
+//! Detail hero's Select Version disc opens (`screens::versions_panel`). One builder, so the two can
+//! never word one version two ways. A row only CHOOSES its file; the check mark rides the one Play takes.
 //!
 //! Pure over its inputs ([`MediaVersion`]s and the caller's row identity and action), so the
 //! labels and the fit are host-testable without a menu or a page.
@@ -9,27 +9,29 @@ use plx_data::pms::MediaVersion;
 use plx_ui::form::{FormId, FormSection, RowKind};
 use plx_ui::table::Row;
 
-/// The list's heading: "Play Version".
+/// The list's heading: "Select Version".
 pub fn title() -> &'static str {
-    plx_os::i18n::msg::browse_menu_play_version_title()
+    plx_os::i18n::msg::browse_menu_select_version_title()
 }
 
 /// **The list as one section**, in the server's order: row `n` is `versions[n]`, identified by
-/// `id(n)` and reporting `act(&versions[n])`. Every row is a button that plays, unless
-/// `unavailable` gives the reason nothing can (a platform that composed no playback driver): every
-/// row is then disabled (`FormSection::disabled`, which makes it answer no press) and the reason is
-/// said once, as the note under the rows (`FormSection::note`, the shared line for a reason that
-/// belongs to the rows above it: it wraps, where a per-row value would not fit beside a version's
-/// label and detail).
+/// `id(n)` and reporting `act(&versions[n])`. Every row is a button that CHOOSES its version, and
+/// the one `checked` names (the file Play takes now) wears the check mark. A row is disabled, with
+/// the reason said once, when `unavailable` gives the reason nothing can play (a platform that
+/// composed no playback driver): every row is then disabled (`FormSection::disabled`, which makes
+/// it answer no press) and the reason is the note under the rows (`FormSection::note`, the shared
+/// line for a reason that belongs to the rows above it: it wraps, where a per-row value would not
+/// fit beside a version's label and detail).
 pub fn section<Id: FormId, A, D>(
     versions: &[MediaVersion],
     id: impl Fn(u16) -> Id,
     act: impl Fn(&MediaVersion) -> A,
+    checked: Option<plx_plex::plex::MediaId>,
     unavailable: Option<&str>,
 ) -> FormSection<Id, A, D> {
     let mut sec = FormSection::new(title());
     for (n, (v, (label, detail))) in versions.iter().zip(labels(versions)).enumerate() {
-        let mut row = Row::new(label);
+        let mut row = Row::new(label).checked(checked == Some(v.id));
         if !detail.is_empty() {
             row = row.detail(detail);
         }
@@ -146,7 +148,8 @@ mod tests {
             // under the one note that says why.
             for unavailable in [None, Some(plx_os::i18n::msg::browse_detail_no_playback())] {
                 let mut form: FormTable<Pos, plx_plex::plex::MediaId, Infallible> = FormTable::new(plx_ui::table_screen::BAND_BASE);
-                form.set(Form::new().section(section(&sample(), Pos, |v| v.id, unavailable)), None);
+                // The check mark takes the leading column, so the list is fitted with one shown.
+                form.set(Form::new().section(section(&sample(), Pos, |v| v.id, Some(sample()[1].id), unavailable)), None);
                 form.table.compact = false;
                 let tag = format!("{} versions{}", language.tag(), if unavailable.is_some() { " (no playback)" } else { "" });
                 out.extend(form.table.menu_cap_failure(&measure, &tag));
@@ -165,7 +168,7 @@ mod tests {
         let why = plx_os::i18n::msg::browse_detail_no_playback();
         for (unavailable, disabled) in [(None, false), (Some(why), true)] {
             let mut form: FormTable<Pos, plx_plex::plex::MediaId, Infallible> = FormTable::new(plx_ui::table_screen::BAND_BASE);
-            form.set(Form::new().section(section(&sample(), Pos, |v| v.id, unavailable)), None);
+            form.set(Form::new().section(section(&sample(), Pos, |v| v.id, None, unavailable)), None);
             let rows: Vec<_> = form.table.sections.iter().flat_map(|s| s.rows.iter()).collect();
             let versions: Vec<_> = rows.iter().filter(|row| !row.is_note()).collect();
             let notes: Vec<_> = rows.iter().filter(|row| row.is_note()).collect();

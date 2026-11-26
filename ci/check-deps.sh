@@ -1476,7 +1476,7 @@ fork_scope_re=$(scope_re "${FORK_SCOPE[@]}")
 # has a line that could hold a site of that rule, and ci/ledger.awk then decides what is really one; a
 # file the pattern misses cannot hold one. W and G read the machines, F the fork scope.
 workers_pat='spawn_small|spawn_sized|spawn_off_frame|submit_retained|submit_ticket|task::(spawn|\{|\*)|storage_worker::(submit|\{|\*)|(task|storage_worker)[[:space:]]+as[[:space:]]'
-globals_pat='client_for|current_server|current_snapshot|keypin::(revision|blocked_for|\{|\*)|session::(peek|current_gen|screen_input_revision|\{|\*)|grant::(offers|\{|\*)|(^|[^A-Za-z0-9_])transport::(viewer_paused|\{|\*)|(^|[^A-Za-z0-9_])preview::(paused|\{|\*)|player::TX|devcaps::(caps|\{|\*)|is_dp_audio|(^|[^A-Za-z0-9_])tape::(active|\{|\*)|(^|[^A-Za-z0-9_])(sidecar|ass_source)::(takes_colour|selected|\{|\*)|server_ids|server_roster_gen|server_facts_gen|server_probe_result|peek_settled|screen_input_revision|(session|keypin|grant|player|transport|preview|devcaps|tape|sidecar|ass_source|caps|is_dp_audio|is_dp_audio_track|peek|peek_settled|current_gen|screen_input_revision|revision|blocked_for|offers|paused|viewer_paused|TX|server_ids|server_roster_gen|server_facts_gen|server_probe_result)[[:space:]]+as[[:space:]]'
+globals_pat='client_for|current_server|current_snapshot|chosen_version|chosen_for|keypin::(revision|blocked_for|\{|\*)|session::(peek|current_gen|screen_input_revision|\{|\*)|grant::(offers|\{|\*)|(^|[^A-Za-z0-9_])transport::(viewer_paused|\{|\*)|(^|[^A-Za-z0-9_])preview::(paused|\{|\*)|player::TX|devcaps::(caps|\{|\*)|is_dp_audio|(^|[^A-Za-z0-9_])tape::(active|\{|\*)|(^|[^A-Za-z0-9_])(sidecar|ass_source)::(takes_colour|selected|\{|\*)|server_ids|server_roster_gen|server_facts_gen|server_probe_result|peek_settled|screen_input_revision|(session|keypin|grant|player|transport|preview|devcaps|tape|sidecar|ass_source|caps|is_dp_audio|is_dp_audio_track|peek|peek_settled|current_gen|screen_input_revision|revision|blocked_for|offers|paused|viewer_paused|TX|server_ids|server_roster_gen|server_facts_gen|server_probe_result)[[:space:]]+as[[:space:]]'
 # a cfg line: one with `test` on it, or an attribute / `cfg!` that opens on one line and closes on a later
 # one, where `test` may sit on the second. A line that is a test-only attribute outright — `#[cfg(test)]`,
 # `#[cfg(any(test, feature = "test-support"))]`, or an `all(<either>, <flat atoms>)` of them — is no
@@ -1557,7 +1557,12 @@ fi # workers
 # coverage expansion that recorded the reads already there. So do the subtitle registries' colour-pick readers
 # `sidecar::takes_colour(` / `sidecar::selected(` / `ass_source::takes_colour(` / `ass_source::selected(`: the
 # Subtitles menu read them through a media free function before the fact became a readout value the app
-# delivers (`player::deliver_subtitle_ink`); no machine holds a site, so the names seeded no ledger line. The settings getters (`route::*`) and `i18n::current` are
+# delivers (`player::deliver_subtitle_ink`); no machine holds a site, so the names seeded no ledger line.
+# `chosen_version(` / `chosen_for(`, the `version_choices` memory's mirror read (what a Play of an item starts and the
+# Detail facts line describes), are spellings like `client_for`: the screens that show it (Detail, the item menu, the Select
+# Version panel) are no machines, so no ledger line was seeded, and a machine that read it would have to take the value
+# as an argument the way the resolve takes `ResolveEnv::picks` and `version` (the other tenants are read at the request,
+# `recalled_track_memory`). The settings getters (`route::*`) and `i18n::current` are
 # deliberately NOT spellings: the owner's architecture board kept settings getters out of this gate, and
 # `i18n::current` is a display read. The device's
 # capability answer is read behind a function too: `devcaps::caps(`, and the zero-argument audio gates

@@ -2510,6 +2510,30 @@ mod uri_stop_refusal_tests {
         assert!(!adapter.release_busy(), "no native release began");
         assert!(!adapter.release_has_queued_start(), "no successor was admitted");
     }
+
+    /// **A URI play that reached its end leaves no end of stream for the next play to find.** The URI
+    /// twin of `engine.rs`'s `a_stopped_play_leaves_no_end_of_stream_for_the_deferred_replay_to_find`.
+    /// The service's `Ended` stands in the attempt view, and only the next physical start replaces
+    /// it. The next play's player page mounts while its resolve is still in flight, so if the stop
+    /// left `ended` standing, the loop's end-of-stream rule (`app::run::playback_tick`: player page
+    /// up and `ended` true) exits that page at once, and every play after it, until a relaunch.
+    #[test]
+    fn a_stopped_uri_play_leaves_no_end_of_stream_for_the_next_play_to_find() {
+        let _serial = plx_base::testlock::serial();
+        let mut adapter = PlayerAdapter::new_fed(unsafe { MainThread::assume() });
+        let route = crate::route::RouteStartAttempt::fixture();
+        adapter.uri_route_attempt = Some(route);
+        let mut ps = crate::route::PlaybackSession::default();
+        ps.begin_attempt_view(route, super::super::attempt_view::Backend::Uri);
+        adapter.publish_uri_observation(&mut ps, route.contract_id(), Observation::Playback(
+            Observed { value: Playback::Ended, from: EvidenceSource::BackendReport }));
+        assert_eq!(crate::player::ended(&ps), Some(true), "PRECONDITION FAILED: the title has ended");
+        // The service closed its session at the end; the attempt is no longer bound to the route.
+        adapter.uri_route_attempt = None;
+        crate::player::stop_playback(&mut ps, &mut adapter);
+        assert_ne!(crate::player::ended(&ps), Some(true),
+            "the finished URI play's end of stream outlived its stop: the next play's page would exit at once");
+    }
 }
 
 #[cfg(test)]

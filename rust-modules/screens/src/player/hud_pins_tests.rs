@@ -487,6 +487,7 @@ impl Chaptered {
                 markers: Vec::new(),
                 chapters: (1..=count).map(chapter).collect(),
                 hdr: false,
+                sub_choice: Default::default(),
             }
         ))));
         Chaptered

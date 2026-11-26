@@ -102,6 +102,22 @@ plx_base::dynlib! {
 }
 
 plx_base::dynlib! {
+    /// Tizen's key grab (`tizen_keyrouter`): the window claims a key so the TV's own shell does not act on it as
+    /// well. A table of its own: an image without it delivers the keys as before, popup and all. There is no unset:
+    /// as in flutter-tizen, the grab goes with the window's surface, and EFL's unset waits without bound for the
+    /// key router, which a torn connection never answers.
+    ecore_wl2_keygrab: ["libecore_wl2.so.1"] {
+        fn ecore_wl2_window_keygrab_set(window: *mut c_void, key: *const c_char, modifiers: c_int, not_modifiers: c_int, priority: c_int, mode: c_int) -> u8;
+    }
+}
+
+/// `ECORE_WL2_WINDOW_KEYGRAB_TOPMOST` in Tizen EFL's `Ecore_Wl2_Window_Keygrab_Mode` (UNKNOWN 0, SHARED 1, TOPMOST 2,
+/// OVERRIDE_EXCLUSIVE 3, EXCLUSIVE 4; the efl-tizen mirror's header, not a device). The window gets the key while it is
+/// the top of the stack, and the Tizen guide lists no privilege for it; the other three are "not for third-party
+/// applications". flutter-tizen's embedder grabs its media keys this way.
+const KEYGRAB_TOPMOST: c_int = 2;
+
+plx_base::dynlib! {
     /// The embedder's `DestroyWindow()`.
     ecore_wl2_end: ["libecore_wl2.so.1"] {
         fn ecore_wl2_window_free(window: *mut c_void);
@@ -428,6 +444,27 @@ impl Window {
         // SAFETY: a live window.
         unsafe { ecore_wl2_window_show(self.window) };
         log("ecore: window shown");
+        self.grab_media_keys();
+    }
+
+    /// Grab the transport keys ([`crate::keys::grabbed`]) TOPMOST, after the show as flutter-tizen does: an ungrabbed
+    /// media key is delivered AND acted on by the TV (the retail "Not Available" popup over a pause). Each call
+    /// blocks until the compositor's key router, the seat and the keymap are ready (EFL round-trips without a bound,
+    /// as flutter-tizen relies on). The names it refused (a keysym the set's keymap lacks) are logged in one line.
+    /// HOST THREAD.
+    fn grab_media_keys(&self) {
+        if !loaded("ecore_wl2_keygrab", ecore_wl2_keygrab::load(None)) {
+            return;
+        }
+        let mut refused = Vec::new();
+        for name in crate::keys::grabbed() {
+            let key = CString::new(name).unwrap_or_default();
+            // SAFETY: a live window, the live table, and a string that outlives the call.
+            if unsafe { ecore_wl2_window_keygrab_set(self.window, key.as_ptr(), 0, 0, 0, KEYGRAB_TOPMOST) } == 0 {
+                refused.push(name);
+            }
+        }
+        log(&format!("ecore: media keys grabbed TOPMOST; refused {refused:?}"));
     }
 
     /// The embedder's `DestroyWindow()`: the handlers, the EGL window, the window, the display, Ecore.
@@ -439,6 +476,7 @@ impl Window {
         self.initialised = false;
         // The keyboard's context goes before the window it types into.
         crate::ime::release();
+
         // SAFETY: handles made by `create`, each cleared after use; the tables were live to make them.
         unsafe {
             for handler in self.handlers.drain(..) {

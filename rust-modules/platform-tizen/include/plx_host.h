@@ -145,12 +145,25 @@
  *     the host's current one is refused with PLX_HOST_PLAYER_E_STALE, and so is every PLAY, PAUSE or SEEK for an epoch whose CLOSE the
  *     host has accepted: the close retires the epoch at the door, before its PLAYER_CLOSED is posted (a second CLOSE of it is still
  *     accepted and still answers one PLAYER_CLOSED, which the library drops as stale).
+ *     _AUDIO_TRACK (arg0 = the native audio index, arg1 = the library's command id, echoed in PLAYER_TRACK) selects that audio track
+ *     (player_select_track(player, PLAYER_STREAM_TYPE_AUDIO, index)). The native call is allowed only once the player is prepared, so
+ *     one asked before PREPARED is held and applied before PREPARED is posted (the newest wins, the older command ids are folded into it).
+ *     EVERY command id gets ONE PLAYER_TRACK before PLAYER_CLOSED: b = the index now selected, or -1 when it was not (the index is not
+ *     below player_get_track_count, the native call refused it, or the epoch ended or never prepared first). A refusal is not a
+ *     PLAYER_ERROR: the player keeps playing the track it had. An index that is already the current track is answered without a call.
+ *     The native index is the player's own order, which need not be the server's, so the library chooses it by the track's language:
+ *     before PREPARED the host posts ONE PLAYER_AUDIO_LANGUAGE per native audio track (index 0 up, at most 32, from a single read of
+ *     player_get_track_count and player_get_track_language_code), and the library asks only for the index whose language is the
+ *     selected stream's.
+ *     The verb and its event came with no change to the table or the event layout, so PLX_HOST_ABI_VERSION stays 2: the host and the
+ *     library ship in one package, and a host without the verb answers it with PLX_HOST_PLAYER_E_ARGS, which the library takes as a refusal.
  *   - Events: PlxHostEvent grows (size >= PLX_HOST_EVENT_V2_SIZE) by epoch and two i64 payload words a, b. The
  *     kinds, with their payloads:
  *       PLAYER_PREPARED(a = duration ms)  PLAYER_STARTED  PLAYER_PAUSED  PLAYER_POSITION(a = ms)
  *       PLAYER_SEEK_DONE(a = command id, b = ms, or -1 refused, or -2 expired)  PLAYER_BUFFERING(a = percent)  PLAYER_VIDEO_SIZE(a = w, b = h)
  *       PLAYER_COMPLETED (the player's completed callback, as it fired)  PLAYER_ERROR(a = the player's native error code, or PLX_HOST_PLAYER_FAIL_BASE + n)  PLAYER_INTERRUPTED(a = native code)
- *       PLAYER_CLOSED  PLAYER_STALL (a position read has not returned for several seconds)
+ *       PLAYER_CLOSED  PLAYER_STALL (a position read has not returned for several seconds)  PLAYER_TRACK(a = command id, b = index, or -1)
+ *       PLAYER_AUDIO_LANGUAGE(a = native audio index, b = its language code's ASCII bytes, the first character in the lowest byte; 0 = no code)
  *     The library queues them on a queue of its own (not the input queue), lossless for every kind but
  *     PLAYER_POSITION and PLAYER_BUFFERING, which keep only the latest per epoch. Position is polled on the HOST
  *     side (about every 250 ms while playing, off the request queue) and posted: there is no synchronous
@@ -227,12 +240,16 @@ extern "C" {
 #define PLX_HOST_EVENT_PLAYER_INTERRUPTED 25 /* a = native code: the system took the player */
 #define PLX_HOST_EVENT_PLAYER_CLOSED 26      /* the player of this epoch is released */
 #define PLX_HOST_EVENT_PLAYER_STALL 27       /* a position read has not returned for several seconds */
+#define PLX_HOST_EVENT_PLAYER_TRACK 28       /* a = command id, b = native audio index selected; -1 refused (see player_verb) */
+#define PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE 29 /* a = native audio index, b = language code bytes, first char lowest; 0 unknown */
+#define PLX_HOST_AUDIO_LANGUAGE_REPORTS 32      /* the most PLAYER_AUDIO_LANGUAGE events the host posts at one PREPARED */
 
 /* player_verb's verb */
 #define PLX_HOST_PLAYER_VERB_PLAY 1
 #define PLX_HOST_PLAYER_VERB_PAUSE 2
 #define PLX_HOST_PLAYER_VERB_SEEK 3  /* arg0 = target ms, arg1 = command id */
 #define PLX_HOST_PLAYER_VERB_CLOSE 4
+#define PLX_HOST_PLAYER_VERB_AUDIO_TRACK 5 /* arg0 = native audio index, arg1 = command id */
 
 typedef void (*PlxHostTask)(void *arg);
 typedef void (*PlxOnStopped)(int32_t code, int32_t clean);

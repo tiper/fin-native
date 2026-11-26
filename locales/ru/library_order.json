@@ -1,0 +1,17 @@
+{
+  "library_order.title": "Порядок медиатек",
+  "library_order.value_server": "Как на сервере",
+  "library_order.value_first": "Первая: {title}",
+  "library_order.row_detail": "Выберите порядок избранных медиатек на экране «Главная» и в шапке «Медиатека».",
+  "library_order.reset": "Сбросить порядок",
+  "library_order.state_idle": "Нажмите OK, чтобы переместить «{title}» вверх или вниз. На экране «Главная» и в шапке раздела «{kind}» избранные медиатеки идут в этом порядке.",
+  "library_order.state_reset": "Возвращает избранные медиатеки к порядку, в котором их перечисляют ваши серверы.",
+  "library_order.state_moving": "Перемещение: «{title}». Вверх и Вниз меняют положение, OK фиксирует его, Назад отменяет.",
+  "library_order.state_unnamed": "«{title}» пока нельзя переместить: её сервер ещё не завершил подключение.",
+  "library_order.state_dropped": "«{title}» теперь {home} на экране «Главная», а в шапке раздела «{kind}» — {header}.",
+  "library_order.state_confirm": "Нажмите OK ещё раз, чтобы вернуть избранные медиатеки к порядку ваших серверов. Любая другая кнопка сохранит ваш порядок.",
+  "library_order.state_reset_done": "Избранные медиатеки снова идут в том порядке, в котором их перечисляют ваши серверы.",
+  "library_order.state_unsaved": "Не удалось сохранить порядок; он действует до перезапуска PlxNative.",
+  "library_order.preview_caption": "{kind} · Шапка медиатеки",
+  "library_order.preview_more": "Медиатеки, которые не помещаются, скрыты за …."
+}

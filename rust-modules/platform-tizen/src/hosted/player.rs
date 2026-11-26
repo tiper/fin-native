@@ -16,10 +16,21 @@ use crate::host_abi::{self, PlayerEvent, PlayerKind};
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-/// How many player events wait for the loop thread. A player makes a few events a second (positions and
-/// buffering are coalesced to one each), so the bound is only reached when the loop is not draining; a lossless
-/// event that does not fit is an overflow the driver must treat as a fault.
+/// How many player events wait for the loop thread. A playing player makes a few events a second (positions and
+/// buffering are coalesced to one each); its one burst is at PREPARED, when the host posts every native audio track's
+/// language ([`host_abi::AUDIO_LANGUAGE_REPORTS`] at most) and then PREPARED, VIDEO_SIZE and the answers held for it
+/// ([`PREPARED_BURST_EVENTS`]) before the loop has drained anything. The bound holds that burst with room to spare
+/// (asserted below), so it is only reached when the loop is not draining; a lossless event that does not fit is an
+/// overflow the driver must treat as a fault.
 const PLAYER_QUEUE_LIMIT: usize = 64;
+
+/// The events other than the languages the host can post in its PREPARED burst: a held track's and a held seek's
+/// answers, PREPARED, VIDEO_SIZE, STARTED (a play held for PREPARED), and one coalesced BUFFERING and POSITION, with
+/// room for an answer folded from more than one held command.
+const PREPARED_BURST_EVENTS: usize = 12;
+
+const _: () = assert!(host_abi::AUDIO_LANGUAGE_REPORTS + PREPARED_BURST_EVENTS < PLAYER_QUEUE_LIMIT,
+    "the PREPARED burst must fit the player queue");
 
 /// How many epochs are tracked as live at once. The driver opens one at a time and waits for its close; the
 /// bound only keeps a host that never reports `PLAYER_CLOSED` from growing the list.
@@ -193,6 +204,26 @@ mod tests {
                 (PlayerKind::SeekDone, 5)
             ]
         );
+    }
+
+    /// The PREPARED burst fits: the host posts every native audio track's language (up to the cap) and then PREPARED,
+    /// VIDEO_SIZE and the answers held for PREPARED in one go, before the loop drains anything (review round 2 of #1566).
+    #[test]
+    fn the_prepared_burst_fits_the_queue() {
+        let link = PlayerLink::new();
+        link.opened(1);
+        for index in 0..host_abi::AUDIO_LANGUAGE_REPORTS {
+            assert_eq!(link.accept(ev(1, PlayerKind::AudioLanguage, index as i64)), Ok(()));
+        }
+        let others = [PlayerKind::Track, PlayerKind::SeekDone, PlayerKind::Prepared, PlayerKind::VideoSize,
+            PlayerKind::Started, PlayerKind::Buffering, PlayerKind::Position];
+        assert!(others.len() <= PREPARED_BURST_EVENTS);
+        for kind in others {
+            assert_eq!(link.accept(ev(1, kind, 0)), Ok(()), "{kind:?}");
+        }
+        let mut out = Vec::new();
+        assert!(!link.drain(&mut out).overflowed);
+        assert_eq!(out.len(), host_abi::AUDIO_LANGUAGE_REPORTS + others.len());
     }
 
     /// A lossless event that does not fit is an overflow the drain reports (never a silent drop); a full

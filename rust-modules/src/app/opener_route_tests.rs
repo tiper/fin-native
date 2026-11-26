@@ -212,13 +212,25 @@ fn a_detail_related_card_opens_its_menu_at_the_drawn_rect_and_other_shelves_open
 fn pdf_proposal_more_opens_the_on_deck_episode_even_outside_the_loaded_season() {
     let _guard = plx_base::testlock::serial();
     plx_plex::plex::reset_servers_for_test();
+    // Production latches the Dolby Vision diagnostics before the first frame; the page's per-frame
+    // version rule (`taken_version`) reads them.
+    plx_data::metadata::prewarm_dv_latches();
     let sid = plx_plex::plex::register_for_test("hero-more", "127.0.0.1", 9, "synthetic", "fixture");
     let mut d = Dispatcher::<AppHost>::new();
     let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
     let mut rig = owner.bridge();
+    // The hero's actions: the watch toggle, Play from Start (the episode is underway), and the two a
+    // show page offers for its on-deck episode, Select Version and Audio & Subtitles. Four are more
+    // than the round buttons hold (`hero::split_actions`), so the … opens a menu with the last two.
+    let version = |id: i64| plx_data::pms::MediaVersion { id: plx_plex::plex::MediaId(id), ..Default::default() };
     plx_data::metadata::set_current_for_test(rig.stores.metadata.state_mut(), Some(plx_data::metadata::Detail {
         sid, rk: "show".into(), kind: "show".into(), is_show: true,
-        on_deck: Some(plx_data::metadata::Episode { rk: "on-deck".into(), resume_ms: 60_000, dur_ms: 120_000, ..Default::default() }),
+        on_deck: Some(plx_data::metadata::Episode {
+            rk: "on-deck".into(), resume_ms: 60_000, dur_ms: 120_000,
+            part: "/library/parts/1/1/file.mkv".into(), versions: vec![version(1), version(2)], ..Default::default()
+        }),
+        audio: vec![plx_data::metadata::Stream { id: 11, ..Default::default() }],
+        episode_streams: plx_data::metadata::EpisodeStreams::Loaded("on-deck".into()),
         ..Default::default()
     }));
     d.request(MachineId::Nav, NavOp::Root(AppArg::Content(ContentArg::Detail { sid, rk: "show".into() })));
@@ -230,7 +242,11 @@ fn pdf_proposal_more_opens_the_on_deck_episode_even_outside_the_loaded_season() 
         rig.content_menu_arg(&d, entry, &ret).filter(|arg| arg.rk == "on-deck")
     }).expect("More opens the on-deck episode's menu");
     assert_eq!(arg.rk, "on-deck");
-    assert!(matches!(arg.kind, ItemMenuKind::Episode { mark: plx_ui::widgets::PosterMark::InProgress, .. }));
+    assert!(
+        matches!(&arg.kind, ItemMenuKind::HeroOverflow { rows, .. }
+            if rows[..] == [plx_screens::registry::HeroCtl::Version, plx_screens::registry::HeroCtl::AudioSubtitles]),
+        "the … holds what the round buttons had no room for",
+    );
     assert!(!arg.loaded_episode, "the on-deck item uses the addressed fetch path, independent of the season window");
     plx_plex::plex::reset_servers_for_test();
 }

@@ -552,6 +552,7 @@ pub fn failure_action_word(a: plx_media::player::FailureAction) -> &'static str 
         A::PlayAutomatically => "play_automatically",
         A::TryAgain => "try_again",
         A::ChangeQuality => "change_quality",
+        A::ChangeTracks => "change_tracks",
         A::Repair => "repair",
         A::Back => "back",
     }
@@ -566,6 +567,7 @@ pub fn failure_action_label(a: plx_media::player::FailureAction) -> &'static std
         A::PlayAutomatically => msg::widgets_failure_play_auto_c(),
         A::TryAgain => msg::browse_action_retry_c(),
         A::ChangeQuality => msg::widgets_failure_change_quality_c(),
+        A::ChangeTracks => msg::settings_audio_title_c(),
         A::Repair => msg::widgets_repair_action_c(),
         A::Back => msg::settings_back_c(),
     }

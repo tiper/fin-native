@@ -60,6 +60,26 @@ pub const EVENT_PLAYER_ERROR: u32 = 24;
 pub const EVENT_PLAYER_INTERRUPTED: u32 = 25;
 pub const EVENT_PLAYER_CLOSED: u32 = 26;
 pub const EVENT_PLAYER_STALL: u32 = 27;
+/// `PLX_HOST_EVENT_PLAYER_TRACK`: the answer to a `VERB_AUDIO_TRACK` (a = command id, b = the native index selected, or -1).
+pub const EVENT_PLAYER_TRACK: u32 = 28;
+/// `PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE`: one native audio track's language, posted before PREPARED (a = the native index,
+/// b = the code's ASCII bytes, first character in the lowest byte, 0 when the player has none; [`language_of_word`]).
+pub const EVENT_PLAYER_AUDIO_LANGUAGE: u32 = 29;
+
+/// `PLX_HOST_AUDIO_LANGUAGE_REPORTS`: the most native audio tracks whose `PLAYER_AUDIO_LANGUAGE` the host posts at one
+/// PREPARED; a report past it is dropped by the driver, so that track's language reads as unknown.
+pub const AUDIO_LANGUAGE_REPORTS: usize = 32;
+
+/// The language code a `PLAYER_AUDIO_LANGUAGE` word carries: two or three ASCII letters, first character in the lowest
+/// byte and zero-padded. Anything else (no code, a tag with a region, a byte that is not a letter) is `None`, which the
+/// driver treats as a track whose language is unknown.
+pub fn language_of_word(word: i64) -> Option<String> {
+    let bytes = word.to_le_bytes();
+    let len = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+    let (code, pad) = bytes.split_at(len);
+    (code.len() >= 2 && code.len() <= 3 && code.iter().all(u8::is_ascii_alphabetic) && pad.iter().all(|b| *b == 0))
+        .then(|| code.iter().map(|b| char::from(*b)).collect())
+}
 
 /// `PLX_HOST_PLAYER_FAIL_BASE`: a `PLAYER_ERROR` payload at or above this is a failure of the host, not a native code.
 #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) reads it
@@ -74,6 +94,10 @@ pub const VERB_PAUSE: u32 = 2;
 pub const VERB_SEEK: u32 = 3;
 #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
 pub const VERB_CLOSE: u32 = 4;
+/// `PLX_HOST_PLAYER_VERB_AUDIO_TRACK`: select the audio track at native index arg0; arg1 is the command id, echoed in
+/// `PLAYER_TRACK`.
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
+pub const VERB_AUDIO_TRACK: u32 = 5;
 
 /// What `on_stopped` is: the host's report sink, called exactly once with the process status and whether
 /// the host may release its callbacks and surfaces (`clean` 1) or releases nothing (`clean` 0).
@@ -250,6 +274,8 @@ pub enum PlayerKind {
     Interrupted,
     Closed,
     Stall,
+    Track,
+    AudioLanguage,
 }
 
 impl PlayerKind {
@@ -267,6 +293,8 @@ impl PlayerKind {
             EVENT_PLAYER_INTERRUPTED => PlayerKind::Interrupted,
             EVENT_PLAYER_CLOSED => PlayerKind::Closed,
             EVENT_PLAYER_STALL => PlayerKind::Stall,
+            EVENT_PLAYER_TRACK => PlayerKind::Track,
+            EVENT_PLAYER_AUDIO_LANGUAGE => PlayerKind::AudioLanguage,
             _ => return None,
         })
     }
@@ -403,11 +431,15 @@ mod tests {
             ("PLX_HOST_EVENT_PLAYER_INTERRUPTED", i64::from(EVENT_PLAYER_INTERRUPTED)),
             ("PLX_HOST_EVENT_PLAYER_CLOSED", i64::from(EVENT_PLAYER_CLOSED)),
             ("PLX_HOST_EVENT_PLAYER_STALL", i64::from(EVENT_PLAYER_STALL)),
+            ("PLX_HOST_EVENT_PLAYER_TRACK", i64::from(EVENT_PLAYER_TRACK)),
+            ("PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE", i64::from(EVENT_PLAYER_AUDIO_LANGUAGE)),
+            ("PLX_HOST_AUDIO_LANGUAGE_REPORTS", AUDIO_LANGUAGE_REPORTS as i64),
             ("PLX_HOST_PLAYER_FAIL_BASE", PLAYER_FAIL_BASE),
             ("PLX_HOST_PLAYER_VERB_PLAY", i64::from(VERB_PLAY)),
             ("PLX_HOST_PLAYER_VERB_PAUSE", i64::from(VERB_PAUSE)),
             ("PLX_HOST_PLAYER_VERB_SEEK", i64::from(VERB_SEEK)),
             ("PLX_HOST_PLAYER_VERB_CLOSE", i64::from(VERB_CLOSE)),
+            ("PLX_HOST_PLAYER_VERB_AUDIO_TRACK", i64::from(VERB_AUDIO_TRACK)),
         ] {
             assert_eq!(define(name).parse::<i64>().unwrap(), value, "{name}");
         }
@@ -551,6 +583,18 @@ mod tests {
     /// A player event is decoded with its epoch and payload words; a short `size` (a version-1 sized event
     /// carrying a player kind) is refused, and a version-1 pause is still accepted at its own size.
     #[test]
+    fn the_language_word_is_the_codes_ascii_bytes_and_anything_else_is_none() {
+        let word = |s: &str| { let mut b = [0u8; 8]; b[..s.len()].copy_from_slice(s.as_bytes()); i64::from_le_bytes(b) };
+        assert_eq!(language_of_word(word("deu")), Some("deu".to_owned()));
+        assert_eq!(language_of_word(word("en")), Some("en".to_owned()));
+        assert_eq!(language_of_word(0x0075_6564), Some("deu".to_owned()), "first character in the lowest byte");
+        assert_eq!(language_of_word(0), None, "no code");
+        assert_eq!(language_of_word(word("e1")), None, "not letters");
+        assert_eq!(language_of_word(word("de-DE")), None, "not a bare code");
+        assert_eq!(language_of_word(word("abcdefgh")), None, "longer than a language code");
+    }
+
+    #[test]
     fn a_player_event_is_decoded_and_a_short_one_is_refused() {
         let ev = |size, kind, epoch, a, b| PlxHostEvent { size, kind, epoch, reserved: 0, a, b };
         assert_eq!(
@@ -564,7 +608,7 @@ mod tests {
         );
         assert_eq!(unsafe { read_event(&ev(EVENT_V1_SIZE, EVENT_PLAYER_COMPLETED, 3, 0, 0)) }, Err(E_ARGS), "short");
         assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE - 1, EVENT_PLAYER_POSITION, 3, 9, 0)) }, Err(E_ARGS), "short by one byte");
-        assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE, 28, 3, 0, 0)) }, Err(E_ARGS), "an unknown kind");
+        assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE, EVENT_PLAYER_AUDIO_LANGUAGE + 1, 3, 0, 0)) }, Err(E_ARGS), "an unknown kind");
         // A v1 host's pause is 8 bytes in memory: only 8 are readable and only 8 are read.
         let pause = [EVENT_V1_SIZE, EVENT_PAUSE];
         assert_eq!(unsafe { read_event(pause.as_ptr().cast()) }, Ok(HostEvent::Pause));

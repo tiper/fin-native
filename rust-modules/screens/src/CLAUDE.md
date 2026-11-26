@@ -206,9 +206,9 @@ smallest worked example.
   `SectionSpec`s, in order), `fallback` (the order focus falls back through when a section empties)
   and `cards` (a section's `CardSource`, `None` while it has no content). Optional hooks: `pending`,
   `recover`, `card_has_menu`, `elem_of`, `plain_len`, `plain_elem`, `plain_step`, `focus_rect`,
-  `element_rect`, `seat_override`, `reveal_margin`, `shelf_foot`, `wide_extent`, `plain_group`,
+  `element_rect`, `seat_override`, `reveal_margin`, `shelf_foot`, `shelf_foot_open`, `reveal_foot`, `wide_extent`, `plain_group`,
   `reveal_with`, `draw_heading`, `custom_draw`. Stacked shelves are adjacent sections and the air
-  under one is its `shelf_foot` (Search, Person), never a `Custom` gap section between two: a shelf's
+  under one is its `shelf_foot` (Search, Person, Live TV), never a `Custom` gap section between two: a shelf's
   caption stops short of the next shelf's lifted heading, which `Stack` reads off the section that follows.
 - Hold the `Stack` in the screen, feed it every event with `stack.on(&page, ev, cx, fx)` and draw
   through `stack.view(&page)`. Get `Focusable` from `plx_ui::focusable_via_view!`
@@ -237,7 +237,7 @@ Captures are the check — see the `ui-sim` and `which-tier` skills, and `../../
 ## Under posters settings page (library redesign)
 
 `SettingsPage::UnderPosters` (ScreenId 113, `settings_under_posters.rs`) is pushed from Settings >
-Libraries, which now has two rows (Favorite libraries, Under posters). The page has five rows (Title, Movie details ›, TV show details ›, Sort value, Reset), with Reset disabled when all values are at their defaults. Each details row carries its ticked parts on the right (their names joined with " · " in the line's fixed order, "Nothing", or a count such as "4 details" once the joined names pass `NAMES_BUDGET_CHARS`). The page draws the shared picture slot (`RootPicture`, also drawn on the Settings root and on both pickers): one movie poster on the left and one show poster on the right (250 x 375 tiles, 410 apart), each demonstrating the stored selections and each the first poster of its kind (with a poster path) in the WIDEST cache the Browse store holds (`DirectoryView::kind_poster`: the current library's listing and shelves, then every other library's retained rows and shelves), so a last-opened Movies library still shows a real show (a kind the cache has none of is asked for as its library's hubs by `PosterAsk`, from this page and from the Settings root while its Under posters row has focus, until the poster is there or `DirectoryView::kind_shelves_published`); a kind with no art anywhere draws `widgets::absent_card` (the never-sentinel absence ground, uncounted), never `Art::Poster(None)`, which is a skeleton the frame-dump harness refuses; each tile wears its KIND over it ("MOVIE", "TV SHOW": the catalog's `browse.kind.movie` / `browse.kind.tv_show` drawn by `plx_ui::table::draw_caps_label_aligned`, the section header's caps, centred over the tile in `TEXT_READING`), a bold title line above the details line when Title is On, and details in the 380 px preview column, wrapping to two lines if needed. The picker and the picture both use an example for a selected fact the poster lacks. A focused library poster still uses the focused-title marquee (`card_row.rs`); **the column of the kind that is not being chosen is dimmed to the design's `dim`** (`plx_ui::follow_copy::DIM`, 0.45, from `Sv2s-P2-Details`: on the page the kind of the OTHER details row, in a picker the other kind, both at 1 on the root and on Title / Sort value / Reset), caption, tile and lines together as one group on the shared appear spring (`ColumnDims`); it is not the disabled control state. No frame, no clipping and no caption such as "Sorted by Year" or "The library you last opened" (those locale keys were deleted). Each details row pushes `SettingsPage::UnderPostersDetails(PosterKind)` (ScreenId 114, `DetailsPage` in the same file, shared by both kinds), the picker of that kind's details parts: one section, "Show under posters", with a row per part (a movie: Year, Length, Genre, Video quality, Age rating, Score; a show: Year, Seasons, Genre, Age rating, Score), a check mark on the ticked ones and a sample of the part on the right. OK ticks or unticks the row and STAYS on the page (the write goes through `PreferenceCmd::Choose`); at most four are ticked (`DetailParts::MAX`) and with four ticked the unticked rows are DISABLED through the shared `FormSection::disabled` (focusable, inert to OK), their sentence beside the table saying why. The parts are `plx_base::detail_parts::{DetailPart, DetailParts}` (fixed line order, kept to what a kind offers by `for_movies` / `for_shows`); the stored setting keeps the retired single-choice ladder only as the migration source and as the downgrade key (`UnderPostersLadder`). The caption band stays shut only when Title is Off and BOTH part sets are empty (`CaptionPolicy::show_details` is the show's own set). `settings::caption_policy_of`
+Libraries (`root_form`'s `libraries` section declares its rows). The page has five rows (Title, Movie details ›, TV show details ›, Sort value, Reset), with Reset disabled when all values are at their defaults. Each details row carries its ticked parts on the right (their names joined with " · " in the line's fixed order, "Nothing", or a count such as "4 details" once the joined names pass `NAMES_BUDGET_CHARS`). The page draws the shared picture slot (`RootPicture`, also drawn on the Settings root and on both pickers): one movie poster on the left and one show poster on the right (250 x 375 tiles, 410 apart), each demonstrating the stored selections and each the first poster of its kind (with a poster path) in the WIDEST cache the Browse store holds (`DirectoryView::kind_poster`: the current library's listing and shelves, then every other library's retained rows and shelves), so a last-opened Movies library still shows a real show (a kind the cache has none of is asked for as its library's hubs by `PosterAsk`, from this page and from the Settings root while its Under posters row has focus, until the poster is there or `DirectoryView::kind_shelves_published`); a kind with no art anywhere draws `widgets::absent_card` (the never-sentinel absence ground, uncounted), never `Art::Poster(None)`, which is a skeleton the frame-dump harness refuses; each tile wears its KIND over it ("MOVIE", "TV SHOW": the catalog's `browse.kind.movie` / `browse.kind.tv_show` drawn by `plx_ui::table::draw_caps_label_aligned`, the section header's caps, centred over the tile in `TEXT_READING`), a bold title line above the details line when Title is On, and details in the 380 px preview column, wrapping to two lines if needed. The picker and the picture both use an example for a selected fact the poster lacks. A focused library poster still uses the focused-title marquee (`card_row.rs`); **the column of the kind that is not being chosen is dimmed to the design's `dim`** (`plx_ui::follow_copy::DIM`, 0.45, from `Sv2s-P2-Details`: on the page the kind of the OTHER details row, in a picker the other kind, both at 1 on the root and on Title / Sort value / Reset), caption, tile and lines together as one group on the shared appear spring (`ColumnDims`); it is not the disabled control state. No frame, no clipping and no caption such as "Sorted by Year" or "The library you last opened" (those locale keys were deleted). Each details row pushes `SettingsPage::UnderPostersDetails(PosterKind)` (ScreenId 114, `DetailsPage` in the same file, shared by both kinds), the picker of that kind's details parts: one section, "Show under posters", with a row per part (a movie: Year, Length, Genre, Video quality, Age rating, Score; a show: Year, Seasons, Genre, Age rating, Score), a check mark on the ticked ones and a sample of the part on the right. OK ticks or unticks the row and STAYS on the page (the write goes through `PreferenceCmd::Choose`); at most four are ticked (`DetailParts::MAX`) and with four ticked the unticked rows are DISABLED through the shared `FormSection::disabled` (focusable, inert to OK), their sentence beside the table saying why. The parts are `plx_base::detail_parts::{DetailPart, DetailParts}` (fixed line order, kept to what a kind offers by `for_movies` / `for_shows`); the stored setting keeps the retired single-choice ladder only as the migration source and as the downgrade key (`UnderPostersLadder`). The caption band stays shut only when Title is Off and BOTH part sets are empty (`CaptionPolicy::show_details` is the show's own set). `settings::caption_policy_of`
 maps the stored `UnderPosters` to the ui `CaptionPolicy`. **EVERY poster tile reads that one policy through
 `registry::captions`** (`policy_for(&ScreenInputs)` from the host's effective frame capture; `TEST_UNDER_POSTERS` is a fixture input only, `label()` the one builder of a focused
 poster's `[title, details]`, `shelf_label()` for Home's and Recommended's shelves): the Library grid, the Collections page, the Watchlist,
@@ -351,3 +351,62 @@ plan no longer holds is seated on the first band with films (`RailPart::reconcil
   grid's card is in, none when the card is among the items the sort leaves without a value, which lie before the first
   band or after the last) `TEXT_PRIMARY`, and the focused band wears the white focus pill (38 high, built with
   `widgets::focus_pill`, filled as the letters' disc is). There is no position bar or marker.
+
+## The live player: banner, debounced zap, BACK to the channel left (Live TV PR4)
+
+A live channel has **no transport**. `PlayerScreen::hud_drawn` and `hud_up` are `false` on a live session, so the
+scrubber, the control row, Info, Chapters and the track menus are not drawn and cannot be reached; what is drawn is the
+art ground and the banner (`player/live.rs`), and what a key does is `PlayerScreen::live_key`, ahead of the VOD ladder:
+Up, Down, CH+ and CH- step the zap; Left, Right and OK only raise the banner; BACK and STOP leave in ONE press at every phase
+(the debounce, buffering, playing: the VOD transport's hide-first BACK never sees a live channel), and drop a zap still pending so no tune follows the exit; the digits 0-9 open number
+entry (section below); Play/Pause and EXIT fall through to the ladder as before. A failure read-out still owns the frame
+first, as on any playback. VOD input is untouched: every VOD player test passes unmodified.
+
+The decisions are three named phases in `player/zap.rs`, pure, stepped from keys, the Tick and the app's addressed words
+(`Live::press`, `reveal`, `started`, `refused`, `leave`, `cancel_zap`, `jump`, `tick`; no clock read, no session read): **`Zap`** (`Idle`,
+`Pending` while presses are collected, `Tuning` after the ask until the session shows the target's first frame) with a
+600 ms debounce (`DEBOUNCE_MS`) and ONE `PlayerReq::Tune` per run of presses, named by the channel's identity. Its events
+are `Step`, `Jump`, `Tick`, `Session`, `Refused` and `Cancel`, all in the table at the top of `zap.rs`: a window that closes on
+the channel already playing (Up then Down, or a full lap) ends in `Idle` and asks for nothing; a tune the app took no
+request for ends the zap on **`AppMsg::LiveTuneRefused`** (sent by `app::playback::tune_live_channel`'s refusal arm), never
+on an inference from timing; BACK / STOP are `Cancel`. **`Art`** is driven by one `ArtEvent` a frame (`Zapping`, `NoFrame`,
+`Frame`): `Waiting` before anything is known, `Covering` from the first press and while the stream has shown no frame yet,
+`Fading` once one exists, then `Settled`: a later stall or rebuffer never brings the art back, only a zap does. It is drawn by
+`plx_ui::art_ground` (the target programme's art over the video plane's hole, scaled 1.08 at 0.85 brightness: one textured quad of a blurred copy made once per
+image (`art_fit::BackdropSpec`, requested with the art, `tex::resolve_art_on`), never the live glass, so it is as soft over a
+bound video plane as anywhere; art with a clear ground stands on the app's flat ground: never black). **`Banner`** (`Entering`,
+`Shown { until }`) is raised on every stream the app starts (`AppMsg::PlayerStart`, through `Live::started`), on every press, and on
+Left, Right and OK; `Entering` is the page's first state, before it has a clock (the `PlayerStart` of the first mount is
+sent before the page exists), and its first frame stamps the deadline. It is held while a zap is in flight or no picture
+is there, fading .35 s after four seconds: `appkit::player_hud::live::SHOW_MS` / `FADE_MS`, declared values of the banner, not
+`LINGER_MS`. The lineup the zap steps through is `PlayerLike::lineup` (a provided method; the app answers it with the store's
+view) and the banner's placement is the HUD package's `layout.live` (`Compiled::live`, format 1.2). The page's one
+live predicate is `plx_media::route::is_live(ps)`; `HudModel` carries no live flag. The tests are `player/live_tests.rs`,
+`zap.rs`'s own and, through the real loop, `src/app/livetv_routing_tests.rs`.
+
+**BACK lands on the channel left.** `app::playback::exit_player` names the channel the session was tuned to before it
+stops it and tells the page the player was launched from (`bridge::seat_live_channel`, `AppMsg::LiveTvSeat`, a covered
+page still receives an addressed command); `LiveTvScreen` keeps it and, on `Enter::Restored`, seats that channel's card:
+its Recent tile, else its On now poster, else its Channels tile (`left_elem`). OK on that card tunes it again.
+
+## Number entry (Live TV PR5)
+
+A digit typed on the What's on page or over the live player opens **one registered surface**, `AppArg::ChannelEntry`
+(`channel_entry_panel.rs`, canon tag 16, page id 33, namespace `channel_entry`): a top-right panel on the safe frame
+(`ui::popover::corner_panel`: right 96, top 54, 560 wide) with the typed number, a window of five rows on `TableView`'s
+lineup face (`TableView::lineup`, `Row::lead`: the number in its own column, the station beside it) and "+N more" under
+the window. **What it decides is one pure machine**, `channel_entry::NumberEntry` (`Fresh`, `Typing`, `Done`; events
+`Digit`, `Moved`, `Touch`, `Ok`, `Back`, `Tick`; one effect, `Seat`, `Tune` or `Leave`; time passed in): the digits
+narrow the lineup by PREFIX of each number's DIGITS (`6.1` is `61`: there is no dot key; the row shows `6.1`); a prefix that fits exactly ONE channel tunes at once, anything else only seats the highlight
+(the exact match, else the first that is not on screen) and waits `IDLE_MS` (2.5 s) after the last key, which restarts on
+every key; OK tunes the highlight, BACK closes with no tune; the channel already on screen is tagged "Playing" and never
+retuned. The panel reports a choice as `AppMsg::LiveChannelPicked` to the instance named on its argument and starts
+nothing itself, so a pick takes the host's own tune path: the page's `ContentReq::Play`, and over the player
+`ZapEvent::Jump` (`Live::jump`), which makes the ONE `PlayerReq::Tune` on the next frame with the banner and art
+following, exactly as a zap. The page opens it as `ContentPanel::ChannelEntry` (`Style::Compact`); the player asks
+`PlayerReq::OpenChannelEntry`, presented as `Style::PlayerPanel` (`bridge::open_channel_entry`), which leaves the host
+live so the video plane keeps presenting under it, and the digit drops a zap still pending (`Live::cancel_zap`).
+It is one surface however many keys ask for it: a request for a panel that is mounted is refused (the key reaches it as
+input), and one for a panel whose `Present` is still parked for this frame's commit is folded into the parked argument
+as one more opening digit (`bridge::present_once`, `Dispatcher::parked_present_mut`, `AppArg::absorb`). A panel dismissed
+from outside (a press that misses it) hears `Closing` and stops acting, so its timer cannot tune afterwards.

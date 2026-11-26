@@ -9,11 +9,11 @@ thread_local! {
 
 struct ArtSpy;
 impl Source for ArtSpy {
-    fn probe(&self, _: u16, path: &str, _: i32, _: i32, _: bool) -> Option<PosterKey> {
+    fn probe(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<plx_ui::art_fit::BackdropSpec>) -> Option<PosterKey> {
         ART_REQUESTS.with(|calls| calls.borrow_mut().0.push(path.into()));
         None
     }
-    fn warm(&self, _: u16, path: &str, _: i32, _: i32, _: bool) -> Warm {
+    fn warm(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<plx_ui::art_fit::BackdropSpec>) -> Warm {
         ART_REQUESTS.with(|calls| calls.borrow_mut().1.push(path.into()));
         Warm::Claimed
     }

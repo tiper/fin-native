@@ -893,7 +893,7 @@ fn server_stop_is_visible_while_dashboard_cleanup_waits_and_retires_the_row_once
     assert_eq!(shape.kind, crate::player::FailureKind::ServerStopped);
     assert_eq!(shape.detail, "stopped by the admin");
     assert!(!replacement_sent, "the replacement reporter must send no playing report");
-    assert_eq!(remaining.len(), 2, "only the final stopped and the encoder stop: {remaining:#?}");
+    assert_eq!(remaining.len(), 3, "the final stopped, the encoder stop and the logical close: {remaining:#?}");
     assert!(remaining[0].contains("state=stopped") && !remaining[0].contains("continuing=1"));
     assert!(remaining[0].contains("X-Plex-Session-Identifier=logical-1236-abr-2"));
     assert!(remaining[1].contains("/transcode/universal/stop"));
@@ -1098,8 +1098,8 @@ fn the_final_stop_also_retires_the_last_reported_id_when_it_moved_on() {
     leave_recording_pms_case(&mut ps);
     assert_eq!(
         lines.len(),
-        4,
-        "playing(abr-1), stopped(abr-1), stopped(abr-2), encoder stop: {lines:#?}"
+        5,
+        "playing(abr-1), stopped(abr-1), stopped(abr-2), encoder stop, the logical close: {lines:#?}"
     );
     assert!(
         lines[1].contains("state=stopped")
@@ -1131,7 +1131,7 @@ fn the_final_stop_under_the_reported_id_sends_no_extra_stopped() {
 
     let lines = requests_until_quiet(&rx);
     leave_recording_pms_case(&mut ps);
-    assert_eq!(lines.len(), 3, "playing, the final stopped, the encoder stop: {lines:#?}");
+    assert_eq!(lines.len(), 4, "playing, the final stopped, the encoder stop, the logical close: {lines:#?}");
     assert!(
         lines[1].contains("state=stopped")
             && !lines[1].contains("continuing")
@@ -1161,8 +1161,8 @@ fn the_final_stop_retires_the_last_reported_id_after_the_engine_teardown_ran_fir
     leave_recording_pms_case(&mut ps);
     assert_eq!(
         lines.len(),
-        4,
-        "playing(abr-1), stopped(abr-1), stopped(abr-2), encoder stop: {lines:#?}"
+        5,
+        "playing(abr-1), stopped(abr-1), stopped(abr-2), encoder stop, the logical close: {lines:#?}"
     );
     assert!(
         lines[1].contains("state=stopped")
@@ -1269,8 +1269,8 @@ fn a_tick_in_flight_at_the_stop_is_not_retired_twice_and_leaves_no_record() {
     );
     assert_eq!(
         lines.len(),
-        5,
-        "playing(A), stopped(A), playing(B), the final stopped(B), the encoder stop: {lines:#?}"
+        6,
+        "playing(A), stopped(A), playing(B), the final stopped(B), the encoder stop, the logical close: {lines:#?}"
     );
     assert!(
         lines[3].contains("state=stopped")
@@ -1941,6 +1941,37 @@ fn a_full_stop_retires_the_live_request_but_replacement_keeps_its_descriptor() {
         assert!(matches!(dispatch_refusal_conversion(&mut ps, 0, video), RecoveryDispatch::Refused));
     }
     crate::player::stop_playback(&mut ps, &mut adapter);
+}
+
+/// **Try again plays the pick it was made for, through the real stop**: the viewer's pick on the failure
+/// screen is held, the retry stops the failed playback through `stop_for_replacement` (the one door that
+/// means "stop, same visit", which retains the request and the pick), and the retry's selection is the
+/// pick. A full stop of the same session ends the visit instead.
+#[test]
+fn a_retry_through_the_replacement_stop_carries_the_held_pick() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    let mut ps = PlaybackSession::IDLE;
+    let _guard = fresh_registry(&mut ps);
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    let mut adapter = crate::player::adapter::PlayerAdapter::new(unsafe { plx_base::task::MainThread::assume() });
+    seed_request_for_test(&mut ps, "m1");
+    let pick = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Track(21) };
+    memory::hold_pick_for_retry(&mut ps, &pick);
+    assert!(ps.held_pick.is_some(), "setup: the pick is held");
+
+    assert!(crate::player::stop_for_replacement(&mut ps, &mut adapter));
+    assert!(ps.held_pick.is_some(), "the replacement stop is the same visit: the pick stays held");
+    let held = |sel: Option<HeldSelection>| sel.map(|s| (s.part_id, s.audio_sid, s.sub_sid));
+    assert_eq!(held(current_retry_context(&ps, 0).selection), Some((9001, 11, 21)), "and the retry would carry it");
+
+    let _ = retry_current_play(&mut ps, &mut meta, 0, None, crate::player::report::AttemptOrigin::UserRetry);
+    assert_eq!(held(ps.carried_selection), Some((9001, 11, 21)), "the retry's request carries the pick");
+    assert_eq!(memory::failed_pick(&ps), Some(pick), "and the failure panel still reads it");
+    cancel_playback_request(&mut ps, true);
+
+    // a full stop is the end of the visit
+    crate::player::stop_playback(&mut ps, &mut adapter);
+    assert!(ps.held_pick.is_none(), "a full stop ended the visit");
 }
 
 /// A converted channel that fails is tried again by tuning it again, and starts at the live edge.

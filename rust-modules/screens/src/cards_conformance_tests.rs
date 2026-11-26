@@ -12,6 +12,8 @@ const EXPECTED: &str = include_str!("../../../ci/allow/cards-conformance.txt");
 fn table() -> Vec<(&'static str, Mount)> {
     vec![
         ("livetv", super::livetv::cards_harness::mount as Mount),
+        ("livetv_recent", super::livetv::cards_harness::mount_recent as Mount),
+        ("livetv_channels", super::livetv::cards_harness::mount_channels as Mount),
         ("collection", super::collection::cards_harness::mount as Mount),
         ("person", super::person::cards_harness::mount as Mount),
         ("search", super::search::cards_harness::mount as Mount),
@@ -28,7 +30,7 @@ fn table() -> Vec<(&'static str, Mount)> {
 
 /// In-scope screens whose harness is not built yet; the registry test keeps the two lists whole.
 const PENDING: &[&str] = &[];
-const IN_SCOPE: &[&str] = &["livetv", "collection", "person", "search", "library_grid", "library_shelves", "home", "detail_shelves", "detail_collection", "detail_extras", "detail_cast", "watchlist"];
+const IN_SCOPE: &[&str] = &["livetv", "livetv_recent", "livetv_channels", "collection", "person", "search", "library_grid", "library_shelves", "home", "detail_shelves", "detail_collection", "detail_extras", "detail_cast", "watchlist"];
 
 #[test]
 fn every_in_scope_card_screen_is_in_the_table_or_pending() {
@@ -70,6 +72,8 @@ fn cards_arriving_in_the_tick_of_a_focus_change_keep_the_view_in_place() {
     let _policy = crate::registry::captions::PolicyPin::default_setting();
     let mut bad = Vec::new();
     for (screen, mount) in table() {
+        // The Recent row holds five tiles at most (the handoff's), and this case mounts forty.
+        if screen == "livetv_recent" { continue; }
         let outcome = shifted_under_a_focus_change(mount);
         eprintln!("{screen:18} {outcome:?}");
         let must = ["search", "library_shelves", "library_grid"].contains(&screen);

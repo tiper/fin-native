@@ -16,6 +16,7 @@
 //! | [`geometry`] | the focus GROUPS ([`geometry::GROUP_SCRUB`] ..), [`geometry::HudGeometry`] and [`geometry::RowAnchor`]: what a layout reports back to focus, the pointer, the overscan audit and the stand-ins |
 //! | [`command`] | [`command::HudCommand`], the closed vocabulary of things a control asks the app to do, with its app-owned enabled predicates, and classic's five discs as controls |
 //! | [`classic`] | the transport's primitives and `builtin:classic`'s constants: the draws the renderer calls (scrim, title, playbar, clocks, scrub preview), the three the trailer calls (scrim, title, playbar), the failure read-out, `ROW_ANCHOR`; the tab pills are the renderer's. The arrangement is the compiled package's |
+//! | [`live`] | the live banner (Live TV PR4): its words ([`live::words`]), its paint, its fade, and the `layout.live` it stands on |
 //! | [`loaded`] | a package parsed and compiled once, never in the draw ([`loaded::LoadedHud`]), and the production [`AppLabels`](crate::hud_format::compile::AppLabels) constructor over a passed-in locale |
 //! | [`render`] | the renderer: it draws a [`Compiled`](crate::hud_format::compile::Compiled) package's state through the shared widgets; `builtin:classic` is the embedded package it draws |
 //! | [`travel`] | [`travel::order`]: the order vertical focus travel follows, the order the layout draws |
@@ -28,6 +29,7 @@ pub mod caption_rise;
 pub mod classic;
 pub mod command;
 pub mod geometry;
+pub mod live;
 pub mod loaded;
 pub mod model;
 pub mod motion;

@@ -1139,7 +1139,19 @@ where
         self.request_with_return(from, op, self.return_state());
     }
 
+    /// The argument of a surface whose `Present` is PARKED for this frame's commit and that `which` names. A
+    /// surface mounts at the commit, once a frame, so a second request in the same frame cannot see the first in
+    /// the tree: whoever presents once-only surfaces asks here too, and folds or refuses the second request.
+    pub fn parked_present_mut(&mut self, which: impl Fn(&H::Arg) -> bool) -> Option<&mut H::Arg> {
+        self.parked.iter_mut().find_map(|(item, _)| match &mut item.fx {
+            Fx::Nav(NavOp::Present(arg)) if which(arg) => Some(arg),
+            _ => None,
+        })
+    }
+
     pub fn request_with_return(&mut self, from: MachineId, op: NavOp<H::Arg>, ret: ReturnState<H::Elem, H::Memory>) {
+        // A `ret` handed in from outside was captured by an earlier `return_state()`, which stamped the
+        // entry that held input then (`ret.captured`); the owner now is not a stand-in for it.
         self.parked.push((Stamped {
             from,
             fx: Fx::Nav(op),
@@ -1147,8 +1159,9 @@ where
     }
 
     fn park(&mut self, item: Stamped<H>) {
-        let ret = self.return_state();
-        self.parked.push((item, ret));
+        // The capturing owner travels with the op, stamped on the `ret` itself: where the `ret` lands is
+        // decided at commit, by `ret.captured`.
+        self.parked.push((item, self.return_state()));
     }
 
     /// `Lifecycle(0x103/0x104)`: `Suspend` down the tree at the next commit.
@@ -1383,6 +1396,7 @@ where
             scroll: 0.0,
             memory: self.owner_entry().and_then(|e| self.nav.entry(e))
                 .and_then(|e| e.inst.as_ref()).map(|i| i.screen.memory_at(self.focus())).unwrap_or_default(),
+            captured: self.owner_entry(),
         }
     }
 

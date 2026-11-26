@@ -1,0 +1,6 @@
+{
+  "library_order.state_unsaved": {
+    "value": "Couldn't save this order; it applies until FinNative restarts.",
+    "description": "Sentence added on the Library order page when the order could not be written to disk: it still applies, but only until the app restarts."
+  }
+}

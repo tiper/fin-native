@@ -62,12 +62,22 @@ float shade_block(int i, vec2 px) {
   float t = clamp((length(d) - u_sc[i + 1].x) * u_sc[i + 1].y, 0.0, 1.0);
   return u_sc[i + 1].z * (1.0 - t * t * (3.0 - 2.0 * t));
 }
-// An edge field packs horizontal and vertical easing, three shelf stops, a soft join and a top fade.
+// An edge field packs its side shade, three shelf stops, a soft join and a top fade; `scrim::SideShade`
+// and `scrim::EdgeShade::at` are the same arithmetic. The side is a box (u_sc[0] = horizontal and
+// vertical easing) or, when u_sc[4].z is 1, an ellipse about the corner u_sc[4].xy (u_sc[0] =
+// 1/reach semi-axes and min(reach)/feather).
 float edge_alpha(vec2 px) {
   vec4 edge = u_sc[0];
   vec4 shelf = u_sc[1];
   vec4 ink = u_sc[2];
-  float upper = ink.z * (1.0 - smoothstep(edge.x, edge.y, px.x)) * smoothstep(edge.z, edge.w, px.y);
+  float upper;
+  if (u_sc[4].z > 0.5) {
+    vec2 q = vec2(px.x - u_sc[4].x, u_sc[4].y - px.y);
+    float t = clamp((1.0 - length(q * edge.xy)) * edge.z, 0.0, 1.0);
+    upper = ink.z * t * t * (3.0 - 2.0 * t);
+  } else {
+    upper = ink.z * (1.0 - smoothstep(edge.x, edge.y, px.x)) * smoothstep(edge.z, edge.w, px.y);
+  }
   vec3 top = u_sc[3].xyz;
   if (top.z > 0.0) upper += top.z * (1.0 - smoothstep(top.x, top.y, px.y));
   float foot = px.y < shelf.y

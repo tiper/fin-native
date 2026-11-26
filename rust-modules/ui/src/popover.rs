@@ -250,6 +250,24 @@ impl Placement {
         overflow: Overflow::ClampToRoom,
         keep: crate::consts::SAFE,
     };
+
+    /// A panel with no opener, in the safe frame's top-right corner ([`corner_panel`]): below the
+    /// corner point, hung from its right edge, the height cut to the room under it.
+    pub const CORNER: Placement = Placement {
+        order: SideOrder::Fixed(&[Side::Below]),
+        cross: Cross::Hang,
+        overflow: Overflow::ClampToRoom,
+        keep: crate::consts::SAFE,
+    };
+}
+
+/// **A panel that no control opened, in the safe frame's top-right corner** (Live TV's number entry,
+/// SPEC-5: right 96, top 54): [`anchor_panel`] over a zero-size anchor at the corner, so the panel's
+/// right edge is the frame's and its top is the frame's. `size` is the panel's own `(w, h)`; the side
+/// is `Below`, so [`Popover::rise_offset`] settles it down into place.
+pub fn corner_panel(w: f32, h: f32) -> Anchored {
+    let keep = Placement::CORNER.keep;
+    anchor_panel(Rect::new(keep.x + keep.w, keep.y, 0.0, 0.0), (w, h), h, 0.0, Placement::CORNER)
 }
 
 /// [`anchor_panel`]'s answer: the panel's rect and the side of the anchor it took (which is where
@@ -353,6 +371,18 @@ pub fn under_or_above(a: Rect, content_w: f32, content_h: f32) -> Rect {
     let width = content_w.clamp(crate::table::MENU_MIN_W, crate::table::MENU_MAX_W);
     let h = content_h.clamp(120.0, SCR_H - 2.0 * PANEL_EDGE);
     anchor_panel(a, (width, h), h, PANEL_GAP, Placement::UNDER_OR_ABOVE).rect
+}
+
+/// [`under_or_above`] for a panel that may be taller than the room either side of its opener (a pushed page
+/// with a long list, from a control low on the screen): the same sides in the same order, but when neither
+/// holds the whole panel it takes the roomier side and is CUT to that room (the list scrolls inside), so it
+/// stays hung off its opener instead of being clamped to the top of the screen and covering it.
+pub fn under_or_above_fit(a: Rect, content_w: f32, content_h: f32) -> Rect {
+    use crate::consts::SCR_H;
+    let width = content_w.clamp(crate::table::MENU_MIN_W, crate::table::MENU_MAX_W);
+    let h = content_h.clamp(120.0, SCR_H - 2.0 * PANEL_EDGE);
+    let how = Placement { overflow: Overflow::ClampToRoom, ..Placement::UNDER_OR_ABOVE };
+    anchor_panel(a, (width, h), h, PANEL_GAP, how).rect
 }
 
 /// **Where a header menu's panel of width `w` starts across, hung from its opener `pill`** (the
