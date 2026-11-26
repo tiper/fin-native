@@ -2384,10 +2384,15 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             };
             if forced && audio_sel.is_none() {
                 audio_sel = pick_audio(StandIn::SameKind, &eligible);
-                if let Some((_, raw, _)) = &audio_sel {
+                if let Some((i, raw, _)) = &audio_sel {
+                    let converted = usize::try_from(*i).ok().and_then(|i| tracks.get(i)).is_some_and(|t| {
+                        plx_os::devcaps::converted_with(&env.caps, env.audio_conversion, &t.codec, t.channels, t.sampling_rate)
+                    });
                     crate::player::log(&format!(
-                        "playback_policy: Force Direct Play decodes audio codec {raw} ({}) in the app, stereo",
-                        plx_data::metadata::friendly_codec(raw)
+                        "playback_policy: Force Direct Play {} audio codec {raw} ({}) {}",
+                        if converted { "converts" } else { "decodes" },
+                        plx_data::metadata::friendly_codec(raw),
+                        if converted { "to AC3 on the TV" } else { "in the app, stereo" },
                     ));
                 }
             }
