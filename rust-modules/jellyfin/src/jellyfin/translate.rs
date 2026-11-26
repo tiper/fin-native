@@ -760,9 +760,11 @@ fn stream(item_id: &str, src: &MediaSourceInfo, m: &MediaStream) -> Option<Strea
             _ => String::new(),
         };
     }
-    // A sidecar subtitle is fetched as a file. Plex keys only external files this way; text tracks
-    // muxed into the container are demuxed by the player, so they keep an empty key here too.
-    if stream_type == 3 && m.is_external {
+    // A keyed subtitle is fetched as a file and drawn by the app whatever the stream carries. An
+    // external file is served as it is; an embedded plain-text track is extracted by the server, so
+    // it still shows when the server converts the stream, which carries no subtitle (#49). ASS stays
+    // in the container, where its fonts are; a picture subtitle has no text to extract.
+    if stream_type == 3 && (m.is_external || matches!(s.codec.as_str(), "srt" | "vtt" | "mov_text")) {
         let fmt = if s.codec == "ass" { "ass" } else { "srt" };
         s.key = format!(
             "/Videos/{}/{}/Subtitles/{}/0/Stream.{fmt}",
@@ -917,6 +919,21 @@ mod tests {
 
     fn parse(json: &str) -> BaseItemDto {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn an_embedded_plain_text_subtitle_is_fetched_as_the_file_the_server_extracts() {
+        let json = MOVIE.replace(
+            r#"{"Type": "EmbeddedImage""#,
+            r#"{"Type": "Subtitle", "Index": 6, "Codec": "subrip"}, {"Type": "Subtitle", "Index": 7, "Codec": "ass"}, {"Type": "EmbeddedImage""#,
+        );
+        let m = metadata(&parse(&json), &Ctx { sections: &SectionIds::default(), section_guid: None }).unwrap();
+        let key = |i: i64| m.media[0].part[0].stream.iter().find(|s| s.index == i).unwrap().key.clone();
+        let base = "/Videos/f137a2dd21bbc1b99aa5c0f6bf02a805/f137a2dd21bbc1b99aa5c0f6bf02a805/Subtitles";
+        assert_eq!(key(6), format!("{base}/6/0/Stream.srt"), "embedded SRT");
+        assert_eq!(key(3), format!("{base}/3/0/Stream.srt"), "external SRT, as before");
+        assert_eq!(key(7), "", "ASS stays in the container, with its fonts");
+        assert_eq!(key(4), "", "PGS has no text to extract");
     }
 
     #[test]
