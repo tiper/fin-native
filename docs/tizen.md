@@ -405,6 +405,29 @@ Measured on the TV 10.0 emulator against `tests/mock_pms.py`:
 **Not measured:** a retail set. Whether Smart Hub stays hidden, and what the letterbox bars show (the plane's own background,
 expected black), is the tester's next nightly.
 
+## The media keys are grabbed (retail report and emulator run, 2026-11-26)
+
+On the first retail set (discussion #1460) the remote's dedicated Play/Pause key paused and resumed the video, and the TV also
+raised its own "Not Available" popup. The OK button did not raise it. A key the window has not grabbed is delivered to the app
+AND acted on by the TV's shell. flutter-tizen hit the same popup (flutter-tizen issue #319) and removed it by grabbing its media
+keys TOPMOST after the window is shown (`BindKeys`, `tizen_window_ecore_wl2.cc`).
+
+`ecore::Window::show` now grabs every transport row of `keys::TABLE` (`keys::grabbed`: Play, Pause, the two Play/Pause toggle
+names `XF86PlayBack` and `XF86AudioPlayPause`, Stop, Rewind, Next, Forward). It uses `ecore_wl2_window_keygrab_set(win, name, 0,
+0, 0, TOPMOST)`, a `dynlib!` table of its own. As in flutter-tizen there is no unset: the grab goes with the window's surface. TOPMOST gives the window the key while it
+is on top of the stack. The Tizen guide lists no privilege for it; the other modes are "not for third-party applications".
+Navigation keys are not grabbed.
+
+Measured on the TV 10.0 emulator:
+
+- The log reads `ecore: media keys grabbed TOPMOST; refused []`.
+- During playback, Pause (`XF86AudioPause`, code 209) still reaches the app and pauses (`player event Paused`), and Play
+  (`XF86AudioPlay`, code 208) resumes (`Started`).
+- The emulator raised no popup before or after the change.
+
+**Not measured:** whether the popup is gone on a retail set, and which name the retail remote's toggle key sends. It is the
+tester's next nightly.
+
 ## The system keyboard (emulator run, 2026-11-25)
 
 Search's field raises the television's own on-screen keyboard through Ecore IMF (`platform-tizen/src/ime.rs`). The
