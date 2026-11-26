@@ -462,15 +462,15 @@ class ReplayFixtures(unittest.TestCase):
         """Actual CLI and actual guard, without executing any outbound operation."""
         source = os.path.join(self.FIXTURES, 'v13-owned-input-content')
         expected = {
-            'manifest.json': '5b6af06f5d10db1211e3540ca5a1e4214e970e3169aed2d81b8fd89da1304d5a',
-            'rec-0000.jsonl': '40cd762653901e61ff388f2ab94dc55522d6250a136f4cb119f2743fa582a823',
+            'manifest.json': '99d546a847ffaa283fbf952a5f0d15f302172a1710e0125da41f7d7ded6c1e60',
+            'rec-0000.jsonl': 'bde60d9163d8a5cddfcfba64eb4fdad91e2aaa4d1d82c898659646b8610efbc2',
         }
         for name, digest in expected.items():
             with open(os.path.join(source, name), 'rb') as f:
                 self.assertEqual(hashlib.sha256(f.read()).hexdigest(), digest)
         with open(os.path.join(source, 'manifest.json'), encoding='utf-8') as f:
             original = json.load(f)
-        self.assertEqual((original['schema'], original['state_fp']), (3, 12734002143041661619))
+        self.assertEqual((original['schema'], original['state_fp']), (3, 15567541324829359259))
         with tempfile.TemporaryDirectory() as root:
             subprocess.run(['git', 'init', '-q', root], check=True)
             fixtures = os.path.join(root, 'tests', 'fixtures', 'replay')
@@ -485,7 +485,11 @@ class ReplayFixtures(unittest.TestCase):
             cases = [('producer', (), None, True),
                      ('raw-producer', ('anchor',), 'DELETE', True),
                      ('legal-enum', ('init', 'data', 'ui_preferences', 'subtitle_size'), 'large', True),
-                     ('unknown-fp', ('state_fp',), 8363262880582770196, False),
+                     ('unknown-fp', ('state_fp',), 15567541324829359260, False),
+                     ('pre-whats-on-v13-fp', ('state_fp',), 8363262880582770195, False),
+                     ('pre-channels-shelf-v13-fp', ('state_fp',), 2884821880834123965, False),
+                     ('pre-hero-row-v13-fp', ('state_fp',), 13368307521658900119, False),
+                     ('pre-library-v13-fp', ('state_fp',), 12734002143041661619, False),
                      ('pre-watchlist-v13-fp', ('state_fp',), 9159521251572352515, False),
                      ('old-fp', ('state_fp',), 4239819007634745513, False),
                      ('other-old-fp', ('state_fp',), 13512213413816145485, False),
@@ -701,8 +705,8 @@ class ReplayFixtures(unittest.TestCase):
             '6-settings-family': 4239819007634745513,
             '12-filmography-detail-return': 4239819007634745513,
             '12-filmography-detail-return-current': 13512213413816145485,
-            'v13-owned-input-content': 12734002143041661619,
-            '13-by-id-filmography': 12734002143041661619,
+            'v13-owned-input-content': 15567541324829359259,
+            '13-by-id-filmography': 15567541324829359259,
         })
 
     def _tool(self, *args):

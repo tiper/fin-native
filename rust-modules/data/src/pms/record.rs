@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use super::{Landing, LandingClient, SourceBuild};
 
-pub const SHAPE: &str = "HubsResultV1{gen:u32,seq:u32,sid:u16,client:Option<u32>,token_gen:u32,build:Option<{cw:[{last_viewed_at:i64,m:PmsMovie}],shelves:[{title:str,hub_id:str,key:str,items:[PmsMovie],positions:[u64],total:u64,offset:u64,end:u64,more:bool}]}>};PmsMovie{sid:u16,sec:i64,title:str,year:i32,rating:str,dur_ns:i64,part:str,thumb:str,still:str,art:str,summary:str,rk:str,vcodec:str,acodec:str,blur:[[f32bits;3];4],has_blur:bool,kind:i32,resume_ms:i64,show_rk:str,season_index:i32,show_title:str,ep_index:i32,unwatched:bool,watched:bool,aired:str,child_count:i64}";
+pub const SHAPE: &str = "HubsResultV1{gen:u32,seq:u32,sid:u16,client:Option<u32>,token_gen:u32,build:Option<{cw:[{last_viewed_at:i64,m:PmsMovie}],shelves:[{title:str,hub_id:str,key:str,items:[PmsMovie],positions:[u64],total:u64,offset:u64,end:u64,more:bool,library:Option<Mixed|{One:i64}>}]}>};PmsMovie{sid:u16,sec:i64,title:str,year:i32,rating:str,dur_ns:i64,part:str,thumb:str,still:str,art:str,summary:str,rk:str,vcodec:str,acodec:str,blur:[[f32bits;3];4],has_blur:bool,kind:i32,resume_ms:i64,show_rk:str,season_index:i32,show_title:str,ep_index:i32,unwatched:bool,watched:bool,aired:str,child_count:i64}";
 
 pub fn encode(landing: &Landing) -> Value {
     let Landing { gen, seq, sid, client, token_gen, build } = landing;
@@ -97,7 +97,7 @@ pub(super) mod blur_bits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pms::{CwItem, PmsMovie, Shelf};
+    use crate::pms::{CwItem, PmsMovie, Shelf, ShelfLibrary};
     use std::sync::Arc;
 
     fn landing() -> Landing {
@@ -129,7 +129,7 @@ mod tests {
             build: Some(SourceBuild {
                 lane: Default::default(),
                 cw: vec![CwItem { last_viewed_at: i64::MAX, m: Arc::new(m.clone()), position: 0 }],
-                shelves: vec![Shelf { epoch: 0, positions: Vec::new(), title: "Shelf".into(), hub_id: "provider.hub".into(),
+                shelves: vec![Shelf { library: ShelfLibrary::Unknown, epoch: 0, positions: Vec::new(), title: "Shelf".into(), hub_id: "provider.hub".into(),
                     key: "/hub/key".into(), items: vec![Arc::new(m)], total: 0, offset: 0, end: 0, more: false, shown: 0, row: Default::default() }],
             }) }
     }

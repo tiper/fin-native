@@ -1528,3 +1528,16 @@ fn entering_a_library_with_collections_fades_the_whole_control_in_when_its_count
     }
     knows_collections(&[]);
 }
+
+/// A Library order moves the pills and nothing else the header reads: the row must redraw anyway.
+#[test]
+fn a_reorder_with_nothing_else_changed_redraws_the_pills() {
+    let _guard = plx_base::testlock::serial();
+    let (mut fixture, mut page, engine) = grid_page(3);
+    let pills = |page: &LibraryScreen| page.probe_libraries().into_iter().map(|(_, index)| index)
+        .filter(|index| *index != usize::MAX).collect::<Vec<_>>();
+    assert_eq!(pills(&page), [0, 1, 2]);
+    fixture.directory = fixture.directory.clone().with_presentation_order(vec![2, 0, 1]);
+    page.sync(&fixture.cx(&engine));
+    assert_eq!(pills(&page), [2, 0, 1], "the pills follow the profile's order");
+}

@@ -451,11 +451,26 @@ pub struct SectionView {
     pub row: super::SrcRow,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct DirectoryData {
     sources: Vec<(ServerId, super::SrcGroup)>,
+    /// Browse's whole verdict per source ([`super::BrowseSource::verdict`]): what Home's roster orders
+    /// by, handed over as it is, so the two surfaces rank the sources by one rule
+    /// ([`super::source_rank`]) from one input, in one publication.
+    verdicts: Vec<(ServerId, super::SourceVerdict)>,
     sections: Vec<SectionView>,
     favorites: Vec<(ServerId, i64, bool)>,
+    /// Every `sections` index in the order to PRESENT (the profile's Library order over the
+    /// deterministic default). `sections` itself stays in table order: its indices are identities.
+    order: Vec<usize>,
+    /// The favourites in presentation order (Settings' Library order's rows).
+    order_rows: Vec<super::LibraryOrderRow>,
+    /// What the profile's record is against the libraries present ([`super::OrderState`]): Settings'
+    /// Reset row is offered when one is saved, whether or not it moves anything now.
+    order_state: super::OrderState,
+    /// What Home's merge ranks its shelves by: the server order, or the favourites `(server,
+    /// section key)` in presentation and server order while a record is in effect.
+    home_order: crate::pms::HomeOrder<Vec<(ServerId, i64)>>,
 }
 
 /// Retained by the Bridge-owned `BrowseStore` and captured from its `BrowseState`, never a new
@@ -484,6 +499,8 @@ pub struct DirectorySnapshot {
     sections_gen: u32,
     tabs_gen: u32,
     pin_commit: super::PinCommit,
+    /// Where the Library order write stands (read every capture: a receipt lands with no table change).
+    order_write: super::WriteState,
 }
 
 /// Where a retained poster sits: an O(1) handle on the immutable rows that hold it, and its place
@@ -593,6 +610,7 @@ impl Default for DirectorySnapshot {
             sections_gen: 0,
             tabs_gen: 0,
             pin_commit: super::PinCommit::default(),
+            order_write: Default::default(),
         }
     }
 }
@@ -610,12 +628,17 @@ impl DirectorySnapshot {
             self.data = Arc::new(DirectoryData {
                 sources: state.sources().iter().map(|s| s.sid)
                     .zip(state.source_groups()).collect(),
+                verdicts: state.sources().iter().map(|s| (s.sid, s.verdict())).collect(),
                 sections: state.sections().iter().zip(state.all_source_rows())
                     .map(|(section, row)| SectionView {
                         sid: state.sources().get(section.src).map(|source| source.sid),
                         key: section.key, kind: section.kind, row,
                     }).collect(),
                 favorites: state.favorite_sections(),
+                order: state.section_order(),
+                order_rows: state.library_order_rows(),
+                order_state: state.order_state(),
+                home_order: state.home_order(),
             });
             self.stamp = Some(stamp);
         }
@@ -627,8 +650,9 @@ impl DirectorySnapshot {
         self.sections_gen = state.sections_gen();
         self.tabs_gen = state.tabs_gen();
         self.pin_commit = state.pin_commit();
+        self.order_write = state.order_write();
         for (i, kind) in [super::SecKind::Movie, super::SecKind::Show].into_iter().enumerate() {
-            self.preferred[i] = state.tab_of_kind(kind).and_then(|tab| state.tab_section(tab));
+            self.preferred[i] = state.tab_of_kind(kind).and_then(|_| state.section_of_kind_in(kind, &self.data.order));
             self.kind_fetch[i] = state.kind_state(kind);
             self.kind_shelves[i] = self.preferred[i]
                 .and_then(|section| state.states().get(section))
@@ -649,8 +673,13 @@ impl DirectorySnapshot {
             stamp: Some((epoch, 0, 0, 1, sid)),
             data: Arc::new(DirectoryData {
                 sources: vec![(sid, source)],
+                verdicts: Vec::new(),
                 sections: Vec::new(),
                 favorites: Vec::new(),
+                order: Vec::new(),
+                order_rows: Vec::new(),
+                order_state: super::OrderState::Server,
+                home_order: Default::default(),
             }),
             sample: Vec::new(),
             kind_posters: [None, None],
@@ -662,6 +691,7 @@ impl DirectorySnapshot {
             sections_gen: 0,
             tabs_gen: 0,
             pin_commit: super::PinCommit::default(),
+            order_write: Default::default(),
         }
     }
 
@@ -731,14 +761,20 @@ impl DirectorySnapshot {
             section.sid.map(|sid| (sid, section.key, section.row.pinned))
         }).collect();
         let source_count = sources.len();
+        let order = (0..sections.len()).collect();
         Self {
             preferred,
             kind_fetch: [SecFetch::Ready; 2],
             stamp: Some((epoch, 0, current, source_count, ServerId::UNSET)),
             data: Arc::new(DirectoryData {
                 sources,
+                verdicts: Vec::new(),
                 sections,
                 favorites,
+                order,
+                order_rows: Vec::new(),
+                order_state: super::OrderState::Server,
+                home_order: Default::default(),
             }),
             sample: Vec::new(),
             kind_posters: [None, None],
@@ -750,7 +786,27 @@ impl DirectorySnapshot {
             sections_gen: 0,
             tabs_gen: 0,
             pin_commit: super::PinCommit::default(),
+            order_write: Default::default(),
         }
+    }
+
+    /// This directory with `verdicts` as Browse's verdict per source: what a fixture's Home roster ranks by.
+    #[cfg(test)]
+    pub(crate) fn with_source_verdicts(mut self, verdicts: Vec<(ServerId, super::SourceVerdict)>) -> Self {
+        let mut data = (*self.data).clone();
+        data.verdicts = verdicts;
+        self.data = Arc::new(data);
+        self
+    }
+
+    /// This directory presenting its sections in `order` (table indices): a Library order a fixture
+    /// holds without a store behind it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_presentation_order(mut self, order: Vec<usize>) -> Self {
+        let mut data = (*self.data).clone();
+        data.order = order;
+        self.data = Arc::new(data);
+        self
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -819,6 +875,38 @@ impl<'a> DirectoryView<'a> {
     #[allow(dead_code)]
     pub fn favorite_sections(self) -> &'a [(ServerId, i64, bool)] {
         &self.0.data.favorites
+    }
+    /// **The favourite libraries in the profile's Library order**, first shown first, for Settings'
+    /// Library order page (across servers; `handle` names a share's owner). Empty before any
+    /// library has landed.
+    pub fn library_order(self) -> &'a [super::LibraryOrderRow] {
+        &self.0.data.order_rows
+    }
+    /// **What the profile's record is** ([`super::OrderState`]): `Server` when there is none (Reset has
+    /// nothing to delete), `Recorded { in_effect }` when one is shown or still stored. `in_effect`
+    /// is false while it moves no favourite shown (a friend's server offline, the one library it
+    /// moved unfavourited, a Reset not yet saved), where Reset still has a record to delete. Whether
+    /// the last write reached the disk is [`Self::library_order_write`].
+    pub fn library_order_state(self) -> super::OrderState {
+        self.0.data.order_state
+    }
+    /// Where the profile's last Library order write stands ([`super::WriteState`]), so Settings can
+    /// tell an order that is saved from one that stands for this run only (`Failed`).
+    pub fn library_order_write(self) -> super::WriteState {
+        self.0.order_write
+    }
+    /// The table indices in the order the Library header presents them. A reorder moves this and
+    /// nothing else the header reads, so the header's fingerprint hashes it.
+    pub fn presentation_order(self) -> &'a [usize] {
+        &self.0.data.order
+    }
+    /// Browse's verdict per source, which Home's roster is ordered by (`browse::source_rank`).
+    pub(crate) fn source_verdicts(self) -> &'a [(ServerId, super::SourceVerdict)] {
+        &self.0.data.verdicts
+    }
+    /// What Home ranks its shelves by (see `DirectoryData::home_order`).
+    pub(crate) fn home_order(self) -> crate::pms::HomeOrder<&'a [(ServerId, i64)]> {
+        self.0.data.home_order.as_slices()
     }
     #[allow(dead_code)]
     pub fn tab_kind(self, tab: usize) -> Option<super::SecKind> {
@@ -900,8 +988,7 @@ impl<'a> DirectoryView<'a> {
     /// Sort & Filter still surfaces its pill in the Library header while viewing it.
     pub fn rows_for(self, section: usize) -> impl Iterator<Item = &'a super::SrcRow> {
         let kind = self.sections().get(section).map(|s| s.kind);
-        self.sections()
-            .iter()
+        self.0.data.order.iter().filter_map(move |&at| self.sections().get(at))
             .filter(move |s| Some(s.kind) == kind && (s.row.pinned || s.row.section == section))
             .map(|s| &s.row)
     }

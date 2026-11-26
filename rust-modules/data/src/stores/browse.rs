@@ -15,7 +15,7 @@ use super::StoreId;
 
 #[allow(unused_imports)] // Shared owner vocabulary; some members are feature/test specific.
 pub use crate::browse::{
-    Cursor, CursorAt, GenreEntry, LibraryType, PinCommit, SecFetch, SecKind, SortEntry, SourceState, SrcGroup, SrcRow,
+    Cursor, CursorAt, GenreEntry, LibraryOrderRow, LibraryType, OrderState, PinCommit, WriteState, SecFetch, SecKind, SortEntry, SourceState, SrcGroup, SrcRow,
 };
 #[allow(unused_imports)] // Shared owner vocabulary; some members are feature/test specific.
 pub use crate::browse::section_hubs::{HubsId, HubsSnapshot, HubsView, Publication};
@@ -88,6 +88,14 @@ pub enum BrowseCmd {
     /// though it were a decision (`plex::pins::answers`). An EMPTY list is still a commit — the
     /// question was put and every default was left alone.
     ApplyPins(Vec<(usize, bool)>),
+    /// Settings' Library order: the profile's WHOLE order of its favourite libraries as the page
+    /// showed them, `(machine id, section key)` first shown first. An order that says nothing the
+    /// server order does not deletes the profile's record instead of recording it
+    /// (`plex::library_order::merged`); one that names no library is refused, Reset being the one
+    /// command that deletes. Needs the session, like [`Self::ApplyPins`], and is refused without one.
+    SetLibraryOrder(Vec<(String, i64)>),
+    /// Settings' Reset to server order: delete the profile's Library order record.
+    ResetLibraryOrder,
     RetryDiscovery,
     /// The profile/account switch: wipe everything and supersede everything in flight.
     Reset,
@@ -175,7 +183,7 @@ impl BrowseStore {
     /// discovery command is refused here, because the session it must read was never handed:
     /// those reach [`BrowseStore::run_with_session`].
     pub fn run(&mut self, cmd: BrowseCmd, keys: &ClientKeys) -> bool {
-        if matches!(cmd, BrowseCmd::ApplyPins(_) | BrowseCmd::Discovery(_) | BrowseCmd::RecheckShares | BrowseCmd::Addressed { .. }) {
+        if matches!(cmd, BrowseCmd::ApplyPins(_) | BrowseCmd::SetLibraryOrder(_) | BrowseCmd::ResetLibraryOrder | BrowseCmd::Discovery(_) | BrowseCmd::RecheckShares | BrowseCmd::Addressed { .. }) {
             debug_assert!(false, "a pin or discovery command reached a step handed no session");
             plx_base::eventlog::log(
                 "browse: a pin or discovery command reached a step handed no session — dropped");

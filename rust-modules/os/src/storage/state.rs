@@ -177,11 +177,11 @@ pub struct AuthContext {
 /// until it picks its own).
 ///
 /// `version_choices` is the file a profile selected (or played) for one item, naming a
-/// `machineIdentifier` and a ratingKey. The next three are each profile's own browsing and playback memory, which sign-out forgets with
+/// `machineIdentifier` and a ratingKey. The next four are each profile's own browsing and playback memory, which sign-out forgets with
 /// the account whose profile it was: `subtitle_offsets` (the timing correction a profile tuned for
 /// one item, naming a `machineIdentifier` and a ratingKey), `library_sorts` (how each library was
-/// last browsed) and `last_library` (the library each top tab opened in), the last two naming a
-/// server and a section.
+/// last browsed), `last_library` (the library each top tab opened in) and `library_order` (the order
+/// of its favourite libraries); the last three name a server and a section.
 ///
 /// `recent_channels` (Live TV's Recent row, per profile) names a server's machine identifier and a
 /// channel, and goes with the account the same way.
@@ -195,6 +195,7 @@ pub const ACCOUNT_BOUND_PREFERENCES: &[&str] = &[
     "version_choices",
     "library_sorts",
     "last_library",
+    "library_order",
 ];
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]

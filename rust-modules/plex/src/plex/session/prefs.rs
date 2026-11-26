@@ -37,7 +37,7 @@
 //! [`RecentChannelEntry`]) are the other tenants of the door and are declared the same way
 //! ([`SubtitleOffsetsPref`], [`VersionChoicesPref`], [`RecentChannelsPref`]).
 use super::{
-    MarkerSkipMode, DolbyVisionMode, InstantDpadSeeking, UriEngine, DeckPress, DirectPlayMode, HdrOverlayBrightness, LastLibrary, LibraryViews, NativeAudioRefusal, NextEpisodeMode, OpaqueExtensions,
+    MarkerSkipMode, DolbyVisionMode, InstantDpadSeeking, UriEngine, DeckPress, DirectPlayMode, HdrOverlayBrightness, LastLibrary, LibraryOrder, LibraryViews, NativeAudioRefusal, NextEpisodeMode, OpaqueExtensions,
     PlaintextConsent, HoldHintTaught, PlaybackQuality, ServerKeyPin, Session, SkipInterval, SubtitleOffsetEntry, SubtitleOffsets, SubtitlePosition,
     SubtitleSize, SubtitleTone, UiResolution, UnderPosters, VersionChoiceEntry, VersionChoices,
 };
@@ -335,6 +335,27 @@ pub struct Preferences {
     #[serde(rename = "library_sorts", default, deserialize_with = "super::de_soft_vec",
         skip_serializing_if = "Vec::is_empty")]
     pub library_views: Vec<LibraryViews>,
+    /// **The order a profile put its favourite libraries in**, across every server (a friend's share
+    /// can sit between its own libraries) — Settings' Library order. It governs three things and no
+    /// others: the order of Home's shelves, the order of the Library header's pills, and which library
+    /// a tab press lands on when nothing was visited or remembered (the first-ordered favourite of the
+    /// type). Which libraries are favourites, the tab strip's membership, Search and the Sources
+    /// picker's grouping do not read it.
+    ///
+    /// Keyed like [`Preferences::last_library`] and for its reasons: by profile, and by (machine id,
+    /// section key), never a section INDEX. **An absent record is the server order**, and a library the
+    /// record does not name (a new one, a share that arrived later) falls at its default position
+    /// relative to the ones it does ([`crate::plex::library_order`]). Choosing an order that says
+    /// nothing the server order does not (and leaves no offline server's entries behind) deletes the
+    /// record rather than recording it, so the list holds only profiles that really reordered; the one
+    /// rule is `library_order::merged`.
+    ///
+    /// Cleared with the credentials at sign-out (`storage::state::ACCOUNT_BOUND_PREFERENCES`) and,
+    /// like [`Preferences::last_library`], not stamped. Soft-parsed for the reason every list in this
+    /// struct is; omitted while empty so a session that never reordered serializes exactly as it did
+    /// before the field existed, and an older build keeps the key as an opaque extension.
+    #[serde(default, deserialize_with = "super::de_soft_vec", skip_serializing_if = "Vec::is_empty")]
+    pub library_order: Vec<LibraryOrder>,
     // ---- per-profile memory lists (written only through the memory door, `ProfileMemory`) ----
     /// **Each profile's remembered audio and subtitle picks, per show** — see [`TrackMemoryEntry`].
     /// A [`ProfileList`] per profile, soft-parsed per element so one junk record or entry costs
@@ -677,6 +698,7 @@ list_row!(NativeAudioRefusedRow: NativeAudioRefusal = native_audio_refused, "nat
 // could not be activated) leaves them to the next account, as it always has.
 list_row!(LastLibraryRow: LastLibrary = last_library, "last_library", Profile, account true);
 list_row!(LibraryViewsRow: LibraryViews = library_views, "library_sorts", Profile, account true);
+list_row!(LibraryOrderRow: LibraryOrder = library_order, "library_order", Profile, account true);
 
 /// A setting as data, so a test (and a later generic restore) can walk them all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -736,6 +758,7 @@ pub const DESCRIPTORS: &[Descriptor] = &[
     Descriptor::of::<NativeAudioRefusedRow>(),
     Descriptor::of::<LastLibraryRow>(),
     Descriptor::of::<LibraryViewsRow>(),
+    Descriptor::of::<LibraryOrderRow>(),
     // The per-profile player settings' own values.
     Descriptor::of::<ProfilePrefsPref>(),
     // The memory-door tenants (lists with no value API).

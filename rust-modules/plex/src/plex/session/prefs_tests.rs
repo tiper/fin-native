@@ -10,11 +10,11 @@
 //! descriptors are declared.
 use super::prefs::{Descriptor, Fallback, ListRow, Parse, ProfileMemory, Row, Scope, Setting, SettingsWrite, DESCRIPTORS};
 use super::prefs::{DolbyVisionModePref, InstantDpadSeekingPref, UriEnginePref, AudioEnhancementsPref, AutoSignInPref, DeckPressPref, UnderPostersPref, DirectPlayModePref, LastHeroBlurPref,
-    LastLibraryRow, LibraryViewsRow, NextEpisodeModePref, PlaintextConsentRow, QualityPref, ServerKeyPinsRow,
+    LastLibraryRow, LibraryOrderRow, LibraryViewsRow, NextEpisodeModePref, PlaintextConsentRow, QualityPref, ServerKeyPinsRow,
     HdrOverlayBrightnessPref, SkipIntervalPref, SubtitleOffsetsPref, SubtitlePositionPref, SubtitleSizePref, SubtitleTonePref, VersionChoicesPref,
     HoldHintTaughtPref, HudEndTimePref, TrailerAutoplayPref, UiResolutionPref};
 use super::{
-    DolbyVisionMode, InstantDpadSeeking, UriEngine, CanonicalSessionPreferences, DeckPress, UnderPosters, UnderPostersLadder, DetailPart, DetailParts, DirectPlayMode, LastLibrary, LibraryViews, NextEpisodeMode,
+    DolbyVisionMode, InstantDpadSeeking, UriEngine, CanonicalSessionPreferences, DeckPress, UnderPosters, UnderPostersLadder, DetailPart, DetailParts, DirectPlayMode, LastLibrary, LibraryOrder, LibraryViews, NextEpisodeMode,
     PlaintextChoice, PlaintextConsent, PlaybackQuality, Preferences, ServerKeyPin, Session, SkipInterval,
     HdrOverlayBrightness, HoldHintTaught, SubtitleOffsetEntry, VersionChoiceEntry, SubtitlePosition, SubtitleSize, SubtitleTone, UiResolution,
 };
@@ -125,7 +125,7 @@ fn every_marker_names_its_own_field() {
     check_row::<LastHeroBlurPref>(Some([[0.5, 0.25, 0.125]; 4]));
     check_row::<UiResolutionPref>(UiResolution::Hd720);
     check_row::<HoldHintTaughtPref>(HoldHintTaught { card: true, pill: false });
-    // The table lists exactly these twenty-two `Setting` rows, the five list rows below, the four
+    // The table lists exactly these twenty-two `Setting` rows, the six list rows below, the four
     // memory-door rows (`TrackMemoryPref`, whose field check is
     // `track_memory_tests::the_list_row_names_its_own_field`, `RecentChannelsPref`, checked by
     // `recent_channels_tests::the_list_row_names_its_own_field_and_is_account_bound`, `SubtitleOffsetsPref`, checked by
@@ -133,7 +133,7 @@ fn every_marker_names_its_own_field() {
     // `the_version_choices_row_names_its_own_field`) and the per-profile record list
     // (`ProfilePrefsPref`, `profile_prefs_tests::nothing_picked_serializes_to_no_key`): a row needs
     // its line in one of the four places.
-    assert_eq!(DESCRIPTORS.len(), 22 + 5 + 4 + 1 + 1, "plus `HudSelectionPref`, a `String` row checked by `profile_prefs_tests`");
+    assert_eq!(DESCRIPTORS.len(), 22 + 6 + 4 + 1 + 1, "plus `HudSelectionPref`, a `String` row checked by `profile_prefs_tests`");
 }
 
 /// The list rows do what `check_row` proves for the `Copy` ones: the marker names its own field
@@ -170,6 +170,8 @@ fn every_list_marker_names_its_own_field() {
         json!({"user":"u1","libs":[{"kind":"movie","machine_id":"m","key":1}]})).unwrap());
     check_list_row::<LibraryViewsRow>(serde_json::from_value::<LibraryViews>(
         json!({"user":"u1","libs":[{"machine_id":"m","key":1,"sort":"plays"}]})).unwrap());
+    check_list_row::<LibraryOrderRow>(serde_json::from_value::<LibraryOrder>(
+        json!({"user":"u1","libs":[{"machine_id":"m","key":1},{"machine_id":"n","key":4}]})).unwrap());
     // `library_views` is stored as `library_sorts`: the row's key is the wire key.
     assert_eq!(LibraryViewsRow::KEY, "library_sorts");
 }
@@ -262,6 +264,7 @@ fn the_a5_rows_declare_the_scope_and_binding_main_has() {
         ("server_key_pins", Scope::Account, true, Parse::SoftVec),
         ("last_library", Scope::Profile, true, Parse::SoftVec),
         ("library_sorts", Scope::Profile, true, Parse::SoftVec),
+        ("library_order", Scope::Profile, true, Parse::SoftVec),
     ] {
         let d = row(key);
         assert_eq!((d.scope, d.account_bound, d.parse), (scope, bound, parse), "{key}");
@@ -390,6 +393,7 @@ fn garbage_fixtures() -> Vec<(&'static str, Vec<Value>)> {
         ("native_audio_refused", not_a_list()),
         ("last_library", not_a_list()),
         ("library_sorts", not_a_list()),
+        ("library_order", not_a_list()),
         ("track_memory", not_a_list()),
         ("recent_channels", not_a_list()),
         ("subtitle_offsets", not_a_list()),
@@ -414,6 +418,7 @@ fn good_element(key: &str) -> Value {
         "native_audio_refused" => json!({"firmware":"kisscurl-koli","codec":"vorbis","channels":2}),
         "last_library" => json!({"user":"u1","libs":[{"kind":"movie","machine_id":"m","key":1}]}),
         "library_sorts" => json!({"user":"u1","libs":[{"machine_id":"m","key":1,"sort":"plays"}]}),
+        "library_order" => json!({"user":"u1","libs":[{"machine_id":"m","key":1}]}),
         "subtitle_offsets" => json!({"user":"u1","items":[{"machine_id":"m","rating_key":"42","offset_ms":1500}]}),
         "version_choices" => json!({"user":"u1","account":"a","items":[{"machine_id":"m","rating_key":"42","media_id":3086}]}),
         "track_memory" => json!({"user":"u1","account":"a","items":[{"machine_id":"m","show_rk":"42",

@@ -190,6 +190,23 @@ pub fn composite_parts(thumb: &str) -> Option<(&str, &str)> {
     }
 }
 
+/// The identifier of a promoted collection hub without its `custom.collection.` prefix (the one place
+/// that prefix is spelled); `None` for every other hub.
+fn promoted_collection_tail(hub_identifier: &str) -> Option<&str> {
+    hub_identifier.strip_prefix("custom.collection.")
+}
+
+/// Is this a promoted collection hub (`custom.collection.…`)?
+pub(super) fn is_promoted_collection_hub(hub_identifier: &str) -> bool { promoted_collection_tail(hub_identifier).is_some() }
+
+/// The section a promoted `custom.collection.{section}.…` hub is published under: the identifier's
+/// first segment, `None` when it does not parse (and for every other hub). The one parse of that segment,
+/// shared by [`promoted_collection_hub`] (which reads an unparsed section as 0) and
+/// `library_order::hub_library`.
+pub(super) fn promoted_collection_section(hub_identifier: &str) -> Option<i64> {
+    promoted_collection_tail(hub_identifier)?.split('.').next()?.parse().ok()
+}
+
 /// The collection a promoted `custom.collection.{section}.{rk}.{rk}` hub lists, for a linked shelf
 /// heading: `(section, ratingKey)`. The rating key comes from the hub's listing `key`
 /// (`/library/collections/{rk}/children`) and falls back to the identifier's own segment; the
@@ -199,9 +216,10 @@ fn promoted_collection_hub<'a>(
     hub_identifier: &'a str,
     key: &'a str,
 ) -> Option<(i64, &'a str)> {
-    let tail = hub_identifier.strip_prefix("custom.collection.")?;
+    let tail = promoted_collection_tail(hub_identifier)?;
+    let section = promoted_collection_section(hub_identifier).unwrap_or(0);
     let mut segments = tail.split('.');
-    let section = segments.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    segments.next(); // the section segment, read above
     let rk = collection_rk_from_hub_key(key)
         .or_else(|| segments.next().filter(|rk| !rk.is_empty()))?;
     Some((section, rk))
@@ -231,18 +249,14 @@ pub fn related_collection_hub(hub_identifier: &str, key: &str) -> Option<(i64, i
     if !(tail.is_empty() || tail.starts_with('.')) {
         return None;
     }
-    let (path, query) = key.split_once('?').unwrap_or((key, ""));
+    let path = key.split_once('?').map_or(key, |(path, _)| path);
     let section = path
         .strip_prefix("/library/sections/")
         .and_then(|rest| rest.split('/').next())
         .and_then(|s| s.parse().ok())
         .or_else(|| tail.strip_prefix('.')?.split('.').next()?.parse().ok())
         .unwrap_or(0);
-    let tag = query
-        .split('&')
-        .find_map(|pair| pair.strip_prefix("tagId="))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let tag = super::paging::query_value(key, "tagId").and_then(|v| v.parse().ok()).unwrap_or(0);
     Some((section, tag))
 }
 

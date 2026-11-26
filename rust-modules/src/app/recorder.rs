@@ -284,6 +284,7 @@ fn state_fp_v8() -> u64 {
 pub(crate) fn state_fp_v7() -> u64 {
     let mut shapes: Vec<&str> = APP_SHAPES.to_vec();
     shapes[1] = historical_input_shape();
+    pre_library_record(&mut shapes);
     let shape = shapes.iter_mut().find(|shape| **shape == super::bootstrap::SHAPE)
         .expect("controlled initial shape");
     *shape = super::bootstrap::SHAPE_V7;
@@ -295,6 +296,18 @@ pub(crate) fn state_fp_v7() -> u64 {
     plx_ui::rec::state_fp(&shapes)
 }
 
+/// The recorded Home result before a shelf carried the library it was decided for (`library`):
+/// the frozen session-codec census was graded under it, so it keeps it.
+#[cfg(test)]
+const PRE_LIBRARY_RECORD_SHAPE: &str = "HubsResultV1{gen:u32,seq:u32,sid:u16,client:Option<u32>,token_gen:u32,build:Option<{cw:[{last_viewed_at:i64,m:PmsMovie}],shelves:[{title:str,hub_id:str,key:str,items:[PmsMovie],positions:[u64],total:u64,offset:u64,end:u64,more:bool}]}>};PmsMovie{sid:u16,sec:i64,title:str,year:i32,rating:str,dur_ns:i64,part:str,thumb:str,still:str,art:str,summary:str,rk:str,vcodec:str,acodec:str,blur:[[f32bits;3];4],has_blur:bool,kind:i32,resume_ms:i64,show_rk:str,season_index:i32,show_title:str,ep_index:i32,unwatched:bool,watched:bool,aired:str,child_count:i64}";
+
+/// Put the recorded Home result's frozen shape ([`PRE_LIBRARY_RECORD_SHAPE`]) where the live one stands.
+#[cfg(test)]
+fn pre_library_record(shapes: &mut [&str]) {
+    let record = shapes.iter().position(|shape| *shape == plx_data::pms::record::SHAPE).expect("the record shape");
+    shapes[record] = PRE_LIBRARY_RECORD_SHAPE;
+}
+
 // Probe only: install complete vector and numeric literals after the production probe run.
 #[cfg(test)]
 fn session_app_prior_vector() -> Vec<&'static str> {
@@ -302,6 +315,8 @@ fn session_app_prior_vector() -> Vec<&'static str> {
     shapes[1] = historical_input_shape();
     // This test's session-codec census is frozen history, not today's product shape.
     shapes[3] = "AppFrameV4{route:str,overlay:str,focus:str,tree:u64,session:u64,consent:u64,initial:u64}";
+    // ...and it was computed before a recorded shelf carried the library it was decided for.
+    pre_library_record(&mut shapes);
     shapes.push(super::bootstrap::CONTENT_SHAPE);
     shapes.push(RESOLUTION_SHAPE_V1);
     shapes.push("CaptureReadinessV2{before_dispatch:pending:bool,text:bool}");
@@ -2860,7 +2875,9 @@ mod tests {
         // `ById{id,press,expect}` and the `Pan` it had left out, so this moves from
         // 0x6b18_a6a7_e8d6_f465. `ProductResolutionV2` adds the `Id` row, which moves the full census
         // below and not this APP-side half.
-        assert_eq!(plx_ui::rec::state_fp(APP_SHAPES), 0x19b7_5414_e5d4_c071);
+        // A recorded shelf carries the library it was decided for (`record::SHAPE` gains `library`): the APP
+        // half moves from 0x19b7_5414_e5d4_c071.
+        assert_eq!(plx_ui::rec::state_fp(APP_SHAPES), 0x4e55_da7e_c00a_a7d5);
         // V13 adds the exact captured presentation ingress, canonical latest-source
         // generation and sealed queued event. The V12 fixture/census remains history.
         // `ProductResolutionV2` (the by-id `Id` resolution row, a11y-ids D6) moves the full census
@@ -2868,11 +2885,12 @@ mod tests {
         // keeps refused at the shape boundary like every older value.
         // The What's on page: the Live TV screen's shape lists its Recent channels (moved from 0x7410_4747_8858_9e13).
         // The Channels shelf keeps every channel reachable: the Live TV stack has three shelves (moved from 0x2808_f237_5764_68bd).
-        // **The hero row (#1553) moves the census to this value from 0xb985_c4dc_d4a9_4e97 (main's).** The screen
-        // shapes gained the Audio & Subtitles panel (`PreplayPanel`, its `Source`) and the item menu's
-        // hero overflow (`HeroOverflow{rows:len}`, `Action::Hero`'s control). The predecessors are kept
-        // below like every older value.
-        assert_eq!(state_fp(), 0xb0b8_437b_410f_aab3, "current V13 producer census");
+        // The hero row (#1553) moved the census to 0xb0b8_437b_410f_aab3 from 0xb985_c4dc_d4a9_4e97: the screen
+        // shapes gained the Audio & Subtitles panel (`PreplayPanel`, its `Source`) and the item menu's hero
+        // overflow (`HeroOverflow{rows:len}`, `Action::Hero`'s control). A recorded shelf then carries the
+        // library it was decided for (`record::SHAPE`), which moves it again from 0xb0b8_437b_410f_aab3.
+        assert_eq!(state_fp(), 0xd80b_045a_c4aa_fc9b, "current V13 producer census");
+        assert_ne!(state_fp(), 0xb0b8_437b_410f_aab3, "the census before the shelf's recorded library");
         assert_ne!(state_fp(), 0xb985_c4dc_d4a9_4e97, "the census before the hero row's panel and overflow shapes");
         assert_ne!(state_fp(), 0xc0b2_71bb_16d2_d02f, "the hero row's census before the Live TV pages joined it");
         assert_ne!(state_fp(), 0x2808_f237_5764_68bd, "the census before the Channels shelf");

@@ -374,6 +374,18 @@ The whole shared-source feature rests on keeping these apart:
   this same route (`SettingsPage::Favourites` — the enum lives in `screens/family.rs`, not
   `screens/settings.rs` — hosting the same screen type). Owner's ruling, 2026-08-21 — "it
   is separate for each profile" — and it hung off the whole `Session` (one per install) before that.
+  **Order is a fourth, separate question** and not a state: Settings' *Library order*
+  (`Preferences::library_order`, rules in `library_order.rs`, per profile, naming libraries by
+  `(machineIdentifier, section key)`) ranks the FAVOURITE libraries across servers and governs
+  exactly two surfaces, the order of Home's shelves (`pms::published_order`) and of the Library
+  header's pills (`DirectoryView::rows_for`), and it decides where a tab press lands when nothing was
+  visited or remembered (`section_of_kind`'s fallback and `repoint_cur` take the first-ordered favourite
+  of the type). It never changes which libraries are favourites, the tab strip's membership, Search or
+  the Sources picker, and an absent record is the server order (own servers first, then shares, each
+  server's directory order). One state, `library_order::OrderState`, says what the record is (none /
+  recorded / recorded and moving a favourite shown: recorded means the profile sees one or the
+  session still holds one, so Reset stays offered until the disk has none); the writer's `merged` keeps an offline server's entries (the grain is
+  the machine, like `pins::carry_forward`) and deletes a record only when it says nothing.
 - **reachable** — a fact about NOW: something answered at one of its addresses, *as the right
   machine*. It changes while nobody touches anything, and it is never a reason to forget the grant
   or the pin.
@@ -502,11 +514,11 @@ a dead source is **absent** from Home and states itself in its own library secti
   cache, not a per-call file transaction.
 - **Every preference key but `language` lives in ONE struct, `session/prefs.rs`'s `Preferences`**
   (the ten player settings' and `trailer_autoplay`'s FROZEN top-level keys, `profile_prefs` (their per-profile home, below), `auto_sign_in`, `last_hero_blur`, `hold_hint_taught`, the account-bound
-  `plaintext_consent` and `server_key_pins`, the per-profile `last_library` and `library_sorts` (cleared
+  `plaintext_consent` and `server_key_pins`, the per-profile `last_library`, `library_sorts` and `library_order` (cleared
   at sign-out like every `ACCOUNT_BOUND = true` row in `prefs::DESCRIPTORS`, but their records carry no
   account stamp, so the one login that is not a sign-out, a stored session that could not be activated
   in `app/boot.rs`, would leave them to the next account: `replace_after_reauthentication_guarded_with_outcome`
-  clears both, and the Home pins and recent searches, when the login's owner identity (`owner_identity`, the roster admin's plex.tv id; never the token, which every sign-in mints anew) differs from the stored one or either is unknown), and the four memory-door lists `track_memory`, `subtitle_offsets`, `version_choices` and `recent_channels`, Live TV's per-profile Recent row), flattened (`#[serde(flatten)] prefs`) into BOTH on-disk
+  clears all three, and the Home pins and recent searches, when the login's owner identity (`owner_identity`, the roster admin's plex.tv id; never the token, which every sign-in mints anew) differs from the stored one or either is unknown), and the four memory-door lists `track_memory`, `subtitle_offsets`, `version_choices` and `recent_channels`, Live TV's per-profile Recent row), flattened (`#[serde(flatten)] prefs`) into BOTH on-disk
   forms — the legacy file's `Session` and the canonical preference record — declared before each
   form's own `extensions`, so the flatten takes its keys first and the unknown-key map still sees
   only keys nobody models. A new key of that kind is a `Preferences` field (its serde attributes

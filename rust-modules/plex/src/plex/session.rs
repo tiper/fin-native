@@ -629,7 +629,7 @@ pub struct Session {
     /// and display settings, and those settings' frozen top-level keys every profile
     /// falls back to (`trailer_autoplay` among them), `auto_sign_in`,
     /// `last_hero_blur`, `plaintext_consent`, `server_key_pins`, `last_library`,
-    /// `library_sorts`, `track_memory`, `subtitle_offsets`, `version_choices`, `recent_channels`), flattened so the keys sit at the top level of the file under
+    /// `library_sorts`, `library_order`, `track_memory`, `subtitle_offsets`, `version_choices`, `recent_channels`), flattened so the keys sit at the top level of the file under
     /// the same keys they always had. Declared before [`Session::extensions`]:
     /// a flattened struct takes its keys first, so the unknown-key map sees only keys nobody models.
     #[serde(flatten)]
@@ -2240,6 +2240,33 @@ pub struct LibraryViews {
     pub extensions: OpaqueExtensions,
 }
 
+/// One profile's chosen order of its favourite libraries. See [`Preferences::library_order`].
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct LibraryOrder {
+    /// The Plex Home user's `uuid`, or **empty for the account owner** — [`LastLibrary`]'s
+    /// convention, and for the same reason.
+    pub user: String,
+    /// The libraries in the order the profile put them, first shown first. Soft-parsed per
+    /// element. The rules that turn it into an order for a live table are
+    /// [`crate::plex::library_order`].
+    #[serde(deserialize_with = "de_soft_vec")]
+    pub libs: Vec<OrderedLib>,
+    #[serde(flatten, default, skip_serializing_if = "OpaqueExtensions::is_empty")]
+    pub extensions: OpaqueExtensions,
+}
+
+/// One library in a [`LibraryOrder`], named the way [`PinnedLib`] names one: by the server's
+/// `machineIdentifier` and the section key, never by a table index or a registry slot.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct OrderedLib {
+    pub machine_id: String,
+    pub key: i64,
+    #[serde(flatten, default, skip_serializing_if = "OpaqueExtensions::is_empty")]
+    pub extensions: OpaqueExtensions,
+}
+
 /// A page left open above the library grid.
 #[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -3060,6 +3087,32 @@ impl Session {
             }
         }
         self.prefs.library_views.retain(|views| !views.libs.is_empty());
+    }
+
+    /// One profile's chosen library order — `None` for a profile that never chose one, which reads
+    /// as the server order. An empty record is never kept, so `Some` always holds a list.
+    pub fn order_for(&self, user: &str) -> Option<&LibraryOrder> {
+        self.prefs.library_order.iter().find(|order| order.user == user)
+    }
+
+    /// Record one profile's library order, replacing its previous one and leaving every other
+    /// profile's alone. A library with no machine id cannot be named across a restart, so it is not
+    /// recorded ([`LastLibrary::set`]'s rule); a list left empty forgets the record. WHAT to store (an
+    /// offline server's entries carried, a record that says nothing dropped) is
+    /// `library_order::merged`'s decision, made before this is called.
+    pub fn set_order_for(&mut self, user: &str, libs: &[(String, i64)]) {
+        self.prefs.library_order.retain(|order| order.user != user);
+        let libs: Vec<OrderedLib> = libs.iter().filter(|(machine, _)| !machine.is_empty())
+            .map(|(machine_id, key)| OrderedLib { machine_id: machine_id.clone(), key: *key, extensions: Default::default() })
+            .collect();
+        if !libs.is_empty() {
+            self.prefs.library_order.push(LibraryOrder { user: user.to_string(), libs, extensions: Default::default() });
+        }
+    }
+
+    /// Forget one profile's library order (back to the server order).
+    pub fn clear_order_for(&mut self, user: &str) {
+        self.prefs.library_order.retain(|order| order.user != user);
     }
 
     /// One profile's remembered subtitle sync-timing correction for one item, `None` for a
@@ -4671,6 +4724,7 @@ pub fn replace_after_reauthentication_guarded_with_outcome(
     if !cur.account_token.is_empty() && !same_owner(&cur.home_users, &next.home_users) {
         next.prefs.last_library.clear();
         next.prefs.library_views.clear();
+        next.prefs.library_order.clear();
         next.home_pins.clear();
         next.recent_searches.clear();
     }
@@ -5958,6 +6012,8 @@ pub use install_preferences::Retained;
 pub mod prefs;
 #[cfg(test)]
 mod prefs_tests;
+#[cfg(test)]
+mod library_order_tests;
 #[cfg(test)]
 mod memory_tests;
 

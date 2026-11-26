@@ -120,6 +120,41 @@ pub enum SourceState {
     InsecureOnly,
 }
 
+/// **THE default source order**, the one definition: the household's own servers first (a managed
+/// profile's family server is the household's though plex.tv sends it a handle, and a share plex.tv
+/// never named is not the household's though it carries none: #68), then servers with no owner to
+/// name before shares that have one, each group in registry slot order (`ServerId::raw`: the same quantity on both surfaces, whatever order
+/// a roster sync appended the sources in). Browse's default section order
+/// ([`BrowseState::default_section_order`]), and so the Library header, the tab fallback and Settings,
+/// read it; so does Home's roster (`pms::roster_with_scope`), so a profile's shelves and its header
+/// never disagree about which server leads.
+///
+/// `verdict` is Browse's classification of the source ([`BrowseSource::verdict`]); `None` is a source
+/// Browse has not classified (its table does not hold it yet, or no longer: the step after a reset), and
+/// it ranks behind every classified one, in slot order among its own kind. That is the ONE grade of an
+/// unclassified source, whichever surface asks: nothing else guesses a verdict from a handle.
+pub(crate) fn source_rank(verdict: Option<SourceVerdict>, sid: ServerId) -> SourceRank {
+    match verdict {
+        Some(SourceVerdict { household, has_handle }) => (false, !household, has_handle, sid.raw()),
+        None => (true, true, true, sid.raw()),
+    }
+}
+
+/// **Browse's whole verdict on one source**, the only input [`source_rank`] reads besides the slot:
+/// whether the source is the household's, and whether it has an owner to name. It is assembled in ONE
+/// place ([`BrowseSource::verdict`]) and travels as it is: the Library header ranks by it
+/// ([`BrowseState::default_section_order`]) and so does Home, which is handed it with the directory
+/// ([`DirectoryView::source_verdicts`](crate::stores::browse::DirectoryView::source_verdicts)) and
+/// adds no half of its own, so the two surfaces never disagree inside one publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SourceVerdict {
+    pub household: bool,
+    pub has_handle: bool,
+}
+
+/// [`source_rank`]'s key: unclassified, then not the household's, then has an owner to name, then the slot.
+pub(crate) type SourceRank = (bool, bool, bool, u16);
+
 /// One SOURCE the table is addressed by — a server this account has been granted. Comes from the
 /// [server registry](plx_plex::plex::server_ids), which is the granted roster: a server is registered
 /// only once plex.tv (or the `plxnative-servers` dev trigger) handed us a token for it.
@@ -205,6 +240,12 @@ pub struct BrowseSource {
 }
 
 impl BrowseSource {
+    /// Browse's verdict on this source: the ONE place its two halves are assembled ([`SourceVerdict`]).
+    /// An empty handle is not "owned" (a share plex.tv never named has none), so `household` is the
+    /// table's own derivation, not a reading of the handle.
+    pub(crate) fn verdict(&self) -> SourceVerdict {
+        SourceVerdict { household: self.household, has_handle: !self.handle.is_empty() }
+    }
     /// Did the last dial succeed? The old `bool`, preserved as a QUESTION so that widening the
     /// field did not have to become a behaviour change at the same time.
     ///
@@ -1046,6 +1087,14 @@ pub struct BrowseState {
     /// another's view.
     view_memory: plx_plex::plex::session::LibraryViews,
     recorded: Option<plx_plex::plex::session::HomePins>,
+    /// This profile's Library order record as the profile SEES it: [`Self::load_remembered`]'s read
+    /// through the pending-write overlay, so a write not yet saved already shows. `None` is the
+    /// server order.
+    order_record: Option<plx_plex::plex::session::LibraryOrder>,
+    /// Whether the session itself (what is on disk once a write is saved) holds a record for this
+    /// profile: the other half of [`Self::order_state`], which a Reset that is pending or failed
+    /// keeps apart from `order_record` (the overlay already shows it gone, the disk still has it).
+    order_stored: bool,
     preference_writes: preferences_job::Preferences,
     pending_pins: Option<(String, std::sync::Arc<std::sync::Mutex<PinWrite>>)>,
     /// The outcome of the last editor commit ([`apply_pins_from`](Self::apply_pins_from)),
@@ -1064,6 +1113,9 @@ pub struct PinCommit {
     pub seq: u32,
     pub recorded: bool,
 }
+
+pub use plx_plex::plex::library_order::OrderState;
+pub use preferences_job::WriteState;
 
 /// Shared by a cloned Browse snapshot, so consuming a receipt never makes another clone
 /// mistake a successful write for a disconnected worker. Failed writes keep the local choice.
@@ -1161,6 +1213,8 @@ impl Default for BrowseState {
             visited_user: String::new(),
             view_memory: Default::default(),
             recorded: None,
+            order_record: None,
+            order_stored: false,
             pending_pins: None,
             pin_commit: PinCommit::default(),
             preference_writes: Default::default(),
@@ -2127,6 +2181,129 @@ impl BrowseState {
         }
         out
     }
+    // ---- Library order: a projection over the table, never a reorder of it ---------------------
+    //
+    // Table indices are identities (`cur`, `states`, saved views, listings), so the order is NOT
+    // applied by moving rows: `section_order` answers the table indices in the order to present, and
+    // the two surfaces that follow it (the Library header via `DirectoryData::order`, Home's shelves
+    // via `BrowseScope::order`) read that. `plex::library_order` has the rules.
+
+    /// Every table index in the DEFAULT order, which is deterministic whatever order the sources'
+    /// directories landed in: sources in [`source_rank`] order (the household's own servers first,
+    /// then shares; the SAME order Home's roster takes), each source's libraries in the order its
+    /// directory listed them (the table appends a source's rows contiguously).
+    fn default_section_order(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.sections.len()).collect();
+        order.sort_by_key(|&index| {
+            let src = self.sections[index].src;
+            let source = self.sources.get(src);
+            // a section whose source is gone is unclassified: last, then by source index
+            (source_rank(source.map(BrowseSource::verdict), source.map_or(ServerId::UNSET, |source| source.sid)), src)
+        });
+        order
+    }
+    /// The libraries at `order` (table indices) as `plex::library_order` sees them.
+    fn libs_in<'a>(&'a self, order: &[usize]) -> Vec<plx_plex::plex::library_order::Lib<'a>> {
+        order.iter().map(|&index| {
+            let section = &self.sections[index];
+            plx_plex::plex::library_order::Lib {
+                machine_id: self.sources.get(section.src).map_or("", |source| source.machine_id.as_str()),
+                key: section.key,
+            }
+        }).collect()
+    }
+    /// Every table index in the order to PRESENT: the default order under this profile's record.
+    fn section_order(&self) -> Vec<usize> {
+        let default = self.default_section_order();
+        plx_plex::plex::library_order::effective(&self.libs_in(&default), self.order_record.as_ref())
+            .into_iter().map(|at| default[at]).collect()
+    }
+    /// The favourites (table indices) in presentation order.
+    fn favorite_order(&self) -> Vec<usize> {
+        self.section_order().into_iter().filter(|&index| self.sections[index].pinned).collect()
+    }
+    /// The favourites (table indices) in the server's own order.
+    fn favorite_default_order(&self) -> Vec<usize> {
+        self.default_section_order().into_iter().filter(|&index| self.sections[index].pinned).collect()
+    }
+    /// The favourites in presentation order and in the server's own order, when they DIFFER: what the
+    /// record moves among the libraries every surface presents. `None` is the server order. The one
+    /// comparison [`Self::order_state`] and [`Self::home_order`] both read.
+    fn favorites_moved(&self) -> Option<(Vec<usize>, Vec<usize>)> {
+        let effective = self.favorite_order();
+        let default = self.favorite_default_order();
+        (effective != default).then_some((effective, default))
+    }
+    /// **What the profile's Library order is now**: the ONE state the header, Home and Settings read.
+    /// A record is *there* when the profile sees one ([`Self::order_record`], a pending write
+    /// included) or the session holds one ([`Self::order_stored`]: a Reset not yet saved, or one that
+    /// failed, leaves the disk's record to be deleted); it is *in effect* when it moves a favourite.
+    fn order_state(&self) -> OrderState {
+        let recorded = self.order_stored || self.order_record.as_ref().is_some_and(|record| !record.libs.is_empty());
+        OrderState::of(recorded, self.favorites_moved().is_some())
+    }
+    /// How Home ranks its shelves: the server order unless the record moves a favourite, then the
+    /// favourites in presentation and in server order for Home to compare per source.
+    fn home_order(&self) -> crate::pms::HomeOrder<Vec<(ServerId, i64)>> {
+        let Some((effective, default)) = self.favorites_moved() else { return crate::pms::HomeOrder::Natural };
+        let named = |order: Vec<usize>| order.into_iter().filter_map(|index| {
+            let section = self.sections.get(index)?;
+            Some((self.sources.get(section.src)?.sid, section.key))
+        }).collect();
+        crate::pms::HomeOrder::Moved { effective: named(effective), default: named(default) }
+    }
+    /// Where this profile's last Library order write stands (what Settings tells saved from failed by):
+    /// the overlay's own entry for it, through the overlay's own filter.
+    fn order_write(&self) -> WriteState { self.preference_writes.order_write(&self.profile_key) }
+    /// What the profile reads as a library's identity in the record: `(machine id, key)`.
+    fn order_identity(&self, index: usize) -> Option<(String, i64)> {
+        let section = self.sections.get(index)?;
+        let machine = &self.sources.get(section.src)?.machine_id;
+        Some((machine.clone(), section.key))
+    }
+    /// The Library order commands' one door: queue the write the way every other preference write is
+    /// queued (the overlay holds it, and its receipt, until it is saved), mirror it into the local
+    /// record at once, and republish.
+    fn commit_library_order(&mut self, edit: preferences_job::Edit, session: &plx_plex::plex::session::Session) -> bool {
+        if session.client_id.is_empty() {
+            plx_base::eventlog::log(
+                "browse: the session refused a Library order change (no identity) — nothing was recorded");
+            return false;
+        }
+        let user = self.profile_key.clone();
+        if self.preference_writes.emit(&user, edit).is_none() {
+            plx_base::eventlog::log("browse: the write queue refused a Library order change");
+            return false;
+        }
+        // `load_remembered` republishes when the record the overlay now shows is not the one it had
+        self.load_remembered(session, &user);
+        true
+    }
+    fn set_library_order_from(&mut self, libs: Vec<(String, i64)>, session: &plx_plex::plex::session::Session) -> bool {
+        if libs.is_empty() {
+            debug_assert!(false, "a Library order naming no library reached the step (Reset is the command that deletes)");
+            plx_base::eventlog::log(
+                "browse: a Library order naming no library — refused (Reset deletes the record)");
+            return false;
+        }
+        let present: Vec<(String, i64)> = self.default_section_order().into_iter()
+            .filter_map(|index| self.order_identity(index)).collect();
+        self.commit_library_order(preferences_job::Edit::Order { libs, present }, session)
+    }
+    fn reset_library_order_from(&mut self, session: &plx_plex::plex::session::Session) -> bool {
+        self.commit_library_order(preferences_job::Edit::OrderReset, session)
+    }
+    /// The favourites in presentation order, as Settings' Library order lists them.
+    fn library_order_rows(&self) -> Vec<LibraryOrderRow> {
+        self.favorite_order().into_iter().filter_map(|index| {
+            let section = self.sections.get(index)?;
+            let source = self.sources.get(section.src)?;
+            Some(LibraryOrderRow {
+                section: index, machine_id: source.machine_id.clone(), key: section.key,
+                title: section.title.clone(), kind: section.kind, handle: source.handle.clone(),
+            })
+        }).collect()
+    }
     fn favorite_sections(&self) -> Vec<(ServerId, i64, bool)> {
         self.library_pins().into_iter().filter_map(|(source, key, favorite)| {
             self.sources.get(source).map(|row| (row.sid, key, favorite))
@@ -2141,6 +2318,7 @@ impl BrowseState {
     fn tab_of_kind(&self, kind: SecKind) -> Option<usize> {
         self.tab_kinds().position(|candidate| candidate == kind)
     }
+    #[cfg(test)]
     fn tab_kind(&self, tab: usize) -> Option<SecKind> {
         self.tab_kinds().nth(tab)
     }
@@ -2156,8 +2334,10 @@ impl BrowseState {
     ///
     /// The current Library visit wins first, including a non-favorite selected through Library
     /// options. Once that visit ends, [`remembered_section`](Self::remembered_section) restores
-    /// the last-used favorite. The remaining tiebreak among the *pinned* libraries of the type
-    /// prefers the HOUSEHOLD's over an outsider's.
+    /// the last-used favorite. The remaining tiebreak among the *pinned* libraries of the type is the
+    /// profile's Library order ([`Self::favorite_order`]): its first-ordered favourite of the type, which
+    /// with no record is the default order, and that prefers the HOUSEHOLD's over an outsider's
+    /// ([`Self::default_section_order`]).
     ///
     /// The tiebreak is issue #68's mechanism, one household wider. 0.6.x's `tab_section` sorted on
     /// raw `!owned` with no `pinned` filter at all, so two equally-graded libraries tied and the
@@ -2168,6 +2348,16 @@ impl BrowseState {
     /// owned, so everything tied again and the tab could land on a stranger's shelf. Grading on
     /// the household is what makes the tiebreak able to separate them.
     fn section_of_kind(&self, kind: SecKind) -> Option<usize> {
+        self.kind_hint(kind).or_else(|| self.first_favorite_of(kind, &self.section_order()))
+    }
+    /// [`Self::section_of_kind`] over a presentation order already built (`DirectoryData::order`, which
+    /// the publication rebuilds only when the table, a source fact or the record moves): what the
+    /// per-frame capture reads, so a frame that moved none of those allocates nothing for it.
+    fn section_of_kind_in(&self, kind: SecKind, presented: &[usize]) -> Option<usize> {
+        self.kind_hint(kind).or_else(|| self.first_favorite_of(kind, presented))
+    }
+    /// The visit and the profile's memory decide a tab before any order does.
+    fn kind_hint(&self, kind: SecKind) -> Option<usize> {
         if self.tab_has_favorite(kind) {
             if let Some((_, machine, key)) = self.visited.iter().find(|(candidate, _, _)| *candidate == kind) {
                 if let Some(index) = self.sections.iter().position(|section| section.kind == kind && section.key == *key
@@ -2176,16 +2366,15 @@ impl BrowseState {
                 }
             }
         }
-        if let Some(section) = self.remembered_section(kind) {
-            return Some(section);
-        }
-        self.sections.iter().enumerate()
-            .filter(|(_, section)| section.kind == kind && section.pinned)
-            .min_by_key(|(_, section)| {
-                !self.sources.get(section.src).map(|source| source.household).unwrap_or(false)
-            })
-            .map(|(index, _)| index)
+        self.remembered_section(kind)
     }
+    /// The profile's first-ordered favourite of the type in `presented` (every table index in
+    /// presentation order): the default order already puts the household's own servers before shares,
+    /// and a Library order moves them as the profile chose.
+    fn first_favorite_of(&self, kind: SecKind, presented: &[usize]) -> Option<usize> {
+        presented.iter().copied().find(|&index| self.sections.get(index).is_some_and(|section| section.kind == kind && section.pinned))
+    }
+    #[cfg(test)]
     fn tab_section(&self, tab: usize) -> Option<usize> {
         self.section_of_kind(self.tab_kind(tab)?)
     }
@@ -2275,6 +2464,7 @@ impl BrowseState {
         }
     }
     fn load_remembered(&mut self, session: &plx_plex::plex::session::Session, user: &str) {
+        let stored = session;
         let overlaid = self.preference_writes.overlay(session, user);
         let session = &overlaid;
         if self.visited_user != user {
@@ -2287,6 +2477,20 @@ impl BrowseState {
                     .map(|kind| (kind, target.machine_id.clone(), target.key))
             }).collect()).unwrap_or_default();
         self.view_memory = session.views_for(user).cloned().unwrap_or_default();
+        // A record that arrives by reload (a profile switch, a session recovery, a pending write
+        // landing or being dropped) is a moved presentation with no command behind it: republish.
+        // Nothing guarantees `BrowseCmd::Reset` accompanies it. The revocation tenure moves in the
+        // session (`plex::session::tenure`, on sign-out or a replaced account) and the Reset sites
+        // (`activate_server_owned`, the controlled boot) run on a server change, not on that counter;
+        // a tenure move only retires the overlay's pending edits (`Preferences::overlay`), and the
+        // next reload then reads a different record, which is what this compares.
+        let order = session.order_for(user).cloned();
+        let stored = stored.order_for(user).is_some_and(|record| !record.libs.is_empty());
+        if order != self.order_record || stored != self.order_stored {
+            self.order_record = order;
+            self.order_stored = stored;
+            self.bump_sections_gen();
+        }
     }
     /// The pin rules' view of the section table.
     ///
@@ -2327,12 +2531,13 @@ impl BrowseState {
             return;
         }
         let want = self.section_kind(current).and_then(|kind| self.section_of_kind(kind))
-            .or_else(|| self.sections.iter().position(|section| section.pinned));
+            .or_else(|| self.favorite_order().first().copied());
         if let Some(index) = want {
             self.set_cur(index);
         }
     }
-    /// Poll the pending pin write's receipt, once (`PinWrite::observe`). The Bridge calls this
+    /// Poll the pending pin write's receipt, once (`PinWrite::observe`), and the overlay's (the Library
+    /// order's among them). The Bridge calls this
     /// before it reads the session it hands the step (`Bridge::browse_session`), so a write seen as
     /// saved is never paired with a session read from before it.
     pub fn observe_pin_write(&self) {
@@ -2699,6 +2904,8 @@ impl BrowseState {
         self.sections = Vec::new();
         self.states = Vec::new();
         self.recorded = None;
+        self.order_record = None;
+        self.order_stored = false;
         self.remembered = Vec::new();
         self.view_memory = Default::default();
         self.tab_shape = u32::MAX;
@@ -2931,6 +3138,8 @@ impl BrowseState {
                 self.apply_pins_from(&edits, session);
                 true
             }
+            BrowseCmd::SetLibraryOrder(libs) => self.set_library_order_from(libs, session),
+            BrowseCmd::ResetLibraryOrder => self.reset_library_order_from(session),
             BrowseCmd::RetryDiscovery => {
                 self.retry_discovery();
                 true
@@ -3914,6 +4123,21 @@ impl SrcGroup {
     }
 }
 
+/// One favourite library in Settings' Library order, in the order it is shown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryOrderRow {
+    /// the section table index it opens (an identity only inside one table epoch)
+    pub section: usize,
+    /// what an order command names it by, with [`Self::key`]; empty while the registry has not
+    /// learned the server's machine id, which is a row an order cannot record
+    pub machine_id: String,
+    pub key: i64,
+    pub title: String,
+    pub kind: SecKind,
+    /// the owner's handle ("anna" for a friend's share); empty on your own server
+    pub handle: String,
+}
+
 /// One library row in the Sources list.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct SrcRow {
@@ -4597,3 +4821,7 @@ mod membership_tests;
 
 #[cfg(test)]
 mod roster_input_tests;
+
+#[cfg(test)]
+#[path = "browse_library_order_tests.rs"]
+mod library_order_tests;

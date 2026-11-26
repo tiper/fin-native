@@ -26,23 +26,7 @@ fn home_group_identity_uses_provider_and_server_not_title_or_position() {
 
 #[test]
 fn home_keeps_recently_added_rows_for_two_same_type_libraries() {
-    // `librarySectionTitle` is present on every real PMS item (`docs/pms-api.md` §2) — set here
-    // so `localized_hub_title`'s "Recently Added in {library}" override reproduces PMS's own
-    // per-library disambiguation exactly, rather than only being exercised on the fallback path.
-    let body = r#"{"MediaContainer":{"Hub":[
-        {"type":"show","hubIdentifier":"home.television.recent",
-         "title":"Recently Added in TV","key":"/hubs/home/recentlyAdded?type=2&sectionID=1",
-         "Metadata":[{"ratingKey":"101","librarySectionID":"1","librarySectionTitle":"TV",
-                      "type":"show","title":"TV Show","thumb":"/tv.jpg","art":"/tv-art.jpg"}]},
-        {"type":"show","hubIdentifier":"home.television.recent",
-         "title":"Recently Added in TV HDR","key":"/hubs/home/recentlyAdded?type=2&sectionID=2",
-         "Metadata":[{"ratingKey":"202","librarySectionID":"2","librarySectionTitle":"TV HDR",
-                      "type":"show","title":"HDR Show","thumb":"/hdr.jpg","art":"/hdr-art.jpg"}]}
-    ]}}"#;
-    let mc = serde_json::from_str::<plx_plex::plex::Envelope>(body)
-        .expect("the two-library PMS response parses")
-        .media_container;
-    let build = project(&mc, &plx_plex::plex::MediaContainer::default(), sid(0));
+    let build = project(&twin_tv_libraries_home(), &plx_plex::plex::MediaContainer::default(), sid(0));
     let (items, hubs, _) = merge(&[src(0, "", HubState::Ready, Some(build))]);
 
     assert_eq!(hubs.len(), 2, "both same-type library shelves reach Home");
@@ -905,7 +889,7 @@ fn an_unpinned_library_publishes_nothing() {
         src(1, "friend", HubState::Ready, Some(built(1, &[], shelves_in(1, 1, 200, 12)))),
     ];
     let scope = BrowseScope {
-        sections_gen: 0,
+        verdicts: &[], order: crate::pms::HomeOrder::Natural, sections_gen: 0,
         pins: &[(sid(0), 1, true), (sid(1), 1, false)],
         clients: Default::default(),
     };
@@ -1216,7 +1200,7 @@ fn an_unpinned_roster_first_copy_does_not_hide_the_pinned_one() {
         ready(h[0].0, "", vec![card(h[0].0, "own", "Estudios sociales", Some(4), 2, true, 100)]),
         ready(h[1].0, "friend", vec![card(h[1].0, "theirs", "Social Studies", Some(4), 1, true, 900)]),
     ]);
-    let scope = BrowseScope { sections_gen: 1, pins: &[(h[0].0, 2, false), (h[1].0, 1, true)], clients: Default::default() };
+    let scope = BrowseScope { verdicts: &[], order: crate::pms::HomeOrder::Natural, sections_gen: 1, pins: &[(h[0].0, 2, false), (h[1].0, 1, true)], clients: Default::default() };
     let (cat, hubs, _) = merge_with_scope(&o.state.srcs, &scope);
     let deck: Vec<_> = cat[hubs[0].start..hubs[0].start + hubs[0].len].iter().map(|m| m.rk.clone()).collect();
     assert_eq!(deck, ["theirs"], "the show does not vanish");

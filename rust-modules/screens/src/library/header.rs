@@ -248,6 +248,8 @@ impl LibraryScreen {
         for section in directory.sections() {
             (section.sid.map(|sid| sid.raw()), section.key, section.row.title.as_str(), section.row.pinned).hash(&mut h);
         }
+        // the order the pills are PRESENTED in is what a Library order moves: `sections` stays in table order
+        directory.presentation_order().hash(&mut h);
         for (id, source) in directory.sources() { (id.raw(), source.handle.as_str()).hash(&mut h); }
         (listing.id().map(|id| (id.epoch, id.section, id.query)), listing.sort_index(), listing.sort_desc(),
             listing.unwatched(), listing.genre().map(|genre| genre.id.as_str()), listing.total(),

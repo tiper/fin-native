@@ -85,6 +85,7 @@ pub mod grant;
 // persisted answer — no store, no screen — so the household default, the recorded answer and the
 // never-empty floor are graded on the host rather than observed on a television.
 pub mod pins;
+pub mod library_order;
 
 // The plex.tv METADATA PROVIDER (`discover.provider.plex.tv`) — a third service, but one that
 // shares the account API's transport + identity headers exactly, so it only adds an
