@@ -25,13 +25,14 @@
 | `mk/platform-tizen.mk` | the build; the `Makefile` includes it only when `PLATFORM=tizen`, so every webOS and desktop `make` is untouched |
 | `rust-modules/platform-tizen/` | the platform crate (`plx_platform_tizen`) and `include/plx_host.h`, the C contract, written once and read by both sides |
 | `tizen/build-sdl.sh` | static SDL2 + SDL2_ttf from the pins `sdl2` and `sdl2-ttf` in `ci/dependencies.json` (no HarfBuzz) |
+| `ci/build-libass.py` | the subtitle renderer `libass-plx` (the webOS recipe, shared: `tizen-libass` runs it with `PLX_ASS_STAGE`; "The subtitle renderer", below) |
 | `tizen/host/PlxHost/` | the .NET host: `PlxHost.csproj`, `tizen-manifest.xml`, `Program.cs` |
 | `tizen/package.py` | stages the package's `lib/` and `res/`, refuses without signing material, packs and checks the `.tpk` |
 | `ci/check-tizen-so.py` | the contract check: header against C# as text (`abi`), the linker's version script (`map`), the linked library (`verify`) |
 | `tools/tizen-log-receiver.py` | the UDP log receiver, with a lost-datagram report |
 
 Generated and never committed (`.gitignore`): `rust-modules/target-tizen/`, `tizen/out/`, `tizen/sdl-build/`, and under
-`tizen/host/PlxHost/` the staged `lib/`, `bin/`, `obj/`, `res/appfont*.ttf`, `res/OFL.txt`, `res/dev-boot.json`,
+`tizen/host/PlxHost/` the staged `lib/`, `bin/`, `obj/`, `res/appfont*.ttf`, `res/fonts/`, `res/libass-plx*.so.0`, `res/OFL.txt`, `res/dev-boot.json`,
 `res/log-host.txt`, `res/THIRD-PARTY-NOTICES.md`, `res/licenses/` and the icon.
 
 ## The targets
@@ -46,15 +47,18 @@ the television build by accident; the queries (`print-*`) answer under every `PL
 | `tizen-abi` | any host, python3 | reads `plx_host.h` and `Program.cs` as text: the three `plx_host_*` functions, each one's return type and parameter count, both structs field for field (name, order, width), every function-pointer typedef against the host's `delegate` of the same name (return and parameter widths), and every `PLX_HOST_*` constant the host spells equal the header's (the host must spell the version and every event kind and verb) |
 | `tizen-check` | any host with the target's std | `tizen-abi`, then `cargo check --lib` of the platform crate for the selected target |
 | `tizen-sdl` | host tools and the selected compiler | the static SDL2 + SDL2_ttf under `tizen/sdl-build/<arch>` (a stamp of the pins, the script and the flags skips a rebuild that would change nothing) |
-| `tizen-so` | Linux x86_64 with `libgles-dev`, or the ARM NDK | `cargo rustc --crate-type staticlib` of the platform crate (features `tizen,uri,devtriggers`, profile `tvdev`; under `RELEASE=1` profile `release` and features `tizen,uri` only, so a release library carries no dev-trigger seam), then the link into `tizen/out/<arch>/libplx.so` |
-| `tizen-verify` | GNU binutils (from the NDK on ARM) | `ci/check-tizen-so.py verify` on the linked library (below) |
-| `tizen-stage` | python3 | stages `lib/libplx.so`, `res/` and the icon into the host project; `TIZEN_MOCK_HOST` and `TIZEN_LOG_HOST` become `res/dev-boot.json` and `res/log-host.txt` |
+| `tizen-libass` | the above, cmake and pkg-config | the subtitle renderer `tizen/out/<arch>/libass-plx-host.so.0` (x86_64) or `libass-plx.so.0` (armv7), stripped; `ci/build-libass.py` keeps the static stack under `vendor/libass-prefix-host` or `vendor/libass-prefix` (shared with the simulators and the webOS package) and relinks only the facade when it is current |
+| `tizen-so` | Linux x86_64 with `libgles-dev`, or the ARM NDK | `tizen-libass`, then `cargo rustc --crate-type staticlib` of the platform crate (features `tizen,uri,devtriggers`, profile `tvdev`; under `RELEASE=1` profile `release` and features `tizen,uri` only, so a release library carries no dev-trigger seam), then the link into `tizen/out/<arch>/libplx.so` |
+| `tizen-verify` | GNU binutils (from the NDK on ARM) | `ci/check-tizen-so.py verify` on the linked library and, with `--ass`, the renderer (below) |
+| `tizen-stage` | python3 | stages `lib/libplx.so`, `res/` (the renderer, the fonts, the notices) and the icon into the host project; `TIZEN_MOCK_HOST` and `TIZEN_LOG_HOST` become `res/dev-boot.json` and `res/log-host.txt` |
 | `tizen-tpk` | the above, .NET 8 SDK, a Samsung certificate profile | the signed `tizen/out/PlxNative-x86_64.tpk`; refuses at once, naming the missing variables, without the profile |
 | `tizen-tpk-nightly` | the above, .NET 8 SDK, OpenSSL, `RELEASE=1` | builds and verifies `plxnative-tizen-v<label>-<arch>.tpk` with throwaway signing |
 | `print-tizen-config` | any host | the configuration, one `NAME=value` per line (the CI job prints it) |
 
 The emulator link runs on x86_64 Linux. The ARM build uses the pinned webOS NDK on macOS or arm64
-Linux and the `armv7-unknown-linux-gnueabi` Rust target. Run `make setup-env` to install both.
+Linux and the `armv7-unknown-linux-gnueabi` Rust target. Run `make setup-env` to install both. The NDK has no
+x86_64 Linux build, so an x86_64 Linux machine (WSL included) builds only the emulator package; the armv7 one is CI's
+(`tizen-package.yml`) or a Mac's.
 
 ### What the link contains
 
@@ -67,10 +71,37 @@ script generated from the header** that makes the three `plx_host_*` names globa
 symbol is exported. The link is written to `libplx.so.part` and renamed, so a failed link never leaves a half-written library for
 `tizen-verify` to read.
 
+### The subtitle renderer
+
+The package carries a second native library, `libass-plx`, the same one the webOS package ships: the `plx_ass_*` facade (`src/ass.c`,
+`src/ass_fonts.c`, `src/ass_text.c`, `include/ass.h`) over a statically linked libass, FreeType, FriBidi, HarfBuzz and libunibreak. It is
+what draws every text subtitle (`player::ass`, `ass_source`) and what shapes Arabic and Hebrew UI text (`plx_gfx::rtl`). Without it a
+selected subtitle shows "Styled subtitle support is unavailable in this installation" and right-to-left text falls back to boxes.
+It is NOT linked into `libplx.so`: the application opens it at run time by absolute path from its application directory (`dynlib!`,
+candidates `libass-plx-host.so.0`, `libass-plx.so.0`), which on Tizen is `res/` (`DirectoryInfo.Resource`), so it is staged as
+`res/<name>` beside the fonts it reads.
+
+- **Built by the webOS recipe, not a parallel one.** `tizen-libass` runs `ci/build-libass.py` with `PLX_ASS_STAGE=tizen/out/<arch>`, which
+  only changes where the stripped library is published (never `pkg/`, which no Tizen goal writes). On armv7 it is the recipe's ARM
+  cross build, from the same inputs and under the same stamp key as the webOS one: the Tizen armv7 link already uses the same pinned webOS NDK, sysroot (glibc 2.12 symbols) and
+  `ci/arm-cc.py`, and the file is `libass-plx.so.0`. On x86_64 it is the recipe's Linux host build, `libass-plx-host.so.0`, compiled by the build host's
+  `cc` exactly as `libplx.so` is (and under the same `PLX_MAX_GLIBC` ceiling). The static stack is cached by the recipe's own content key
+  under `vendor/libass-prefix(-host)`, shared with the webOS package and the simulators.
+- **The fonts.** `tizen/package.py` stages every face of the UI text chain (`appfont.ttf`, `appfont-bold.ttf`, `appfont-cjk.ttf`,
+  `appfont-emoji.ttf`, the Arabic and Hebrew faces with their bold cuts; `ci/test_shipped_faces.py` holds the list to `text.rs`) and the
+  per-script subtitle faces with their manifest in `res/fonts/subs/`. The renderer's default face is `appfont-cjk.ttf`; `verify_tpk`
+  refuses a package that lacks a face the packaged manifest names.
+- **Checked.** `tizen-verify` holds the renderer to its own rules (below); `verify_tpk` requires exactly one renderer, under one of the two
+  names, byte-equal to the verified file, and no other ELF object outside `lib/`.
+- **Size.** The x86_64 emulator package grew from 15,043,205 to 25,621,891 bytes (a `tvdev` build with the dev-boot files, measured
+  2026-11-26). The renderer is 3.2 MB stripped and `appfont-cjk.ttf` 13.4 MB, both before compression.
+
 **Notices.** The package statically links SDL2 and SDL2_ttf (zlib) and FreeType (the FreeType License, which requires the credit to be shown
-in the documentation shipped with the product), so the `.tpk` carries `res/THIRD-PARTY-NOTICES.md` and `res/licenses/` (the project's own
+in the documentation shipped with the product), and carries the renderer (libass ISC, FreeType, FriBidi LGPL-2.1-or-later, HarfBuzz Old MIT,
+libunibreak zlib: `THIRD-PARTY-NOTICES.md` 1.2), so the `.tpk` carries `res/THIRD-PARTY-NOTICES.md` and `res/licenses/` (the project's own
 `LICENSE`, `LICENSING.md`, `TRADEMARKS.md` and every `licenses/*.txt`, the set the `.ipk` ships); `tizen/package.py` stages them and
-`verify_tpk` fails a package without the notices, `Zlib.txt` or `FreeType.txt`. `THIRD-PARTY-NOTICES.md` section 2.8 is this package's additional entry and states, heading by heading, which other sections of the file cover the `.tpk`; section 3 there describes the webOS package, so read 2.8 first.
+`verify_tpk` fails a package without the notices, `Zlib.txt`, `FreeType.txt` or the renderer's texts (`libass-ISC.txt`, `HarfBuzz-Old-MIT.txt`,
+`libunibreak-Zlib.txt`, `LGPL-2.1.txt`). `THIRD-PARTY-NOTICES.md` section 2.8 is this package's additional entry and states, heading by heading, which other sections of the file cover the `.tpk`; section 3 there describes the webOS package, so read 2.8 first.
 
 ### What `tizen-verify` checks
 
@@ -93,10 +124,16 @@ symbols are exactly `plx_host_start`, `plx_host_post` and `plx_host_stop`, equal
 glibc; the CI runner, ubuntu-24.04, links against 2.39). A newer build host is a failure that names the ceiling: link on an older host, raise `PLX_MAX_GLIBC`
 if you know the target's glibc, or `PLX_ALLOW_NEW_GLIBC=1` to report and continue. The parsers and every rule are unit-tested on canned
 `readelf`/`nm` text (`ci/test_tizen_so_check.py`). The ARM check also compares every required import and
-library name against `ci/testdata/tizen60-armv7-abi.json`. Its exports come from the Tizen 6.0 ARM
+library name against `ci/testdata/tizen60-armv7-abi.json` (the renderer's too). Its exports come from the Tizen 6.0 ARM
 rootstrap and the matching Tizen SDK compiler's `libgcc_s.so.1`. Both archives and their SHA-256
 digests are in `ci/dependencies.json` under `tizen60-abi-reference`. The inventory covers link-time
 imports. Runtime libraries loaded by name still need device verification.
+
+`--ass` verifies the renderer the same way, under its own rules (`verify_ass_object`): `DT_NEEDED` only `libc.so.6` (required), `libm.so.6`,
+`libpthread.so.0`, `librt.so.1`, `libgcc_s.so.1` and the loader (no `libGLESv2`, and no firmware FreeType, FriBidi, HarfBuzz or libass: the
+stack is static); the SONAME the build gives the architecture (`libass-plx-host.so.0` on x86_64, `libass-plx.so.0` on armv7); no text relocation
+or static TLS; every undefined symbol a versioned glibc/libgcc one; the exports exactly the `plx_ass_*` functions `include/ass.h` declares
+(so no `FT_`/`hb_`/`fribidi_`/`ass_` name leaks); the same glibc ceiling and, on armv7, the same Tizen 6.0 inventory.
 
 ### The contract with the host
 
@@ -255,13 +292,15 @@ WSL2 Ubuntu 22.04 or newer is enough. Versions come from the repository's pins; 
 
 - the checkout on the branch named for the run, and `rustup` with the toolchain pinned in `rust-modules/rust-toolchain.toml`
   (the plain host target, no cross compiler; `make` installs nothing);
-- `gcc`, `make`, `curl`, `tar`, `python3` (3.10 is enough) and binutils (`apt install build-essential curl python3`);
-  `pkg-config` is not required (a "could not discover SDL2" warning from the crates' build scripts is expected and harmless);
+- `gcc`, `g++`, `make`, `curl`, `tar`, `python3` (3.10 is enough) and binutils (`apt install build-essential curl python3`);
+- `cmake` and `pkg-config` (`apt install cmake pkg-config`) for the subtitle renderer's static font stack (`tizen-libass`); a "could not
+  discover SDL2" warning from the crates' build scripts is expected and harmless;
 - `apt install libgles-dev`: the link stub for `libGLESv2.so`. Keep `libsdl2-dev` and `libsdl2-ttf-dev` off a build machine that
   only builds the library (the host unit tests link them, CI installs them); the library links its own static SDL by path and
   `tizen-verify` fails on a `libSDL2` in `DT_NEEDED` either way;
 - a checkout path without spaces (SDL's autoconf cannot build there; under WSL use a path in the Linux filesystem, not `/mnt/c/...`);
-- network to `raw.githubusercontent.com` (the nanosvg headers) and the SDL release hosts: every one of those downloads is pinned and
+- network to `raw.githubusercontent.com` (the nanosvg headers), the SDL release hosts and the libass stack's (FreeType, FriBidi, HarfBuzz,
+  libunibreak, libass): every one of those downloads is pinned and
   sha256-verified by `ci/deps.py` and cached machine-wide;
 - for the `.tpk`: a user-local .NET 8 SDK (`dotnet-install.sh --channel 8.0 --install-dir ~/.dotnet`, with `DOTNET_ROOT` if elsewhere),
   `sdb`, network to nuget.org and the Samsung certificate profile below. The NuGet packages are exact-version pins in `PlxHost.csproj`
@@ -538,7 +577,9 @@ Not measured: a retail set, other layouts and languages (the `globe` key), the p
 
 `.github/workflows/tizen.yml`, job `tizen-so` ("Tizen library (link and verify, no emulator)"), on `ubuntu-24.04`, only for the
 paths it names (`rust-modules/**` is one: the library is the whole application, so a new `extern` symbol anywhere is this link's
-undefined symbol). It prints the configuration, runs `tizen-abi`, `tizen-so` and `tizen-verify`, then
+undefined symbol; the renderer's recipe, facade sources and the staged fonts are others). It restores the Linux simulator job's cache of the
+host libass stack (same path and key), prints the configuration, runs `tizen-abi`, `tizen-so` (which builds the renderer first) and
+`tizen-verify`, then
 `cargo test --lib -p plx_platform_tizen --features tizen` from `rust-modules`: the pattern of `ci.yml`'s host unit job, which already
 runs the crate with its default features (an empty library), so this pass adds the crate's own `tizen` tests. It uses no emulator, no
 .NET SDK and no certificate, is **not** a required check, and branch protection is not edited.

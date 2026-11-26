@@ -1,7 +1,8 @@
 name: Tizen library CI
 
 # The Tizen platform's hosted library (docs/tizen.md; mk/platform-tizen.mk): links `libplx.so` (the `plx_platform_tizen` staticlib, a
-# STATIC SDL2 + SDL2_ttf and nanosvg's rasterizer) and checks what the link produced. The x86_64 job verifies the emulator library.
+# STATIC SDL2 + SDL2_ttf and nanosvg's rasterizer), builds the subtitle renderer `libass-plx` beside it (ci/build-libass.py, the webOS
+# recipe) and checks what both produced. The x86_64 job verifies the emulator library.
 # The ARMv7 job builds the release package. The link check proves it links against the expected system libraries
 # a Tizen television has (`-z defs`), that its DT_NEEDED set, undefined symbols, exports and glibc ceiling are the allowlist's
 # (`ci/check-tizen-so.py verify`), and that the C header and the .NET host agree on the three exports (`ci/check-tizen-so.py abi`).
@@ -38,6 +39,24 @@ on:
       - 'rust-modules/**'
       - '!rust-modules/**/*.md'
       - 'src/svg.c'
+      # The subtitle renderer the package carries (`tizen-libass`): its recipe, its facade sources and the fonts staged beside it.
+      - 'ci/build-libass.sh'
+      - 'ci/host-toolchain-id.sh'
+      - 'ci/build-libass.py'
+      - 'ci/stage-link-evidence.py'
+      - 'ci/check-link-evidence.py'
+      - 'ci/patches/libass-*.patch'
+      - 'src/ass.c'
+      - 'src/ass_fonts.c'
+      - 'src/ass_text.c'
+      - 'src/ass_internal.h'
+      - 'src/ass_composite.h'
+      - 'include/ass.h'
+      - 'pkg/appfont*.ttf'
+      - 'pkg/fonts/subs/**'
+      - 'pkg/OFL.txt'
+      - 'THIRD-PARTY-NOTICES.md'
+      - 'licenses/**'
       - 'ci/check-tizen-so.py'
       - 'ci/testdata/tizen60-armv7-abi.json'
       - 'ci/nightly.py'
@@ -78,11 +97,12 @@ jobs:
 
       - name: Install the GLES2 development library the link names
         # `-lGLESv2` resolves against libGLESv2.so (the .so symlink is in -dev only). The television has no such package: the library
-        # needs `libGLESv2.so.2` at run time and the Tizen image provides it (inventory D3). Bounded apt path, as every job here.
+        # needs `libGLESv2.so.2` at run time and the Tizen image provides it (inventory D3). cmake and pkg-config build the renderer's
+        # static font stack (ci/build-libass.py). Bounded apt path, as every job here.
         timeout-minutes: 15
         uses: ./.github/actions/apt-install
         with:
-          packages: libgles-dev binutils
+          packages: libgles-dev binutils cmake pkg-config
 
       # The pinned Rust toolchain, the cargo cache, and (sdl: "true") the desktop SDL/GL development packages that LINK the crate's own host
       # test binary (build.rs links them for every host test binary). The library itself links NONE of them: its SDL is built from the
@@ -91,16 +111,29 @@ jobs:
         with:
           sdl: "true"
 
+      - id: toolchain
+        name: Identify the host toolchain
+        run: echo "id=$(./ci/host-toolchain-id.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the host libass stack
+        # The emulator's renderer is ci/build-libass.py's host build, the one the Linux simulator job builds, so this is THAT job's entry
+        # (simulators.yml, same path and key): a hit skips the static FreeType/FriBidi/HarfBuzz/libunibreak/libass build and only the
+        # facade relinks. The script still re-checks its own content stamp, so a stale entry rebuilds rather than ships.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: vendor/libass-prefix-host
+          key: host-libass-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.id }}-${{ hashFiles('ci/build-libass.sh', 'ci/build-libass.py', 'ci/dependencies.json', 'ci/deps.py', 'ci/arm-cc.py', 'ci/check-link-evidence.py', 'ci/stage-link-evidence.py', 'ci/patches/libass-0001-grow-font-faces.patch', 'src/ass.c', 'src/ass_text.c', 'src/ass_fonts.c', 'src/ass_internal.h', 'src/ass_composite.h', 'include/ass.h') }}
+
       - name: The configuration
         run: make PLATFORM=tizen print-tizen-config
 
       - name: The header and the .NET host agree on the exports
         run: make PLATFORM=tizen tizen-abi
 
-      - name: Build the library (static SDL2 + SDL2_ttf, the platform staticlib, the link)
+      - name: Build the library (static SDL2 + SDL2_ttf, the platform staticlib, the link) and the subtitle renderer
         run: make PLATFORM=tizen tizen-so
 
-      - name: Verify the library (DT_NEEDED allowlist, undefined symbols, exports, glibc ceiling)
+      - name: Verify the library and the renderer (DT_NEEDED allowlists, undefined symbols, exports, glibc ceiling)
         run: make PLATFORM=tizen tizen-verify
 
       - name: The platform crate's own host tests with the Tizen feature

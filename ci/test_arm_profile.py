@@ -125,10 +125,10 @@ HOST_ONLY_GOALS = (
     "print-playback-config",
 )
 # The Tizen goals (`mk/platform-tizen.mk`, read only under PLATFORM=tizen): the host library, the static SDL, the .NET host's package. None builds,
-# reads or ships the ARM artifacts or writes under pkg/ (it reads pkg/appfont*.ttf and pkg/OFL.txt and writes under tizen/ and rust-modules/target-tizen),
+# reads or ships the ARM artifacts or writes under pkg/ (it reads the pkg/ fonts and OFL.txt and writes under tizen/, rust-modules/target-tizen and the libass stack's vendor/ prefix),
 # so none may reset the stamp: `make PLATFORM=tizen tizen-abi` after a `make ARM_PROFILE=release deploy` once deleted the release-built pkg/plxnative.
 # Run with PLATFORM=tizen: without it the goal does not exist and the test would pass for the wrong reason.
-TIZEN_GOALS = ("tizen-abi", "tizen-check", "tizen-sdl", "tizen-so", "tizen-verify", "tizen-stage", "tizen-signing", "tizen-tpk",
+TIZEN_GOALS = ("tizen-abi", "tizen-check", "tizen-sdl", "tizen-libass", "tizen-so", "tizen-verify", "tizen-stage", "tizen-signing", "tizen-tpk",
                "tizen-tpk-nightly", "print-tizen-config")
 # Goals that stay OUT of SIDE_EFFECT_FREE, each with the reason. A goal that builds, reads or ships the ARM
 # artifacts (or writes under pkg/) must reset the stamp: that is how a stale binary is never deployed.

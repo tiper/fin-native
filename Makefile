@@ -888,7 +888,7 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 #     when `test-hostsim` and `check-nodef` were listed. Each such goal builds a cargo tree under
 #     `rust-modules/` or runs a script, and none of them reads what the stamp guards.
 #   * The TIZEN goals (`tizen-*`, `print-tizen-config`; mk/platform-tizen.mk, read only under PLATFORM=tizen) build a host library under
-#     `tizen/` and `rust-modules/target-tizen` and read `pkg/` fonts only. `make PLATFORM=tizen tizen-abi` after a
+#     `tizen/` and `rust-modules/target-tizen` (and the shared libass stack under `vendor/`) and read `pkg/` fonts only. `make PLATFORM=tizen tizen-abi` after a
 #     `make ARM_PROFILE=release deploy` deleted the release-built binary (a reviewer's find on the Tizen PR): ci/test_arm_profile.py pins them.
 #   * TV-CONTROL goals: `kill`, `run`, `run-stream`, `verify-deploy`, `uninstall`, `fetch-profile` and
 #     `softfloat-probe` each have `tv-lock-require` as their one prerequisite and an ssh/scp recipe, and
@@ -907,7 +907,7 @@ RUST_CFG       = features:$(RUST_FEATFLAGS)$(if $(filter-out release,$(ARM_PROFI
 # goal in the two kinds above resets nothing under a dry run, and every goal named as NOT here stays out
 # of the list. The list is ONE line on purpose (`grep '^SIDE_EFFECT_FREE' Makefile` is the exact set,
 # and several tests read it that way).
-SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim test-host-interface check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require tizen-abi tizen-check tizen-sdl tizen-so tizen-verify tizen-stage tizen-signing tizen-tpk tizen-tpk-nightly
+SIDE_EFFECT_FREE = $(QUERY_GOALS) release-guard lab-guard disk disk-preflight build-bench build-bench-quick test-hostsim test-host-interface check-nodef test-fast test-crate fuzz-hud lint check-cargo-lint check-cargo-unit-hostsim check-localization check-c-unit check-python-harness notices notices-verify setup-rust setup-env disk-watch disk-watch-uninstall fixtures fixtures-quick fixtures-pipeline demo-library sim-token sim-macos-token sim-clean sim-macos-clean kill run run-stream verify-deploy uninstall fetch-profile softfloat-probe tv-lock-require tizen-abi tizen-check tizen-sdl tizen-libass tizen-so tizen-verify tizen-stage tizen-signing tizen-tpk tizen-tpk-nightly
 # A BARE `make PLATFORM=tizen` has no goal either, and its default goal is `tizen-check` (mk/platform-tizen.mk), which is side-effect free;
 # a bare webOS or desktop `make` builds the package and stays a reset.
 PURE_QUERY := $(if $(MAKECMDGOALS),$(if $(filter-out $(SIDE_EFFECT_FREE),$(MAKECMDGOALS)),,yes),$(if $(filter tizen,$(PLATFORM)),yes,))

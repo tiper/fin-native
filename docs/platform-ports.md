@@ -1390,7 +1390,9 @@ Ecore names to `remote_token_key` pairs".
   -Wl,--whole-archive` over it plus `svg.o` and a STATIC SDL2 + SDL2_ttf built from the pins in `ci/dependencies.json`
   (`tizen/build-sdl.sh`), with `-z defs`, a version script that exports only the header's three `plx_host_*` names and
   `-lGLESv2` (decision D3). No `main.c`, `access.c`, `exit.c`, `starfish.c` or `video_plane.c`, and none of
-  `sentry_context.o`, `crashtrace.o` or libass: nothing the emulator build reaches references them. No cdylib crate type,
+  `sentry_context.o` or `crashtrace.o`: nothing the emulator build reaches references them. libass is not linked in
+  either: the package carries the separate `libass-plx` the webOS package ships, from the same recipe, opened by name from
+  `res/` (`tizen-libass`; docs/tizen.md, "The subtitle renderer"). No cdylib crate type,
   so `ci/test_no_host_staticlib.py` is untouched. `docs/tizen.md` is the build's page.
 - CI: `cross-build` (`ci.yml:531`) stays required and webOS-only. The compile-only Tizen job is its own workflow,
   `.github/workflows/tizen.yml` (job `tizen-so`, not a required check): it builds the `.so` (`make PLATFORM=tizen tizen-so`),

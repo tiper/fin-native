@@ -6,8 +6,11 @@
 # carries both. The library is the platform crate `plx_platform_tizen` as a cargo STATICLIB (`cargo rustc --crate-type staticlib`,
 # the crate itself stays an rlib: ci/test_no_host_staticlib.py), linked by the host C compiler with `--whole-archive` together with
 # `svg.o` (the nanosvg rasterizer the UI's icons use) and a STATIC SDL2 + SDL2_ttf built from the pins in ci/dependencies.json
-# (tizen/build-sdl.sh). No main.c, access.c, exit.c, starfish.c, video_plane.c, libass or crash recorder: none is referenced on this
-# platform (docs/tizen.md). The Makefile's `CC` (ci/arm-cc.py), `RUST_ENV` (cortex-a9 flags) and `src/svg.o` are the ARM build's and are
+# (tizen/build-sdl.sh). No main.c, access.c, exit.c, starfish.c, video_plane.c or crash recorder: none is referenced on this
+# platform (docs/tizen.md). The ASS renderer is NOT linked in either: it is the same separate `libass-plx` the webOS package
+# carries (the plx_ass_* facade over a static FreeType/FriBidi/HarfBuzz/libunibreak/libass), opened by name from the
+# application directory (`res/`) by the subtitle renderer and the right-to-left text path, and built by `tizen-libass` with
+# ci/build-libass.py, the webOS recipe, unchanged in its pins and flags. The Makefile's `CC` (ci/arm-cc.py), `RUST_ENV` (cortex-a9 flags) and `src/svg.o` are the ARM build's and are
 # kept separate for the emulator. The ARM build uses the same NDK but its own objects and Cargo tree.
 #
 # x86_64 targets the Tizen TV 10.0 emulator. armv7 cross-compiles with the pinned NDK for retail
@@ -25,8 +28,9 @@
 #
 #   make PLATFORM=tizen tizen-check     the library's source compiles for the emulator target, and the C# host and plx_host.h agree
 #   make PLATFORM=tizen tizen-sdl       the static SDL2 + SDL2_ttf (cached under tizen/sdl-build/)
-#   make PLATFORM=tizen tizen-so        tizen/out/x86_64/libplx.so
-#   make PLATFORM=tizen tizen-verify    DT_NEEDED allowlist, undefined symbols, exports, glibc ceiling (ci/check-tizen-so.py)
+#   make PLATFORM=tizen tizen-libass    tizen/out/x86_64/libass-plx-host.so.0 (armv7: libass-plx.so.0), the subtitle renderer
+#   make PLATFORM=tizen tizen-so        tizen/out/x86_64/libplx.so (and tizen-libass)
+#   make PLATFORM=tizen tizen-verify    DT_NEEDED allowlist, undefined symbols, exports, glibc ceiling of both (ci/check-tizen-so.py)
 #   make PLATFORM=tizen tizen-stage     the package's res/ and lib/ staged into the host project (what tizen-tpk packs)
 #   make PLATFORM=tizen tizen-tpk       the signed package; refuses at once, naming the missing variables, without the signing four
 #   make PLATFORM=tizen print-tizen-config   the configuration, one NAME=value per line
@@ -45,10 +49,16 @@ TIZEN_SDL_TOOLS    = PLX_SDL_HOST=arm-linux-gnueabi AR='$(TOOLPREFIX)ar' NM='$(T
 TIZEN_ELF_TOOLS    = --readelf '$(TOOLPREFIX)readelf' --nm '$(TOOLPREFIX)nm'
 TIZEN_ELF_REFERENCE = --against ci/testdata/tizen60-armv7-abi.json
 TIZEN_COMPAT_OBJ   = $(TIZEN_BUILD)/getauxval.o
+# The renderer is the webOS package's own cross build (ci/build-libass.py without HOST): the same NDK, sysroot and flags.
+TIZEN_ASS_NAME     = libass-plx.so.0
+TIZEN_ASS_ENV      = WEBOS_SDK='$(WEBOS_SDK)'
 TIZEN_GUARD        = test -x '$(TOOLPREFIX)gcc' || { echo 'tizen: install the pinned NDK with make setup-env' >&2; exit 1; }
 else
 TIZEN_RUST_TARGET  = x86_64-unknown-linux-gnu
 TIZEN_CC          ?= cc
+# The renderer is ci/build-libass.py's host build (HOST=1), linked by the build host's `cc` like the library below.
+TIZEN_ASS_NAME     = libass-plx-host.so.0
+TIZEN_ASS_ENV      = HOST=1
 TIZEN_GUARD        = test "$$(uname -s)-$$(uname -m)" = Linux-x86_64 || { echo "tizen: the emulator library needs an x86_64 Linux build host" >&2; exit 1; }
 endif
 TIZEN_TFM          = tizen80
@@ -74,6 +84,8 @@ TIZEN_A            = $(TIZEN_CARGO_DIR)/libplx_platform_tizen.a
 TIZEN_BUILD        = tizen/out/$(TIZEN_NIGHTLY_SUBDIR)$(TIZEN_ARCH)
 TIZEN_SDL          = tizen/sdl-build/$(TIZEN_NIGHTLY_SUBDIR)$(TIZEN_ARCH)
 TIZEN_SO           = $(TIZEN_BUILD)/libplx.so
+TIZEN_ASS          = $(TIZEN_BUILD)/$(TIZEN_ASS_NAME)
+TIZEN_ASS_HEADER   = include/ass.h
 TIZEN_MAP          = $(TIZEN_BUILD)/plx_host.map
 TIZEN_HEADER       = rust-modules/platform-tizen/include/plx_host.h
 TIZEN_HOST_DIR     = tizen/host/PlxHost
@@ -86,7 +98,7 @@ TIZEN_CARGO_ENV    = env -u PLX_SENTRY_DSN -u PLX_SENTRY_DSN_DEV -u PLX_POSTHOG_
                      PATH="$$HOME/.cargo/bin:$$PATH" CARGO_INCREMENTAL=0 \
                      RUSTFLAGS="$(TIZEN_RUST_CODEGEN) $(RUST_REMAP) $(RUST_CAPLINTS)"
 
-.PHONY: tizen-abi tizen-check tizen-sdl tizen-so tizen-verify tizen-stage tizen-signing tizen-tpk tizen-tpk-nightly print-tizen-config
+.PHONY: tizen-abi tizen-check tizen-sdl tizen-libass tizen-so tizen-verify tizen-stage tizen-signing tizen-tpk tizen-tpk-nightly print-tizen-config
 .DEFAULT_GOAL := tizen-check
 
 # The three exports the .NET host calls, from the header, and the C# DllImport list and callback table checked against it. Text only.
@@ -104,6 +116,14 @@ tizen-check: tizen-abi
 tizen-sdl:
 	@$(TIZEN_GUARD)
 	CC='$(TIZEN_CC)' PLX_SDL_CPPFLAGS='$(TIZEN_CFLAGS)' $(TIZEN_SDL_TOOLS) tizen/build-sdl.sh $(TIZEN_SDL)
+
+# The subtitle renderer and right-to-left shaper, `libass-plx` (docs/tizen.md, "The subtitle renderer"). The recipe is the webOS one,
+# ci/build-libass.py, which keeps its own content-keyed stamp of the static stack under vendor/libass-prefix(-host) (shared with the webOS
+# package and the simulators, so an unchanged stack is not rebuilt) and relinks the small facade each time. PLX_ASS_STAGE publishes the
+# stripped library into this build's directory instead of pkg/, which no Tizen goal writes. It needs cmake and pkg-config.
+tizen-libass:
+	@$(TIZEN_GUARD)
+	$(TIZEN_ASS_ENV) PLX_ASS_STAGE='$(CURDIR)/$(TIZEN_BUILD)' ./ci/build-libass.sh
 
 # The nanosvg rasterizer the UI's icons use, for this host (the ARM `src/svg.o` is a different object). nanosvg's headers are
 # staged from the pins by the Makefile's own rule.
@@ -125,7 +145,7 @@ $(TIZEN_MAP): $(TIZEN_HEADER) ci/check-tizen-so.py
 # three exported roots drops the code the platform never reaches before the undefined-symbol check, as rustc does for a cdylib.
 # `--as-needed` keeps DT_NEEDED to what the link truly uses. SDL's archives precede their dependencies; the system libraries come last.
 # The result is written beside its name and renamed, so a failed link never leaves a half-written libplx.so for `tizen-verify` to read.
-tizen-so: tizen-sdl $(TIZEN_BUILD)/svg.o $(TIZEN_COMPAT_OBJ) $(TIZEN_MAP)
+tizen-so: tizen-sdl tizen-libass $(TIZEN_BUILD)/svg.o $(TIZEN_COMPAT_OBJ) $(TIZEN_MAP)
 	@$(TIZEN_GUARD)
 	mkdir -p rust-modules/$(TIZEN_TDIR) $(TIZEN_BUILD)
 	cd rust-modules && $(TIZEN_CARGO_ENV) \
@@ -145,9 +165,11 @@ tizen-so: tizen-sdl $(TIZEN_BUILD)/svg.o $(TIZEN_COMPAT_OBJ) $(TIZEN_MAP)
 
 # What the linked library may need and export (ci/check-tizen-so.py verify): the DT_NEEDED allowlist, no undefined symbol outside the
 # loader's own, the exports equal to the header's and to the C# DllImport list, no text relocation, SDL/FreeType present and not exported, and
-# the glibc ceiling PLX_MAX_GLIBC. Needs the binutils of the build host.
-TIZEN_VERIFY = test -f $(TIZEN_SO) || { echo "tizen-verify: $(TIZEN_SO) is missing; run: make PLATFORM=tizen tizen-so" >&2; exit 1; }; \
-	  python3 ci/check-tizen-so.py verify $(TIZEN_SO) --arch $(TIZEN_ARCH) $(TIZEN_ELF_TOOLS) $(TIZEN_ELF_REFERENCE) --header $(TIZEN_HEADER) --host-cs $(TIZEN_HOST_CS)
+# the glibc ceiling PLX_MAX_GLIBC. `--ass` holds the renderer to its own rules: the C runtime only, exactly the plx_ass_* functions of
+# include/ass.h as its exports, the same glibc ceiling and (armv7) the same Tizen 6.0 inventory. Needs the binutils of the build host.
+TIZEN_VERIFY = for f in $(TIZEN_SO) $(TIZEN_ASS); do test -f $$f || { echo "tizen-verify: $$f is missing; run: make PLATFORM=tizen tizen-so" >&2; exit 1; }; done; \
+	  python3 ci/check-tizen-so.py verify $(TIZEN_SO) --arch $(TIZEN_ARCH) $(TIZEN_ELF_TOOLS) $(TIZEN_ELF_REFERENCE) --header $(TIZEN_HEADER) --host-cs $(TIZEN_HOST_CS) \
+	    --ass $(TIZEN_ASS) --ass-header $(TIZEN_ASS_HEADER)
 tizen-verify:
 	@$(TIZEN_VERIFY)
 # `make -j tizen-so tizen-verify` must not read the old library while the new one links: when both are goals, verify waits for the link.
@@ -155,12 +177,13 @@ ifneq ($(filter tizen-so,$(MAKECMDGOALS)),)
 tizen-verify: | tizen-so
 endif
 
-# Stages the package's payload into the host project (tizen/package.py): lib/libplx.so, res/appfont.ttf and OFL.txt, the icon, and the two
+# Stages the package's payload into the host project (tizen/package.py): lib/libplx.so, the renderer and the fonts under res/, OFL.txt, the
+# notices, the icon, and the two
 # dev-boot inputs. TIZEN_MOCK_HOST=HOST:PORT writes res/dev-boot.json (the mock Plex server the emulator reaches as 10.0.2.2; tests/mock_pms.py)
 # and TIZEN_LOG_HOST=IPV4:PORT writes res/log-host.txt (the UDP log channel; tools/tizen-log-receiver.py); a value that is absent writes NO file and
 # removes a stale one, so the package is exactly what the command line asked for. The values are addresses, never a credential.
 tizen-stage:
-	python3 tizen/package.py stage --so $(TIZEN_SO) $(if $(TIZEN_MOCK_HOST),--mock-host '$(TIZEN_MOCK_HOST)') $(if $(TIZEN_LOG_HOST),--log-host '$(TIZEN_LOG_HOST)')
+	python3 tizen/package.py stage --so $(TIZEN_SO) --ass $(TIZEN_ASS) $(if $(TIZEN_MOCK_HOST),--mock-host '$(TIZEN_MOCK_HOST)') $(if $(TIZEN_LOG_HOST),--log-host '$(TIZEN_LOG_HOST)')
 
 # The signing environment is read by tizen/package.py from the environment itself: PLX_TIZEN_AUTHOR_P12, PLX_TIZEN_AUTHOR_PASS,
 # PLX_TIZEN_DIST_P12, PLX_TIZEN_DIST_PASS. A password is NEVER written in this file (make would echo it and put it in argv). This check
@@ -171,20 +194,20 @@ tizen-signing:
 # The verification is a RECIPE line, after the link: as a prerequisite of its own it could run beside `tizen-so` under -j and read the old library.
 tizen-tpk: tizen-signing tizen-so
 	@$(TIZEN_VERIFY)
-	python3 tizen/package.py tpk --so $(TIZEN_SO) $(if $(TIZEN_MOCK_HOST),--mock-host '$(TIZEN_MOCK_HOST)') $(if $(TIZEN_LOG_HOST),--log-host '$(TIZEN_LOG_HOST)')
+	python3 tizen/package.py tpk --so $(TIZEN_SO) --ass $(TIZEN_ASS) $(if $(TIZEN_MOCK_HOST),--mock-host '$(TIZEN_MOCK_HOST)') $(if $(TIZEN_LOG_HOST),--log-host '$(TIZEN_LOG_HOST)')
 
 # The configuration, for the CI job's log and a PR body (docs/platform-ports.md: "their variables are printed by the CI job").
 print-tizen-config:
 	@printf '%s\n' 'PLATFORM=$(PLATFORM)' 'TIZEN_ARCH=$(TIZEN_ARCH)' 'TIZEN_RUST_TARGET=$(TIZEN_RUST_TARGET)' 'TIZEN_TFM=$(TIZEN_TFM)' \
 	  'TIZEN_PROFILE=$(TIZEN_PROFILE)' 'TIZEN_FEATURES=$(TIZEN_FEATURES)' 'RUST_TOOLCHAIN=$(RUST_TOOLCHAIN)' 'TIZEN_CC=$(TIZEN_CC)' \
-	  'TIZEN_STATICLIB=$(TIZEN_A)' 'TIZEN_SO=$(TIZEN_SO)' 'TIZEN_SYSLIBS=$(TIZEN_SYSLIBS)'
+	  'TIZEN_STATICLIB=$(TIZEN_A)' 'TIZEN_SO=$(TIZEN_SO)' 'TIZEN_ASS=$(TIZEN_ASS)' 'TIZEN_SYSLIBS=$(TIZEN_SYSLIBS)'
 
 tizen-tpk-nightly:
 	@test '$(RELEASE)' = 1 || { echo 'tizen-tpk-nightly needs RELEASE=1' >&2; exit 1; }
 	python3 tizen/package.py check-nightly --label '$(TIZEN_NIGHTLY_LABEL)' $(if $(TIZEN_MOCK_HOST),--mock-host '$(TIZEN_MOCK_HOST)') $(if $(TIZEN_LOG_HOST),--log-host '$(TIZEN_LOG_HOST)')
 	$(MAKE) PLATFORM=tizen TIZEN_ARCH=$(TIZEN_ARCH) RELEASE=1 FLAVOR=nightly TIZEN_PROFILE=release \
 	  TIZEN_FEATURES=tizen,uri PLX_NIGHTLY_DATE='$(lastword $(subst -, ,$(TIZEN_NIGHTLY_LABEL)))' tizen-so tizen-verify
-	python3 tizen/package.py tpk-nightly --so tizen/out/nightly/$(TIZEN_ARCH)/libplx.so --label '$(TIZEN_NIGHTLY_LABEL)'
+	python3 tizen/package.py tpk-nightly --so tizen/out/nightly/$(TIZEN_ARCH)/libplx.so --ass tizen/out/nightly/$(TIZEN_ARCH)/$(TIZEN_ASS_NAME) --label '$(TIZEN_NIGHTLY_LABEL)'
 
 # The disk budget at the two build entries of this file (docs/disk-budget.md): both start cargo. ORDER-ONLY, as every entry is. The estimate
 # is not a measurement yet: the checked-in table (tools/disk-budget.py NEED_GIB) has no `target-tizen` row.
