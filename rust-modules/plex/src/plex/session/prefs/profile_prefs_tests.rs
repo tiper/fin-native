@@ -3,7 +3,7 @@
 //! seats. The live half (cells, the door, the restore) is `media::route::prefs_tests`; the seat
 //! trigger is the app's `restore_characterisation_tests`.
 use super::super::{
-    DolbyVisionMode, InstantDpadSeeking, UriEngine, current_seat, AudioEnhancementsPref, CurrentProfile, DeckPress, DeckPressPref, UnderPosters, DetailPart, DetailParts, DirectPlayMode, DirectPlayModePref,
+    DolbyVisionMode, AudioConversion, InstantDpadSeeking, UriEngine, current_seat, AudioEnhancementsPref, CurrentProfile, DeckPress, DeckPressPref, UnderPosters, DetailPart, DetailParts, DirectPlayMode, DirectPlayModePref,
     HdrOverlayBrightness, HdrOverlayBrightnessPref, NextEpisodeMode, NextEpisodeModePref, PlaybackQuality, QualityPref, Seat, Session, SkipInterval, SkipIntervalPref,
     SubtitlePosition, SubtitlePositionPref, SubtitleSize, SubtitleSizePref, SubtitleTone, SubtitleTonePref, TempSession,
     TrailerAutoplayPref, HudEndTimePref, UserRef,
@@ -50,6 +50,7 @@ fn the_record_has_one_field_for_each_setting_with_a_legacy_fallback() {
     let full = ProfilePrefs {
         playback_quality: Some(PlaybackQuality::P720),
         direct_play_mode: Some(DirectPlayMode::Forced),
+        audio_conversion: Some(AudioConversion::Tv),
         subtitle_tone: Some(SubtitleTone::Silver),
         subtitle_size: Some(SubtitleSize::Large),
         subtitle_position: Some(SubtitlePosition::High),
@@ -74,7 +75,7 @@ fn the_record_has_one_field_for_each_setting_with_a_legacy_fallback() {
         .filter(|d| d.fallback == Fallback::LegacyInstallKey)
         .map(|d| d.key.to_string())
         .collect();
-    assert_eq!(rows.len(), 19, "every per-profile setting has a legacy fallback");
+    assert_eq!(rows.len(), 20, "every per-profile setting has a legacy fallback");
     assert_eq!(fields, rows, "ProfilePrefs and the rows with a legacy fallback drifted");
     assert!(effective::<HudEndTimePref>(&Preferences::default(), None), "a profile with no pick defaults the end-time label on");
     assert!(!effective::<HudEndTimePref>(&Preferences::default(), Some(&full)), "a profile's explicit OFF overrides the default");

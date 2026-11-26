@@ -59,6 +59,10 @@ use super::origin::Origin;
 use super::probe::Location;
 mod playback_options;
 pub use playback_options::{MarkerSkipMode, DolbyVisionMode, InstantDpadSeeking, UriEngine};
+// The Convert-audio setting's value and its preference row.
+mod audio_conversion;
+pub use audio_conversion::AudioConversion;
+pub use prefs::AudioConversionPref;
 
 pub use prefs::{IntroSkipPref, CreditsSkipPref, DolbyVisionModePref, InstantDpadSeekingPref, UriEnginePref, HoldHintTaughtPref, effective, effective_hud, own_prefs, persist_profile_hud, persist_profile_pref, put_own, stored_effective, stored_effective_hud, tenure, HudSelectionPref, AudioEnhancementsPref,
     DeckPressPref, DirectPlayModePref, HdrOverlayBrightnessPref, NextEpisodeModePref, Preferences, ProfilePrefs, ProfilePrefsPref,
@@ -2827,6 +2831,10 @@ impl Session {
 
     pub fn hdr_overlay_brightness(&self) -> HdrOverlayBrightness {
         self.prefs.hdr_overlay_brightness
+    }
+
+    pub fn audio_conversion(&self) -> AudioConversion {
+        self.prefs.audio_conversion
     }
 
     pub fn audio_enhancements(&self) -> crate::plex::AudioEnhancements {

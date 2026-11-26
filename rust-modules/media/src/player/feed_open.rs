@@ -134,6 +134,7 @@ impl FeedOpenRequest {
                 audio_codec,
                 pcm_is_lossy: route::stream_pcm_is_lossy(ps),
                 audio_channels,
+                audio_converts_on_tv: route::audio_converts_on_tv(ps),
                 feed_payload,
                 payload_options,
                 original_dv,

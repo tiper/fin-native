@@ -18,9 +18,18 @@ use std::os::raw::{c_int, c_long, c_uchar, c_uint, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 pub use plx_media_codecs::ffi::*;
+#[path = "ff_audio.rs"]
+mod audio;
+pub use audio::set_convert_audio;
 
 fn audio_declaration_mismatch(declared: u8, actual: u8) -> bool {
-    // PCM describes decoded output; the container still carries the compressed input.
+    // PCM describes decoded output; the container still carries the compressed input. So does the
+    // AC3 the app encodes ("Convert audio: On the TV") over a track the converter takes: DTS, an AC3
+    // already, or a codec outside the Load's code space. E-AC3 and AAC pass through the converter
+    // untouched, so under that declaration they are still a mismatch.
+    if declared == plx_playback_contract::feed::DG_LOAD_A_CONVERTED_AC3 {
+        return matches!(actual, 2 | 3);
+    }
     declared != 0 && declared != 5 && actual != 0 && declared != actual
 }
 
@@ -33,6 +42,26 @@ fn pcm_output_does_not_mismatch_the_compressed_source() {
     }
     assert!(audio_declaration_mismatch(2, 3));
     assert!(!audio_declaration_mismatch(0, 3));
+}
+
+/// "Convert audio: On the TV": a Load that declared the AC3 the app encodes
+/// (`DG_LOAD_A_CONVERTED_AC3`) is honoured over DTS, TrueHD or any other track the converter
+/// decodes, but not over E-AC3 or AAC, which it passes through. Refusing it as a stale declaration sent a converted DTS film into a
+/// reload loop that ended on the error screen.
+#[test]
+fn a_converted_ac3_declaration_matches_what_the_converter_takes() {
+    let converted = plx_playback_contract::feed::DG_LOAD_A_CONVERTED_AC3;
+    // DTS (4) and the codecs outside the Load's code space (0: TrueHD, FLAC, Opus, ...) are the
+    // converter's; an AC3 track (1) is already what the Load declared.
+    for actual in [0, 1, 4] {
+        assert!(!audio_declaration_mismatch(converted, actual), "source code {actual}");
+    }
+    // Stale metadata (TrueHD or DTS) over a file that really carries E-AC3 or AAC: the converter
+    // passes those through untouched, so feeding them under an AC3 declaration stalls the audio.
+    // They stay mismatches, and the one-shot retry reloads with the codec the file carries.
+    for actual in [2, 3] {
+        assert!(audio_declaration_mismatch(converted, actual), "source code {actual}");
+    }
 }
 
 /// Captured by the media composition and moved into one demux worker. Authorization is checked
@@ -256,7 +285,8 @@ unsafe fn audio_stream_matching(fmt: *mut AVFormatContext, want: &str) -> Option
         let cp = stream_codecpar(*streams.add(i as usize));
         if (*cp).codec_type == AVMEDIA_TYPE_AUDIO {
             let name = std::ffi::CStr::from_ptr(avcodec_get_name((*cp).codec_id)).to_string_lossy();
-            if audio_name_matches(&name, want) {
+            // PMS calls every PCM track `pcm`, FFmpeg names its sample layout (`pcm_s24le`).
+            if audio_name_matches(&name, want) || (want.eq_ignore_ascii_case("pcm") && name.starts_with("pcm_")) {
                 return Some(i as c_int);
             }
         }
@@ -324,6 +354,15 @@ pub(crate) fn store_pushed_any(pushed: bool) {
     PUSHED_ANY.store(pushed, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Tell `devcaps` whether the bundled FFmpeg can convert audio on the TV (`ff_audio.rs`): after
+/// `plx_media_codecs::ffi::boot`, which loads the libraries, once at start-up. The app calls it
+/// right after that boot; a build whose FFmpeg lost a component offers the server its old profile.
+pub fn publish_audio_converter() {
+    if abi_ok() {
+        plx_os::devcaps::set_tv_audio_converter(audio::converter_available());
+    }
+}
+
 /// Boot smoke test + optional ABI probe. Called once at startup.
 pub fn boot() {
     // The https media transport's own table, resolved here so the `dlopen` and its log line land
@@ -333,7 +372,7 @@ pub fn boot() {
     // and a set with no FFmpeg still signs in.
     range_io::boot();
     boot_probe_with(
-        || { plx_media_codecs::ffi::boot(); abi_ok() },
+        || { plx_media_codecs::ffi::boot(); publish_audio_converter(); abi_ok() },
         || plx_base::devtrig::read("ffprobe"),
         probe,
     );
@@ -7088,7 +7127,7 @@ pub fn demux(
                     // A lossy codec is the app's only when the Load declared PCM for it (the attempt
                     // decodes it in the app); otherwise it is native audio and the set's decoder takes it.
                     plx_os::devcaps::app_decoded_by_ffmpeg_name(&name)
-                        .filter(|c| !c.lossy || pcm_lossy())
+                        .filter(|c| (!c.lossy || pcm_lossy()) && audio::app_decodes(&name))
                         .map(|_| name.into_owned())
                 } else {
                     None
@@ -7155,10 +7194,18 @@ pub fn demux(
                 } else {
                     None
                 };
+                // "Convert audio: on the TV" (`ff_audio.rs`): a track the Load declared AC3 for and
+                // this build cannot convert is refused like an unfeedable one.
+                let Ok(mut converter) = audio::AudioConverter::for_track(streams, ai) else {
+                    session.media().publish(DemuxEffect::Failed);
+                    avformat_close_input(&mut fmt);
+                    free_avio(avio);
+                    break;
+                };
                 // Opus goes to the television's own decoder (`ff_native_audio.rs`; its header travels
                 // in the Load). What is fed natively is recorded for the player, which learns a
                 // refusal from it. FLAC, ALAC and LPCM are decoded in the app (`pcm_dec`) and are not native.
-                if ai >= 0 && FEED_AUDIO.load(Ordering::Relaxed) && speed_dec.is_none() {
+                if ai >= 0 && FEED_AUDIO.load(Ordering::Relaxed) && speed_dec.is_none() && converter.is_none() {
                     let acp = stream_codecpar(*streams.add(ai as usize));
                     let aname = std::ffi::CStr::from_ptr(avcodec_get_name((*acp).codec_id)).to_string_lossy().into_owned();
                     if let Some(kind) = native_audio::Kind::from_ffmpeg_name(&aname) {
@@ -7525,6 +7572,9 @@ pub fn demux(
                             batch.clear();
                         }
                         session.media().publish(DemuxEffect::FirstAudioPts(i64::MIN));
+                        if let Some(conv) = converter.as_mut() {
+                            conv.reset();
+                        }
                     }
                     let r = av_read_frame(fmt, pkt);
                     if frame_read_failed(&mut state, r) {
@@ -7730,6 +7780,19 @@ pub fn demux(
                             for (au_pts, pcm) in dec.decode(pkt, pts) {
                                 rv = crate::aq::aq_push_gated(
                                     aqa_p, pcm.as_ptr(), pcm.len() as c_int, au_pts, 1, 2, gate,
+                                    || state.drain_wire(),
+                                );
+                                if rv != 0 {
+                                    break;
+                                }
+                            }
+                            rv
+                        } else if let Some(conv) = converter.as_mut() {
+                            // A converted track: each AC3 frame the packet completes is its own AU.
+                            let mut rv = 0;
+                            for (au_pts, ac3) in conv.decode(pkt) {
+                                rv = crate::aq::aq_push_gated(
+                                    aqa_p, ac3.as_ptr(), ac3.len() as c_int, au_pts, 1, 2, gate,
                                     || state.drain_wire(),
                                 );
                                 if rv != 0 {
@@ -7959,3 +8022,7 @@ mod packet_framing_tests;
 #[cfg(test)]
 #[path = "ff_hls_live_tests.rs"]
 mod hls_live_tests;
+
+#[cfg(test)]
+#[path = "ff_audio_tests.rs"]
+mod audio_tests;

@@ -2,6 +2,7 @@
 //! ladder, direct-play-eligible fallbacks, and subtitle stream id resolution.
 
 use super::*;
+use crate::route::audio_direct_plays_or_converted;
 #[allow(unused_imports)]
 use super::test_support::*;
 
@@ -1223,6 +1224,50 @@ fn an_attempt_without_dts_picks_the_ac3_sibling_while_the_wider_attempt_keeps_th
     assert_eq!(pick(&b), Some((1, "ac3".into(), 12)), "without the row the same-language AC3 plays instead");
 }
 
+/// The C1: Opus is listed but limited to stereo (`opus<=2`), the shape `devcaps` leaves it in.
+fn c1_opus_caps() -> plx_os::devcaps::Caps {
+    plx_os::devcaps::Caps {
+        audio: "aac,ac3,eac3,dts,flac,opus".into(),
+        audio_channels: [("opus".into(), 2), ("flac".into(), 2)].into(),
+        ..plx_os::devcaps::Caps::assumed()
+    }
+}
+
+/// **"Convert audio: on the TV" makes a track the app converts a direct-play pick in Auto**, as it
+/// does in Forced: the original file is played and the TV converts the audio. Without it Opus 5.1
+/// (beyond the C1's stereo limit) read as not direct-playable, the planner asked the server for
+/// a remux, and the live stream it returned has no duration, so every seek was dropped.
+#[test]
+fn auto_direct_plays_audio_the_app_converts_on_the_tv() {
+    let caps = c1_opus_caps();
+    for mode in [DirectPlayMode::Auto, DirectPlayMode::Forced] {
+        assert!(audio_direct_plays_or_converted(&caps, true, mode, "opus", 6, 0), "{mode:?}: converted on the TV");
+        assert!(audio_direct_plays_or_converted(&caps, true, mode, "opus", 2, 0), "{mode:?}: stereo is the set's own");
+    }
+    assert!(!audio_direct_plays_or_converted(&caps, false, DirectPlayMode::Auto, "opus", 6, 0), "conversion off: the server converts");
+    assert!(audio_direct_plays_or_converted(&caps, false, DirectPlayMode::Auto, "opus", 2, 0), "stereo Opus stays native");
+    assert!(audio_direct_plays_or_converted(&caps, true, DirectPlayMode::Auto, "dts", 6, 0), "DTS the set has no row for is converted");
+    assert!(!audio_direct_plays_or_converted(&caps, false, DirectPlayMode::Auto, "dts", 6, 0), "conversion off: the server converts");
+    assert!(audio_direct_plays_or_converted(&caps, true, DirectPlayMode::Auto, "truehd", 8, 0), "TrueHD is");
+}
+
+/// The planner's pick follows it: a lone Opus 5.1 track is picked with conversion on and left to
+/// the server with it off.
+#[test]
+fn the_planner_picks_an_opus_51_track_only_when_the_tv_converts_it() {
+    let caps = c1_opus_caps();
+    let mut opus = server_selected(trk(7, "opus", "por", true));
+    opus.channels = 6;
+    let tracks = [opus];
+    let pick = |conversion: bool| {
+        pick_dp_audio_eligible(&tracks, "opus", AudioLangPrefs::default(), 0, StandIn::Any,
+            |c, n, r| audio_direct_plays_or_converted(&caps, conversion, DirectPlayMode::Auto, c, n, r))
+            .map(|(_, _, id)| id)
+    };
+    assert_eq!(pick(true), Some(7));
+    assert_eq!(pick(false), None);
+}
+
 #[test]
 fn the_load_declaration_maps_every_dts_spelling_to_the_payload_name() {
     // PMS writes the DTS family as `dca` / `dca-ma` / `dca_ma`; the demuxer feeds DTS core
@@ -1237,4 +1282,30 @@ fn the_load_declaration_maps_every_dts_spelling_to_the_payload_name() {
     assert_eq!(audio_declaration("ac3"), "ac3");
     assert_eq!(audio_declaration("aac"), "aac");
     assert_eq!(audio_declaration("TrueHD"), "truehd");
+}
+
+/// **The planner's own audio pick counts a track the app converts on the TV.** A set that learned it
+/// takes DTS in stereo only (a refused 5.1 DTS Load, `dts<=2`) must still direct-play the 5.1 DTS
+/// track when the viewer chose "Convert audio: On the TV": the pick, under Auto and under Force, is
+/// what decides direct play at the play start, before any recovery can convert it. With the setting
+/// off Auto leaves it to the server, as before.
+#[test]
+fn the_play_start_pick_direct_plays_a_dts_51_track_the_tv_converts() {
+    let caps = plx_os::devcaps::Caps {
+        audio: "aac,ac3,eac3,dts".into(),
+        audio_channels: [("dts".into(), 2)].into(),
+        ..plx_os::devcaps::Caps::assumed()
+    };
+    let mut dts = server_selected(trk(9, "dca", "eng", true));
+    dts.channels = 6;
+    dts.sampling_rate = 48_000;
+    let tracks = [dts];
+    let pick = |mode: DirectPlayMode, conversion: bool| {
+        pick_dp_audio_eligible(&tracks, "dca", AudioLangPrefs::default(), 0, StandIn::SameKind,
+            |c, n, r| audio_direct_plays_or_converted(&caps, conversion, mode, c, n, r))
+            .map(|(_, _, id)| id)
+    };
+    assert_eq!(pick(DirectPlayMode::Auto, true), Some(9), "Auto: converted on the TV");
+    assert_eq!(pick(DirectPlayMode::Forced, true), Some(9), "Forced: converted on the TV");
+    assert_eq!(pick(DirectPlayMode::Auto, false), None, "Auto without the setting: the server converts");
 }

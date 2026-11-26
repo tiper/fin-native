@@ -395,7 +395,19 @@ fn drive_open_recovery(ps: &mut crate::route::PlaybackSession, first: super::rec
                         plx_os::devcaps::Facet::Audio { .. } => crate::route::VideoLane::AsPlanned,
                         plx_os::devcaps::Facet::Video { .. } => crate::route::VideoLane::Encode,
                     };
-                    crate::route::dispatch_refusal_conversion(ps, secs, lane)
+                    // A refused audio the app converts on the TV needs no server: the same route
+                    // reloads and the demuxer converts it.
+                    let on_tv = match facet {
+                        plx_os::devcaps::Facet::Audio { .. } => crate::route::dispatch_refusal_on_tv(ps, secs),
+                        plx_os::devcaps::Facet::Video { .. } => None,
+                    };
+                    match on_tv {
+                        Some(dispatched) => {
+                            super::log("open recovery: audio convert on the TV, no server conversion");
+                            dispatched
+                        }
+                        None => crate::route::dispatch_refusal_conversion(ps, secs, lane),
+                    }
                 }
                 RecoveryEffect::ConvertBoth { flight } => {
                     // The manual both-facets rung: the audio converted AND the video encoded. The

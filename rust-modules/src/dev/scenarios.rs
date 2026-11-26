@@ -1336,6 +1336,7 @@ pub(crate) fn settings_boot_page(target: &str) -> Option<plx_screens::family::Se
         "picker-quality" => SettingsPage::Picker(PickerKind::Quality),
         "picker-next-episode" => SettingsPage::Picker(PickerKind::NextEpisode),
         "picker-deck-press" => SettingsPage::Picker(PickerKind::DeckPress),
+        "picker-audio-conversion" => SettingsPage::Picker(PickerKind::AudioConversion),
         "picker-hdr-overlay" => SettingsPage::Picker(PickerKind::HdrOverlay),
         // root → the Interface resolution picker
         "picker-resolution" => SettingsPage::Picker(PickerKind::UiResolution),

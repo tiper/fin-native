@@ -34,7 +34,7 @@ they no longer do, because the TV's version moves with the firmware (libavformat
 
 | Shipped file | Upstream | Licence |
 |---|---|---|
-| `libavutil-plx.so.61`, `libavcodec-plx.so.63`, `libavformat-plx.so.63` | FFmpeg **9.1**, unmodified | LGPL-2.1-or-later |
+| `libavutil-plx.so.61`, `libswresample-plx.so.7`, `libavcodec-plx.so.63`, `libavformat-plx.so.63` | FFmpeg **9.1**, unmodified | LGPL-2.1-or-later |
 
 **These libraries are covered by the GNU Lesser General Public License, version 2.1 or later.** A
 complete copy of that licence is supplied with this package at `licenses/LGPL-2.1.txt`.
@@ -60,6 +60,12 @@ because the television's player has no input for them; the result is fed to it a
 by the app (`dca`) where Force Direct Play has no native path for it or a refused open falls back to it. The one external library enabled is **zlib**,
 the television's own `libz.so.1` (not redistributed — see section 3), which the Matroska demuxer
 needs to inflate compressed subtitle tracks.
+
+The build also enables the `ac3` encoder (Settings > Playback > Convert audio) and libswresample,
+which ships beside the other libraries, and decodes TrueHD, Opus, Vorbis and further PCM formats in
+the app so that it can re-encode them to AC3. All of it is LGPL-2.1-or-later, built from the same
+unmodified FFmpeg source. The converter (`ff_audio.rs`) is adapted from SchulzCode/WebOS-Jellyfin-Native
+(0BSD, <https://github.com/SchulzCode/WebOS-Jellyfin-Native>).
 
 **You may modify and replace them.** They are ordinary shared libraries, loaded at run time by
 `dlopen` from the application's own directory; no FFmpeg code is linked into the `plxnative`

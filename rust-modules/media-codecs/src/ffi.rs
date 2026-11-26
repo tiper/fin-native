@@ -434,6 +434,10 @@ plx_base::dynlib! {
     fn av_frame_get_buffer(frame: *mut c_void, align: c_int) -> c_int;
     fn av_frame_make_writable(frame: *mut c_void) -> c_int;
     fn av_frame_unref(frame: *mut c_void);
+    // The audio converter's layouts (`plx_play_feed`'s `ff_audio.rs`).
+    fn av_opt_set_int(obj: *mut c_void, name: *const c_char, val: i64, search_flags: c_int) -> c_int;
+    fn av_channel_layout_default(ch_layout: *mut AVChannelLayout, nb_channels: c_int);
+    fn av_channel_layout_uninit(ch_layout: *mut AVChannelLayout);
     fn av_opt_set(obj: *mut c_void, name: *const c_char, val: *const c_char, search_flags: c_int) -> c_int;
     fn av_get_pix_fmt(name: *const c_char) -> c_int;
     // Container tags. Borrowed, never freed: the entry belongs to the dictionary, which belongs to
@@ -444,6 +448,38 @@ plx_base::dynlib! {
         prev: *const AVDictionaryEntry,
         flags: c_int,
     ) -> *const AVDictionaryEntry;
+}}
+plx_base::dynlib! {
+    // The audio converter's sample-format, rate and layout conversion (`plx_play_feed`'s
+    // `ff_audio.rs`). REQUIRED, unlike swscale: libavcodec itself names it in DT_NEEDED (its Opus
+    // decoder resamples), so a package without it has no libavcodec either.
+    pub swresample: [
+        // The ELF the app SHIPS, and the Mach-O the desktop simulator builds beside it.
+        "libswresample-plx.so.7",
+        "libswresample-plx.7.dylib",
+    ] {
+    fn swresample_version() -> c_uint;
+    fn swr_alloc_set_opts2(
+        ps: *mut *mut c_void,
+        out_ch_layout: *const AVChannelLayout,
+        out_sample_fmt: c_int,
+        out_sample_rate: c_int,
+        in_ch_layout: *const AVChannelLayout,
+        in_sample_fmt: c_int,
+        in_sample_rate: c_int,
+        log_offset: c_int,
+        log_ctx: *mut c_void,
+    ) -> c_int;
+    fn swr_init(s: *mut c_void) -> c_int;
+    fn swr_free(s: *mut *mut c_void);
+    fn swr_convert(
+        s: *mut c_void,
+        out: *mut *mut u8,
+        out_count: c_int,
+        input: *const *const u8,
+        in_count: c_int,
+    ) -> c_int;
+    fn swr_get_out_samples(s: *mut c_void, in_samples: c_int) -> c_int;
 }}
 plx_base::dynlib! {
     pub swscale: [
@@ -668,8 +704,8 @@ fn load_libraries() -> bool {
     // a bare SONAME there could open the television's copy instead of ours.
     let dir = Some(plx_base::paths::app_dir());
 
-    // DEPENDENCY ORDER, and it is load-bearing. libavformat NEEDs libavcodec NEEDs libavutil by
-    // SONAME, and these libraries carry no rpath (FFmpeg's configure evals its flags, so
+    // DEPENDENCY ORDER, and it is load-bearing. libavformat NEEDs libavcodec NEEDs libswresample and libavutil
+    // (libswresample NEEDs libavutil) by SONAME, and these libraries carry no rpath (FFmpeg's configure evals its flags, so
     // -Wl,-rpath,$ORIGIN does not survive — see ci/build-ffmpeg.sh). Loading a dependency FIRST
     // with RTLD_GLOBAL puts it in the global scope under its SONAME, so when the next library
     // names it the loader finds the one we just opened rather than searching the system paths and
@@ -677,6 +713,7 @@ fn load_libraries() -> bool {
     let mut ok = true;
     for (what, verdict) in [
         ("avutil", avutil::load(dir)),
+        ("swresample", swresample::load(dir)),
         ("avcodec", avcodec::load(dir)),
         ("avformat", avformat::load(dir)),
     ] {
@@ -784,16 +821,29 @@ pub fn boot() {
         plx_base::eventlog::log(&format!(
             "ff: avformat={} avcodec={} avutil={}", ver(fmt), ver(cod), ver(utl)
         ));
-        let bad = (fmt >> 16, cod >> 16, utl >> 16) != (63, 63, 61);
+        // libswresample too: the audio converter calls it directly (libavcodec's DT_NEEDED and its
+        // symbol versions already pin it, but a stale file beside them would otherwise go unchecked).
+        let bad = (fmt >> 16, cod >> 16, utl >> 16, swresample_version() >> 16) != (63, 63, 61, 7);
         ABI_OK.store(!bad, Ordering::Relaxed);
         if bad {
             plx_base::eventlog::log(
                 "ff: BUNDLED FFmpeg is not the one this build expects (want avformat 63 / \
-                 avcodec 63 / avutil 61) — the app directory holds a stale or foreign \
+                 avcodec 63 / avutil 61 / swresample 7) — the app directory holds a stale or foreign \
                  libav*-plx; refusing to demux",
             );
         }
     }
+}
+
+/// Write one field of an FFmpeg struct at its asserted offset (`ci/ffabi-assert.c`). The caller
+/// guarantees `base` points at a live struct of that shape.
+#[inline]
+pub unsafe fn poke_i32(base: *mut c_void, off: usize, v: i32) {
+    *((base as *mut u8).add(off) as *mut i32) = v;
+}
+#[inline]
+pub unsafe fn poke_i64(base: *mut c_void, off: usize, v: i64) {
+    *((base as *mut u8).add(off) as *mut i64) = v;
 }
 
 pub fn sws_ok() -> bool { SWS_OK.load(Ordering::Relaxed) }

@@ -1094,6 +1094,8 @@ pub(crate) unsafe fn construct(
     if !controlled {
         (platform.media.early_init)(&mt); // every backend set: the platform's boot facts (webOS: the plane owner's)
         plx_media_codecs::ffi::boot(); // Codec resource boot; controlled Home cannot invoke ABI probes.
+        #[cfg(feature = "play-feed")]
+        plx_play_feed::publish_audio_converter(); // "Convert audio: on the TV" needs the loaded FFmpeg's components
     }
                        // dev: /tmp/plxnative-logintest validates the plex.tv account path end-to-end on the device — a
                        // real typed create_pin() through the libcurl transport + DTO deserialize. Logs only the

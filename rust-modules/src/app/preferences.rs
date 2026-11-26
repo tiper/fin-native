@@ -5,7 +5,7 @@ mod marker_access;
 pub(crate) use marker_access::MarkerAccessRunner;
 use plx_media::route::{choose, Choice, How};
 use plx_plex::plex::account::{PreferenceError, PreferenceRequest};
-use plx_plex::plex::session::{IntroSkipPref, CreditsSkipPref, DolbyVisionModePref, InstantDpadSeekingPref, UriEnginePref, DeckPressPref, DirectPlayModePref, HdrOverlayBrightnessPref, NextEpisodeModePref, QualityPref,
+use plx_plex::plex::session::{IntroSkipPref, CreditsSkipPref, DolbyVisionModePref, AudioConversionPref, InstantDpadSeekingPref, UriEnginePref, DeckPressPref, DirectPlayModePref, HdrOverlayBrightnessPref, NextEpisodeModePref, QualityPref,
     SkipIntervalPref, SubtitlePositionPref, SubtitleSizePref, SubtitleTonePref, TrailerAutoplayPref, HudEndTimePref, UnderPostersPref};
 use plx_screens::registry::{AccountPreferenceReply, PreferenceCmd};
 use std::sync::mpsc::Sender;
@@ -18,6 +18,7 @@ fn choose_setting(choice: Choice, reply: Sender<bool>) {
         Choice::CreditsSkip(v) => choose::<CreditsSkipPref>(v, How::settings::<CreditsSkipPref>(reply)),
         Choice::Quality(v) => choose::<QualityPref>(v, How::settings::<QualityPref>(reply)),
         Choice::DirectPlay(v) => choose::<DirectPlayModePref>(v, How::settings::<DirectPlayModePref>(reply)),
+        Choice::AudioConversion(v) => choose::<AudioConversionPref>(v, How::settings::<AudioConversionPref>(reply)),
         Choice::NextEpisode(v) => choose::<NextEpisodeModePref>(v, How::settings::<NextEpisodeModePref>(reply)),
         Choice::InstantDpadSeeking(v) => choose::<InstantDpadSeekingPref>(v, How::settings::<InstantDpadSeekingPref>(reply)),
         Choice::UriEngine(v) => choose::<UriEnginePref>(v, How::settings::<UriEnginePref>(reply)),

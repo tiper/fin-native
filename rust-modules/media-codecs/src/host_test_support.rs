@@ -24,6 +24,7 @@ pub fn bind_host_ffmpeg() -> HostFfmpeg {
         .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../pkg"));
     for (what, verdict) in [
         ("avutil", avutil::load(Some(&dir))),
+        ("swresample", crate::ffi::swresample::load(Some(&dir))),
         ("avcodec", avcodec::load(Some(&dir))),
         ("avformat", avformat::load(Some(&dir))),
     ] {

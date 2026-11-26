@@ -173,6 +173,10 @@ pub struct OpenOrigin {
     pub port: i32,
 }
 
+/// The `dg_load_a` code of an AC3 the app encodes itself from a track the pipeline cannot take
+/// ("Convert audio: on the TV"), so the read-out can name it apart from a file's own AC3 (code 1).
+pub const DG_LOAD_A_CONVERTED_AC3: u8 = 7;
+
 /// The resolved facts of one streamed open. Route selection and credential authorization finished
 /// before this was built. URLs have no Debug surface; the demux session is bound later, by
 /// [`FeedOpen::open_stage`], because the route attempt and the native epoch do not exist yet.
@@ -183,6 +187,9 @@ pub struct OpenStream {
     pub audio_codec: String,
     pub pcm_is_lossy: bool,
     pub audio_channels: i64,
+    /// The route's refused audio is converted by the app on the TV (`route::audio_converts_on_tv`):
+    /// "Convert audio: on the TV" may declare AC3 for a track the pipeline cannot take.
+    pub audio_converts_on_tv: bool,
     pub feed_payload: PayloadFacts,
     pub payload_options: PayloadOptions,
     pub original_dv: OriginalDvFacts,

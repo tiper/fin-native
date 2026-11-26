@@ -36,7 +36,7 @@
 //! frozen top-level keys: no pick in this module ever writes one.
 use super::plan::{supported_quality, Quality, QUALITY_LADDER};
 use plx_plex::plex::session::{
-    MarkerSkipMode, IntroSkipPref, CreditsSkipPref, DolbyVisionMode, DolbyVisionModePref, InstantDpadSeeking, InstantDpadSeekingPref, UriEngine, UriEnginePref, effective, own_prefs, persist_profile_pref, AudioEnhancementsPref, DeckPress, DeckPressPref, DirectPlayMode,
+    MarkerSkipMode, IntroSkipPref, CreditsSkipPref, DolbyVisionMode, DolbyVisionModePref, AudioConversion, AudioConversionPref, InstantDpadSeeking, InstantDpadSeekingPref, UriEngine, UriEnginePref, effective, own_prefs, persist_profile_pref, AudioEnhancementsPref, DeckPress, DeckPressPref, DirectPlayMode,
     DirectPlayModePref, HdrOverlayBrightness, HdrOverlayBrightnessPref, NextEpisodeMode, NextEpisodeModePref, Preferences, ProfilePrefs, ProfilePrefsRecord,
     ProfileSetting, ProfileWrite, QualityPref, Row, Setting, SkipInterval, SkipIntervalPref, SubtitlePosition,
     SubtitlePositionPref, SubtitleSize, SubtitleSizePref, SubtitleTone, SubtitleTonePref, TrailerAutoplayPref, HudEndTimePref, UnderPosters,
@@ -143,7 +143,7 @@ macro_rules! packed_by_index {
         }
     )*};
 }
-packed_by_index!(MarkerSkipMode = 1, DolbyVisionMode = 0, InstantDpadSeeking = 0, UriEngine = 0, NextEpisodeMode = 0, SkipInterval = 1, DeckPress = 0, SubtitleSize = 1, SubtitlePosition = 0, SubtitleTone = 0, HdrOverlayBrightness = 1);
+packed_by_index!(MarkerSkipMode = 1, DolbyVisionMode = 0, InstantDpadSeeking = 0, UriEngine = 0, NextEpisodeMode = 0, SkipInterval = 1, DeckPress = 0, SubtitleSize = 1, SubtitlePosition = 0, SubtitleTone = 0, HdrOverlayBrightness = 1, AudioConversion = 0);
 
 impl Packed for DirectPlayMode {
     const SEED: u16 = 0;
@@ -245,6 +245,12 @@ live_cell!(
     pub(super) DIRECT_PLAY_MODE: DirectPlayMode, "direct-play preference"
 );
 live_cell!(
+    /// Where the seated profile has audio the TV cannot decode converted. Its publish also tells
+    /// `devcaps`, which the direct-play profile and the route's audio test read (both live in layers
+    /// below this one): see [`AudioConversionPref`]'s `LiveSetting`.
+    pub(super) AUDIO_CONVERSION: AudioConversion, "audio conversion preference"
+);
+live_cell!(
     /// What the player does at an episode's credits when a successor is queued. Read by
     /// `appkit::player_hud::slot` every frame and by `finish_playback` at the end of the stream.
     pub(super) NEXT_EPISODE_MODE: NextEpisodeMode, "next episode preference"
@@ -339,6 +345,26 @@ live_setting!(UriEnginePref, URI_ENGINE, "playback engine");
 live_setting!(IntroSkipPref, INTRO_SKIP, "intro skip");
 live_setting!(CreditsSkipPref, CREDITS_SKIP, "credits skip");
 live_setting!(DolbyVisionModePref, DOLBY_VISION_MODE, "Dolby Vision mode");
+/// By hand rather than through `live_setting!`, for the one line its `publish` adds: the choice is
+/// also the platform layer's ([`plx_os::devcaps::set_tv_audio_conversion`]), because the two
+/// readers that decide what direct-plays — plex's profile and `is_dp_audio_track` — sit below this
+/// crate and cannot read the cell.
+impl LiveSetting for AudioConversionPref {
+    fn live() -> AudioConversion {
+        AUDIO_CONVERSION.get()
+    }
+    fn publish(v: AudioConversion) {
+        AUDIO_CONVERSION.set(v);
+        plx_os::devcaps::set_tv_audio_conversion(v == AudioConversion::Tv);
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    fn publishes() -> u32 {
+        AUDIO_CONVERSION.publishes()
+    }
+    fn log_label() -> &'static str {
+        "audio conversion"
+    }
+}
 live_setting!(DeckPressPref, DECK_PRESS, "deck press");
 live_setting!(UnderPostersPref, UNDER_POSTERS, "under posters");
 live_setting!(SubtitleSizePref, SUBTITLE_SIZE, "subtitle size");
@@ -395,6 +421,7 @@ impl LiveRow {
 pub const LIVE_ROWS: &[LiveRow] = &[
     LiveRow::of::<QualityPref>(),
     LiveRow::of::<DirectPlayModePref>(),
+    LiveRow::of::<AudioConversionPref>(),
     LiveRow::of::<SubtitleTonePref>(),
     LiveRow::of::<SubtitleSizePref>(),
     LiveRow::of::<SubtitlePositionPref>(),
@@ -821,6 +848,7 @@ macro_rules! choices {
 choices! {
     Quality => QualityPref,
     DirectPlay => DirectPlayModePref,
+    AudioConversion => AudioConversionPref,
     NextEpisode => NextEpisodeModePref,
     SkipInterval => SkipIntervalPref,
     InstantDpadSeeking => InstantDpadSeekingPref,
@@ -942,6 +970,9 @@ pub fn direct_play_mode() -> DirectPlayMode { DirectPlayModePref::live() }
 pub fn restore_direct_play_mode(mode: DirectPlayMode) { restore_live::<DirectPlayModePref>(mode) }
 /// Blocking persistence seam; Settings dispatches it through [`choose`].
 pub fn set_direct_play_mode(mode: DirectPlayMode) -> bool { confirm::<DirectPlayModePref>(mode) }
+
+pub fn audio_conversion() -> AudioConversion { AudioConversionPref::live() }
+pub fn restore_audio_conversion(c: AudioConversion) { restore_live::<AudioConversionPref>(c) }
 
 pub fn next_episode_mode() -> NextEpisodeMode { NextEpisodeModePref::live() }
 pub fn restore_next_episode_mode(mode: NextEpisodeMode) { restore_live::<NextEpisodeModePref>(mode) }

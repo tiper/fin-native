@@ -2055,6 +2055,13 @@ pub fn load_audio(
 }
 
 
+pub use plx_playback_contract::feed::DG_LOAD_A_CONVERTED_AC3;
+
+/// The Load's audio for a track the demuxer converts to AC3 (`devcaps::track_converted`): the
+/// pipeline's own AC3, which is not PCM and so carries no sink lead.
+pub fn converted_load_audio() -> LoadAudio {
+    LoadAudio { name: "AC3", diagnostic: DG_LOAD_A_CONVERTED_AC3, lead: PcmLead::Off }
+}
 
 pub fn build_av_payload_from_facts(
     facts: &crate::PayloadFacts, video: &str, audio: &str, env: crate::SinkEnvelope, rate: i32,
@@ -2154,6 +2161,8 @@ pub fn prepare_native_open(
     // dev A/B: /tmp/plxnative-noaudio feeds video only (needAudio:false + skip es=2) to isolate
     // whether the audio ES (E-AC3/Atmos) is what stalls the sink on 4K HEVC.
     crate::set_feed_audio(!no_audio);
+    // Off unless the audio arm below declares a converted AC3.
+    crate::set_convert_audio(false);
     let stream_payload;
     // Every arm below assigns this — the static payloads through `static_envelope`, the streamed
     // one through `sink_envelope_now` — so a new arm that forgets it fails to compile.
@@ -2216,8 +2225,32 @@ pub fn prepare_native_open(
             // sink slaves to the dead audio clock and stalls (verified: video-only plays).
             let codec = &open.audio_codec;
             // App-decoded audio: the Load must state the PCM shape, and the demuxer must produce
-            // exactly that. Missing facts refuse the Load — a guessed rate plays at the wrong pitch.
-            let pcm = match crate::app_pcm_for_rate(session_rate, open.feed_payload.pcm.clone()) {
+            // exactly that.
+            let app_pcm = crate::app_pcm_for_rate(session_rate, open.feed_payload.pcm.clone());
+            // "Convert audio: on the TV": a codec the pipeline cannot take at this track's channel
+            // count (stereo Opus goes to the TV's own decoder, `ff_native_audio.rs`), and that the
+            // app's PCM path does not carry either (FLAC in mono or stereo at a rate `pcmInfo` can
+            // name goes as PCM, `devcaps::audio_track_fits`), is declared AC3 and the demuxer
+            // converts it (`ff_audio.rs`), from this one answer. Never at a speed: there the speed
+            // decoder feeds every codec as PCM.
+            let pcm_shape = match &app_pcm {
+                Some(Ok(f)) => Some((i64::from(f.channels), i64::from(f.sample_rate))),
+                _ => None,
+            };
+            let converted = session_rate == crate::shared::RATE_NORMAL
+                && plx_os::devcaps::track_converted(
+                    &plx_os::devcaps::caps(),
+                    plx_os::devcaps::tv_audio_conversion(),
+                    codec,
+                    open.audio_channels,
+                    pcm_shape,
+                    open.audio_converts_on_tv,
+                );
+            crate::set_convert_audio(converted);
+            // Missing facts refuse a PCM Load — a guessed rate plays at the wrong pitch. A converted
+            // track is AC3 whatever its facts, and opens no PCM decoder.
+            let pcm = match app_pcm {
+                _ if converted => None,
                 Some(Ok(f)) => Some(f),
                 Some(Err(why)) => {
                     plx_base::eventlog::log(&format!("start_bufferfeed: PCM audio refused — {why}"));
@@ -2229,9 +2262,14 @@ pub fn prepare_native_open(
             // Dev trigger `pcmavoffset=<ms>` (debug builds, read per Load): how the lead is measured
             // on an output the default was not filmed on.
             let lead_override = plx_base::devtrig::read("pcmavoffset");
-            let Some(audio) = load_audio(
-                &codec, session_rate, pcm.is_some(), lead_override.as_deref(), plx_os::devcaps::audio_stack(),
-            ) else {
+            let declared = if converted {
+                Some(converted_load_audio())
+            } else {
+                load_audio(
+                    &codec, session_rate, pcm.is_some(), lead_override.as_deref(), plx_os::devcaps::audio_stack(),
+                )
+            };
+            let Some(audio) = declared else {
                 plx_base::eventlog::log(&format!("start_bufferfeed: unsupported audio codec {codec:?}; refusing incorrect Load declaration"));
                 shared.fail_demux_latch(hooks.load_refusal_latch);
                 return Err(PrepareRefusal::Refused);

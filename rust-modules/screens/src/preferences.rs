@@ -19,9 +19,9 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver};
 use plx_appkit::skip_policy::MarkerPrefsView;
-use plx_plex::plex::session::{MarkerSkipMode, DolbyVisionMode, InstantDpadSeeking, UiResolution, UriEngine, QualityPref, DirectPlayModePref, SubtitleSizePref, SubtitlePositionPref, SubtitleTonePref, HdrOverlayBrightnessPref, NextEpisodeModePref, DeckPressPref, SkipIntervalPref, InstantDpadSeekingPref, UriEnginePref, DolbyVisionModePref};
+use plx_plex::plex::session::{MarkerSkipMode, DolbyVisionMode, InstantDpadSeeking, UiResolution, UriEngine, AudioConversionPref, QualityPref, DirectPlayModePref, SubtitleSizePref, SubtitlePositionPref, SubtitleTonePref, HdrOverlayBrightnessPref, NextEpisodeModePref, DeckPressPref, SkipIntervalPref, InstantDpadSeekingPref, UriEnginePref, DolbyVisionModePref};
 use plx_plex::plex::account::{AudioPreferences, PreferenceError, PreferenceRequest, PreferenceSnapshot, PreferenceUpdate};
-use plx_media::route::{Choice, DeckPress, DirectPlayMode, NextEpisodeMode, Quality, SkipInterval, SubtitlePosition, SubtitleSize, SubtitleTone, HdrOverlayBrightness};
+use plx_media::route::{AudioConversion, Choice, DeckPress, DirectPlayMode, NextEpisodeMode, Quality, SkipInterval, SubtitlePosition, SubtitleSize, SubtitleTone, HdrOverlayBrightness};
 use plx_ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
 use plx_ui::frame::Budget;
 use plx_machine::machine::{Canon, Cx, Delivery, Edge, Effects, EntryId, FocusKey, Fx, GroupId,
@@ -45,6 +45,7 @@ pub enum Kind { Playback, AudioSubtitles }
 impl PickerKind {
     fn title(self) -> &'static str { match self {
         Self::Quality => plx_os::i18n::msg::settings_playback_quality(), Self::DirectPlay => plx_os::i18n::msg::settings_playback_direct_play(),
+        Self::AudioConversion => plx_os::i18n::msg::settings_playback_audio_conversion(),
         Self::SubtitleSize => plx_os::i18n::msg::settings_playback_subtitle_size(), Self::SubtitlePosition => plx_os::i18n::msg::settings_playback_subtitle_position(),
         Self::SubtitleColor => plx_os::i18n::msg::settings_playback_subtitle_color(),
         Self::HdrOverlay => plx_os::i18n::msg::settings_playback_hdr_overlay(),
@@ -65,6 +66,7 @@ impl PickerKind {
     fn copy(self) -> &'static str { match self {
         Self::Quality => plx_os::i18n::msg::settings_playback_quality_copy(),
         Self::DirectPlay => plx_os::i18n::msg::settings_playback_direct_play_copy(),
+        Self::AudioConversion => plx_os::i18n::msg::settings_playback_audio_conversion_copy(),
         Self::SubtitleSize => plx_os::i18n::msg::settings_playback_subtitle_size_copy(),
         Self::SubtitlePosition => plx_os::i18n::msg::settings_playback_subtitle_position_copy(),
         Self::SubtitleColor => plx_os::i18n::msg::settings_playback_subtitle_color_copy(),
@@ -83,7 +85,7 @@ impl PickerKind {
     /// The field-list page this field belongs to; `None` for a field the Settings root lists itself.
     fn kind(self) -> Option<Kind> {
         match self {
-            Self::Quality | Self::DirectPlay | Self::HdrOverlay | Self::NextEpisode | Self::DeckPress | Self::SkipInterval | Self::InstantDpadSeeking | Self::UriEngine | Self::DolbyVision | Self::IntroSkip | Self::CreditsSkip => Some(Kind::Playback),
+            Self::Quality | Self::DirectPlay | Self::AudioConversion | Self::HdrOverlay | Self::NextEpisode | Self::DeckPress | Self::SkipInterval | Self::InstantDpadSeeking | Self::UriEngine | Self::DolbyVision | Self::IntroSkip | Self::CreditsSkip => Some(Kind::Playback),
             Self::AudioLanguage | Self::SubtitleMode | Self::SubtitleLanguage | Self::ForcedSubtitles | Self::SubtitleSize | Self::SubtitlePosition | Self::SubtitleColor => Some(Kind::AudioSubtitles),
             Self::UiResolution => None,
         }
@@ -109,7 +111,7 @@ impl Kind {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Value { IntroSkip(MarkerSkipMode, u64), CreditsSkip(MarkerSkipMode, u64), InstantDpadSeeking(InstantDpadSeeking), UriEngine(UriEngine), DolbyVision(DolbyVisionMode), Quality(Quality), DirectPlay(DirectPlayMode), SubtitleSize(SubtitleSize), SubtitlePosition(SubtitlePosition), SubtitleTone(SubtitleTone), HdrOverlay(HdrOverlayBrightness), NextEpisode(NextEpisodeMode), DeckPress(DeckPress), SkipInterval(SkipInterval), UiResolution(UiResolution), Language(String), Mode(i64), Forced(i64) }
+enum Value { IntroSkip(MarkerSkipMode, u64), CreditsSkip(MarkerSkipMode, u64), InstantDpadSeeking(InstantDpadSeeking), UriEngine(UriEngine), DolbyVision(DolbyVisionMode), Quality(Quality), DirectPlay(DirectPlayMode), AudioConversion(AudioConversion), SubtitleSize(SubtitleSize), SubtitlePosition(SubtitlePosition), SubtitleTone(SubtitleTone), HdrOverlay(HdrOverlayBrightness), NextEpisode(NextEpisodeMode), DeckPress(DeckPress), SkipInterval(SkipInterval), UiResolution(UiResolution), Language(String), Mode(i64), Forced(i64) }
 
 /// The hashed half of a transaction: what the page shows while a load or save is in flight.
 struct Io { busy: bool, status: String }
@@ -276,6 +278,7 @@ impl Txn {
             Value::CreditsSkip(mode, scope) => PreferenceCmd::ChooseMarker { kind: plx_data::metadata::MarkerKind::Credits, mode, scope, reply },
             Value::Quality(quality) => PreferenceCmd::Choose(Choice::Quality(quality), reply),
             Value::DirectPlay(mode) => PreferenceCmd::Choose(Choice::DirectPlay(mode), reply),
+            Value::AudioConversion(place) => PreferenceCmd::Choose(Choice::AudioConversion(place), reply),
             Value::SubtitleSize(size) => PreferenceCmd::Choose(Choice::SubtitleSize(size), reply),
             Value::SubtitlePosition(position) => PreferenceCmd::Choose(Choice::SubtitlePosition(position), reply),
             Value::SubtitleTone(tone) => PreferenceCmd::Choose(Choice::SubtitleTone(tone), reply),
@@ -375,6 +378,7 @@ impl FormId for RowId {
             Self::PlayerHud => 12,
             Self::Field(PickerKind::IntroSkip) => 13,
             Self::Field(PickerKind::CreditsSkip) => 14,
+            Self::Field(PickerKind::AudioConversion) => 19,
             Self::Retry => 6,
         })
     }
@@ -382,6 +386,7 @@ impl FormId for RowId {
         Some(match self {
             Self::Field(PickerKind::Quality) => "quality",
             Self::Field(PickerKind::DirectPlay) => "direct_play",
+            Self::Field(PickerKind::AudioConversion) => "audio_conversion",
             Self::Field(PickerKind::SubtitleSize) => "subtitle_size",
             Self::Field(PickerKind::SubtitlePosition) => "subtitle_position",
             Self::Field(PickerKind::SubtitleColor) => "subtitle_color",
@@ -443,6 +448,7 @@ pub struct PreferencesPage {
     /// The next-episode mode, deck press and skip interval the rows were last built from (not
     /// canonical state, like `look`).
     next_episode: NextEpisodeMode,
+    audio_conversion: AudioConversion,
     deck_press: DeckPress,
     skip_interval: SkipInterval,
     instant_dpad_seeking: InstantDpadSeeking,
@@ -459,7 +465,7 @@ impl PreferencesPage {
                 quality: inputs.preference::<QualityPref>(), direct_play: inputs.preference::<DirectPlayModePref>(), values: Vec::new() },
             copy: String::new(), follow: plx_ui::follow_copy::FollowCopy::new(""), txn: Txn::new(false, &inputs.profile),
             look: preference_look(inputs),
-            next_episode: inputs.preference::<NextEpisodeModePref>(), deck_press: inputs.preference::<DeckPressPref>(),
+            next_episode: inputs.preference::<NextEpisodeModePref>(), audio_conversion: inputs.preference::<AudioConversionPref>(), deck_press: inputs.preference::<DeckPressPref>(),
             skip_interval: inputs.preference::<SkipIntervalPref>(), instant_dpad_seeking: inputs.preference::<InstantDpadSeekingPref>(),
             uri_engine: inputs.preference::<UriEnginePref>(),
             dolby_vision: inputs.preference::<DolbyVisionModePref>(), whose: Whose::now(inputs) };
@@ -495,6 +501,7 @@ impl PreferencesPage {
         self.state.direct_play = self.inputs.preference::<DirectPlayModePref>();
         self.look = preference_look(&self.inputs);
         self.next_episode = self.inputs.preference::<NextEpisodeModePref>();
+        self.audio_conversion = self.inputs.preference::<AudioConversionPref>();
         self.deck_press = self.inputs.preference::<DeckPressPref>();
         self.skip_interval = self.inputs.preference::<SkipIntervalPref>();
         self.instant_dpad_seeking = self.inputs.preference::<InstantDpadSeekingPref>();
@@ -540,7 +547,7 @@ fn groups_of(kind: Kind) -> [(&'static str, &'static [PickerKind]); 3] {
     use plx_os::i18n::msg;
     match kind {
         Kind::Playback => [
-            (msg::settings_playback_group_video(), &[PickerKind::Quality, PickerKind::DirectPlay, PickerKind::DolbyVision, PickerKind::UriEngine]),
+            (msg::settings_playback_group_video(), &[PickerKind::Quality, PickerKind::DirectPlay, PickerKind::AudioConversion, PickerKind::DolbyVision, PickerKind::UriEngine]),
             (msg::settings_playback_group_player(), &[PickerKind::SkipInterval, PickerKind::InstantDpadSeeking, PickerKind::HdrOverlay, PickerKind::IntroSkip, PickerKind::CreditsSkip]),
             (msg::settings_playback_group_up_next(), &[PickerKind::NextEpisode, PickerKind::DeckPress]),
         ],
@@ -606,6 +613,7 @@ fn resolve_value(field: PickerKind, quality: Quality, direct_play: DirectPlayMod
         PickerKind::IntroSkip | PickerKind::CreditsSkip => unreachable!("marker fields require the frame publication"),
         PickerKind::Quality => Value::Quality(quality),
         PickerKind::DirectPlay => Value::DirectPlay(direct_play),
+        PickerKind::AudioConversion => Value::AudioConversion(local.preference::<AudioConversionPref>()),
         PickerKind::SubtitleSize => Value::SubtitleSize(local.preference::<SubtitleSizePref>()),
         PickerKind::SubtitlePosition => Value::SubtitlePosition(local.preference::<SubtitlePositionPref>()),
         PickerKind::SubtitleColor => Value::SubtitleTone(local.preference::<SubtitleTonePref>()),
@@ -632,6 +640,8 @@ fn field_options(field: PickerKind, _quality: Quality, _direct_play: DirectPlayM
             .map(|q| (q.label().into(), Value::Quality(*q))).collect(),
         PickerKind::DirectPlay => [DirectPlayMode::Auto, DirectPlayMode::Forced, DirectPlayMode::Disabled]
             .into_iter().map(|m| (mode_label(m).into(), Value::DirectPlay(m))).collect(),
+        PickerKind::AudioConversion => AudioConversion::LADDER.into_iter()
+            .map(|c| (audio_conversion_label(c).into(), Value::AudioConversion(c))).collect(),
         PickerKind::SubtitleSize => SubtitleSize::LADDER.into_iter()
             .map(|s| (subtitle_size_label(s).into(), Value::SubtitleSize(s))).collect(),
         PickerKind::SubtitlePosition => SubtitlePosition::LADDER.into_iter()
@@ -749,6 +759,12 @@ fn mode_label(mode: DirectPlayMode) -> &'static str {
     match mode { DirectPlayMode::Auto => plx_os::i18n::msg::settings_playback_auto(), DirectPlayMode::Forced => plx_os::i18n::msg::settings_playback_forced(), DirectPlayMode::Disabled => plx_os::i18n::msg::settings_playback_disabled() }
 }
 use plx_appkit::track_menu::{subtitle_position_label, subtitle_size_label, subtitle_tone_label};
+fn audio_conversion_label(place: AudioConversion) -> &'static str {
+    match place {
+        AudioConversion::Server => plx_os::i18n::msg::settings_playback_audio_conversion_server(),
+        AudioConversion::Tv => plx_os::i18n::msg::settings_playback_audio_conversion_tv(),
+    }
+}
 fn hdr_overlay_label(brightness: HdrOverlayBrightness) -> &'static str {
     match brightness {
         HdrOverlayBrightness::Full => plx_os::i18n::msg::settings_playback_hdr_overlay_full(),
@@ -858,6 +874,7 @@ impl Machine<InnerHost> for PreferencesPage {
                     || self.state.direct_play != self.inputs.preference::<DirectPlayModePref>()
                     || self.look != preference_look(&self.inputs)
                     || self.next_episode != self.inputs.preference::<NextEpisodeModePref>()
+                    || self.audio_conversion != self.inputs.preference::<AudioConversionPref>()
                     || self.deck_press != self.inputs.preference::<DeckPressPref>()
                     || self.skip_interval != self.inputs.preference::<SkipIntervalPref>()
                     || self.instant_dpad_seeking != self.inputs.preference::<InstantDpadSeekingPref>()

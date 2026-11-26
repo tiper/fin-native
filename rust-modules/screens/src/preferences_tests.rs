@@ -541,7 +541,7 @@ fn video_and_playback_lists_video_player_and_up_next() {
     let granted = MarkerPrefsView { scope: 1, intro_granted: true, credits_granted: true, ..Default::default() };
     let all = FieldListInputs { marker_prefs: granted, ..inputs_of(Kind::Playback, None) };
     assert_eq!(fields_of(&all), vec![
-        PickerKind::Quality, PickerKind::DirectPlay, PickerKind::DolbyVision, PickerKind::UriEngine,
+        PickerKind::Quality, PickerKind::DirectPlay, PickerKind::AudioConversion, PickerKind::DolbyVision, PickerKind::UriEngine,
         PickerKind::SkipInterval, PickerKind::InstantDpadSeeking, PickerKind::HdrOverlay, PickerKind::IntroSkip, PickerKind::CreditsSkip,
         PickerKind::NextEpisode, PickerKind::DeckPress,
     ]);
@@ -561,7 +561,7 @@ fn intro_and_credits_skip_rows_follow_their_grants_in_the_player_group() {
     let _serial = plx_base::testlock::serial();
     let none = inputs_of(Kind::Playback, None);
     assert_eq!(fields_of(&none), vec![
-        PickerKind::Quality, PickerKind::DirectPlay, PickerKind::DolbyVision, PickerKind::UriEngine,
+        PickerKind::Quality, PickerKind::DirectPlay, PickerKind::AudioConversion, PickerKind::DolbyVision, PickerKind::UriEngine,
         PickerKind::SkipInterval, PickerKind::InstantDpadSeeking, PickerKind::HdrOverlay, PickerKind::NextEpisode, PickerKind::DeckPress]);
     let intro = FieldListInputs { marker_prefs: MarkerPrefsView { scope: 2, intro_granted: true, ..Default::default() }, ..inputs_of(Kind::Playback, None) };
     assert_eq!(fields_of(&intro).iter().filter(|f| matches!(f, PickerKind::IntroSkip | PickerKind::CreditsSkip)).collect::<Vec<_>>(), [&PickerKind::IntroSkip]);
@@ -634,7 +634,7 @@ fn every_field_list_row_states_its_own_sentence() {
     let seated = Whose::Profile("Maya".into());
     let sentence = |kind, id: Option<&RowId>, status, force, whose: &Whose|
         row_sentence(kind, id, page, status, if force { DirectPlayMode::Forced } else { DirectPlayMode::Auto }, whose).into_owned();
-    for field in [PickerKind::Quality, PickerKind::DirectPlay, PickerKind::DolbyVision, PickerKind::UriEngine, PickerKind::SkipInterval, PickerKind::InstantDpadSeeking,
+    for field in [PickerKind::Quality, PickerKind::DirectPlay, PickerKind::AudioConversion, PickerKind::DolbyVision, PickerKind::UriEngine, PickerKind::SkipInterval, PickerKind::InstantDpadSeeking,
         PickerKind::HdrOverlay, PickerKind::IntroSkip, PickerKind::CreditsSkip, PickerKind::NextEpisode, PickerKind::DeckPress] {
         assert_eq!(sentence(Kind::Playback, Some(&RowId::Field(field)), false, false, &seated), field.copy(), "{field:?}");
     }

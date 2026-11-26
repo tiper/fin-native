@@ -112,8 +112,8 @@ scheme, or by a plaintext open's redirect to https (`stream::redirect` hands tha
 `AvioState` holds a source enum and `read_cb`/`seek_cb` dispatch: `http` → `stream.rs`'s raw socket, `https` → media's `curlio` credential facade over `plx_net::range_io`. That matters *here* because teardown is a
 different mechanism per arm: `route_start::teardown` (through `FeedStop::stop_unblock`) fires `stream::http_shutdown` at the socket **and**
 `curlio::abort_active()` through `net::range_io` at the curl source's wake pipe, since a thread parked in `curl_multi_wait`
-is not one any `shutdown(2)` of ours can reach. Exactly one of the two ever has anything to do. Ours ships beside the binary as `libav*-plx.so.*`, is `dlopen`'d by absolute path
-and pinned to majors 63/63/61, and is built `--disable-network` with `file` as its only protocol —
+is not one any `shutdown(2)` of ours can reach. Exactly one of the two ever has anything to do. Ours ships beside the binary as `libav*-plx.so.*` plus `libswresample-plx.so.7`, is `dlopen`'d by absolute path
+and pinned to majors 63/63/61/7 (avformat/avcodec/avutil/swresample), and is built `--disable-network` with `file` as its only protocol —
 so the AVIO is not merely how bytes reach it today, it is the only way they *can*. See the root
 `docs/agent-reference.md` linking section for why. It
 emits Annex-B video AUs (param sets prepended at each keyframe; a stream with no avcC/hvcC record, which is what an MPEG-TS or raw elementary stream under a `.mp4` name looks like since the route trusts the part's file NAME, arrives with start codes already: `ff::NalInput` decides it once per stream from the extradata, H.264 is framed in place and held back until its first keyframe, and HEVC is refused like a codec with no framing; its clock is also moved to 0 at the demuxer (`ff::stream_origin_ns`: packets rebased after the read, the origin added back on a seek) because the engine takes a fresh play's first keyframe to be near 0 and a capture's clock starts wherever the transmitter's did; Matroska and MP4 keep theirs; #1084) and, for AV1, Section-5 temporal units (TD OBU first, the av1C sequence header and metadata OBUs in-band on keyframes; `/tmp/plxnative-av1obu` = notd,noseq,raw tokens varies it on a debug build), for VP9 the demuxed packet unchanged (a frame carries its own headers and libpf's `video/x-vp9` caps have no `codec_data`), and AC3/EAC3, ADTS-framed AAC, or DTS core audio frames,
@@ -652,7 +652,11 @@ something.
   carries, `PlaybackSession::attempt_caps`, derived from the request's `start` on each rung's entry,
   never narrowed in place and never from a later read of the process-wide answer), and `ConvertFacet`
   has `route::dispatch_refusal_conversion` fly a `ClaimWork::Encode` under a `FlightOwner::Recovery`
-  that rebuilds today's route (which now plans the audio as the server's to convert), or, for a
+  that rebuilds today's route (which now plans the audio as the server's to convert), unless the
+  stream is a direct play and "Convert audio: On the TV" covers the refused codec under the narrowed
+  attempt (`route::audio_converts_on_tv`): then `route::dispatch_refusal_on_tv` flies a
+  `ClaimWork::KeepRoute` (no server round trip), the landing reloads the same route and the Load
+  declares AC3 for the demuxer's conversion (`engine::start_bufferfeed` reads the attempt too); or, for a
   video facet (`VideoLane::Encode`), an encode with `no_video_copy` under the lower of the route's
   ceiling and the 1080p rung's (`Caps::video_ceiling` lowers that codec's `raster_bound` to 1920x1088
   in the profile and the direct-play gate too). A video facet never proves and is never stored

@@ -481,7 +481,7 @@ pub(super) fn transcode_spec_carrying_burn<'a>(
 }
 
 
-pub use plx_plex::plex::session::{PlaybackQuality as Quality, DeckPress, DirectPlayMode, HdrOverlayBrightness, NextEpisodeMode, SkipInterval, SubtitleSize, SubtitlePosition, SubtitleTone};
+pub use plx_plex::plex::session::{PlaybackQuality as Quality, AudioConversion, DeckPress, DirectPlayMode, HdrOverlayBrightness, NextEpisodeMode, SkipInterval, SubtitleSize, SubtitlePosition, SubtitleTone};
 
 
 /// The ladder IN ORDER, best first. The ONE place row order lives, so the picker's index mapping
@@ -1446,6 +1446,10 @@ pub struct ResolveEnv {
     /// process-wide capability answer: every direct-play gate, the audio pick and the transcode
     /// profile of this resolve are derived from this one value.
     pub caps: std::sync::Arc<plx_os::devcaps::Caps>,
+    /// "Convert audio: On the TV" in force for this attempt (`devcaps::tv_audio_conversion`: the
+    /// viewer's choice and a build that can convert), copied at the request like the capability value
+    /// so the audio pick decides from values alone.
+    pub tv_audio_conversion: bool,
     /// The playback backends composed for this session, copied off it like the capability value
     /// above: the worker plans Feed work only when Feed is among them.
     pub backends: plx_playback_contract::BackendSet,
@@ -2368,7 +2372,9 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                 audio_natively_plays_with(&env.caps, env.direct_play_mode, codec, channels, rate)
             };
             let eligible = |codec: &str, channels: i64, rate: i64| {
-                audio_direct_plays_with(&env.caps, env.direct_play_mode, codec, channels, rate)
+                super::decision::audio_direct_plays_or_converted(
+                    &env.caps, env.tv_audio_conversion, env.direct_play_mode, codec, channels, rate,
+                )
             };
             let copy_blocked = forced || no_video_copy;
             let pick_audio = |stand_in: StandIn, plays: &dyn Fn(&str, i64, i64) -> bool| {
@@ -2399,7 +2405,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                 audio_sel = pick_audio(StandIn::SameKind, &eligible);
                 if let Some((_, raw, _)) = &audio_sel {
                     crate::player::log(&format!(
-                        "playback_policy: Force Direct Play decodes audio codec {raw} ({}) in the app, stereo",
+                        "playback_policy: Force Direct Play plays audio codec {raw} ({}) through the app",
                         plx_data::metadata::friendly_codec(raw)
                     ));
                 }
@@ -2563,6 +2569,21 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             // The reasoning, and what is measured versus documented, is at `plex::link_policy`.
             let location = client.link();
             let link = plx_plex::plex::link_policy(location);
+            // One line that says what this play start decided from: the mode, the Convert audio
+            // choice, the quality, the audio track it picked and the link (no URL, no token).
+            let audio_pick = match &audio_sel {
+                Some((i, raw, _)) => {
+                    let channels = usize::try_from(*i).ok().and_then(|i| tracks.get(i)).map_or(0, |t| t.channels);
+                    format!("{raw}/{channels}ch")
+                }
+                None => "none".to_owned(),
+            };
+            crate::player::log(&format!(
+                "playback_policy: direct_play_mode={:?} convert_audio={} quality={:?} audio_pick={audio_pick} link={location:?}",
+                env.direct_play_mode,
+                if env.tv_audio_conversion { "tv" } else { "server" },
+                playback_quality,
+            ));
             // …and what the USER has asked for, on top of what the link allows. Same two flags, composed
             // by AND, so the STRICTER of the two always wins: a relay link cannot be loosened by picking a
             // high rung, and a low rung is not rescued by a fast link. The reasoning — and why a ceiling

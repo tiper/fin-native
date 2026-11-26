@@ -9,12 +9,12 @@
 //! T-live and T-settings sit in media (`route/prefs_tests.rs`), where the lists they hold to these
 //! descriptors are declared.
 use super::prefs::{Descriptor, Fallback, ListRow, Parse, ProfileMemory, Row, Scope, Setting, SettingsWrite, DESCRIPTORS};
-use super::prefs::{DolbyVisionModePref, InstantDpadSeekingPref, UriEnginePref, AudioEnhancementsPref, AutoSignInPref, DeckPressPref, UnderPostersPref, DirectPlayModePref, LastHeroBlurPref,
+use super::prefs::{DolbyVisionModePref, AudioConversionPref, InstantDpadSeekingPref, UriEnginePref, AudioEnhancementsPref, AutoSignInPref, DeckPressPref, UnderPostersPref, DirectPlayModePref, LastHeroBlurPref,
     LastLibraryRow, LibraryOrderRow, LibraryViewsRow, NextEpisodeModePref, PlaintextConsentRow, QualityPref, ServerKeyPinsRow,
     HdrOverlayBrightnessPref, SkipIntervalPref, SubtitleOffsetsPref, SubtitlePositionPref, SubtitleSizePref, SubtitleTonePref, VersionChoicesPref,
     HoldHintTaughtPref, HudEndTimePref, TrailerAutoplayPref, UiResolutionPref};
 use super::{
-    DolbyVisionMode, InstantDpadSeeking, UriEngine, CanonicalSessionPreferences, DeckPress, UnderPosters, UnderPostersLadder, DetailPart, DetailParts, DirectPlayMode, LastLibrary, LibraryOrder, LibraryViews, NextEpisodeMode,
+    DolbyVisionMode, AudioConversion, InstantDpadSeeking, UriEngine, CanonicalSessionPreferences, DeckPress, UnderPosters, UnderPostersLadder, DetailPart, DetailParts, DirectPlayMode, LastLibrary, LibraryOrder, LibraryViews, NextEpisodeMode,
     PlaintextChoice, PlaintextConsent, PlaybackQuality, Preferences, ServerKeyPin, Session, SkipInterval,
     HdrOverlayBrightness, HoldHintTaught, SubtitleOffsetEntry, VersionChoiceEntry, SubtitlePosition, SubtitleSize, SubtitleTone, UiResolution,
 };
@@ -104,6 +104,7 @@ where
 fn every_marker_names_its_own_field() {
     check_row::<QualityPref>(PlaybackQuality::P720);
     check_row::<DirectPlayModePref>(DirectPlayMode::Forced);
+    check_row::<AudioConversionPref>(AudioConversion::Tv);
     check_row::<SubtitleTonePref>(SubtitleTone::Grey);
     check_row::<SubtitleSizePref>(SubtitleSize::Large);
     check_row::<SubtitlePositionPref>(SubtitlePosition::High);
@@ -125,7 +126,7 @@ fn every_marker_names_its_own_field() {
     check_row::<LastHeroBlurPref>(Some([[0.5, 0.25, 0.125]; 4]));
     check_row::<UiResolutionPref>(UiResolution::Hd720);
     check_row::<HoldHintTaughtPref>(HoldHintTaught { card: true, pill: false });
-    // The table lists exactly these twenty-two `Setting` rows, the six list rows below, the four
+    // The table lists exactly these twenty-three `Setting` rows, the six list rows below, the four
     // memory-door rows (`TrackMemoryPref`, whose field check is
     // `track_memory_tests::the_list_row_names_its_own_field`, `RecentChannelsPref`, checked by
     // `recent_channels_tests::the_list_row_names_its_own_field_and_is_account_bound`, `SubtitleOffsetsPref`, checked by
@@ -133,7 +134,7 @@ fn every_marker_names_its_own_field() {
     // `the_version_choices_row_names_its_own_field`) and the per-profile record list
     // (`ProfilePrefsPref`, `profile_prefs_tests::nothing_picked_serializes_to_no_key`): a row needs
     // its line in one of the four places.
-    assert_eq!(DESCRIPTORS.len(), 22 + 6 + 4 + 1 + 1, "plus `HudSelectionPref`, a `String` row checked by `profile_prefs_tests`");
+    assert_eq!(DESCRIPTORS.len(), 23 + 6 + 4 + 1 + 1, "plus `HudSelectionPref`, a `String` row checked by `profile_prefs_tests`");
 }
 
 /// The list rows do what `check_row` proves for the `Copy` ones: the marker names its own field
@@ -225,6 +226,7 @@ fn the_declared_live_and_settings_facts_are_the_ones_main_has() {
     for (key, settings) in [
         ("playback_quality", Some(Confirm)),
         ("direct_play_mode", Some(Confirm)),
+        ("audio_conversion", Some(Confirm)),
         ("next_episode_mode", Some(Confirm)),
         ("skip_interval", Some(Confirm)),
         ("instant_dpad_seeking", Some(Confirm)),
@@ -365,6 +367,7 @@ fn garbage_fixtures() -> Vec<(&'static str, Vec<Value>)> {
     vec![
         ("playback_quality", generic()),
         ("direct_play_mode", generic()),
+        ("audio_conversion", generic()),
         ("subtitle_tone", generic()),
         ("subtitle_size", generic()),
         ("subtitle_position", generic()),
