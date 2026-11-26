@@ -229,13 +229,14 @@ struct PickTap {
     last: Option<Asked>,
     /// `(what was asked, who asked, how it ended)`, in the order the runner finished them.
     commands: Vec<(Asked, MachineId, plx_machine::machine::AppCommandOutcome)>,
-    /// How many times a panel reported a picked version (`AppMsg::PlayVersion`) to its page.
+    /// How many times a panel reported a picked version (`AppMsg::SelectVersion`) to its page.
     play_version_reported: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Asked {
     Play(Option<plx_plex::plex::MediaId>),
+    Select(plx_plex::plex::MediaId),
     Present(plx_plex::plex::ServerId, String),
     /// Any other app command, named by family: not what these tests grade, but a failure prints it.
     /// (The Play Version page also asks for a hero `PreviewStart` while the panel covers it; that one
@@ -246,7 +247,7 @@ enum Asked {
 impl plx_ui::dispatch::Tap<AppHost> for PickTap {
     fn effect(&mut self, _: u64, stamped: &plx_machine::machine::Stamped<AppHost>) {
         use plx_screens::registry::{AppFx, AppMsg, ContentArg, ContentReq, PlayIntent};
-        if let Fx::Deliver(_, plx_machine::machine::Delivery::Screen(plx_ui::screen::ScreenEvent::App(AppMsg::PlayVersion(_)))) = &stamped.fx {
+        if let Fx::Deliver(_, plx_machine::machine::Delivery::Screen(plx_ui::screen::ScreenEvent::App(AppMsg::SelectVersion(_)))) = &stamped.fx {
             self.play_version_reported += 1;
         }
         if let Fx::App(app) = &stamped.fx {
@@ -255,6 +256,7 @@ impl plx_ui::dispatch::Tap<AppHost> for PickTap {
                     PlayIntent::Item { version, .. } | PlayIntent::Movie { version, .. } => *version,
                     PlayIntent::Live { .. } => unreachable!("a detail action cannot tune a channel"),
                 }),
+                AppFx::Content(ContentReq::SelectVersion { media, .. }) => Asked::Select(*media),
                 AppFx::Content(ContentReq::Present(ContentArg::Detail { sid, rk })) => Asked::Present(*sid, rk.clone()),
                 AppFx::Content(ContentReq::PreviewStart { .. }) => Asked::Other("content:PreviewStart"),
                 AppFx::Content(_) => Asked::Other("content"),
@@ -305,15 +307,12 @@ fn page_instance(d: &Dispatcher<AppHost>) -> InstanceId {
     d.nav.top_page().and_then(|e| e.inst.as_ref()).expect("the page mounted").id
 }
 
-/// **Play Version, the reporter's case (#1424):** a title with two versions, the panel open, the
-/// second row picked. The page's play command for THAT version is executed and the Player is
-/// entered.
-///
-/// Red first on `origin/main` (`3878e4f55`): the page asked for the second version and the runner
-/// answered `Refused` (`content_command`'s input-owner gate, run before the panel's `Dismiss`
-/// committed), so no Player was ever pushed.
+/// **Select Version, through the product frame (the shape of #1424):** a title with two versions, the
+/// panel open, the second row picked. The page's command to select THAT version is executed (not
+/// refused while the panel is still closing), the panel closes and NOTHING plays: the player is not
+/// entered and the page stays on top.
 #[test]
-fn a_picked_version_plays_that_version_though_its_panel_is_still_closing() {
+fn a_picked_version_is_selected_and_nothing_plays_though_its_panel_is_still_closing() {
     use plx_machine::machine::AppCommandOutcome;
     let versions = plx_appkit::version_list::sample();
     let pick = versions[1].id;
@@ -334,20 +333,21 @@ fn a_picked_version_plays_that_version_though_its_panel_is_still_closing() {
         plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits) },
     );
     w.frames(40);
-    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Play Version panel is up");
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel is up");
     let mut tap = PickTap::default();
     let mut t = w.frame;
     let mut bridge = w.bridge.bridge();
     pick_key(&mut w.d, &mut bridge, &mut t, Key::Down, &mut tap);
     pick_key(&mut w.d, &mut bridge, &mut t, Key::Ok, &mut tap);
     assert_eq!(
-        tap.ended(host, &Asked::Play(Some(pick))), [AppCommandOutcome::Completed],
-        "the page asked to play the SECOND version, once, and the runner executed it: {}", tap.account());
+        tap.ended(host, &Asked::Select(pick)), [AppCommandOutcome::Completed],
+        "the page asked to select the SECOND version, once, and the runner executed it: {}", tap.account());
+    assert!(tap.commands.iter().all(|(asked, ..)| !matches!(asked, Asked::Play(_))), "nothing was asked to play: {}", tap.account());
     assert!(w.d.nav.modals.surfaces.is_empty(), "the panel closed");
-    assert!(matches!(w.d.top_arg(), Some(AppArg::Player)), "the pick entered the player");
+    assert!(!matches!(w.d.top_arg(), Some(AppArg::Player)), "the pick did not enter the player");
 }
 
-/// **Play Version on a platform that composed no playback driver (W6c):** the panel's rows are the
+/// **Select Version on a platform that composed no playback driver (W6c):** the panel's rows are the
 /// shared disabled rows, so the pick presses nothing: no play is asked, the player is not entered
 /// and the panel stays up (OK on a disabled row does nothing; BACK still closes it). The mount
 /// reads the platform's fact (`ScreenInputs::can_play`), which the previous test, on the default
@@ -374,7 +374,7 @@ fn a_version_pick_asks_for_no_play_when_the_platform_composed_no_driver() {
         plx_screens::registry::ContentPanel::Versions { anchor: [300.0f32, 800.0, 300.0, 60.0].map(f32::to_bits) },
     );
     w.frames(40);
-    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Play Version panel is up");
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel is up");
     let mut tap = PickTap::default();
     let mut t = w.frame;
     let mut bridge = w.bridge.bridge();
@@ -494,4 +494,123 @@ fn a_page_under_a_picker_that_stays_open_is_still_refused() {
         tap.ended(s.host, &Asked::Present(s.other, "copy".into())), [AppCommandOutcome::Refused],
         "the page asked, and a covered page is refused: {}", tap.account());
     assert_eq!(s.d.nav.modals.surfaces.len(), 1, "the picker is still up, and nothing was presented over it");
+}
+
+/// A part-watched movie with two versions and two audio and two subtitle tracks, the page the hero's `…`
+/// holds Select Version and Audio & Subtitles on. `discs` instead puts one of them on the hero's own row: a
+/// movie with no resume point has no Play from Start, so Watchlist, Watched and the one action asked for
+/// (`Some(true)`: versions only, `Some(false)`: tracks only) fill the row without a `…`.
+fn hero_world(name: &str, discs: Option<bool>) -> World {
+    // the DV diagnostics latch on first read, which must not be inside a machine step
+    plx_data::metadata::prewarm_dv_latches();
+    let stream = |id| plx_data::metadata::Stream { id, ..Default::default() };
+    let mut detail = plx_data::metadata::Detail {
+        sid: plx_plex::plex::ServerId::UNSET,
+        rk: "movie".into(),
+        kind: "movie".into(),
+        title: "Movie".into(),
+        part: "/library/parts/7/movie.mkv".into(),
+        resume_ms: 600_000,
+        dur_ms: 6_000_000,
+        versions: plx_appkit::version_list::sample(),
+        audio: vec![stream(11), stream(12)],
+        subs: vec![stream(21), stream(22)],
+        ..Default::default()
+    };
+    if let Some(versions) = discs {
+        detail.resume_ms = 0;
+        if versions { detail.audio.clear(); detail.subs.clear(); } else { detail.versions.clear(); }
+    }
+    World::detail_page(name, detail)
+}
+
+/// Focus walked along the hero row to `ctl`.
+fn walk_to(w: &mut World, ctl: plx_screens::detail::HeroCtl) {
+    for _ in 0..8 {
+        if w.elem() == Some(ctl.elem()) { return; }
+        w.press(Key::Right);
+    }
+    panic!("the hero row never reached {ctl:?}: focus {:?}", w.focus());
+}
+
+/// **A Detail page on top always holds focus** (the invariant these tests pin): a pick or BACK that closes
+/// the last surface leaves the ring on `ctl`, never on nothing and never on a closed surface's entry.
+fn assert_focus_on_hero(w: &World, ctl: plx_screens::detail::HeroCtl, what: &str) {
+    let page = w.d.nav.top_page().expect("a page is on top").id;
+    assert!(w.d.nav.modals.surfaces.is_empty(), "{what}: premise: the surface closed");
+    assert_eq!(w.focus(), Some(FocusKey { entry: page, elem: ctl.elem() }), "{what}: focus is back on the opener");
+}
+
+/// BACK until the surfaces are gone (the Audio & Subtitles panel pops a page before it dismisses).
+fn back_out(w: &mut World) {
+    for _ in 0..4 {
+        if w.d.nav.modals.surfaces.is_empty() { return; }
+        w.press(Key::Back);
+    }
+}
+
+/// **A pick in Select Version, opened from the hero's `…` menu, returns focus to the `…`** (the menu row
+/// hands its panel to the page, so the panel is presented while the closing menu still owns the ring).
+/// The page used to keep the menu's row as its return spot and was restored onto a dead entry: no ring,
+/// Left and Right dead, Down on the cast. The same close as BACK without a pick.
+#[test]
+fn a_version_pick_from_the_more_menu_returns_focus_to_the_more_button() {
+    use plx_screens::detail::HeroCtl;
+    let mut w = hero_world("version-pick-more", None);
+    walk_to(&mut w, HeroCtl::More);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the … menu is up");
+    w.press(Key::Ok); // its first row: Select Version
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel replaced the menu");
+    w.press(Key::Down);
+    w.press(Key::Ok);
+    assert_focus_on_hero(&w, HeroCtl::More, "a version pick");
+
+    // control: BACK without a pick
+    w.press(Key::Ok);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the panel is up again");
+    w.press(Key::Back);
+    assert_focus_on_hero(&w, HeroCtl::More, "BACK from the panel");
+}
+
+/// **A pick in Audio & Subtitles, opened from the hero's `…` menu, returns focus to the `…`**, the panel
+/// being left after the pick (it stays up with the check moved).
+#[test]
+fn an_audio_subtitles_pick_from_the_more_menu_returns_focus_to_the_more_button() {
+    use plx_screens::detail::HeroCtl;
+    let mut w = hero_world("tracks-pick-more", None);
+    walk_to(&mut w, HeroCtl::More);
+    w.press(Key::Ok);
+    w.press(Key::Down); // Select Version, then Audio & Subtitles
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Audio & Subtitles panel is up");
+    w.press(Key::Down);
+    w.press(Key::Ok); // a pick: the check moves, the panel stays
+    back_out(&mut w);
+    assert_focus_on_hero(&w, HeroCtl::More, "an Audio & Subtitles pick");
+}
+
+/// **The same from the hero's own discs**: Select Version and Audio & Subtitles opened from their discs
+/// return focus to that disc.
+#[test]
+fn a_pick_from_a_hero_disc_returns_focus_to_that_disc() {
+    use plx_screens::detail::HeroCtl;
+    let mut w = hero_world("version-pick-disc", Some(true));
+    walk_to(&mut w, HeroCtl::Version);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Select Version panel is up");
+    w.press(Key::Down);
+    w.press(Key::Ok);
+    assert_focus_on_hero(&w, HeroCtl::Version, "a version pick from its disc");
+    drop(w);
+
+    let mut w = hero_world("tracks-pick-disc", Some(false));
+    walk_to(&mut w, HeroCtl::AudioSubtitles);
+    w.press(Key::Ok);
+    assert_eq!(w.d.nav.modals.surfaces.len(), 1, "premise: the Audio & Subtitles panel is up");
+    w.press(Key::Down);
+    w.press(Key::Ok);
+    back_out(&mut w);
+    assert_focus_on_hero(&w, HeroCtl::AudioSubtitles, "an Audio & Subtitles pick from its disc");
 }

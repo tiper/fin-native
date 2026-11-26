@@ -2868,7 +2868,13 @@ mod tests {
         // keeps refused at the shape boundary like every older value.
         // The What's on page: the Live TV screen's shape lists its Recent channels (moved from 0x7410_4747_8858_9e13).
         // The Channels shelf keeps every channel reachable: the Live TV stack has three shelves (moved from 0x2808_f237_5764_68bd).
-        assert_eq!(state_fp(), 0xb985_c4dc_d4a9_4e97, "current V13 producer census");
+        // **The hero row (#1553) moves the census to this value from 0xb985_c4dc_d4a9_4e97 (main's).** The screen
+        // shapes gained the Audio & Subtitles panel (`PreplayPanel`, its `Source`) and the item menu's
+        // hero overflow (`HeroOverflow{rows:len}`, `Action::Hero`'s control). The predecessors are kept
+        // below like every older value.
+        assert_eq!(state_fp(), 0xb0b8_437b_410f_aab3, "current V13 producer census");
+        assert_ne!(state_fp(), 0xb985_c4dc_d4a9_4e97, "the census before the hero row's panel and overflow shapes");
+        assert_ne!(state_fp(), 0xc0b2_71bb_16d2_d02f, "the hero row's census before the Live TV pages joined it");
         assert_ne!(state_fp(), 0x2808_f237_5764_68bd, "the census before the Channels shelf");
         assert_ne!(state_fp(), 0x7410_4747_8858_9e13, "the census before the What's on page");
         assert_ne!(state_fp(), 0x7f1d_280c_909c_8603, "the census before Filmography's Watchlist menu");

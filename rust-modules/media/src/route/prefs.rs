@@ -45,7 +45,7 @@ use plx_plex::plex::session::{
 use plx_plex::plex::session::prefs::{
     MemoryEntry, ProfileKeyed, ProfileList, ProfileMemory, ProfileRecords, RecentChannelEntry, SettingsWrite, TrackMemoryEntry,
 };
-use plx_plex::plex::session::{self, Seat, Session, SubtitleOffsetEntry};
+use plx_plex::plex::session::{self, Seat, Session, SubtitleOffsetEntry, VersionChoiceEntry};
 use plx_plex::plex::AudioEnhancements;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU16, Ordering::Relaxed};
@@ -618,11 +618,26 @@ fn reseed_mirror<E: MemoryTenant>(record: &Session) {
 
 /// Every tenant of the memory door, once. (The profiles' own player values are reseeded beside them.)
 pub const MEMORY_ROWS: &[MemoryRow] =
-    &[MemoryRow::of::<SubtitleOffsetEntry>(), MemoryRow::of::<TrackMemoryEntry>(), MemoryRow::of::<RecentChannelEntry>()];
+    &[
+        MemoryRow::of::<SubtitleOffsetEntry>(),
+        MemoryRow::of::<TrackMemoryEntry>(),
+        MemoryRow::of::<VersionChoiceEntry>(),
+        MemoryRow::of::<RecentChannelEntry>(),
+    ];
 
 static SUBTITLE_OFFSETS: MemoryMirror<SubtitleOffsetEntry> = MemoryMirror::new();
 static TRACK_MEMORY: MemoryMirror<TrackMemoryEntry> = MemoryMirror::new();
+static VERSION_CHOICES: MemoryMirror<VersionChoiceEntry> = MemoryMirror::new();
 static RECENT_CHANNELS: MemoryMirror<RecentChannelEntry> = MemoryMirror::new();
+
+impl MemoryTenant for VersionChoiceEntry {
+    fn mirror() -> &'static MemoryMirror<Self> {
+        &VERSION_CHOICES
+    }
+    fn log_label() -> &'static str {
+        "version choice"
+    }
+}
 
 impl MemoryTenant for SubtitleOffsetEntry {
     fn mirror() -> &'static MemoryMirror<Self> {

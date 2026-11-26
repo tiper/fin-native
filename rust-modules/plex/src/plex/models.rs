@@ -753,6 +753,19 @@ pub struct Media {
     pub ends_at: i64,
 }
 
+/// Extract the numeric Part id from a Plex part key (/library/parts/{id}/…/file.mkv); `0` when the key
+/// names none. The one reading of a part key into the id every file-addressed record is keyed by (the
+/// selection PUT, a pre-play pick, a plan's `part_id`).
+pub fn part_id_of(part_key: &str) -> i64 {
+    let mut it = part_key.split('/');
+    while let Some(seg) = it.next() {
+        if seg == "parts" {
+            return it.next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        }
+    }
+    0
+}
+
 #[derive(Deserialize, Default)]
 pub struct MediaPart {
     #[serde(default, deserialize_with = "de_i64")]

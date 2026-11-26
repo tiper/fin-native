@@ -1732,7 +1732,7 @@ impl Bridge<'_> {
     pub(crate) fn publish_player_presentation(&mut self, ps: &plx_media::route::PlaybackSession) -> bool {
         // No Player replay domain exists: controlled owners retain explicit neutral/supplied facts.
         if !self.retained.live_screen_inputs { return false; }
-        let next = super::player_presentation::capture(ps);
+        let next = super::player_presentation::capture(ps, self.metadata_view());
         // The set the composition published: the screens read it to disable Play when none is composed.
         let backends = ps.backends();
         if self.retained.screen_inputs.player_presentation == next
@@ -1954,13 +1954,12 @@ impl Bridge<'_> {
             let sid = match &e.arg { AppArg::Content(ContentArg::Detail { sid, .. }) => *sid, _ => return None };
             let rect = page.focused_rect::<AppHost>(ret.focus, &cx, At::Drawn);
             let meta = <AppHost as plx_screens::registry::MetadataLike>::metadata(&cx);
-            if let Some((ep, mark)) = page.hero_menu_episode(ret.focus, meta) {
-                let mut arg = strip_menu_arg(sid, &ep.rk,
-                    ItemMenuKind::Episode { mark, versions: ep.versions.clone() }, entry, ret.focus, rect);
-                // The on-deck episode need not be in the loaded season window. The ordinary
-                // addressed item path fetches it, rather than the filmstrip's loaded-only path.
+            if let Some((rk, kind)) = d.nav.instance_of(entry).and_then(|opener| page.hero_overflow(ret.focus, meta, opener)) {
+                // The hero's …: the item Play from Start / Play Version act on may be the on-deck
+                // episode, which need not be in the loaded season window, so the ordinary
+                // addressed-item path fetches it rather than the filmstrip's loaded-only one.
+                let mut arg = strip_menu_arg(sid, &rk, kind, entry, ret.focus, rect);
                 arg.loaded_episode = false;
-                arg.watchlist = self.watchlist_face(page.watchlist_hex(), plx_data::watchlist::model::Kind::Show, true);
                 return Some(arg);
             }
             if let Some((rk, show_rk, index, mark)) = page.focused_season(ret.focus, meta) {
@@ -4469,6 +4468,27 @@ pub(crate) fn open_player_overlay(
             plx_screens::player::overlay::PlayerOverlayArg { kind },
         )),
     );
+}
+
+/// **Present the before-playback picker over the failed player** (`PlayerReq::OpenFailedTracks`): the
+/// item and the part are the failed attempt's, read off the session; the surface is a player panel that
+/// survives the failure, as the `…` popover's Quality page does.
+pub(crate) fn open_failed_tracks(ps: &plx_media::route::PlaybackSession, anchor: [u32; 4], d: &mut Dispatcher<AppHost>) {
+    let Some(InputOwner::Entry(entry)) = d.nav.input_owner() else { return };
+    let Some(host) = d.nav.instance_of(entry) else { return };
+    let arg = AppArg::PreplayPanel(plx_screens::preplay_panel::PreplayArg {
+        host,
+        sid: plx_media::route::cur_sid(ps),
+        rk: plx_media::route::cur_rk(ps),
+        anchor,
+        source: plx_screens::preplay_panel::Source::Failed { part_id: plx_media::route::cur_part_id(ps), pick: plx_media::route::failed_pick(ps) },
+    });
+    let id = plx_ui::screen::ScreenArg::id(&arg);
+    if surface_up(d, move |up| plx_ui::screen::ScreenArg::id(up) == id) {
+        return;
+    }
+    d.nav.next_style = Style::PlayerPanel { survives_failure: true };
+    d.request(MachineId::Nav, NavOp::Present(arg));
 }
 
 /// Which player panel owns input right now, if one does.

@@ -1077,6 +1077,10 @@ pub enum FailureAction {
     /// The `…` popover opened on the quality ladder — a different rung is a different route, and
     /// picking one retries at it.
     ChangeQuality,
+    /// *Audio & Subtitles*: the before-playback picker over the failure screen, so the viewer can
+    /// pick the pair Try again plays (`route::hold_pick_for_retry`). Offered where a retry can happen and
+    /// the failed item has tracks to show ([`FailureContext::tracks_available`]).
+    ChangeTracks,
     /// Review the sandbox repair (the confirmation `Player.repair` guards).
     Repair,
     /// Leave the player.
@@ -1099,6 +1103,9 @@ pub struct FailureContext {
     pub quality_carriable: bool,
     /// The sandbox repair can still be started (nothing is running or finished).
     pub repair_idle: bool,
+    /// The failed item has audio or subtitle tracks the picker can list ([`failed_tracks_available`]). An
+    /// input like the rest, decided once at the app boundary where the metadata is in reach.
+    pub tracks_available: bool,
 }
 
 /// **The failure read-out's row, as ONE table** — every control the read-out draws, in draw order;
@@ -1161,6 +1168,11 @@ pub fn failure_actions(kind: FailureKind, cx: FailureContext) -> Vec<FailureActi
                 if cx.quality_carriable {
                     v.push(A::ChangeQuality);
                 }
+                // The pair a retry plays is the viewer's to change, whatever the rung: a track pick needs
+                // only tracks to pick from.
+                if cx.tracks_available {
+                    v.push(A::ChangeTracks);
+                }
             }
         }
     }
@@ -1169,17 +1181,25 @@ pub fn failure_actions(kind: FailureKind, cx: FailureContext) -> Vec<FailureActi
 }
 
 /// The live [`FailureContext`] (main thread).
-pub fn failure_context(ps: &crate::route::PlaybackSession) -> FailureContext {
-    failure_context_captured(ps, failtest_forced())
+pub fn failure_context(ps: &crate::route::PlaybackSession, tracks_available: bool) -> FailureContext {
+    failure_context_captured(ps, failtest_forced(), tracks_available)
+}
+
+/// **Does the failed item have tracks the picker can show?** The one question behind
+/// [`FailureContext::tracks_available`]: not a channel, and the playing item's lists address the failed
+/// attempt's part (`MetadataView::failed_tracks`, which is also what the panel's rows read).
+pub fn failed_tracks_available(ps: &crate::route::PlaybackSession, meta: plx_data::metadata::MetadataView<'_>) -> bool {
+    !crate::route::is_live(ps) && meta.has_failed_tracks(crate::route::cur_sid(ps), &crate::route::cur_rk(ps), crate::route::cur_part_id(ps))
 }
 
 /// App-boundary resolver using the diagnostic policy already sampled for this frame.
-pub fn failure_context_captured(ps: &crate::route::PlaybackSession, diagnostic_forced: bool) -> FailureContext {
+pub fn failure_context_captured(ps: &crate::route::PlaybackSession, diagnostic_forced: bool, tracks_available: bool) -> FailureContext {
     FailureContext {
         forced: crate::route::forced_direct_play(ps) || diagnostic_forced,
         can_retry: crate::route::can_retry_current_play(ps),
         quality_carriable: !crate::route::is_live(ps) && ps.quality_pick_carriable(),
         repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle,
+        tracks_available,
     }
 }
 
@@ -2874,8 +2894,10 @@ pub fn every_failure_row() -> Vec<(FailureKind, FailureContext, Vec<FailureActio
             for can_retry in [false, true] {
                 for quality_carriable in [false, true] {
                     for repair_idle in [false, true] {
-                        let cx = FailureContext { forced, can_retry, quality_carriable, repair_idle };
-                        out.push((kind, cx, failure_actions(kind, cx)));
+                        for tracks_available in [false, true] {
+                            let cx = FailureContext { forced, can_retry, quality_carriable, repair_idle, tracks_available };
+                            out.push((kind, cx, failure_actions(kind, cx)));
+                        }
                     }
                 }
             }
@@ -3259,7 +3281,7 @@ mod tests {
         assert_eq!(shape.kind, FailureKind::TunersBusy);
         assert_eq!(shape.readout, plx_os::i18n::msg::widgets_verdict_tuners_busy());
         for forced in [false, true] {
-            let cx = FailureContext { forced, can_retry: true, repair_idle: false, quality_carriable: false };
+            let cx = FailureContext { forced, can_retry: true, repair_idle: false, quality_carriable: false, tracks_available: false };
             assert_eq!(failure_actions(shape.kind, cx), vec![FailureAction::TryAgain, FailureAction::Back]);
             assert_eq!(failure_actions(shape.kind, FailureContext { can_retry: false, ..cx }), vec![FailureAction::Back]);
         }
@@ -3303,7 +3325,7 @@ mod tests {
     /// every rung Force overrides. The fix is the one change that re-enables the fallback.
     #[test]
     fn forced_direct_play_offers_the_fix_and_never_the_quality_ladder() {
-        let cx = FailureContext { forced: true, can_retry: true, quality_carriable: true, repair_idle: true };
+        let cx = FailureContext { forced: true, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
         let row = failure_actions(FailureKind::PlaybackPolicy, cx);
         assert_eq!(row.first(), Some(&FailureAction::PlayAutomatically));
         assert!(!row.contains(&FailureAction::ChangeQuality), "{row:?}");
@@ -3328,11 +3350,12 @@ mod tests {
             assert_eq!(row.iter().filter(|a| **a == A::Back).count(), 1, "{at}");
             if cx.forced {
                 assert!(!row.contains(&A::ChangeQuality), "Force overrides every rung — {at}");
+                assert!(!row.contains(&A::ChangeTracks), "the forced row is the fix and a retry only — {at}");
             } else {
                 assert!(!row.contains(&A::PlayAutomatically), "nothing to switch off — {at}");
             }
             if !cx.can_retry {
-                for a in [A::TryAgain, A::ChangeQuality, A::PlayAutomatically] {
+                for a in [A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::PlayAutomatically] {
                     assert!(!row.contains(&a), "no request to resolve again — {at}");
                 }
             }
@@ -3345,7 +3368,7 @@ mod tests {
             assert_eq!(row.contains(&A::Repair), kind == K::JailMissingRtkmem && cx.repair_idle, "{at}");
         }
         // and a transient failure without Force keeps both of its recoveries
-        let cx = FailureContext { forced: false, can_retry: true, quality_carriable: true, repair_idle: true };
+        let cx = FailureContext { forced: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: false };
         let row = failure_actions(K::PlaybackInterrupted, cx);
         assert_eq!(&row[..2], &[A::TryAgain, A::ChangeQuality]);
     }
@@ -3364,13 +3387,37 @@ mod tests {
                 assert!(!row.contains(&A::ChangeQuality), "{kind:?} {cx:?}: the ladder leads nowhere — {row:?}");
             }
         }
-        let uri_only = FailureContext { forced: false, can_retry: true, quality_carriable: false, repair_idle: true };
+        let uri_only = FailureContext { forced: false, can_retry: true, quality_carriable: false, repair_idle: true, tracks_available: false };
         assert_eq!(failure_actions(K::PlaybackInterrupted, uri_only), [A::TryAgain, A::Back]);
         let feed = FailureContext { quality_carriable: true, ..uri_only };
         assert_eq!(failure_actions(K::PlaybackInterrupted, feed), [A::TryAgain, A::ChangeQuality, A::Back]);
         // Force still offers its own recovery, the one change that re-enables the fallback.
         let forced = FailureContext { forced: true, ..uri_only };
         assert_eq!(failure_actions(K::PlaybackInterrupted, forced), [A::PlayAutomatically, A::TryAgain, A::Back]);
+    }
+
+    /// **The failure row offers *Audio & Subtitles* exactly where a retry can play the pick**: not forced,
+    /// a request to resolve again, and tracks to show; after *Change quality*, before *Back*.
+    #[test]
+    fn the_failure_row_offers_audio_and_subtitles_only_where_a_retry_can_play_the_pick() {
+        use FailureAction as A;
+        use FailureKind as K;
+        for (kind, cx, row) in every_failure_row() {
+            let at = format!("{kind:?} {cx:?}: {row:?}");
+            if row.contains(&A::ChangeTracks) {
+                assert!(cx.tracks_available && cx.can_retry && !cx.forced, "{at}");
+                let tracks = row.iter().position(|a| *a == A::ChangeTracks).unwrap();
+                if let Some(quality) = row.iter().position(|a| *a == A::ChangeQuality) {
+                    assert!(quality < tracks, "after Change quality — {at}");
+                }
+            }
+        }
+        let cx = FailureContext { forced: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
+        assert_eq!(failure_actions(K::PlaybackInterrupted, cx), [A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::Back]);
+        let no_rung = FailureContext { quality_carriable: false, ..cx };
+        assert_eq!(failure_actions(K::PlaybackInterrupted, no_rung), [A::TryAgain, A::ChangeTracks, A::Back]);
+        let refused = failure_actions(K::DecisionRefused, cx);
+        assert_eq!(refused, [A::ChangeQuality, A::ChangeTracks, A::Back], "a refusal repeats, a different pair may not");
     }
 
     #[test]
@@ -4133,7 +4180,7 @@ mod tests {
         assert_eq!(e.kind.code(), "preview_not_direct", "{:?}", e.kind);
         assert_ne!(e.kind, FailureKind::Unspecified);
         assert!(e.detail.is_empty(), "no server sentence rides a refusal that is ours");
-        let cx = FailureContext { forced: false, can_retry: true, quality_carriable: true, repair_idle: false };
+        let cx = FailureContext { forced: false, can_retry: true, quality_carriable: true, repair_idle: false, tracks_available: false };
         assert_eq!(failure_actions(e.kind, cx), vec![FailureAction::Back], "same item, same refusal: no Try Again");
     }
 

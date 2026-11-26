@@ -1,16 +1,17 @@
-//! **Play Version** — the Detail hero's list of a movie's or episode's versions, opened by the
-//! Play Version disc.
+//! **Select Version** — the Detail hero's list of a movie's or episode's versions, opened by the
+//! Select Version disc.
 //!
 //! A `Style::Compact` surface anchored to the disc that opened it, the *Also available* panel's
 //! shape (`screens::alt_sources`): the anchor rides on [`VersionsArg`], the surface owns input
-//! while it is up, and it REPORTS the choice. A row delivers [`AppMsg::PlayVersion`] to the Detail
-//! instance named on its argument and the PAGE plays it, the way its Play pill does (resuming), so
-//! "what Play means on this page" stays in one place.
+//! while it is up, and it REPORTS the choice. A row delivers [`AppMsg::SelectVersion`] to the Detail
+//! instance named on its argument and the PAGE records it as the file its Play and Resume start; the
+//! row plays nothing, and the check mark moves to it. So "what Play means on this page" stays in one
+//! place.
 //!
 //! The rows are `plx_appkit::version_list`, the same builder the item menu's Play Version page
 //! draws, captured when the panel opens: a refetch landing behind an open list does not move a
-//! row under the cursor. It opens on the version Play takes unasked, the server's first
-//! (`plx_plex::plex::Metadata::media_version(None)`).
+//! row under the cursor. It opens on the row that wears the check mark, the version Play takes now
+//! (the viewer's choice, else what plays unasked).
 
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -82,14 +83,20 @@ pub struct VersionsPanelScreen {
 }
 
 impl VersionsPanelScreen {
-    /// `can_play` is whether the platform composed any playback driver (`ScreenInputs::can_play`):
-    /// without one every row is disabled and says why, and presses nothing.
-    pub fn new(entry: EntryId, arg: VersionsArg, versions: &[MediaVersion], can_play: bool) -> Self {
+    /// `checked` is the version Play takes now: it wears the check mark and the list opens on it
+    /// (else on the first row). `can_play` is whether the platform composed any playback driver
+    /// (`ScreenInputs::can_play`): without one every row is disabled and says why, and presses
+    /// nothing.
+    pub fn new(entry: EntryId, arg: VersionsArg, versions: &[MediaVersion], checked: Option<MediaId>, can_play: bool) -> Self {
         let mut form = FormTable::new(plx_ui::table_screen::BAND_BASE);
         // rows carry a sub-line: the track menu's size class
         form.table.compact = false;
         let unavailable = (!can_play).then(plx_os::i18n::msg::browse_detail_no_playback);
-        form.set(Form::new().section(plx_appkit::version_list::section(versions, VersionRow, |v| v.id, unavailable)), Some(&VersionRow(0)));
+        let opening = checked.and_then(|id| versions.iter().position(|v| v.id == id)).unwrap_or(0);
+        form.set(
+            Form::new().section(plx_appkit::version_list::section(versions, VersionRow, |v| v.id, checked, unavailable)),
+            Some(&VersionRow(opening as u16)),
+        );
         Self { entry, arg, versions: versions.iter().map(|v| v.id).collect(), form }
     }
 
@@ -103,7 +110,7 @@ impl VersionsPanelScreen {
         fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
     }
 
-    /// Close, and report row `elem`'s version to the page. Takes the elem, not the cursor: a click
+    /// Close, and report row `elem`'s version to the page, which selects it. Takes the elem, not the cursor: a click
     /// names the stop it hit (`AltSourcesScreen::commit`). OK on a DISABLED row (no playback driver
     /// composed) does nothing and the panel stays up, as on every disabled row (`ui/CLAUDE.md`: "OK
     /// does nothing"); BACK still closes it.
@@ -120,7 +127,7 @@ impl VersionsPanelScreen {
         if let Some(media) = media {
             fx.push(Fx::Deliver(
                 MachineId::Instance(self.arg.host),
-                Delivery::Screen(ScreenEvent::App(AppMsg::PlayVersion(media))),
+                Delivery::Screen(ScreenEvent::App(AppMsg::SelectVersion(media))),
             ));
         }
     }
@@ -221,8 +228,8 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Focusable<H> for VersionsPa
     /// count `GroupSpec::len` states), so a separator or note never shifts an id. The label is the
     /// row's own text, for the state file only. The elements and the inverse are the shared ones.
     ///
-    /// **A row plays, so it names what it plays.** OK delivers `AppMsg::PlayVersion` to the page, which plays the
-    /// hero's title as its Play pill would, in the version the row names: the subject is the Play pill's own
+    /// **A row selects for a title, so it names that title.** OK delivers `AppMsg::SelectVersion` to the page, which
+    /// records the version the row names for the hero's title, the one its Play pill plays: the subject is the Play pill's own
     /// (`registry::versions_subject`: the page's loaded item, read from the metadata store the way the mount reads the
     /// versions), so `versions.row.<n>` needs a press that names the title. The key is derived from `cx`, not kept on the
     /// screen: it is no part of the screen's recorded state (`SHAPE`).
@@ -388,6 +395,7 @@ pub(crate) mod tests {
             EntryId(3),
             VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor },
             &plx_appkit::version_list::sample(),
+            None,
             true,
         )
     }
@@ -434,7 +442,7 @@ pub(crate) mod tests {
     }
 
     /// **A row plays, so it names the title it plays** (`versions.row.<n>` is in `SUBJECT_BEARING`): the subject is
-    /// what the page's Play pill plays, the key `AppMsg::PlayVersion` acts on (`DetailScreen::play_hero`), and not the
+    /// what the page's Play pill plays, the key `AppMsg::SelectVersion` acts on (`DetailScreen::select_version`), and not the
     /// route's. A movie page plays itself; a show page plays the episode its hero plays, so the route's show key
     /// would name the wrong title. With no page loaded (or another one) a row names none, and the guarded doors
     /// cannot press it.
@@ -464,6 +472,23 @@ pub(crate) mod tests {
         assert_eq!(row_subject(&p, 0), None, "no page loaded");
     }
 
+    /// The version Play takes now wears the check mark and the list opens on it; with none named
+    /// the list opens on its first row and no row is marked.
+    #[test]
+    fn the_taken_version_wears_the_check_and_the_list_opens_on_it() {
+        let versions = plx_appkit::version_list::sample();
+        let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
+        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor };
+        for (checked, marked, opening) in [(None, None, 0), (Some(versions[0].id), Some(0), 0), (Some(versions[1].id), Some(1), 1)] {
+            let p = VersionsPanelScreen::new(EntryId(3), arg.clone(), &versions, checked, true);
+            let rows: Vec<_> = p.form.table.sections.iter().flat_map(|s| s.rows.iter()).filter(|r| !r.is_note()).collect();
+            assert_eq!(rows.iter().position(|r| r.checked), marked, "{checked:?}");
+            assert_eq!(p.form.selected_key().map(|k| k.0), Some(opening), "{checked:?}: opens on the marked row");
+        }
+        let gone = VersionsPanelScreen::new(EntryId(3), arg, &versions, Some(MediaId(99)), true);
+        assert_eq!(gone.form.selected_key().map(|k| k.0), Some(0), "a version the list lacks opens on the first row");
+    }
+
     /// OK on a row closes the panel and reports THAT version to the page that opened it.
     #[test]
     fn a_row_reports_its_version_to_the_host_page() {
@@ -476,7 +501,7 @@ pub(crate) mod tests {
         let fx: Vec<_> = out.into_iter().map(|e| e.fx).collect();
         assert!(matches!(fx.first(), Some(Fx::Nav(NavOp::Dismiss(EntryId(3))))), "the panel closes");
         let played = fx.iter().find_map(|f| match f {
-            Fx::Deliver(MachineId::Instance(InstanceId(9)), Delivery::Screen(ScreenEvent::App(AppMsg::PlayVersion(m)))) => Some(*m),
+            Fx::Deliver(MachineId::Instance(InstanceId(9)), Delivery::Screen(ScreenEvent::App(AppMsg::SelectVersion(m)))) => Some(*m),
             _ => None,
         });
         assert_eq!(played, Some(plx_appkit::version_list::sample()[1].id), "the host page is told which version");
@@ -504,9 +529,9 @@ pub(crate) mod tests {
         };
         let closes = |fx: &[Fx<HostFixture>]| fx.iter().any(|f| matches!(f, Fx::Nav(NavOp::Dismiss(EntryId(3)))));
         let reports = |fx: &[Fx<HostFixture>]| fx.iter().any(|f| matches!(f,
-            Fx::Deliver(_, Delivery::Screen(ScreenEvent::App(AppMsg::PlayVersion(_))))));
+            Fx::Deliver(_, Delivery::Screen(ScreenEvent::App(AppMsg::SelectVersion(_))))));
         for (can_play, disabled) in [(true, false), (false, true)] {
-            let mut p = VersionsPanelScreen::new(EntryId(3), arg.clone(), &plx_appkit::version_list::sample(), can_play);
+            let mut p = VersionsPanelScreen::new(EntryId(3), arg.clone(), &plx_appkit::version_list::sample(), None, can_play);
             let rows: Vec<_> = p.form.table.sections.iter().flat_map(|s| s.rows.iter()).collect();
             let versions: Vec<_> = rows.iter().filter(|row| !row.is_note()).collect();
             let notes: Vec<_> = rows.iter().filter(|row| row.is_note()).collect();

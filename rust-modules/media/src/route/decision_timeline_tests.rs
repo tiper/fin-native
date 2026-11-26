@@ -1943,6 +1943,37 @@ fn a_full_stop_retires_the_live_request_but_replacement_keeps_its_descriptor() {
     crate::player::stop_playback(&mut ps, &mut adapter);
 }
 
+/// **Try again plays the pick it was made for, through the real stop**: the viewer's pick on the failure
+/// screen is held, the retry stops the failed playback through `stop_for_replacement` (the one door that
+/// means "stop, same visit", which retains the request and the pick), and the retry's selection is the
+/// pick. A full stop of the same session ends the visit instead.
+#[test]
+fn a_retry_through_the_replacement_stop_carries_the_held_pick() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    let mut ps = PlaybackSession::IDLE;
+    let _guard = fresh_registry(&mut ps);
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    let mut adapter = crate::player::adapter::PlayerAdapter::new(unsafe { plx_base::task::MainThread::assume() });
+    seed_request_for_test(&mut ps, "m1");
+    let pick = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Track(21) };
+    memory::hold_pick_for_retry(&mut ps, &pick);
+    assert!(ps.held_pick.is_some(), "setup: the pick is held");
+
+    assert!(crate::player::stop_for_replacement(&mut ps, &mut adapter));
+    assert!(ps.held_pick.is_some(), "the replacement stop is the same visit: the pick stays held");
+    let held = |sel: Option<HeldSelection>| sel.map(|s| (s.part_id, s.audio_sid, s.sub_sid));
+    assert_eq!(held(current_retry_context(&ps, 0).selection), Some((9001, 11, 21)), "and the retry would carry it");
+
+    let _ = retry_current_play(&mut ps, &mut meta, 0, None, crate::player::report::AttemptOrigin::UserRetry);
+    assert_eq!(held(ps.carried_selection), Some((9001, 11, 21)), "the retry's request carries the pick");
+    assert_eq!(memory::failed_pick(&ps), Some(pick), "and the failure panel still reads it");
+    cancel_playback_request(&mut ps, true);
+
+    // a full stop is the end of the visit
+    crate::player::stop_playback(&mut ps, &mut adapter);
+    assert!(ps.held_pick.is_none(), "a full stop ended the visit");
+}
+
 /// A converted channel that fails is tried again by tuning it again, and starts at the live edge.
 /// Its playhead names nothing on a channel, and a resume rebuild needs a library ratingKey that a live
 /// recording never has: the retry used to carry the position into that rebuild, which is refused

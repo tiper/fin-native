@@ -1356,6 +1356,9 @@ const VEIL_TEX_PX: usize = 64;
 /// identical on every platform this targets), written once on the 0→nonzero transition below and
 /// read everywhere else — the same shape the diagnostic counters already uses in this file.
 static VEIL_TEX: AtomicU32 = AtomicU32::new(0);
+/// The same falloff mirrored to peak at the TOP-LEFT corner ([`versions_mark`]'s). `tex_uv` reads a
+/// reversed window as a zero-width crop, not a flip, so the mirror is its own texture.
+static VEIL_TEX_LEFT: AtomicU32 = AtomicU32::new(0);
 
 /// The corner **veil** texture: white RGB with a radial alpha falloff peaking at the TOP-RIGHT
 /// corner, generated once and reused at every size. It is a texture rather than geometry because the
@@ -1367,7 +1370,15 @@ static VEIL_TEX: AtomicU32 = AtomicU32::new(0);
 /// gets the tile's own silhouette for free — the veil's other three corners live in fully
 /// transparent territory, so rounding them changes nothing.
 fn veil_tex() -> std::os::raw::c_uint {
-    let cached = VEIL_TEX.load(Relaxed);
+    veil_tex_at(&VEIL_TEX, false)
+}
+
+fn veil_tex_left() -> std::os::raw::c_uint {
+    veil_tex_at(&VEIL_TEX_LEFT, true)
+}
+
+fn veil_tex_at(slot: &AtomicU32, mirrored: bool) -> std::os::raw::c_uint {
+    let cached = slot.load(Relaxed);
     if cached != 0 {
         return cached;
     }
@@ -1376,7 +1387,7 @@ fn veil_tex() -> std::os::raw::c_uint {
     for y in 0..n {
         for x in 0..n {
             // distance from the top-right corner, in units of the box's width
-            let dx = (n - 1 - x) as f32 / (n - 1) as f32;
+            let dx = (if mirrored { x } else { n - 1 - x }) as f32 / (n - 1) as f32;
             let dy = y as f32 / (n - 1) as f32;
             let a = (1.0 - (dx * dx + dy * dy).sqrt() / VEIL_EXTENT).clamp(0.0, 1.0);
             let i = (y * n + x) * 4;
@@ -1387,7 +1398,7 @@ fn veil_tex() -> std::os::raw::c_uint {
         }
     }
     let tex = plx_gfx::gfx::upload_rgba(0, n as std::os::raw::c_int, n as std::os::raw::c_int, px.as_ptr());
-    VEIL_TEX.store(tex, Relaxed);
+    slot.store(tex, Relaxed);
     tex
 }
 
@@ -1416,10 +1427,7 @@ pub fn corner_mark(p: Painter, card: Rect, rad: f32, icon: crate::icons::Icon) {
         rad,
         theme::TILE_MARK_VEIL,
     );
-    // Quantized to 4px so the focus pop reuses a handful of cached masks instead of rasterizing +
-    // uploading one per rounded pixel, and proportional to the DRAWN tile so the mark rides the pop.
-    let d = ((card.w * TICK_RATIO) / 4.0).round() * 4.0; // 24px on a 250 card (26 → nearest rung)
-    let ins = card.w * TICK_INSET;
+    let (d, ins) = tick_box(card.w);
     let tick = Rect::new(card.x + card.w - ins - d, card.y + ins, d, d);
     p.shadow(
         tick,
@@ -1429,6 +1437,65 @@ pub fn corner_mark(p: Painter, card: Rect, rad: f32, icon: crate::icons::Icon) {
         theme::TILE_MARK_SHADOW,
     );
     crate::icons::draw(p, icon, tick, theme::TILE_MARK_INK);
+}
+
+/// The tick's box and corner inset for a tile `w` wide. Quantized to 4px so the focus pop reuses a
+/// handful of cached masks instead of rasterizing + uploading one per rounded pixel, and
+/// proportional to the DRAWN tile so the mark rides the pop. 24px / 12px on a 250 card (26 → the
+/// nearest rung).
+fn tick_box(w: f32) -> (f32, f32) {
+    (((w * TICK_RATIO) / 4.0).round() * 4.0, w * TICK_INSET)
+}
+
+/// The least version count that earns [`versions_mark`]: one file is the normal case and says nothing.
+pub const VERSIONS_MARK_MIN: usize = 2;
+
+/// **The versions mark** on an episode still (VER-7 D3 E): the overlapping-sheets glyph and the file
+/// count as a numeral, `⧉ 2`, at the TOP-LEFT of the still, where the official app puts it. It is
+/// the watched tick's own object, mirrored: the same veil texture (flipped to the left corner), the
+/// same inset, glyph box and soft shadow ([`tick_box`]), the same ink, and a numeral in the caption
+/// face the still's footer is set in. No new colour or token.
+///
+/// `count` is the episode's number of files; under [`VERSIONS_MARK_MIN`] nothing is drawn. `card` is
+/// the rect actually drawn (scaled while popped) and `rad` its corner radius. `unit_w` is the width
+/// the mark's ratios are taken on: a 250 tile for a poster, so a wider still carries a mark of the
+/// same physical size (`CARD_W`, scaled with the pop) instead of a 44px glyph. Returns whether it
+/// drew.
+pub fn versions_mark(
+    p: Painter,
+    card: Rect,
+    rad: f32,
+    unit_w: f32,
+    count: usize,
+    measure: &dyn plx_machine::machine::Measure,
+) -> bool {
+    if count < VERSIONS_MARK_MIN {
+        return false;
+    }
+    let v = unit_w * VEIL_RATIO;
+    // The tick's veil mirrored, its peak at the TOP-LEFT corner. A recording painter submits
+    // nothing, so it must not upload the texture either (no GL context).
+    let veil = if p.is_recording() { 0 } else { veil_tex_left() };
+    p.tex(
+        veil,
+        Rect::new(card.x, card.y, v, v),
+        rad,
+        theme::TILE_MARK_VEIL,
+    );
+    let (d, ins) = tick_box(unit_w);
+    let glyph = Rect::new(card.x + ins, card.y + ins, d, d);
+    let sz = theme::size::CAPTION;
+    let text = count.to_string();
+    let (run, w) = measure.fit_line_measured(&text, v, sz, false);
+    let gap = theme::space::XS * 0.5;
+    // One shadow under glyph and numeral together, the tick's own (`corner_mark`).
+    let pill = Rect::new(glyph.x, glyph.y, d + gap + w, d);
+    p.shadow(pill, d * 0.5, d * TICK_SHADOW_BLUR, d * TICK_SHADOW_DY, theme::TILE_MARK_SHADOW);
+    crate::icons::draw(p, crate::icons::Icon::Collection, glyph, theme::TILE_MARK_INK);
+    let (cap_t, cap_b) = plx_gfx::text::text_cap_band(sz, 0);
+    let y = glyph.y + d * 0.5 - (cap_t + cap_b) * 0.5;
+    p.text(run.as_ptr(), glyph.x + d + gap, y, sz, theme::TILE_MARK_INK, 0, 0);
+    true
 }
 
 /// Person-glyph box as a fraction of a headshot tile — the [`Art::Person`] fallback's one ratio.

@@ -355,6 +355,18 @@ pub fn under_or_above(a: Rect, content_w: f32, content_h: f32) -> Rect {
     anchor_panel(a, (width, h), h, PANEL_GAP, Placement::UNDER_OR_ABOVE).rect
 }
 
+/// [`under_or_above`] for a panel that may be taller than the room either side of its opener (a pushed page
+/// with a long list, from a control low on the screen): the same sides in the same order, but when neither
+/// holds the whole panel it takes the roomier side and is CUT to that room (the list scrolls inside), so it
+/// stays hung off its opener instead of being clamped to the top of the screen and covering it.
+pub fn under_or_above_fit(a: Rect, content_w: f32, content_h: f32) -> Rect {
+    use crate::consts::SCR_H;
+    let width = content_w.clamp(crate::table::MENU_MIN_W, crate::table::MENU_MAX_W);
+    let h = content_h.clamp(120.0, SCR_H - 2.0 * PANEL_EDGE);
+    let how = Placement { overflow: Overflow::ClampToRoom, ..Placement::UNDER_OR_ABOVE };
+    anchor_panel(a, (width, h), h, PANEL_GAP, how).rect
+}
+
 /// **Where a header menu's panel of width `w` starts across, hung from its opener `pill`** (the
 /// focused pill, outset included): the panel's NEAR edge is the opener's OUTER edge, the edge it
 /// morphs from, so the lit opener and the panel read as one object. The near edge is the one on

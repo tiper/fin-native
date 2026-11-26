@@ -3017,7 +3017,7 @@ mod flight_tests {
         assert_eq!(shape.kind, crate::player::FailureKind::ServerStopped);
         assert_eq!(shape.detail, "stopped by the admin");
         assert_eq!(
-            crate::player::failure_actions(shape.kind, crate::player::failure_context(&rig.ps)),
+            crate::player::failure_actions(shape.kind, crate::player::failure_context(&rig.ps, false)),
             vec![crate::player::FailureAction::Back]
         );
     }

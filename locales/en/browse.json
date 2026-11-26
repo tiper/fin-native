@@ -175,9 +175,9 @@
     "value": "Trailer",
     "description": "browse detail trailer"
   },
-  "browse.detail.play_version": {
-    "value": "Play Version",
-    "description": "The detail page's Play Version button, shown on a movie or episode that has more than one file (version). It is a round icon button whose name slides out beside it when focused, so keep it short. Pressing it opens the list of versions to choose which one plays."
+  "browse.detail.select_version": {
+    "value": "Select Version",
+    "description": "The detail page's Select Version button, shown on a movie or episode that has more than one file (version). It is a round icon button whose name slides out beside it when focused, so keep it short. Pressing it opens the list of versions to choose which one Play and Resume start; choosing one does not start playback."
   },
   "browse.detail.resume": {
     "value": "Resume",
@@ -319,13 +319,13 @@
     "value": "Remove from Deck",
     "description": "browse menu remove_deck"
   },
-  "browse.menu.play_version": {
-    "value": "Play Version…",
-    "description": "Item context menu row on a movie or episode that has more than one file (version). Opens the list of versions to choose which one plays. The ellipsis says that a choice follows."
+  "browse.menu.select_version": {
+    "value": "Select Version…",
+    "description": "Item context menu row on a movie or episode that has more than one file (version). Opens the list of versions to choose which one Play and Resume start. The ellipsis says that a choice follows."
   },
-  "browse.menu.play_version_title": {
-    "value": "Play Version",
-    "description": "Heading of the list of a movie's or episode's versions (files), opened from the Play Version… row. Each row below it is one version, e.g. \"25.2 Mbps · 4K\"; choosing one plays it."
+  "browse.menu.select_version_title": {
+    "value": "Select Version",
+    "description": "Heading of the list of a movie's or episode's versions (files), opened from the Select Version… row or the Select Version button. Each row below it is one version, e.g. \"25.2 Mbps · 4K\"; choosing one only selects it (a check mark shows the one Play starts) and does not start playback."
   },
   "browse.login.deleted": {
     "value": "Local data deleted",

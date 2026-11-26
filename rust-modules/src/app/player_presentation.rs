@@ -2,7 +2,7 @@
 use plx_appkit::player_hud::{self, Busy, FailureReadout, Presentation};
 use plx_media::player;
 
-pub(super) fn capture(ps: &plx_media::route::PlaybackSession) -> Presentation {
+pub(super) fn capture(ps: &plx_media::route::PlaybackSession, meta: plx_data::metadata::MetadataView<'_>) -> Presentation {
     plx_base::step::assert_io_allowed("player presentation capture");
     let diagnostic = plx_base::devtrig::read("failtest");
     // Preserve the old exists semantics for an unreadable trigger as well as an empty file.
@@ -11,7 +11,8 @@ pub(super) fn capture(ps: &plx_media::route::PlaybackSession) -> Presentation {
     if forced || state == player::PlaybackState::Error {
         let error = player::error_captured(ps, diagnostic.as_deref());
         let caption = error.caption;
-        let context = player::failure_context_captured(ps, diagnostic.as_deref().is_some_and(|arm| arm.trim() == "policy"));
+        let context = player::failure_context_captured(ps, diagnostic.as_deref().is_some_and(|arm| arm.trim() == "policy"),
+            player::failed_tracks_available(ps, meta));
         let actions = player::failure_actions(error.kind, context);
         let support = player::support_line(error.kind);
         let readout = FailureReadout::captured(error, actions, support, ps.repair_status);
@@ -31,6 +32,8 @@ mod tests {
         let _serial = plx_base::testlock::serial();
         plx_base::devtrig::with_private_triggers(|| {
             let ps = plx_media::route::PlaybackSession::IDLE;
+            let store = plx_data::stores::metadata::MetadataStore::default();
+            let capture = |ps: &plx_media::route::PlaybackSession| capture(ps, store.view());
             let neutral = capture(&ps);
             let path = plx_base::devtrig::path("failtest");
             std::fs::write(&path, "policy").unwrap();
@@ -48,7 +51,7 @@ mod tests {
             let drawn = plx_ui::record_walk(|| plx_ui::draw_census::capture(||
                 player_hud::classic::draw_readout(failed.failure.as_deref(), failed.busy, 0, 0, &plx_ui::fixture::FixtureMeasure)));
             assert!(!drawn.is_empty());
-            assert!(std::panic::catch_unwind(|| capture(&ps)).is_err(), "the producer is explicitly outside StepScope");
+            assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| capture(&ps))).is_err(), "the producer is explicitly outside StepScope");
         });
     }
 }

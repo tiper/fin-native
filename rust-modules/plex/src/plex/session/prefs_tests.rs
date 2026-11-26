@@ -11,12 +11,12 @@
 use super::prefs::{Descriptor, Fallback, ListRow, Parse, ProfileMemory, Row, Scope, Setting, SettingsWrite, DESCRIPTORS};
 use super::prefs::{DolbyVisionModePref, InstantDpadSeekingPref, UriEnginePref, AudioEnhancementsPref, AutoSignInPref, DeckPressPref, UnderPostersPref, DirectPlayModePref, LastHeroBlurPref,
     LastLibraryRow, LibraryViewsRow, NextEpisodeModePref, PlaintextConsentRow, QualityPref, ServerKeyPinsRow,
-    HdrOverlayBrightnessPref, SkipIntervalPref, SubtitleOffsetsPref, SubtitlePositionPref, SubtitleSizePref, SubtitleTonePref,
+    HdrOverlayBrightnessPref, SkipIntervalPref, SubtitleOffsetsPref, SubtitlePositionPref, SubtitleSizePref, SubtitleTonePref, VersionChoicesPref,
     HoldHintTaughtPref, HudEndTimePref, TrailerAutoplayPref, UiResolutionPref};
 use super::{
     DolbyVisionMode, InstantDpadSeeking, UriEngine, CanonicalSessionPreferences, DeckPress, UnderPosters, UnderPostersLadder, DetailPart, DetailParts, DirectPlayMode, LastLibrary, LibraryViews, NextEpisodeMode,
     PlaintextChoice, PlaintextConsent, PlaybackQuality, Preferences, ServerKeyPin, Session, SkipInterval,
-    HdrOverlayBrightness, HoldHintTaught, SubtitleOffsetEntry, SubtitlePosition, SubtitleSize, SubtitleTone, UiResolution,
+    HdrOverlayBrightness, HoldHintTaught, SubtitleOffsetEntry, VersionChoiceEntry, SubtitlePosition, SubtitleSize, SubtitleTone, UiResolution,
 };
 use serde::de::{self, Deserializer, Visitor};
 use serde_json::{json, Value};
@@ -125,14 +125,15 @@ fn every_marker_names_its_own_field() {
     check_row::<LastHeroBlurPref>(Some([[0.5, 0.25, 0.125]; 4]));
     check_row::<UiResolutionPref>(UiResolution::Hd720);
     check_row::<HoldHintTaughtPref>(HoldHintTaught { card: true, pill: false });
-    // The table lists exactly these twenty-two `Setting` rows, the five list rows below, the three
+    // The table lists exactly these twenty-two `Setting` rows, the five list rows below, the four
     // memory-door rows (`TrackMemoryPref`, whose field check is
     // `track_memory_tests::the_list_row_names_its_own_field`, `RecentChannelsPref`, checked by
-    // `recent_channels_tests::the_list_row_names_its_own_field_and_is_account_bound`, and `SubtitleOffsetsPref`, checked by
-    // `the_subtitle_offsets_row_names_its_own_field`) and the per-profile record list
+    // `recent_channels_tests::the_list_row_names_its_own_field_and_is_account_bound`, `SubtitleOffsetsPref`, checked by
+    // `the_subtitle_offsets_row_names_its_own_field`, and `VersionChoicesPref`, checked by
+    // `the_version_choices_row_names_its_own_field`) and the per-profile record list
     // (`ProfilePrefsPref`, `profile_prefs_tests::nothing_picked_serializes_to_no_key`): a row needs
     // its line in one of the four places.
-    assert_eq!(DESCRIPTORS.len(), 22 + 5 + 3 + 1 + 1, "plus `HudSelectionPref`, a `String` row checked by `profile_prefs_tests`");
+    assert_eq!(DESCRIPTORS.len(), 22 + 5 + 4 + 1 + 1, "plus `HudSelectionPref`, a `String` row checked by `profile_prefs_tests`");
 }
 
 /// The list rows do what `check_row` proves for the `Copy` ones: the marker names its own field
@@ -328,6 +329,32 @@ fn the_subtitle_offsets_row_names_its_own_field() {
     assert_eq!((row.scope, row.account_bound, row.live, row.settings, row.parse), (Scope::PerItem, true, false, None, Parse::SoftVec));
 }
 
+/// The `version_choices` row is a memory-door tenant: a `Preferences` field under its own key,
+/// written only while non-empty, per item, account-bound, no live cell, no Settings row.
+#[test]
+fn the_version_choices_row_names_its_own_field() {
+    let default_json = serde_json::to_value(Preferences::default()).unwrap();
+    assert!(default_json.get("version_choices").is_none(), "an empty list writes no key: {default_json}");
+    let mut p = Preferences::default();
+    assert!(!p.version_choices.upsert_with("u1", "", &("m".to_string(), "42".to_string()), |_| {
+        Some(VersionChoiceEntry { machine_id: "m".into(), rating_key: "42".into(), media_id: 3086, extensions: Default::default() })
+    }), "an unstamped record is nobody's: the write is refused");
+    assert!(p.version_choices.upsert_with("u1", "a", &("m".to_string(), "42".to_string()), |_| {
+        Some(VersionChoiceEntry { machine_id: "m".into(), rating_key: "42".into(), media_id: 3086, extensions: Default::default() })
+    }));
+    let body = serde_json::to_value(&p).unwrap();
+    assert!(body["version_choices"].is_array(), "{body}");
+    for (key, value) in body.as_object().unwrap() {
+        if key != VersionChoicesPref::KEY {
+            assert_eq!(default_json.get(key), Some(value), "writing the row moved the unrelated key {key}");
+        }
+    }
+    let back: Preferences = serde_json::from_value(body).unwrap();
+    assert_eq!(back, p);
+    let row = DESCRIPTORS.iter().find(|d| d.key == VersionChoicesPref::KEY).expect("the row is in the table");
+    assert_eq!((row.scope, row.account_bound, row.live, row.settings, row.parse), (Scope::PerItem, true, false, None, Parse::SoftVec));
+}
+
 /// What garbage a key is fed, per descriptor key. A descriptor with no entry here fails
 /// `t_parse`, and so does an entry without a descriptor.
 fn garbage_fixtures() -> Vec<(&'static str, Vec<Value>)> {
@@ -366,6 +393,7 @@ fn garbage_fixtures() -> Vec<(&'static str, Vec<Value>)> {
         ("track_memory", not_a_list()),
         ("recent_channels", not_a_list()),
         ("subtitle_offsets", not_a_list()),
+        ("version_choices", not_a_list()),
         ("profile_prefs", not_a_list()),
     ]
 }
@@ -387,6 +415,7 @@ fn good_element(key: &str) -> Value {
         "last_library" => json!({"user":"u1","libs":[{"kind":"movie","machine_id":"m","key":1}]}),
         "library_sorts" => json!({"user":"u1","libs":[{"machine_id":"m","key":1,"sort":"plays"}]}),
         "subtitle_offsets" => json!({"user":"u1","items":[{"machine_id":"m","rating_key":"42","offset_ms":1500}]}),
+        "version_choices" => json!({"user":"u1","account":"a","items":[{"machine_id":"m","rating_key":"42","media_id":3086}]}),
         "track_memory" => json!({"user":"u1","account":"a","items":[{"machine_id":"m","show_rk":"42",
             "audio":{"lang":"eng","tag":"","commentary":false,"ad":false,"codec":"eac3","channels":6,"title":""}}]}),
         "recent_channels" => json!({"user":"u1","account":"a","items":[{"machine_id":"m","dvr":"7","channel":"C1"}]}),

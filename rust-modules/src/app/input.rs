@@ -1118,15 +1118,12 @@ pub(super) unsafe fn apply_item_action<R: super::playback::PlaybackResources>(
             }
         }
         // The menu turns itself into the version list; this never arrives (`ItemMenuScreen::activate`).
-        Action::ChooseVersion(_) => {}
-        // A picked version plays like Play: the filmstrip's leaf through the loaded season, a card
-        // through the row the menu captured, resuming where it left off.
-        Action::PlayVersion { rk, media } => {
-            if loaded_episode {
-                playback.loaded_episode(ps, pa, &rk, Some(media), pages, bridge);
-            } else if let Some(mm) = item.as_ref().filter(|m| m.rk == rk) {
-                playback.captured_card(ps, pa, mm, false, Some(media), pages, bridge);
-            }
+        Action::ChooseVersion(_) | Action::Hero(_) => {}
+        // A picked version is only CHOSEN: it becomes the file this profile's Play and Resume start
+        // for that item (the filmstrip's episode, or the card the menu captured), and nothing plays.
+        // The ratingKey is the action's own, so a choice lands on the item the menu was opened on.
+        Action::SelectVersion { rk, media } => {
+            plx_media::route::choose_version(plx_media::route::item_sid(sid), &rk, media);
         }
         Action::PlayTrailer {
             rk,

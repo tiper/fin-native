@@ -15,9 +15,7 @@ fn sets() -> Vec<HeroSet> {
                 for trailer in [false, true] {
                     for alt in [false, true] {
                         for go_show in [false, true] {
-                            for more in [false, true] {
-                                v.push(HeroSet { more, watchlist: true, go_show, version, restart, trailer, alt, mark });
-                            }
+                            v.push(HeroSet { watchlist: true, go_show, version, tracks: false, restart, trailer, alt, mark });
                         }
                     }
                 }
@@ -36,13 +34,14 @@ fn the_disc_is_second_after_play_in_every_row() {
         assert_eq!(v[1], HeroCtl::Watchlist, "{s:?}");
         assert_eq!(v[..n].iter().filter(|c| **c == HeroCtl::Watchlist).count(), 1, "{s:?}");
         let rest: Vec<_> = v[2..n].to_vec();
-        let mut want = Vec::new();
-        if s.go_show { want.push(HeroCtl::GoToShow); }
-        if s.restart { want.push(HeroCtl::Restart); }
+        let mut acts = vec![HeroCtl::Watchlist, if s.mark == PosterMark::Watched { HeroCtl::MarkUnwatched } else { HeroCtl::MarkWatched }];
+        if s.go_show { acts.push(HeroCtl::GoToShow); }
+        if s.restart { acts.push(HeroCtl::Restart); }
+        if s.version { acts.push(HeroCtl::Version); }
+        let (round, moved) = if acts.len() <= 3 { (acts.clone(), vec![]) } else { (acts[..2].to_vec(), acts[2..].to_vec()) };
+        let mut want: Vec<_> = round[1..].to_vec();
         if s.trailer { want.push(HeroCtl::Trailer); }
-        want.push(if s.mark == PosterMark::Watched { HeroCtl::MarkUnwatched } else { HeroCtl::MarkWatched });
-        if s.version { want.push(HeroCtl::Version); }
-        if s.more { want.push(HeroCtl::More); }
+        if !moved.is_empty() { want.push(HeroCtl::More); }
         if s.alt { want.push(HeroCtl::Alt); }
         assert_eq!(rest, want, "{s:?}");
         assert!(n <= MAX_CTLS);
@@ -53,13 +52,14 @@ fn the_disc_is_second_after_play_in_every_row() {
 /// membership flip because it is one elem for both faces.
 #[test]
 fn focus_walks_play_then_disc_then_the_rest() {
-    let s = HeroSet { more: false, watchlist: true, go_show: false, version: false, restart: true, trailer: false, alt: false, mark: PosterMark::None };
+    let s = HeroSet { watchlist: true, go_show: false, version: false, tracks: false, restart: true, trailer: false, alt: false, mark: PosterMark::None };
     assert_eq!(ctl_at(s, 0), Some(HeroCtl::Play));
     assert_eq!(ctl_at(s, 1), Some(HeroCtl::Watchlist));
-    assert_eq!(ctl_at(s, 2), Some(HeroCtl::Restart));
+    assert_eq!(ctl_at(s, 2), Some(HeroCtl::MarkWatched));
+    assert_eq!(ctl_at(s, 3), Some(HeroCtl::Restart));
     assert_eq!(index_of(s, HeroCtl::Watchlist), Some(1));
-    assert_eq!(index_of(s, HeroCtl::Restart), Some(2));
-    assert_eq!(watch_index(s), Some(3));
+    assert_eq!(index_of(s, HeroCtl::Restart), Some(3));
+    assert_eq!(watch_index(s), Some(2));
 }
 
 #[test]
@@ -96,8 +96,8 @@ fn the_disc_has_no_label_and_never_widens() {
     for named in [false, true] {
         assert!(disc_verb(HeroCtl::Watchlist, named).is_none());
     }
-    let s = HeroSet { go_show: false, more: false, watchlist: true, version: false, restart: true, trailer: true, alt: true, mark: PosterMark::None };
-    let widths = HeroWidths { pill: 236.0, alt: 150.0, disc: [CD + 90.0, CD + 60.0, CD + 120.0, CD + 70.0, CD + 80.0] };
+    let s = HeroSet { go_show: false, watchlist: true, version: false, tracks: false, restart: true, trailer: true, alt: true, mark: PosterMark::None };
+    let widths = HeroWidths { pill: 236.0, alt: 150.0, disc: [CD + 90.0, CD + 60.0, CD + 120.0, CD + 70.0, CD + 80.0, CD + 90.0] };
     let r = hero_btn_rect_at(s, 1, 0.0, widths);
     assert_eq!((r.w, r.h), (CD, CD));
     let play = hero_btn_rect_at(s, 0, 0.0, widths);

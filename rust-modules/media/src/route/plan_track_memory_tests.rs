@@ -459,3 +459,244 @@ fn the_route_says_when_a_remembered_subtitle_is_not_shown() {
         "nothing was picked, so there is nothing the route could fail to show",
     );
 }
+
+// ---- a pick made before playback (#1532) ---------------------------------------------------------
+
+/// A MOVIE has no show memory, so the pick reaches the first start only through the metadata store's
+/// pick (`MetadataCmd::PatchTracks`, applied by `PlayingItem::apply_picks`): after Off the plan reads no
+/// selected subtitle.
+#[test]
+fn a_preplay_subtitles_off_on_a_movie_plans_no_subtitle_at_the_first_start() {
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let _g = plx_base::testlock::serial();
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let detail = plx_data::metadata::Detail {
+        sid,
+        rk: "m1".into(),
+        kind: "movie".into(),
+        part: "/library/parts/9001/1/file.mkv".into(),
+        audio: vec![Stream { id: 11, ..Default::default() }],
+        subs: vec![text_sub(21, "eng", ""), server_selected(text_sub(22, "spa", ""))],
+        ..Default::default()
+    };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+    let start = |store: &MetadataStore| {
+        let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        item.apply_picks(&store.view().picks_of(sid, "m1"), 9001);
+        pick_subtitle(&item, &NO_SHOW_RULES(), SubtitleLangPrefs::default(), "eng", None, None).pick
+    };
+    assert_eq!(start(&store), Some((22, 1)), "control: PMS's selection plays");
+    let tracks = store.view().preplay_tracks(sid, "m1", None).expect("a movie page names its tracks and part");
+    assert_eq!(crate::route::PreplayItem::of(&tracks).part_id, 9001);
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: plx_data::metadata::PreplayPick { part_id: 9001, audio_sid: 11, sub: plx_data::metadata::SubPick::Off } }));
+    assert_eq!(start(&store), None, "Off: nothing selected, no subtitle");
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: plx_data::metadata::PreplayPick { part_id: 9001, audio_sid: 11, sub: plx_data::metadata::SubPick::Track(21) } }));
+    assert_eq!(start(&store), Some((21, 0)), "a picked track plays");
+}
+
+/// A show page's streams are its hero episode's (`backfill_episode`): the picker reads that
+/// episode's tracks and part, names the show as the memory's key, and a pick patches the same copy.
+/// Any other episode, and a movie's key, find nothing there.
+#[test]
+fn a_show_page_offers_its_hero_episodes_tracks_and_part() {
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let _g = plx_base::testlock::serial();
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let detail = plx_data::metadata::Detail {
+        sid,
+        rk: "show-1".into(),
+        kind: "show".into(),
+        is_show: true,
+        audio: vec![Stream { id: 11, ..Default::default() }],
+        subs: vec![server_selected(text_sub(22, "spa", ""))],
+        on_deck: Some(plx_data::metadata::Episode {
+            rk: "ep-7".into(),
+            part: "/library/parts/777/1/file.mkv".into(),
+            // underway: the show's Play resumes it (`Detail::play_episode`), so its streams are the page's
+            resume_ms: 60_000,
+            ..Default::default()
+        }),
+        episode_streams: plx_data::metadata::EpisodeStreams::Loaded("ep-7".into()),
+        ..Default::default()
+    };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+    let view = store.view();
+    let tracks = view.preplay_tracks(sid, "ep-7", None).expect("the on-deck episode's streams are the page's");
+    assert_eq!((tracks.kind.as_str(), tracks.show_rk.as_str(), tracks.subs.len()), ("episode", "show-1", 1));
+    assert_eq!(crate::route::PreplayItem::of(&tracks).part_id, 777);
+    assert!(view.preplay_tracks(sid, "ep-8", None).is_none(), "another episode's streams are not loaded");
+    assert!(view.preplay_tracks(sid, "show-1", None).is_none(), "a show has no file of its own");
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "ep-7".into(), pick: plx_data::metadata::PreplayPick { part_id: 777, audio_sid: 11, sub: plx_data::metadata::SubPick::Off } }));
+    assert!(!store.run(MetadataCmd::PatchTracks { sid, rk: "ep-8".into(), pick: plx_data::metadata::PreplayPick { part_id: 778, audio_sid: 11, sub: plx_data::metadata::SubPick::Track(22) } }), "not this page's item");
+    assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1, "the pick is the store's one value, not the page's flags");
+    assert!(store.view().picks_of(sid, "ep-8").is_empty());
+}
+
+/// The hole the flags alone leave: "nothing selected" is also what an item the viewer never touched
+/// looks like, so under the account's "always show" rule (mode 2) a movie's Off would be turned back
+/// into a track at the first start. `PlayingItem::sub_choice` is the typed Off that outranks it; an
+/// audio-only pick (`subtitle_sid: 0`, choice still `Server`) must NOT read as Off.
+#[test]
+fn a_preplay_off_outranks_the_accounts_always_show_rule_at_the_first_start() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let _g = plx_base::testlock::serial();
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let detail = plx_data::metadata::Detail {
+        sid,
+        rk: "m1".into(),
+        kind: "movie".into(),
+        part: "/library/parts/9001/1/file.mkv".into(),
+        audio: vec![Stream { id: 11, ..Default::default() }, Stream { id: 12, ..Default::default() }],
+        subs: vec![text_sub(21, "eng", ""), text_sub(22, "spa", "")],
+        ..Default::default()
+    };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+    let always_eng = SubtitleLangPrefs { language: Some("eng"), mode: 2, forced: 0 };
+    let start = |store: &MetadataStore| {
+        let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        item.apply_picks(&store.view().picks_of(sid, "m1"), 9001);
+        pick_subtitle(&item, &NO_SHOW_RULES(), always_eng, "eng", None, None)
+    };
+    assert_eq!(start(&store).pick, Some((21, 0)), "control: the account rule turns the English track on");
+    let patch = |store: &mut MetadataStore, audio_sid, sub| {
+        assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: PreplayPick { part_id: 9001, audio_sid, sub } }));
+    };
+    patch(&mut store, 12, SubPick::Server);
+    assert_eq!(start(&store).pick, Some((21, 0)), "an audio-only pick leaves the subtitle to the rule");
+    patch(&mut store, 12, SubPick::Off);
+    let off = start(&store);
+    assert_eq!((off.pick, off.source), (None, SubPickSource::Override), "Off: no subtitle, whatever the account says");
+    patch(&mut store, 11, SubPick::Off);
+    assert_eq!(start(&store).pick, None, "an audio pick after Off keeps Off");
+    patch(&mut store, 11, SubPick::Track(22));
+    assert_eq!(start(&store).pick, Some((22, 1)), "a track picked after Off plays");
+}
+
+/// **A pick is spent by the playback it started** (#1532), and a re-read of the page does not spend it:
+/// on a SHOW page the loaded page's key is the show's while the pick is keyed by the episode. Pick Off,
+/// Play (`SpendPick`, sent by the loop once the engine confirmed the start), turn English on in the player, stop,
+/// Resume: the second start reads the server's selection, not the stale Off. Installing a playing item
+/// is not a start, and another item's playback leaves the pick.
+#[test]
+fn a_pick_is_retired_by_the_playback_it_started_and_resume_reads_the_server() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let _g = plx_base::testlock::serial();
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let detail = plx_data::metadata::Detail {
+        sid,
+        rk: "show-1".into(),
+        kind: "show".into(),
+        is_show: true,
+        audio: vec![Stream { id: 11, ..Default::default() }],
+        subs: vec![text_sub(22, "spa", "")],
+        on_deck: Some(plx_data::metadata::Episode {
+            rk: "ep-7".into(),
+            part: "/library/parts/777/1/file.mkv".into(),
+            resume_ms: 60_000,
+            ..Default::default()
+        }),
+        episode_streams: plx_data::metadata::EpisodeStreams::Loaded("ep-7".into()),
+        ..Default::default()
+    };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+    let off = PreplayPick { part_id: 777, audio_sid: 11, sub: SubPick::Off };
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "ep-7".into(), pick: off }));
+    assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1, "control: the pick waits for the start");
+    let played = PlayingItem { sid, rk: "ep-7".into(), ..item("episode", "show-1", vec![text_sub(22, "spa", "")]) };
+    assert!(store.run(MetadataCmd::InstallPlaying(Some(played))));
+    assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1, "installing the playing item is not the start");
+    assert!(!store.run(MetadataCmd::SpendPick { sid, rk: "ep-8".into(), part_id: 777 }), "another item's playback leaves the pick");
+    assert_eq!(store.view().picks_of(sid, "ep-7").len(), 1);
+    assert!(store.run(MetadataCmd::SpendPick { sid, rk: "ep-7".into(), part_id: 777 }));
+    assert!(store.view().picks_of(sid, "ep-7").is_empty(), "the playback that started under the pick spent it");
+    assert!(ResolveEnv::snapshot(&crate::route::PlaybackSession::IDLE, store.view(), sid, "ep-7").picks.is_empty(),
+        "Resume's resolve is fed no pick: it plans from the server's selection");
+}
+
+/// **The audio half of a pick travels typed, like the subtitle half**: a movie whose DEFAULT track is
+/// the Japanese original (also what PMS has selected) and an English dub, under an English account.
+/// The viewer picks Japanese. The flags the pick sets cannot say so (`audio_intents` skips a selected
+/// default and falls to the language), so the pick rides the plan's session audio (`env.audio_sid`).
+#[test]
+fn a_pick_of_the_files_default_audio_beats_the_accounts_language() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let _g = plx_base::testlock::serial();
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let detail = plx_data::metadata::Detail {
+        sid,
+        rk: "m1".into(),
+        kind: "movie".into(),
+        part: "/library/parts/9001/1/file.mkv".into(),
+        audio: vec![audio(11, "jpn", "eac3", true, true), audio(12, "eng", "eac3", false, false)],
+        ..Default::default()
+    };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+    let ps = crate::route::PlaybackSession::IDLE;
+    let prefs = AudioLangPrefs::new(None, Some("en"));
+    let first_intent = |store: &MetadataStore| {
+        let mut env = ResolveEnv::snapshot(&ps, store.view(), sid, "m1");
+        env.fresh_play = true; // the viewer's own launch (`request_env`)
+        env.audio_sid = 4242; // what the session last had on screen: another item's track
+        let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        item.apply_picks(env.picks_in_force(), 9001);
+        let session = env.under_pick(9001).map_or(env.audio_sid, |e| e.audio_sid);
+        audio_intents(&item.audio, prefs, session)[0]
+    };
+    assert_eq!(first_intent(&store), AudioIntent::Language("en"), "control: no pick, the account's English dub plays");
+    let jpn = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Server };
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: jpn }));
+    assert_eq!(first_intent(&store), AudioIntent::Selection(0), "the viewer's Japanese beats the language rule though it is the file's default");
+}
+
+/// **Both halves of a pick follow ONE gate** (`ResolveEnv::picks_in_force`): the viewer's launch is fed the
+/// pick, and so is a retry that carries no held selection (its first resolve failed before the item was
+/// fetched, so Try again is the first start that plays: `fresh_play` is false there and the audio half used
+/// to be dropped while the subtitle half still applied). A hero preview and a retry that carries the
+/// attempt's held pair are not.
+#[test]
+fn both_halves_of_a_pick_follow_one_gate() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    use plx_data::stores::metadata::{MetadataCmd, MetadataStore};
+    let _g = plx_base::testlock::serial();
+    let sid = plx_plex::plex::ServerId::from_raw(0);
+    let mut store = MetadataStore::default();
+    let detail = plx_data::metadata::Detail {
+        sid,
+        rk: "m1".into(),
+        kind: "movie".into(),
+        part: "/library/parts/9001/1/file.mkv".into(),
+        audio: vec![audio(11, "jpn", "eac3", true, true), audio(12, "eng", "eac3", false, false)],
+        subs: vec![server_selected(text_sub(21, "eng", ""))],
+        ..Default::default()
+    };
+    plx_data::metadata::install_for_test(store.state_mut(), Some(detail));
+    let jpn_off = PreplayPick { part_id: 9001, audio_sid: 11, sub: SubPick::Off };
+    assert!(store.run(MetadataCmd::PatchTracks { sid, rk: "m1".into(), pick: jpn_off }));
+    let ps = crate::route::PlaybackSession::IDLE;
+    let env_of = |fresh: bool, preview: bool, retry_selection: bool| {
+        let mut env = ResolveEnv::snapshot(&ps, store.view(), sid, "m1");
+        env.fresh_play = fresh;
+        env.set_preview(preview);
+        env.selection_before_retry = retry_selection.then(|| SelectionBeforeRetry {
+            retry_part_id: 9001, audio_sid: 0, sub_sid: 0, subtitle_override: None, sub_mode: SubMode::Track, memory: Vec::new(),
+        });
+        env
+    };
+    let halves = |env: &ResolveEnv| {
+        let mut item = store.view().cached_playing(sid, "m1").expect("the page is the cache");
+        item.apply_picks(env.picks_in_force(), 9001);
+        (item.sub_choice == SubPick::Off, env.under_pick(9001).map(|e| e.audio_sid) == Some(11))
+    };
+    assert_eq!(halves(&env_of(true, false, false)), (true, true), "the viewer's launch");
+    assert_eq!(halves(&env_of(false, false, false)), (true, true), "Try again after a resolve that failed before the item was fetched");
+    assert_eq!(halves(&env_of(false, true, false)), (false, false), "a hero preview is not the viewer's playback");
+    assert_eq!(halves(&env_of(false, false, true)), (false, false), "a retry carrying the attempt's held pair plans from it");
+}

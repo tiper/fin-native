@@ -49,6 +49,16 @@ pub struct Entry<H: Host> {
     pub evicted: bool,
 }
 
+impl<H: Host> Entry<H> {
+    /// The ONE way a `ret` lands on an `Entry`: stored through [`ReturnState::stored`], so the routing
+    /// stamp is spent and `Entry.ret` never carries a stale one. The field stays `pub` because
+    /// screens, the dispatcher and the app read and edit its parts in place (`ret.focus`,
+    /// `ret.memory`); only this whole-value write is single-sited.
+    pub fn store_ret(&mut self, ret: ReturnState<H::Elem, H::Memory>) {
+        self.ret = ret.stored();
+    }
+}
+
 struct Pending<H: Host> {
     op: NavOp<H::Arg>,
     /// The top at request time — `cancel(from)` withdraws only if the top has not moved.
@@ -186,7 +196,7 @@ impl<H: Host> NavStack<H> {
         let from = self.top().map(|e| e.id);
         let continuous = self.continuous_for(&op);
         if let Some(top) = self.top_mut() {
-            top.ret = ret;
+            top.store_ret(ret);
         }
         self.pending = Some(Pending { op, from, staged: None });
         self.transition.request(continuous);

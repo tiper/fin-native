@@ -967,15 +967,20 @@ struct Content {
     subs: (usize, Vec<TrackRow>),
 }
 
-fn content_of(d: &Detail) -> Content {
+/// The tracks as they will play: the viewer's pre-play pick over the page's flags (`PreplayPick::applied`,
+/// the one read the facts line takes too), so "playing" is the pick while one is held and the
+/// server's selection otherwise.
+fn content_of(d: &Detail, picks: &[plx_data::metadata::PreplayPick]) -> Content {
+    let picked = plx_data::metadata::PreplayPick::applied(picks, plx_plex::plex::part_id_of(d.streams_part()), &d.audio, &d.subs);
+    let (audio, subs) = (&*picked.audio, &*picked.subs);
     Content {
         cols: [
             (plx_os::i18n::msg::widgets_tracks_file_heading(), file_rows(d)),
             (plx_os::i18n::msg::widgets_tracks_video_heading(), video_rows(d)),
             ("DOLBY VISION", dovi_rows(d)),
         ],
-        audio: (d.audio.len(), audio_rows(&d.audio)),
-        subs: (d.subs.len(), subtitle_rows(&d.subs)),
+        audio: (audio.len(), audio_rows(audio)),
+        subs: (subs.len(), subtitle_rows(subs)),
     }
 }
 
@@ -1053,6 +1058,7 @@ impl TracksPanelScreen {
     fn paint(
         &mut self,
         d: &Detail,
+        picks: &[plx_data::metadata::PreplayPick],
         appear: f32,
         measure: &dyn plx_machine::machine::Measure,
         field: Option<&plx_ui::underlay::UnderlayField>,
@@ -1093,7 +1099,7 @@ impl TracksPanelScreen {
 
         // ---- body --------------------------------------------------------------------------------
         let band = body_rect();
-        let model = content_of(d);
+        let model = content_of(d, picks);
         // measure first, off the same walk the draw uses, so the page count and the rail describe the
         // content actually about to be drawn rather than the previous item's
         let content = body_flow(&model, band, 0.0, (false, false), p, true, measure);
@@ -1327,7 +1333,8 @@ impl<H: crate::registry::AppLike + crate::registry::MetadataLike> plx_ui::screen
         // `main.ui` total. It is the scene `fps:page-panel` grades.
         let measure = f.measure;
         let field = f.underlay;
-        plx_ui::profile::phase("dt.tracks", || self.paint(d, appear, measure, field));
+        let picks = meta.picks_of(d.sid, d.play_rk());
+        plx_ui::profile::phase("dt.tracks", || self.paint(d, &picks, appear, measure, field));
     }
     fn render(&self) -> plx_ui::screen::RenderStrategy {
         plx_ui::screen::RenderStrategy::Page
@@ -1365,6 +1372,21 @@ fn sheet_painter(appear: f32) -> Painter {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// **"playing" is what will play**: while the viewer holds a pre-play pick (`PreplayPick`), the panel
+    /// marks that track and not the server's selection, through the one `PreplayPick::applied` read.
+    #[test]
+    fn the_track_marked_playing_follows_the_viewers_pick() {
+        use plx_data::metadata::{PreplayPick, SubPick};
+        let audio = |id: i64, selected: bool| Stream { id, codec: "ac3".into(), channels: 6, selected, ..Default::default() };
+        let d = Detail { part: "/library/parts/1/1/f.mkv".into(), audio: vec![audio(1, true), audio(2, false)], ..Default::default() };
+        let playing = |picks: &[PreplayPick]| -> Vec<bool> {
+            content_of(&d, picks).audio.1.iter().map(|r| r.detail.ends_with("playing")).collect()
+        };
+        assert_eq!(playing(&[]), [true, false], "control: the server's selection");
+        let pick = PreplayPick { part_id: 1, audio_sid: 2, sub: SubPick::Server };
+        assert_eq!(playing(&[pick]), [false, true], "the viewer's pick");
+    }
 
     /// Q6, painted: the footer's chevrons stand by their INK, so the gap the eye reads (ink to ink, and
     /// the last ink to the label) is the token, not the token plus the empty margin of the 22 px box.

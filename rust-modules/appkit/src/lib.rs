@@ -35,6 +35,7 @@ pub mod skip_policy;
 pub mod skip_pill; // the Skip Intro / Skip Credits pill — a `ControlSlot` occupant of the player HUD's control row
 pub mod source_list; // the Sources ROW MODEL, shared by the Library panel and that route
 pub mod timing_capsule; // the on-video Subtitle Timing capsule (plan `subtitle-menu-capsule` §4)
+pub mod preplay_tracks; // Audio & Subtitles before playback (#1532): rows, picks, commit
 pub mod track_menu;
 pub mod watchlist_disc; // the Watchlist bookmark disc's faces, glyphs and flip (Detail's hero and Home's)
 pub mod up_next; // end-of-episode Up Next card + auto-advance countdown

@@ -123,6 +123,7 @@ mod imp {
         "dt.about",
         "dt.alt",
         "dt.bio",
+        "dt.preplay",
         "dt.tracks",
         "dt.versions",
         "hm.backdrop",

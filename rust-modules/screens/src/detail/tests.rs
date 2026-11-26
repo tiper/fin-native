@@ -1408,10 +1408,11 @@ fn hero_focus_follows_its_control_when_the_set_grows_under_it() {
 
 #[test]
 fn hero_focus_stays_in_place_when_also_available_lands() {
-    let before = hero::HeroSet { more: false,
+    let before = hero::HeroSet {
         watchlist: true,
         go_show: false,
         version: false,
+        tracks: false,
         restart: true,
         trailer: false,
         alt: false,
@@ -1577,19 +1578,20 @@ fn a_landed_view_state_refresh_puts_the_browsed_season_back_and_never_steers_ano
 #[test]
 fn a_pointer_lands_on_the_capsule_the_unfurl_drew() {
     let y = 812.0;
-    let set = hero::HeroSet { more: false,
+    let set = hero::HeroSet {
         watchlist: true,
         go_show: false,
         version: false,
+        tracks: false,
         restart: true,
         trailer: false,
         alt: false,
         mark: PosterMark::InProgress,
     };
     let index = hero::watch_index(set).unwrap();
-    assert_eq!(hero::ctl_at(set, index - 1), Some(hero::HeroCtl::Restart));
+    assert_eq!(hero::ctl_at(set, index - 1), Some(hero::HeroCtl::Watchlist));
     for unfurl in [0.2, 0.6, 1.0] {
-        let disc = hero::disc_caps_at(set, 230.0, 0.0, [0.0, 0.0, unfurl, 0.0, 0.0], [201.0, 0.0, 267.0, 0.0, 0.0]);
+        let disc = hero::disc_caps_at(set, 230.0, 0.0, [0.0, 0.0, unfurl, 0.0, 0.0, 0.0], [201.0, 0.0, 267.0, 0.0, 0.0, 0.0]);
         let widths = hero::HeroWidths {
             pill: 230.0,
             alt: 0.0,
@@ -1661,12 +1663,12 @@ fn hero_action_row_hit_matches_the_drawn_controls_at_every_set_size() {
                     assert_eq!(n, 3 + usize::from(restart) + usize::from(alt));
                     sizes.insert(n);
                     for unfurl in [
-                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                        [0.0, 0.0, 1.0, 0.0, 0.0],
-                        [0.0, 1.0, 0.0, 0.0, 0.0],
-                        [0.3, 0.0, 0.7, 0.0, 0.0],
-                        [1.0, 0.0, 0.0, 0.0, 0.0],
-                        [0.0, 1.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                        [0.3, 0.0, 0.7, 0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
                     ] {
                         screen.disc_unfurl = unfurl.map(Spring::at);
                         for scroll in [0.0, 48.0] {
@@ -5703,7 +5705,8 @@ fn versioned(kind: &str, versions: usize) -> Detail {
         rk: "leaf".into(),
         kind: kind.into(),
         title: "Leaf".into(),
-        part: "/library/parts/leaf".into(),
+        // a numeric part id, as a real PMS key has: the picker and the pick refuse a part that names no file
+        part: "/library/parts/1/leaf.mkv".into(),
         resume_ms: 600_000,
         dur_ms: 6_000_000,
         versions: plx_appkit::version_list::sample().into_iter().take(versions).collect(),
@@ -5711,38 +5714,43 @@ fn versioned(kind: &str, versions: usize) -> Detail {
     }
 }
 
-/// A version the panel reports plays THAT version of the page's item, resuming as Play does, on a
-/// movie page and an episode page alike.
+/// The version for a SELECT-reporting `effects`, if the page asked the app to remember one.
+fn selected_version(effects: &[plx_machine::machine::Stamped<TestHost>]) -> Option<(ServerId, String, plx_plex::plex::MediaId)> {
+    effects.iter().find_map(|effect| match &effect.fx {
+        Fx::App(AppFx::Content(ContentReq::SelectVersion { sid, rk, media })) => Some((*sid, rk.clone(), *media)),
+        _ => None,
+    })
+}
+
+/// A version the panel reports is SELECTED for the page's item and plays nothing, on a movie page
+/// and an episode page alike; Play then asks for the page's item as before (the app settles which
+/// file: `route::settle_version`).
 #[test]
-fn a_picked_version_plays_it_resuming_like_play() {
+fn a_picked_version_is_selected_and_plays_nothing() {
     for kind in ["movie", "episode"] {
         let _guard = install(versioned(kind, 2));
         let mut screen = bare(&_guard, ServerId::UNSET, "leaf");
         let pick = plx_appkit::version_list::sample()[1].id;
-        let (_, effects) = step(&mut screen, &ScreenEvent::App(AppMsg::PlayVersion(pick)), None);
-        let (play, resume_ns) = play_item(&effects).expect("a pick plays");
-        match play {
-            PlayIntent::Item { rk, version, .. } => {
-                assert_eq!(rk, "leaf", "{kind}");
-                assert_eq!(*version, Some(pick), "{kind}");
-            }
-            PlayIntent::Movie { .. } => panic!("{kind}: the loaded item, not a hub row"),
-            PlayIntent::Live { .. } => panic!("{kind}: the loaded item, not a live channel"),
-        }
-        assert_eq!(resume_ns, plx_data::metadata::resume_ns(600_000, 6_000_000), "{kind} resumes");
+        let (_, effects) = step(&mut screen, &ScreenEvent::App(AppMsg::SelectVersion(pick)), None);
+        assert!(play_item(&effects).is_none(), "{kind}: a pick plays nothing");
+        let (_, rk, media) = selected_version(&effects).expect("a pick is reported to the app");
+        assert_eq!((rk.as_str(), media), ("leaf", pick), "{kind}: the page's item, that version");
+        // A version the item does not have is not reported.
+        let (_, effects) = step(&mut screen, &ScreenEvent::App(AppMsg::SelectVersion(plx_plex::plex::MediaId(99))), None);
+        assert!(selected_version(&effects).is_none(), "{kind}: a version the item lacks selects nothing");
         let (_, effects) = step(&mut screen, &ScreenEvent::Activate(hero::ELEM_PLAY), Some(hero::ELEM_PLAY));
         assert!(
-            matches!(play_item(&effects), Some((PlayIntent::Item { version: None, .. }, _))),
-            "{kind}: the Play pill still plays the default version"
+            matches!(play_item(&effects), Some((PlayIntent::Item { rk, version: None, .. }, _)) if rk == "leaf"),
+            "{kind}: the Play pill asks for the item and leaves the choice to the app"
         );
         clear();
     }
 }
 
 /// On a show page the disc offers the versions of the episode the hero's Play plays (the on-deck
-/// one once the show is started), and a pick plays THAT episode in that version.
+/// one once the show is started), and a pick is selected for THAT episode, never for the show.
 #[test]
-fn a_show_page_offers_and_plays_its_hero_episodes_versions() {
+fn a_show_page_offers_and_selects_its_hero_episodes_versions() {
     let two = || plx_appkit::version_list::sample().into_iter().take(2).collect::<Vec<_>>();
     let on_deck = plx_data::metadata::Episode { resume_ms: 30_000, versions: two(), ..episode("e2", 2) };
     let mut d = detail(ServerId::UNSET, "show");
@@ -5752,14 +5760,10 @@ fn a_show_page_offers_and_plays_its_hero_episodes_versions() {
     let mut screen = bare(&_guard, ServerId::UNSET, "show");
     assert!(screen.hero_set(test_store().view()).version, "the on-deck episode has two versions");
     let pick = plx_appkit::version_list::sample()[1].id;
-    let (_, effects) = step(&mut screen, &ScreenEvent::App(AppMsg::PlayVersion(pick)), None);
-    match play_item(&effects).map(|(play, _)| play) {
-        Some(PlayIntent::Item { rk, version, .. }) => {
-            assert_eq!(rk, "e2", "the hero's episode");
-            assert_eq!(*version, Some(pick));
-        }
-        _ => panic!("a pick plays the hero's episode"),
-    }
+    let (_, effects) = step(&mut screen, &ScreenEvent::App(AppMsg::SelectVersion(pick)), None);
+    assert!(play_item(&effects).is_none(), "a pick plays nothing");
+    let (_, rk, media) = selected_version(&effects).expect("a pick is reported");
+    assert_eq!((rk.as_str(), media), ("e2", pick), "the hero's episode, not the show");
     clear();
     drop(_guard);
 
@@ -5768,6 +5772,117 @@ fn a_show_page_offers_and_plays_its_hero_episodes_versions() {
     let screen = bare(&_guard, ServerId::UNSET, "show");
     assert!(!screen.hero_set(test_store().view()).version);
     clear();
+}
+
+fn stream(id: i64, selected: bool) -> plx_data::metadata::Stream {
+    plx_data::metadata::Stream { id, selected, ..Default::default() }
+}
+
+/// The Audio & Subtitles disc exists where the loaded page has tracks to show (a movie, an
+/// episode's own page, a started show's on-deck episode) and not where it has none, and OK sends the
+/// panel request anchored on the disc, as the Select Version disc does.
+#[test]
+fn the_audio_and_subtitles_disc_follows_the_pages_tracks_and_opens_the_picker() {
+    let with_tracks = || Detail { audio: vec![stream(1, true), stream(2, false)], subs: vec![stream(3, false)], ..versioned("movie", 1) };
+    let _guard = install(with_tracks());
+    let mut screen = bare(&_guard, ServerId::UNSET, "leaf");
+    let set = screen.hero_set(test_store().view());
+    assert!(set.tracks);
+    let (row, n) = hero::hero_ctls(set);
+    assert!(row[..n].contains(&hero::HeroCtl::AudioSubtitles), "three actions are all round buttons");
+    let (_, effects) = step(&mut screen, &ScreenEvent::Activate(hero::ELEM_AUDIO_SUBTITLES), Some(hero::ELEM_AUDIO_SUBTITLES));
+    assert!(
+        effects.iter().any(|e| matches!(&e.fx, Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::PreplayTracks { .. }))))),
+        "OK on the disc opens the picker"
+    );
+    clear();
+    drop(_guard);
+
+    let _guard = install(Detail { audio: Vec::new(), ..with_tracks() });
+    let screen = bare(&_guard, ServerId::UNSET, "leaf");
+    assert!(!screen.hero_set(test_store().view()).tracks, "no streams, no disc");
+    clear();
+    drop(_guard);
+
+    // A show page with an on-deck episode offers THAT episode's tracks (the page's backfilled streams).
+    let on_deck = plx_data::metadata::Episode { resume_ms: 30_000, part: "/library/parts/2/e2.mkv".into(), ..episode("e2", 2) };
+    let mut d = detail(ServerId::UNSET, "show");
+    d.episodes = vec![episode("e1", 1), on_deck.clone()].into();
+    d.on_deck = Some(on_deck);
+    d.audio = vec![stream(1, true)];
+    d.episode_streams = plx_data::metadata::EpisodeStreams::Loaded("e2".into());
+    let _guard = install(d);
+    let screen = bare(&_guard, ServerId::UNSET, "show");
+    assert!(screen.hero_set(test_store().view()).tracks, "a started show offers its on-deck episode's tracks");
+    clear();
+}
+
+/// **The picker follows the file Play starts** (`taken_version`, the Select Version check mark's rule),
+/// not only the viewer's explicit choice: a two-version item whose first file the set cannot decode
+/// plays the second with no choice made, and the disc shows and the panel's rows and PUT part are
+/// that file's.
+#[test]
+fn the_picker_follows_the_file_play_starts_when_no_version_was_chosen() {
+    use plx_data::metadata::VersionPart;
+    let version = |id: i64, resolution: &str, width: i64, height: i64, vcodec: &str| plx_data::pms::MediaVersion {
+        id: plx_plex::plex::MediaId(id),
+        resolution: resolution.into(),
+        width,
+        height,
+        vcodec: vcodec.into(),
+        ..Default::default()
+    };
+    let d = Detail {
+        kind: "movie".into(),
+        part: "/library/parts/1/1/uhd.mkv".into(),
+        vcodec: "vp9".into(),
+        video_resolution: "4k".into(),
+        versions: vec![version(1, "4k", 3840, 2160, "vp9"), version(2, "1080", 1920, 1080, "h264")],
+        version_parts: vec![VersionPart {
+            id: plx_plex::plex::MediaId(2),
+            part: "/library/parts/2/1/hd.mkv".into(),
+            audio: vec![stream(7, true)],
+            subs: Vec::new(),
+        }],
+        audio: vec![stream(1, true)],
+        ..versioned("movie", 0)
+    };
+    assert_eq!(taken_version(&d), Some(plx_plex::plex::MediaId(2)), "control: Play starts the second file");
+    let _guard = install(d);
+    let screen = bare(&_guard, ServerId::UNSET, "leaf");
+    assert!(screen.hero_set(test_store().view()).tracks);
+    let arg = crate::registry::PreplayArg {
+        host: plx_machine::machine::InstanceId(1),
+        sid: ServerId::UNSET,
+        rk: "leaf".into(),
+        anchor: [0; 4],
+        source: crate::registry::PreplaySource::Page,
+    };
+    let tracks = crate::registry::preplay_tracks_of(test_store().view(), &arg);
+    assert_eq!(tracks.part, "/library/parts/2/1/hd.mkv", "the PUT addresses the file Play starts");
+    assert_eq!(tracks.audio.iter().map(|s| s.id).collect::<Vec<_>>(), [7]);
+    clear();
+}
+
+/// **A control the page no longer has is not performed**: the … menu was built from the page as it
+/// stood, and a row handed back after a read took the control away (no tracks now) opens nothing, while
+/// the same row on a page that still has it opens the picker on the menu's anchor.
+#[test]
+fn a_hero_control_handed_back_after_it_left_the_page_does_nothing() {
+    let anchor = [10.0f32, 20.0, 64.0, 64.0].map(f32::to_bits);
+    let handed_back = |d: Detail| {
+        let _guard = install(d);
+        let mut screen = bare(&_guard, ServerId::UNSET, "leaf");
+        let (_, effects) = step(&mut screen, &ScreenEvent::App(AppMsg::HeroCtl { ctl: hero::HeroCtl::AudioSubtitles, anchor }), None);
+        clear();
+        effects.iter().any(|e| matches!(
+            &e.fx,
+            Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::PreplayTracks { anchor: got }))) if *got == anchor
+        ))
+    };
+    let with_tracks = Detail { audio: vec![stream(1, true), stream(2, false)], subs: vec![stream(3, false)], ..versioned("movie", 1) };
+    assert!(handed_back(with_tracks.clone()), "control: the page still has the disc");
+    assert!(!handed_back(Detail { audio: Vec::new(), ..with_tracks }), "the page has no tracks now: nothing opens");
 }
 
 #[test]
@@ -5811,7 +5926,8 @@ fn named<'a>(row: &'a [(String, Option<String>)], id: &str) -> Option<&'a str> {
 /// **Every hero control that plays a title or writes to one names the title it acts on**, so the harness
 /// can make a press say which title it means. On a show that has been STARTED that is the on-deck
 /// episode, not the page's key: Play and Restart play it, the watched toggle writes it, and only the
-/// bookmark acts on the page's own item. The controls that open a menu or a panel carry none.
+/// bookmark acts on the page's own item. The controls that open a menu or a panel carry none. With two
+/// versions the show has four actions, so Restart and Version are rows of …, not hero controls.
 #[test]
 fn a_started_shows_hero_controls_name_the_on_deck_episode_they_act_on() {
     let two = || plx_appkit::version_list::sample().into_iter().take(2).collect::<Vec<_>>();
@@ -5829,9 +5945,8 @@ fn a_started_shows_hero_controls_name_the_on_deck_episode_they_act_on() {
         vec![
             owned("hero.play", Some("e2")),
             owned("hero.watchlist", Some("show")),
-            owned("hero.restart", Some("e2")),
             owned("hero.mark_watched", Some("e2")),
-            owned("hero.version", None),
+            // Play from Start and Play Version are four actions in, so they live under … (VER-8)
             owned("hero.more", None),
         ]
     );
@@ -5948,6 +6063,7 @@ fn the_hero_controls_that_play_or_write_have_a_subject_and_the_rest_have_none() 
         (hero::HeroCtl::GoToShow, false),
         (hero::HeroCtl::Alt, false),
         (hero::HeroCtl::Version, false),
+        (hero::HeroCtl::AudioSubtitles, false),
         (hero::HeroCtl::More, false),
     ] {
         assert_eq!(hero_control_subject(ctl, &d, None).is_some(), acts, "{}", ctl.a11y_name());
@@ -5979,9 +6095,9 @@ fn an_episode_gets_a_go_to_show_disc_that_presses_the_item_menus_navigation() {
     let mut screen = bare(&_guard, ServerId::UNSET, "ep");
     let set = screen.hero_set(test_store().view());
     assert!(set.go_show);
-    assert!(!set.more, "More belongs to a show’s on-deck hero, not this episode page");
+    assert_eq!(hero::overflow_ctls(set).1, 0, "an episode page with this few actions has no …");
     assert!(!set.watchlist, "no plex guid: the bookmark disc is not in this row");
-    assert_eq!(hero::index_of(set, hero::HeroCtl::GoToShow), Some(1));
+    assert_eq!(hero::index_of(set, hero::HeroCtl::GoToShow), Some(2));
     let (_, fx) = step(
         &mut screen,
         &ScreenEvent::Activate(hero::ELEM_GO_TO_SHOW),

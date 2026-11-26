@@ -930,6 +930,7 @@ pub(crate) fn player_requests(
             // The failure-read-out's recovery escape (`ChooseQuality`) and the Tracks->Timing hand-off, which
             // present a panel immediately rather than through the row's deferred press. The
             // tabs row is not an asker: it asks `ToggleSection` (Info and Chapters are sections).
+            PlayerReq::OpenFailedTracks { anchor } => super::bridge::open_failed_tracks(&player.session, anchor, pages),
             PlayerReq::OpenOverlay(kind) => {
                 if plx_media::route::is_live(&player.session) { continue; }
                 seed_menu_anchor(pages, bridge, kind);

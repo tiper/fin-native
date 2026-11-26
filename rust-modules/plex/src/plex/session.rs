@@ -629,7 +629,7 @@ pub struct Session {
     /// and display settings, and those settings' frozen top-level keys every profile
     /// falls back to (`trailer_autoplay` among them), `auto_sign_in`,
     /// `last_hero_blur`, `plaintext_consent`, `server_key_pins`, `last_library`,
-    /// `library_sorts`, `track_memory`, `subtitle_offsets`, `recent_channels`), flattened so the keys sit at the top level of the file under
+    /// `library_sorts`, `track_memory`, `subtitle_offsets`, `version_choices`, `recent_channels`), flattened so the keys sit at the top level of the file under
     /// the same keys they always had. Declared before [`Session::extensions`]:
     /// a flattened struct takes its keys first, so the unknown-key map sees only keys nobody models.
     #[serde(flatten)]
@@ -661,7 +661,7 @@ struct CanonicalSessionPreferences {
     #[serde(default)]
     language: plx_os::i18n::Preference,
     /// Every flattened preference key (playback and display settings, the A5 rows and every memory-door list:
-    /// `track_memory`, `subtitle_offsets`, `recent_channels`), flattened ahead of `extensions` so a flattened struct takes its keys first and
+    /// `track_memory`, `subtitle_offsets`, `version_choices`, `recent_channels`), flattened ahead of `extensions` so a flattened struct takes its keys first and
     /// `extensions` still sees only unknown ones.
     #[serde(flatten)]
     prefs: Preferences,
@@ -2402,6 +2402,24 @@ pub struct SubtitleOffsetEntry {
     pub machine_id: String,
     pub rating_key: String,
     pub offset_ms: i64,
+    #[serde(flatten, default, skip_serializing_if = "OpaqueExtensions::is_empty")]
+    pub extensions: OpaqueExtensions,
+}
+
+/// One profile's remembered version choices: the file Resume and Play start for an item. See
+/// [`Preferences::version_choices`]. A tenant of the memory door ([`prefs::ProfileList`]).
+pub type VersionChoices = prefs::ProfileList<VersionChoiceEntry>;
+
+/// One item's remembered version: the PMS `Media.id` of the file the viewer selected, or that a
+/// playback ran as a specific version. An id, never a position (`plx_plex::plex::MediaId`'s own
+/// rule), keyed by the ITEM (a movie, or one episode: never a show), so it is not carried to the
+/// next episode.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct VersionChoiceEntry {
+    pub machine_id: String,
+    pub rating_key: String,
+    pub media_id: i64,
     #[serde(flatten, default, skip_serializing_if = "OpaqueExtensions::is_empty")]
     pub extensions: OpaqueExtensions,
 }

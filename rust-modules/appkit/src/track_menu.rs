@@ -2010,37 +2010,7 @@ impl TrackMenuState {
         };
         let names = plx_media::player::SHARED.track_names.lock().unwrap();
         for (i, s) in d.audio.iter().enumerate() {
-            let lang = if s.lang.is_empty() {
-                plx_os::i18n::msg::widgets_tracks_unknown()
-            } else {
-                s.lang.as_str()
-            };
-            let label = if s.default {
-                plx_os::i18n::msg::widgets_tracks_original(lang)
-            } else {
-                lang.to_string()
-            };
-            let mut row = Row::new(label).checked(i as c_int == self.active_audio());
-            // a per-track descriptor so sibling tracks in the same language are distinguishable
-            // (e.g. two Russian tracks: "Дубляж" vs "AC-3 5.1"). Prefer the stream title, else the
-            // codec + channel layout.
-            let name = track_label::track_name(
-                &s.title,
-                names.audio(plx_data::metadata::audio_ordinal(&d.audio, i)),
-                lang,
-            );
-            let sub = if name.is_empty() {
-                audio_descriptor(s)
-            } else {
-                name
-            };
-            let sub = audio_sub_line(ps, sub, s);
-            if !sub.is_empty() {
-                row = row.detail(sub);
-            }
-            if s.ad {
-                row = row.badge(Badge::Ad);
-            }
+            let row = audio_track_row(&d.audio, i, i as c_int == self.active_audio(), &names, |sub| audio_sub_line(ps, sub, s));
             sec = sec.item(TrackRow::Audio(i), RowKind::Choice, (), row);
         }
         let mut form = Form::new().section(sec);
@@ -2593,6 +2563,34 @@ fn audio_sub_line(ps: &plx_media::route::PlaybackSession, sub: String, s: &metad
     audio_sub_line_for(sub, converted, in_app)
 }
 
+/// **One Audio row**, shared by the in-player menu and the before-playback picker
+/// ([`crate::preplay_tracks`]): the language (with "Original" on the file's default), the per-track
+/// descriptor so sibling tracks in one language are distinguishable (the stream title, else the
+/// codec + channel layout) and the AD badge. `sub_line` is the only part that depends on a route:
+/// the in-player menu says "converted by the server" there, the picker has no route and passes the
+/// descriptor through.
+pub(crate) fn audio_track_row(
+    audio: &[metadata::Stream],
+    i: usize,
+    checked: bool,
+    names: &metadata::track_names::TrackNames,
+    sub_line: impl FnOnce(String) -> String,
+) -> Row {
+    let s = &audio[i];
+    let lang = if s.lang.is_empty() { plx_os::i18n::msg::widgets_tracks_unknown() } else { s.lang.as_str() };
+    let label = if s.default { plx_os::i18n::msg::widgets_tracks_original(lang) } else { lang.to_string() };
+    let mut row = Row::new(label).checked(checked);
+    let name = track_label::track_name(&s.title, names.audio(plx_data::metadata::audio_ordinal(audio, i)), lang);
+    let sub = sub_line(if name.is_empty() { audio_descriptor(s) } else { name });
+    if !sub.is_empty() {
+        row = row.detail(sub);
+    }
+    if s.ad {
+        row = row.badge(Badge::Ad);
+    }
+    row
+}
+
 /// [`audio_sub_line`] with the facts given — the pure choice, host-testable.
 fn audio_sub_line_for(sub: String, converted: bool, decoded_in_app: bool) -> String {
     if sub.is_empty() {
@@ -2659,7 +2657,7 @@ fn row_badge(b: &RowBadge) -> Badge {
 
 /// A flat row: label = language, detail = source/region (+ "Track N" when this track needed one),
 /// one badge. Used for a single-track "yours" language, and for every "Other languages" row.
-fn flat_row(t: &SubTrack, active_sub: c_int) -> Row {
+pub(crate) fn flat_row(t: &SubTrack, active_sub: c_int) -> Row {
     let mut row = Row::new(t.lang.clone()).checked(active_sub >= 0 && t.i == active_sub as usize);
     let mut parts: Vec<String> = Vec::new();
     if !t.detail.is_empty() {
@@ -2681,7 +2679,7 @@ fn flat_row(t: &SubTrack, active_sub: c_int) -> Row {
 /// source (+ "Track N" if needed), or — for a NAMELESS track — the kind word itself ("Forced",
 /// "SDH", "Full", "Commentary"), in which case a Forced/SDH badge that would only repeat the
 /// label is dropped.
-fn in_lang_row(t: &SubTrack, active_sub: c_int) -> Row {
+pub(crate) fn in_lang_row(t: &SubTrack, active_sub: c_int) -> Row {
     let mut row = Row::new(in_lang_label(t)).checked(active_sub >= 0 && t.i == active_sub as usize);
     // a Forced/SDH chip that would only repeat the kind word the label already is, is dropped; the
     // image codec never is

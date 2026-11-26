@@ -514,7 +514,6 @@ class SubjectBearing(unittest.TestCase):
         "screens/src/player/overlay.rs": ("more.fold.previous", "more.fold.next", "more.fold.from_beginning",
                                           "more.rung.*", "menu.audio.*", "menu.sub.*", "menu.off", "menu.forced",
                                           "menu.hit.*"),
-        "screens/src/versions_panel.rs": ("versions.row.*",),
         "appkit/src/track_menu.rs": ("menu.hit.*",),   # a search result's OK asks the download; the overlay names the title
     }
 
@@ -568,7 +567,7 @@ class SubjectBearing(unittest.TestCase):
         exactly the controls with a subject: a control added to one side and not the other fails here."""
         hero = (ROOT / "rust-modules" / "screens" / "src" / "detail" / "hero.rs").read_text()
         names = dict(re.findall(r'HeroCtl::(\w+) => "(\w+)",', hero.split("pub const fn a11y_name", 1)[1].split("}", 1)[0]))
-        self.assertEqual(len(names), 10, names)
+        self.assertEqual(len(names), 11, names)
         tests = (ROOT / "rust-modules" / "screens" / "src" / "detail" / "tests.rs").read_text()
         table = tests.split("fn the_hero_controls_that_play_or_write_have_a_subject_and_the_rest_have_none", 1)[1].split("\n}\n", 1)[0]
         acts = dict(re.findall(r"\(hero::HeroCtl::(\w+), (true|false)\)", table))

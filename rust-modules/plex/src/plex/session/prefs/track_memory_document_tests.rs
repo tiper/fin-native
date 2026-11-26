@@ -958,8 +958,9 @@ fn an_acl_credential_write_that_fits_evicts_nothing() {
 /// sixteen servers (the roster's largest; nothing caps a profile's sources), every per-profile list at
 /// its cap with every string at its bound (`track_memory` at the 32 KiB budget), sixteen servers' pins
 /// and consent, four recent searches each. Together that is far more than 256 KiB, and it is written
-/// through the production coordinator on the ACL-only tier (webOS 4.x): the guard sheds the three
-/// memory lists in order until the document passes the os layer's own validation, the credentials
+/// through the production coordinator on the ACL-only tier (webOS 4.x): the guard sheds the lists it may shed
+/// (`shed_memory`: track memory, subtitle offsets, version choices, library sorts) in order until the document
+/// passes the os layer's own validation, the credentials
 /// and every unsheddable preference are untouched, and an unrelated quality write afterwards lands.
 ///
 /// The figures it stands on are asserted, not assumed: with ALL per-profile memory gone the same
