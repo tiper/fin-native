@@ -237,9 +237,9 @@ fn the_lookahead_asks_for_the_key_the_card_draw_resolves() {
         for i in [0usize, 7, 431] {
             let art = parts::grid_art(view.item(i).unwrap());
             plx_ui::widgets::resolve_card_art(plx_ui::Painter::root(), Rect::new(0.0, 0.0, 250.0, 375.0), &art);
-            let (srv, path, w, h) = plx_ui::widgets::card_art_request(&art).unwrap();
+            let q = plx_ui::widgets::card_art_request(&art).unwrap();
             let drawn = LOG.with(|l| l.borrow_mut().probes.pop().unwrap());
-            assert_eq!(drawn, (srv, path.to_string(), w, h), "episodes={episodes} card {i}");
+            assert_eq!(drawn, (q.srv, q.path.to_string(), q.w, q.h), "episodes={episodes} card {i}");
         }
     }
 }

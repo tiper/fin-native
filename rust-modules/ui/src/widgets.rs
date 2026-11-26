@@ -377,6 +377,16 @@ pub enum Art<'a> {
         key: &'a str,
         res: (c_int, c_int),
     },
+    /// **A Live TV channel's tile**: its logo, contained on a flat plate with the channel number
+    /// at the corner (`channel_tile`). The logo is a transparent PNG, so it is asked for as one
+    /// ([`ArtRequest::png`]); `name` is what stands in the logo's place when the channel has none.
+    /// `sid` is the raw id of the server that holds the logo, as every variant carries.
+    Channel {
+        sid: u16,
+        logo: &'a str,
+        number: &'a str,
+        name: &'a str,
+    },
 }
 
 impl Art<'_> {
@@ -393,6 +403,7 @@ impl Art<'_> {
             Self::Still(Some(m)) => (m.owner, m.src, still_key(m), 1),
             Self::Thumb { sid, key, .. } => (key.as_ptr() as usize, *sid, *key, 2),
             Self::Person { sid, key, .. } => (key.as_ptr() as usize, *sid, *key, 3),
+            Self::Channel { sid, logo, .. } => (logo.as_ptr() as usize, *sid, *logo, 4),
             Self::Poster(None) | Self::Still(None) => return None,
         };
         let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -911,7 +922,7 @@ pub fn art_uv(art: &Art, tw: f32, th: f32, r: Rect) -> [f32; 4] {
 pub fn art_crop(art: &Art) -> crate::Crop {
     match art {
         Art::Person { .. } => crate::Crop::Headshot,
-        Art::Poster(_) | Art::Still(_) | Art::Thumb { .. } => crate::Crop::Centre,
+        Art::Poster(_) | Art::Still(_) | Art::Thumb { .. } | Art::Channel { .. } => crate::Crop::Centre,
     }
 }
 
@@ -947,27 +958,41 @@ pub fn resolve_card_art(p: Painter, rect: Rect, art: &Art<'_>) -> ArtImage {
     if p.is_recording() { return ArtImage::NONE; }
     let admission = art.motion_identity()
         .map(|id| crate::card_motion::Scope::card(id, p.to_screen(rect).0));
-    let (tex, w, h) = card_art_request(art).map_or((0, 0.0, 0.0), |(srv, path, w, h)| resolve_tex_wh_on(srv, path, w, h, 0));
+    let (tex, w, h) = card_art_request(art).map_or((0, 0.0, 0.0), |q| resolve_tex_wh_on(q.srv, q.path, q.w, q.h, c_int::from(q.png)));
     #[cfg(feature = "devtriggers")]
     {
         crate::card_motion_metrics::draw(tex != 0);
-        if let Some((srv, path, w, h)) = card_art_request(art) {
-            crate::card_probe::art(srv, path, w, h, tex != 0);
+        if let Some(q) = card_art_request(art) {
+            crate::card_probe::art(q.srv, q.path, q.w, q.h, tex != 0);
         }
     }
     let shown = admission.as_ref().map_or(1.0, |scope| scope.arrival(tex != 0));
     ArtImage { tex, w, h, shown }
 }
 
-/// The `(server, path, width, height)` [`resolve_card_art`] asks the source for, for a screen that
-/// must WARM exactly that key (the Library's at-rest lookahead). [`resolve_card_art`] resolves
-/// through this, so the two cannot name different keys; `screens/src/library/lookahead_tests.rs::the_lookahead_asks_for_the_key_the_card_draw_resolves` pins it. `None` for an empty slot.
-pub fn card_art_request<'a>(art: &Art<'a>) -> Option<(u16, &'a str, c_int, c_int)> {
-    Some(match art {
-        Art::Poster(m) => { let m = (*m)?; (m.src, m.thumb, POSTER_RES.0, POSTER_RES.1) }
-        Art::Still(m) => { let m = (*m)?; (m.src, still_key(&m), STILL_RES.0, STILL_RES.1) }
-        Art::Thumb { sid, key, res } | Art::Person { sid, key, res } => (*sid, *key, res.0, res.1),
-    })
+/// What [`resolve_card_art`] asks the image source for: the server, the path on it, the size, and whether
+/// the picture is wanted as a PNG (a logo with a transparent ground; everything else is a JPEG).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArtRequest<'a> {
+    pub srv: u16,
+    pub path: &'a str,
+    pub w: c_int,
+    pub h: c_int,
+    pub png: bool,
+}
+
+/// What [`resolve_card_art`] asks the source for, for a screen that must WARM exactly that key (the
+/// Library's at-rest lookahead). [`resolve_card_art`] resolves through this, so the two cannot name
+/// different keys; `screens/src/library/lookahead_tests.rs::the_lookahead_asks_for_the_key_the_card_draw_resolves`
+/// pins it. `None` for an empty slot.
+pub fn card_art_request<'a>(art: &Art<'a>) -> Option<ArtRequest<'a>> {
+    let (srv, path, (w, h), png) = match art {
+        Art::Poster(m) => { let m = (*m)?; (m.src, m.thumb, POSTER_RES, false) }
+        Art::Still(m) => { let m = (*m)?; (m.src, still_key(&m), STILL_RES, false) }
+        Art::Thumb { sid, key, res } | Art::Person { sid, key, res } => (*sid, *key, *res, false),
+        Art::Channel { sid, logo, .. } => (*sid, *logo, channel_tile::LOGO_RES, true),
+    };
+    Some(ArtRequest { srv, path, w, h, png })
 }
 
 /// The name a poster card draws on the neutral collection tile, when it draws one: a collection
@@ -1143,6 +1168,7 @@ pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>,
             // it too.
             let _ = m;
         }
+        Art::Channel { sid, logo, number, name } => channel_tile::draw(p, frame, r, rad, f, &channel_tile::Face { sid, logo, number, name }, image),
         Art::Person { key, .. } => {
             let ArtImage { tex: t, w: tw, h: th, .. } = image;
             if t != 0 {
@@ -4352,6 +4378,10 @@ pub fn art_wash_split(r: Rect, art: Rect) -> Option<(Rect, [Option<Rect>; 4])> {
         ],
     ))
 }
+
+/// A Live TV channel's tile face (a plate, a contained logo, the number): [`Art::Channel`]'s draw.
+#[path = "widgets_channel_tile.rs"]
+pub mod channel_tile;
 
 // ---- PageGround: the item-keyed ground a BROWSING screen stands on. ----
 
@@ -9893,4 +9923,17 @@ fn button_progress_ring_uses_bounded_quadrants_and_leaves_the_default_face_uncha
     let plain = crate::draw_census::capture(|| make().draw(&Env::inert(), Painter::recording()));
     let zero = crate::draw_census::capture(|| make().progress_ring(0.0).draw(&Env::inert(), Painter::recording()));
     assert_eq!(plain, zero, "zero progress adds no geometry or alternate resting face");
+}
+
+/// A channel plate asks for its logo as a PNG (the transparent ground is the mark's), a poster for a JPEG.
+#[cfg(test)]
+#[test]
+fn a_channel_logo_is_requested_as_a_png_and_every_other_card_art_as_a_jpeg() {
+    let logo = Art::Channel { sid: 3, logo: "/logos/7.png", number: "7", name: "Seven" };
+    let asked = card_art_request(&logo).expect("a logo is asked for");
+    assert_eq!((asked.srv, asked.path, asked.png), (3, "/logos/7.png", true));
+    assert_eq!((asked.w, asked.h), channel_tile::LOGO_RES);
+    let thumb = card_art_request(&Art::Thumb { sid: 3, key: "/t/1", res: (10, 10) }).unwrap();
+    assert!(!thumb.png);
+    assert_eq!(card_art_request(&Art::Poster(None)), None);
 }

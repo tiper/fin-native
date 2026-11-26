@@ -247,8 +247,9 @@ pub trait StackPage<H: Host> {
     fn reveal_margin(&self, _k: Self::Key) -> f32 {
         MARGIN_Y
     }
-    /// Air the page keeps under a shelf's block, counted in the block's height (the scroll reveals
-    /// it with the block): a page whose shelves are stacked with the label band's air under each.
+    /// Air the page keeps under a shelf's block, counted in the block's height (by default the
+    /// scroll reveals it with the block; a page whose foot is the next shelf's heading room says
+    /// [`reveal_foot`](Self::reveal_foot) `false`, and the scroll shows the tiles and open band only): a page whose shelves are stacked with the label band's air under each.
     /// Shelves are adjacent sections, never a `Custom` gap between two of them: the shelf above
     /// reads the heading of the one below as the thing under its caption
     /// ([`SectionFrame::below_rise`]), and a gap section hides it. A page that keeps the last
@@ -257,6 +258,22 @@ pub trait StackPage<H: Host> {
     /// below it (`card_row::room_for`), and a `Stack` refuses a page that keeps less there.
     fn shelf_foot(&self, _cx: &Cx<'_, H>, _k: Self::Key) -> f32 {
         0.0
+    }
+    /// [`shelf_foot`](Self::shelf_foot) while the shelf's caption band is OPEN (a card of the shelf has
+    /// focus), for a page whose design keeps a different air under a shelf at rest than under its open
+    /// caption: the foot runs from one to the other on the band's own spring (`Shelf::band_expand`), so
+    /// the section below rides the shared band motion and nothing else. The default is the resting foot
+    /// (a constant air). Both must keep at least [`UNDER_LABEL_AIR`] under a shelf with another below it.
+    fn shelf_foot_open(&self, cx: &Cx<'_, H>, k: Self::Key) -> f32 {
+        self.shelf_foot(cx, k)
+    }
+    /// Whether the scroll that shows a focused shelf reveals its [`shelf_foot`](Self::shelf_foot) with the block
+    /// (the default: the focused shelf's foot is part of the block the scroll brings into view) or only the tiles and the open label band. A page whose foot is the room of the heading of the
+    /// shelf BELOW (the air between two stacked shelves, which that shelf's own reveal brings on) says `false`:
+    /// the gap under the focused shelf is not something that has to be visible, and revealing it scrolls a page
+    /// whose tiles already fit. The page still ends where its content does ([`Stack::max_scroll`]).
+    fn reveal_foot(&self, _k: Self::Key) -> bool {
+        true
     }
     /// Whether a shelf's group extent spans the page's width (the default) or is the shelf's own
     /// head tile.
@@ -614,11 +631,19 @@ impl<K: Copy + Eq> Stack<K> {
         p.cards(cx, self.specs[i].key).map_or(0, |c| c.len())
     }
 
+    /// The air under a shelf's block with its caption band `e` open (0 collapsed to 1 focused): the page's
+    /// resting [`StackPage::shelf_foot`] running to its [`StackPage::shelf_foot_open`] with the band.
+    fn foot<H: Host, P: StackPage<H, Key = K>>(p: &P, cx: &Cx<'_, H>, k: K, e: f32) -> f32 {
+        let rest = p.shelf_foot(cx, k);
+        let open = p.shelf_foot_open(cx, k);
+        rest + (open - rest) * e.clamp(0.0, 1.0)
+    }
+
     /// Section `i`'s height in the flow.
     fn height<H: Host, P: StackPage<H, Key = K>>(&self, p: &P, cx: &Cx<'_, H>, i: usize) -> f32 {
         match (&self.specs[i].kind, &self.bodies[i]) {
             (Kind::Shelf { style, heading }, Body::Shelf(s)) => {
-                if self.len_of(p, cx, i) == 0 { 0.0 } else { heading + style.h + s.under_band() + p.shelf_foot(cx, self.specs[i].key) }
+                if self.len_of(p, cx, i) == 0 { 0.0 } else { heading + style.h + s.under_band() + Self::foot(p, cx, self.specs[i].key, s.band_expand()) }
             }
             (Kind::Grid { .. }, Body::Grid(g)) => g.height(self.len_of(p, cx, i)),
             (Kind::Custom { height, .. }, _) => *height,
@@ -716,7 +741,7 @@ impl<K: Copy + Eq> Stack<K> {
                 // `card_row::room_for` counts `UNDER_LABEL_AIR` under a shelf's band: a page that keeps less
                 // with a shelf below would have a caption line drawn over that heading
                 debug_assert!(
-                    p.shelf_foot(cx, self.specs[i].key) >= UNDER_LABEL_AIR,
+                    p.shelf_foot(cx, self.specs[i].key).min(p.shelf_foot_open(cx, self.specs[i].key)) >= UNDER_LABEL_AIR,
                     "a shelf with another shelf below it keeps at least UNDER_LABEL_AIR under it (`StackPage::shelf_foot`)"
                 );
                 next.heading_lift()
@@ -893,7 +918,8 @@ impl<K: Copy + Eq> Stack<K> {
                 // the band the shelf's OWN policy opens to, so a Nothing / one-line / two-line setting
                 // is the destination the scroll target is computed against
                 Body::Shelf(s) => {
-                    heading + style.h + card_row::under_band_for(s.band_h(), (n == focus) as i32 as f32) + p.shelf_foot(cx, self.specs[n].key)
+                    let e = (n == focus) as i32 as f32;
+                    heading + style.h + card_row::under_band_for(s.band_h(), e) + Self::foot(p, cx, self.specs[n].key, e)
                 }
                 _ => self.height(p, cx, n),
             },
@@ -920,6 +946,13 @@ impl<K: Copy + Eq> Stack<K> {
         let j = p.reveal_with(self.specs[i].key).and_then(|k| self.index(k)).unwrap_or(i);
         let h = |n: usize| self.settled_height(p, cx, n, i);
         let (top, height) = ((0..j).map(h).sum::<f32>(), h(j));
+        // a page that keeps the air under a shelf for the shelf below leaves it out of what is revealed
+        let height = match self.specs[j].kind {
+            Kind::Shelf { .. } if !p.reveal_foot(self.specs[j].key) && self.len_of(p, cx, j) > 0 => {
+                height - Self::foot(p, cx, self.specs[j].key, (j == i) as i32 as f32)
+            }
+            _ => height,
+        };
         let max = self.max_with_focus(p, cx, i);
         let hi = if matches!(self.specs[j].kind, Kind::Shelf { .. }) { top - p.reveal_margin(self.specs[j].key) } else { top };
         // a page that sets the target itself reveals from where it is headed, not where it is

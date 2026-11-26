@@ -165,6 +165,15 @@ pub fn live_tv_policy() -> CaptionPolicy {
     CaptionPolicy::same(true, DetailParts::MOVIE_DEFAULT)
 }
 
+/// The label block of a Live TV tile: `title` over `line` (the airing's words, or the channel's identity),
+/// worded through [`live_tv_policy`] like every live label. A tile with no `line` is its title alone.
+pub fn live_label(title: String, line: Option<String>) -> TileLabel {
+    match line {
+        Some(_) => label(&live_tv_policy(), &CaptionFacts { title: Some(title), ..Default::default() }, line),
+        None => TileLabel::from_lines([Some(title), None]),
+    }
+}
+
 fn build(policy: &CaptionPolicy, facts: &CaptionFacts, state: Option<String>, states_survive: bool) -> TileLabel {
     let [title, details] = caption_lines(policy, facts, plx_os::i18n::current());
     let details = if policy.details_for(facts.is_show).is_empty() { if states_survive { state } else { None } } else { state.or(details) };
@@ -241,6 +250,13 @@ mod tests {
     fn lines(l: &TileLabel) -> [Option<String>; 2] {
         let text = |c: &Option<std::ffi::CString>| c.as_ref().map(|c| c.to_string_lossy().into_owned());
         [text(&l.title), text(&l.caption)]
+    }
+
+    /// A Live TV tile's label: the title over the airing's words, or the title alone when there are none.
+    #[test]
+    fn a_live_label_is_its_title_over_its_line_or_the_title_alone() {
+        assert_eq!(lines(&live_label("On now: Show".into(), Some("Started 2 min ago".into()))), [Some("On now: Show".into()), Some("Started 2 min ago".into())]);
+        assert_eq!(lines(&live_label("Seven".into(), None)), [Some("Seven".into()), None]);
     }
 
     /// **Every landscape block is the one builder's**: an episode still, a Search result borrowed from

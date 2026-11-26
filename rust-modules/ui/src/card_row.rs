@@ -156,6 +156,10 @@ impl RowStyle {
         heading_rise: 0.0,
         under_tile: 0.0,
     };
+    /// **A shelf of Live TV channel plates** (the handoff's Recent channels): 250 x 140 on HOME's pitch, so a
+    /// column of plates stands over a column of posters and Down lands straight below. Motion, pop, glow and
+    /// radius are HOME's; only the height differs.
+    pub const CHANNEL: RowStyle = RowStyle { h: 140.0, ..RowStyle::HOME };
     /// **A shelf of EPISODES: landscape stills.** Same motion as HOME — the spring magnification,
     /// the scroll, the glow ring and the heading lift are all one vocabulary — and a different
     /// aspect, because an episode is not a poster.
@@ -939,6 +943,19 @@ pub fn draw_heading_c(
         label.draw(p, Rect::new(x + dx, y, 0.0, cap));
         measure.width(s, sz, bold != 0)
     });
+}
+
+/// The line box the Live TV handoff sets a section heading in (its What's on board): 40 px, with the
+/// HEADLINE type centred in it.
+pub const HEADING_LINE_BOX: f32 = 40.0;
+
+/// How far below the top of a board's heading line box ([`HEADING_LINE_BOX`]) the HEADLINE caps' top
+/// stands once they are centred in it, from `measure.cap_h`. [`draw_heading_c`] paints at the cap top, so
+/// a page that takes its y from the board's line box starts each section this much lower and gives its
+/// heading this much less (the tiles stay where the board has them). Whole pixels, rounded down, so a
+/// heading never sits lower than the board's.
+pub fn heading_ink_drop(measure: &dyn plx_machine::machine::Measure) -> f32 {
+    ((HEADING_LINE_BOX - measure.cap_h(theme::size::HEADLINE)) / 2.0).floor().max(0.0)
 }
 
 /// Draw [`heading_flow`] with its title's cap top at `(x, y)`. Every run rides the painter handed
@@ -2280,6 +2297,36 @@ pub fn resume_bar(p: Painter, r: Rect, frac: f32, rad: f32) {
 // ---------------------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
+    /// The cap top of the 32 px headline in the handoff's 40 px line box, from the measure: the fixture's caps are
+    /// 22.4 px tall, (40 - 22.4) / 2 = 8.8 down to 8; the shipped face's 23.36 gives 8.32, also 8; and a cap as
+    /// tall as the box leaves no drop.
+    #[test]
+    fn the_heading_ink_drop_is_the_centred_cap_top_in_whole_pixels() {
+        use super::heading_ink_drop;
+        struct Caps(f32);
+        impl plx_machine::machine::Measure for Caps {
+            fn width(&self, _: &std::ffi::CStr, _: i32, _: bool) -> f32 { 0.0 }
+            fn cap_h(&self, _: i32) -> f32 { self.0 }
+            fn line_h(&self, _: i32) -> f32 { 0.0 }
+        }
+        assert_eq!(heading_ink_drop(&crate::fixture::FixtureMeasure), 8.0);
+        assert_eq!(heading_ink_drop(&Caps(23.36)), 8.0);
+        assert_eq!(heading_ink_drop(&Caps(24.0)), 8.0);
+        assert_eq!(heading_ink_drop(&Caps(20.0)), 10.0);
+        assert_eq!(heading_ink_drop(&Caps(48.0)), 0.0);
+    }
+
+    /// A channel plate shelf is HOME's in everything but the 140 px height: the same pitch, so the posters of a
+    /// shelf below it stand in the plates' columns.
+    #[test]
+    fn the_channel_row_is_homes_but_140_high() {
+        use super::RowStyle;
+        assert_eq!(RowStyle::CHANNEL.h, 140.0);
+        assert_eq!((RowStyle::CHANNEL.w, RowStyle::CHANNEL.gap), (RowStyle::HOME.w, RowStyle::HOME.gap));
+        assert_eq!(RowStyle::CHANNEL.w + RowStyle::CHANNEL.gap, 280.0, "the handoff's pitch");
+        assert_eq!(RowStyle::CHANNEL.focus_scale, RowStyle::HOME.focus_scale);
+    }
+
     /// The per-row rule is the uniform one when every row has the same pitch, and a row of its own
     /// pitch moves only the shelves below it.
     #[test]

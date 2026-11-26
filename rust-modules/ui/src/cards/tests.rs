@@ -3111,6 +3111,10 @@ mod stack {
         shelf: Cards,
         revision: u64,
         foot: f32,
+        /// What `Shelf` keeps under its block while its caption band is open (`None`: the resting foot).
+        foot_open: Option<f32>,
+        /// Whether the reveal includes `Shelf`'s foot ([`StackPage::reveal_foot`]).
+        reveal_foot: bool,
         /// What each of the further shelves keeps under its block ([`StackPage::shelf_foot`]).
         more_foot: f32,
         /// Further shelves after `Shelf`, each at the default reveal margin.
@@ -3209,12 +3213,16 @@ mod stack {
         fn shelf_foot(&self, _cx: &Cx9<'_>, k: Msec) -> f32 {
             match k { Msec::Shelf => self.foot, Msec::More(_) => self.more_foot, _ => 0.0 }
         }
+        fn shelf_foot_open(&self, cx: &Cx9<'_>, k: Msec) -> f32 {
+            match (k, self.foot_open) { (Msec::Shelf, Some(open)) => open, _ => self.shelf_foot(cx, k) }
+        }
+        fn reveal_foot(&self, _k: Msec) -> bool { self.reveal_foot }
     }
 
     fn mrig(rows: u32, shelf: usize, build: impl FnOnce(Stack<Msec>) -> Stack<Msec>) -> Mrig {
         let mut r = PageRig {
             stack: build(Stack::new(ENTRY)),
-            page: Multi { rows, shelf: Cards::new((0..shelf as u32).map(|i| 100 + i).collect(), false), revision: 1, foot: 0.0, more_foot: 0.0, more: Vec::new(), recover_to: None, narrow: false, named: false },
+            page: Multi { rows, shelf: Cards::new((0..shelf as u32).map(|i| 100 + i).collect(), false), revision: 1, foot: 0.0, foot_open: None, reveal_foot: true, more_foot: 0.0, more: Vec::new(), recover_to: None, narrow: false, named: false },
             view: FixtureView::default(),
             focus: None,
             ms: 0,
@@ -3525,6 +3533,59 @@ mod stack {
         assert_eq!(bare_target, reveal(0.0), "the reveal of the bare block");
         assert_eq!(footed_target, reveal(22.0), "the reveal of the block with its foot");
         assert!(max(0.0) > 0.0 && reveal(22.0) <= max(22.0), "setup: the page scrolls");
+    }
+
+    /// **A page may keep a shelf's foot out of the reveal** (`StackPage::reveal_foot`): the air under a shelf that
+    /// is the room of the next shelf's heading is not something the focused shelf has to show, so the reveal is the
+    /// bare block's wherever the foot is, while the page still ends where its content does (`max_scroll`).
+    #[test]
+    fn a_foot_kept_out_of_the_reveal_leaves_the_target_where_the_bare_block_puts_it() {
+        // the second shelf (the default reveal margin, so its block fits under the margin) is the one focused
+        let at = |foot: f32, revealed: bool| {
+            let mut r = mrig(30, 40, |s| s);
+            r.page.foot = crate::consts::UNDER_LABEL_AIR;
+            r.page.more = vec![Cards::new((200..206).collect(), false)];
+            r.page.more_foot = foot;
+            r.page.reveal_foot = revealed;
+            r.page.revision += 1;
+            r.go(FIELD_ELEM, By::Dir);
+            r.run(1);
+            r.go(200, By::Dir);
+            r.run(1);
+            (r.stack.target(), r.stack.max_scroll(&r.page, &r.cx()))
+        };
+        let (bare, bare_max) = at(0.0, true);
+        let (kept_out, kept_out_max) = at(22.0, false);
+        let (kept_in, _) = at(22.0, true);
+        assert!(bare > 0.0, "setup: the page scrolls to the shelf");
+        assert_eq!(kept_out, bare, "the foot is not revealed");
+        assert_eq!(kept_in - bare, 22.0, "setup: revealed, the same foot moves the target");
+        assert_eq!(kept_out_max - bare_max, 22.0, "the page still ends 22 px lower, where its content does");
+    }
+
+    /// **A shelf's foot may differ at rest and with its caption band open** (`StackPage::shelf_foot_open`): the
+    /// section below stands the resting foot under a shelf nothing in it has focus in, the open foot under a
+    /// focused one, and the page's settled scroll measures the destination, not the moment.
+    #[test]
+    fn a_shelfs_open_foot_replaces_its_resting_foot_while_a_card_of_it_has_focus() {
+        let mut r = mrig(0, 6, |s| s);
+        r.page.foot = 40.0;
+        r.page.foot_open = Some(30.0);
+        r.page.more = vec![Cards::new((200..206).collect(), false)];
+        r.page.revision += 1;
+        r.go(200, By::Restore);
+        r.run(60);
+        let cx = r.cx();
+        // the flow's own y: the frame's, less the scroll it is drawn under
+        let at_rest = r.stack.shelf_frame(&r.page, &cx, Msec::More(0)).expect("frame").y + r.stack.scroll();
+        r.go(100, By::Dir);
+        r.run(60);
+        let cx = r.cx();
+        let focused = r.stack.shelf_frame(&r.page, &cx, Msec::More(0)).expect("frame").y + r.stack.scroll();
+        // the first shelf's block with the band open and the open foot, against the band shut and the resting one
+        let (shut, open) = (card_row::under_band(0.0) + 40.0, card_row::under_band(1.0) + 30.0);
+        assert!((focused - at_rest - (open - shut)).abs() < 0.05, "the section below moves by the change of the first shelf's band and foot: {}", focused - at_rest);
+        assert_ne!(open - shut, card_row::under_band(1.0) - card_row::under_band(0.0), "setup: the foot's own change shows");
     }
 
     /// **A caption line stops short of the heading DRAWN under it, past a shelf with nothing to

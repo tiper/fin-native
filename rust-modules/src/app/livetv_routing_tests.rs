@@ -366,11 +366,11 @@ fn a_channel_ok_reaches_the_real_content_drain_and_live_playback_request() {
     let mut now = 0;
     open_live(&mut app, &mut now);
     assert!(!plx_media::route::is_live(&app.player.session));
-    assert_eq!(app.pages.focus().map(|k| k.elem), Some(0x1000));
+    assert_eq!(app.pages.focus().map(|k| k.elem), Some(0x1001)); // On now's first poster: the page has no Recent row yet
     let keys = super::script_key(Key::Right, Tick { ms: now + 16, dt_us: 16_000 });
     step(&mut app, &mut now, keys);
     settle(&mut app, &mut now);
-    assert_eq!(app.pages.focus().map(|k| k.elem), Some(0x1002));
+    assert_eq!(app.pages.focus().map(|k| k.elem), Some(0x1003));
     let keys = super::script_key(Key::Ok, Tick { ms: now + 16, dt_us: 16_000 });
     let mut observed = step(&mut app, &mut now, keys);
     // The real press machine commits after the release animation, on a later frame.

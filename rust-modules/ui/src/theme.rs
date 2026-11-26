@@ -42,6 +42,7 @@ const COOL_150: [f32; 4] = rgb8(0xdb, 0xe0, 0xeb);
 const COOL_200: [f32; 4] = rgb8(0xcd, 0xd3, 0xdd);
 const COOL_300: [f32; 4] = rgb8(0xb8, 0xbf, 0xcc);
 const COOL_400: [f32; 4] = rgb8(0x94, 0x99, 0xa3);
+const COOL_825: [f32; 4] = rgb8(0x22, 0x27, 0x2d);
 const COOL_850: [f32; 4] = rgb8(0x1f, 0x21, 0x29);
 const COOL_900: [f32; 4] = rgb8(0x14, 0x17, 0x1c);
 
@@ -50,6 +51,12 @@ const NEUTRAL_650: [f32; 4] = rgb8(0x22, 0x22, 0x24);
 const NEUTRAL_750: [f32; 4] = rgb8(0x1b, 0x1b, 0x1d);
 const NEUTRAL_850: [f32; 4] = rgb8(0x14, 0x14, 0x16);
 const NEUTRAL_950: [f32; 4] = rgb8(0x08, 0x08, 0x0a);
+// Haze — the four corner colours of the Live TV page's ground (the handoff's What's on board:
+// `hsl(205 40% 26%)`, `hsl(228 36% 22%)`, `hsl(190 30% 14%)`, `hsl(262 32% 20%)`).
+const HAZE_TOP_LEFT: [f32; 4] = rgb8(40, 71, 93);
+const HAZE_TOP_RIGHT: [f32; 4] = rgb8(36, 44, 76);
+const HAZE_BOTTOM_LEFT: [f32; 4] = rgb8(25, 43, 46);
+const HAZE_BOTTOM_RIGHT: [f32; 4] = rgb8(47, 35, 67);
 const WHITE: [f32; 4] = rgb8(0xff, 0xff, 0xff);
 const BLACK: [f32; 4] = rgb8(0x00, 0x00, 0x00);
 
@@ -357,6 +364,15 @@ pub mod logo {
     /// The logo's BOTTOM edge sits this far above the card's bottom edge: 12 px clear of the 24 px
     /// footer text line that rides 12 px above the card bottom.
     pub const CARD_BOTTOM_INSET: f32 = 48.0;
+    /// A Live TV channel's logo on its plate ([`CHANNEL_PLATE`](super::CHANNEL_PLATE), 250x140): the
+    /// ink area an ordinary wordmark is sized to. Chosen so a 6.5:1 wordmark reaches the width limit
+    /// and a 2.6:1 mark stands 61 px tall, which is where the handoff's LTV-17 board puts them (its own
+    /// per-logo sizes follow an ink-area measure of each source, which a texture's full size is not).
+    pub const CHANNEL_AREA: f32 = 10_000.0;
+    /// The channel logo's slot is this tall, and no mark is taller (the handoff's 218 x 84 box).
+    pub const CHANNEL_H_MAX: f32 = 84.0;
+    /// ...and this wide: the tile's 250 less 16 px on each side.
+    pub const CHANNEL_W_MAX: f32 = 218.0;
 }
 
 // ── Accent / control ─────────────────────────────────────────────────────────
@@ -786,6 +802,10 @@ pub const CARD_PLACEHOLDER: [f32; 4] = PLACEHOLDER_SENTINEL;
 /// painted identically, but it is ABSENCE, not a wait: the sentinel build leaves it alone, so the
 /// pixel oracle never flags a tile that is correct to show.
 pub const CARD_ABSENT: [f32; 4] = COOL_850;
+/// The plate a Live TV channel's logo stands on (the Live TV handoff's Recent-channel tile, `#22272d`:
+/// the top bar's own tone). A logo is drawn contained on it ([`logo::CHANNEL_AREA`]), so a mark on a
+/// transparent ground reads the same whatever the channel's brand colour is.
+pub const CHANNEL_PLATE: [f32; 4] = COOL_825;
 /// Loading-skeleton gradient — top. The same `COOL_850` stop as [`CARD_PLACEHOLDER`]: a card whose
 /// artwork is on the way and one with none to load are the same object at rest. Both lean BLUE,
 /// away from the neutral panel greys, so a missing poster never reads as a panel. The sentinel
@@ -953,6 +973,13 @@ pub const RAIL_FILL: [f32; 4] = with_a(WHITE, 0.95);
 /// [`ACCENT`] used to be: a page GROUND, never a control. Its own role rather than a borrowed one,
 /// so retuning a focus colour can never silently restyle a page background.
 pub const WASH_WARM: [f32; 4] = SAND_100;
+/// The Live TV page's FIXED ground: the four corner colours of the handoff's ambient haze (top left,
+/// top right, bottom left, bottom right, the order of `AmbientWash`'s corners), each leaned toward at
+/// [`WASH_LIVE_TV_W`] from the app surface (`AmbientWash::target`). It does not follow focus: the page has
+/// no artwork it is about, only channels.
+pub const WASH_LIVE_TV: [[f32; 4]; 4] = [HAZE_TOP_LEFT, HAZE_TOP_RIGHT, HAZE_BOTTOM_LEFT, HAZE_BOTTOM_RIGHT];
+/// How far the Live TV page's ground leans toward each of [`WASH_LIVE_TV`]'s corners: the handoff's 50%.
+pub const WASH_LIVE_TV_W: f32 = 0.5;
 /// Frozen ambient envelope for a route that intentionally appears before Home has fetched any
 /// artwork (Shared Sources).  It is a DESIGN-SYSTEM fallback, not a screen colour: the graphite
 /// and amber stops create the low-frequency wallpaper light of an UltraBlur envelope without

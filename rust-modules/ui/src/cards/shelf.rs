@@ -713,8 +713,8 @@ impl Shelf {
             if !src.loaded(i) {
                 continue;
             }
-            let Some((srv, path, w, h)) = crate::widgets::card_art_request(&src.art(i)) else { continue };
-            if crate::tex::warm_ahead_on(srv, path, w, h, false) != crate::tex::Warm::Known {
+            let Some(q) = crate::widgets::card_art_request(&src.art(i)) else { continue };
+            if crate::tex::warm_ahead_on(q.srv, q.path, q.w, q.h, q.png) != crate::tex::Warm::Known {
                 // claimed (the next tick finds it held and goes on) or refused (try again there)
                 self.warm.walk = Some((key, at));
                 return;

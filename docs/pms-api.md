@@ -1946,8 +1946,8 @@ resource cleanup for this route still require device or server evidence; the off
 sequence above proves only the direct-play route.
 
 The mock server models this whole sequence for tests without a tuner:
-`tests/mock_pms.py --livetv-fixture` (one DVR, two tuners, five channels including an MPEG-2/AC-3
-and an AC-4 one; `--livetv-busy` for no free tuner), pinned by `tests/test_mock_pms_livetv.py`.
+`tests/mock_pms.py --livetv-fixture` (one DVR, two tuners, sixteen channels including an MPEG-2/AC-3
+and an AC-4 one, whose airings began at different times; `--livetv-busy` for no free tuner), pinned by `tests/test_mock_pms_livetv.py`.
 Its busy (503) and live-transcode answers follow the inferences above; they are not captures.
 
 ---

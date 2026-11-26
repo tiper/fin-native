@@ -2159,20 +2159,35 @@
     },
     "description": "Empty collection listing in the selected library"
   },
+  "browse.livetv.whats_on": {
+    "value": "What's on",
+    "description": "Title of the Live TV landing page: the channels you watched recently over the programmes airing now"
+  },
+  "browse.livetv.recent": {
+    "value": "Recent channels",
+    "description": "Live TV section heading for the channels the profile tuned most recently"
+  },
   "browse.livetv.channels": {
     "value": "Channels",
-    "description": "Live TV section heading for the complete channel lineup"
+    "description": "Live TV section heading for the channels that have no programme on now and are not in the profile's recent channels"
   },
   "browse.livetv.on_now": {
-    "value": "On Now",
+    "value": "On now",
     "description": "Live TV section heading for programmes currently airing"
   },
   "browse.livetv.channel": {
-    "value": "Channel {number} · {name}",
-    "description": "Channel identity under a current programme; number and name come from the server",
+    "value": "Ch {number} · {name}",
+    "description": "Channel identity under a current programme, the number first; 'Ch' keeps a bare number from reading as a year. Number and name come from the server",
     "args": {
       "number": "str",
       "name": "str"
+    }
+  },
+  "browse.livetv.recent_on_now": {
+    "value": "On now: {programme}",
+    "description": "Title under a Recent channel's tile while it is focused: the programme airing on that channel now; the programme comes from the guide",
+    "args": {
+      "programme": "str"
     }
   },
   "browse.livetv.loading": {

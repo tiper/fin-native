@@ -354,7 +354,7 @@ class SubjectBearing(unittest.TestCase):
     tools/tv-session.sh's `a11y_subject_bearing` is the same list."""
 
     SUBJECT_IDS = ["home.shelf.2.card.5", "home.continue.card.0", "watchlist.grid.card.7", "library.grid.card.3",
-                   "collection.card.1", "detail.related.card.0", "detail.episodes.still.3", "detail.episodes.text.3",
+                   "collection.card.1", "livetv.recent.card.0", "livetv.on_now.card.4", "detail.related.card.0", "detail.episodes.still.3", "detail.episodes.text.3",
                    "detail.season.2", "filmography.row.4", "catalog.primary", "home.hero.play", "home.hero.info",
                    "home.hero.watchlist", "detail.hero.play", "detail.hero.restart", "detail.hero.trailer",
                    "detail.hero.mark_watched", "detail.hero.mark_unwatched", "detail.hero.watchlist",

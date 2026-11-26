@@ -220,6 +220,7 @@ impl SampleRow {
                 })
                 .hash(h),
             Art::Thumb { sid, key, res } | Art::Person { sid, key, res } => (*sid, *key, res.0, res.1).hash(h),
+            Art::Channel { sid, logo, number, name } => (*sid, *logo, *number, *name).hash(h),
         }
     }
 }

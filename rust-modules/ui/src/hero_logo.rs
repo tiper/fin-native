@@ -29,8 +29,9 @@ use crate::{theme, Painter, Rect};
 use std::os::raw::c_int;
 
 /// Which presence rung a logo is drawn at. Both HEROES share one rung — the "mutual logic for logo
-/// size for all hero" directive — and the pinned compact title is the only other one. A new site
-/// picks a rung; it does not invent bounds.
+/// size for all hero" directive — and every other site has a rung of its own: the pinned compact
+/// title, a Continue Watching deck card, a Live TV channel plate; [`LogoRung::Custom`] is the
+/// interpolated one. A new site picks a rung; it does not invent bounds.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum LogoRung {
     /// The full-bleed hero title band — home's sliding column and the detail page's title block.
@@ -40,6 +41,9 @@ pub enum LogoRung {
     /// A Continue Watching deck card's logo (420x236): baked into the card's composite
     /// (`card_art::compose`) and, when there is no logo, its title in type (`title_text`).
     Card,
+    /// A Live TV channel's logo on its 250x140 plate (`widgets::channel_tile`): drawn contained in a
+    /// 218 x 84 slot centred on the plate, and, when the channel has no logo, its name in type there.
+    Channel,
     /// A continuous point between two named rungs, at `t` (0 = the first, 1 = the second) — never
     /// authored as a constant, always the live output of [`LogoRung::lerp`] driven by a spring or
     /// other per-frame progress value (the detail hero's trailer-preview logo, shrinking from
@@ -83,6 +87,13 @@ impl LogoRung {
                 theme::logo::CARD_W_MAX,
                 theme::size::HEADLINE,
             ),
+            LogoRung::Channel => (
+                theme::logo::CHANNEL_AREA,
+                theme::logo::CHANNEL_H_MAX,
+                theme::logo::CHANNEL_H_MAX,
+                theme::logo::CHANNEL_W_MAX,
+                theme::size::LABEL,
+            ),
             LogoRung::Custom { area, band_h, h_max, w_max, fallback_sz, .. } => (area, band_h, h_max, w_max, fallback_sz),
         }
     }
@@ -118,7 +129,7 @@ impl LogoRung {
     fn descent_share(self) -> f32 {
         match self {
             LogoRung::Hero => 1.0,
-            LogoRung::Compact | LogoRung::Card => 0.0,
+            LogoRung::Compact | LogoRung::Card | LogoRung::Channel => 0.0,
             LogoRung::Custom { descent_share, .. } => descent_share,
         }
     }
@@ -789,5 +800,23 @@ mod tests {
         })
         .1;
         assert_eq!(f, crate::placeholder::Frame::default());
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+
+    /// A channel's mark is contained in the plate's 218 x 84 slot at one ink area, whatever its aspect, and is
+    /// never distorted: a wide wordmark is limited by the width, a tall emblem by the height.
+    #[test]
+    fn a_channel_logo_is_contained_in_its_slot_at_its_own_aspect() {
+        for (w, h) in [(600.0, 100.0), (100.0, 100.0), (60.0, 200.0), (1000.0, 1000.0)] {
+            let (fw, fh) = fit(LogoRung::Channel, w, h, theme::logo::CHANNEL_W_MAX);
+            assert!(fw <= theme::logo::CHANNEL_W_MAX + 0.01 && fh <= theme::logo::CHANNEL_H_MAX + 0.01, "{w}x{h} -> {fw}x{fh}");
+            assert!((fw / fh - w / h).abs() < 1e-3, "{w}x{h} -> {fw}x{fh}: the aspect holds");
+            assert!(fw * fh <= theme::logo::CHANNEL_AREA + 0.5, "{w}x{h}: the area is the rung's");
+        }
+        assert_eq!(fit(LogoRung::Channel, 0.0, 100.0, 218.0), (0.0, 0.0), "no source, no mark");
     }
 }

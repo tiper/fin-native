@@ -105,9 +105,9 @@ listings (`type=3|4`) are ordered by that Title key when it is asked for or no s
 missing) and an air date (some missing). Without it every answer is byte-identical.
 
 `--livetv-fixture` (default off) serves the Live TV surface `docs/pms-api.md` §10 describes, so an app can run
-with no tuner: one DVR (key 7) on a device of two tuners, five channels in an unsorted lineup, a guide that airs
-the half hour `now` falls in on every channel but one, a tune that answers with a live session at
-`/livetv/sessions/<uuid>` and holds a tuner until that session's timeline says `stopped`, the direct-play and the
+with no tuner: one DVR (key 7) on a device of two tuners, sixteen channels (the first five in an unsorted lineup), a
+guide that airs the half hour `now` falls in on four of the first five and airings that began at different times on the
+other eleven, a tune that answers with a live session at `/livetv/sessions/<uuid>` and holds a tuner until that session's timeline says `stopped`, the direct-play and the
 transcode decision of each channel's own codecs, and live playlists that grow and carry no `#EXT-X-ENDLIST`. The
 mock models the protocol, not video: a live segment answers 404 unless `--livetv-segment` (below) names a file.
 `--livetv-busy` is the same with no tuners, so every tune answers 503. With these off, every other answer is
@@ -2999,11 +2999,15 @@ class DiscoverFixture:
 
 # ---------------------------------------------------------------- `--livetv-fixture` ----------
 
+LIVETV_ORIGIN = "http://192.0.2.10:8409"  # the Live TV device and its art (TEST-NET-1: no real host)
+
+
 class LiveTvFixture:
     """Live TV on the mock PMS (`--livetv-fixture`; `docs/pms-api.md` §10, `rust-modules/plex/src/plex/livetv.rs`).
 
-    One DVR (key 7) on one device of two tuners, and five channels in an UNSORTED lineup (the app sorts
-    them by number). The guide airs every channel but one for the half hour `now` falls in. A tune mints
+    One DVR (key 7) on one device of two tuners, and sixteen channels in a lineup whose first five are UNSORTED
+    (the app sorts them by number). The guide airs every channel but one: the first five for the half hour `now`
+    falls in, the other eleven for airings that began at different times (the What's on page orders by that). A tune mints
     a live session at `/livetv/sessions/<uuid>` and holds one tuner until that session's timeline reports
     `stopped`. `MockPms.livetv_handle` answers the routes; this class holds the data and the sessions.
 
@@ -3019,7 +3023,7 @@ class LiveTvFixture:
     DVR_KEY = "7"
     EPG_ID = "tv.plex.providers.epg.xmltv:7"
     LINEUP = "lineup://tv.plex.providers.epg.xmltv/mock#Mock"
-    ORIGIN = "http://192.0.2.10:8409"  # the device and its art (TEST-NET-1: no real host)
+    ORIGIN = LIVETV_ORIGIN
 
     # The lineup, UNSORTED. `airing` is what the guide airs at `now` (None: nothing airs); an episode
     # names its show as `grandparentTitle`.
@@ -3035,6 +3039,27 @@ class LiveTvFixture:
          "video": "h264", "audio": "aac", "airing": None},
         {"id": "C104.245.mock.tv", "vcn": "104", "title": "104 News MPEG-2", "thumb": f"{ORIGIN}/logos/104.png",
          "video": "mpeg2video", "audio": "ac3", "airing": {"type": "movie", "title": "Evening News"}},
+        # Eleven more, so the lineup is a row's worth and then some. Each airing began `ago` minutes before
+        # `now` and runs `mins` minutes, so the guide holds airings that began at all sorts of times (the
+        # first five air the half hour `now` falls in, which is one start time for all of them).
+        *(
+            {"id": f"C{vcn}.{int(vcn) + 141}.mock.tv", "vcn": vcn, "title": f"{vcn} {name}",
+             "thumb": f"{LIVETV_ORIGIN}/logos/{vcn}.png", "video": "h264", "audio": "aac",
+             "airing": {"type": kind, "title": title, "ago": ago, "mins": mins}}
+            for vcn, name, kind, title, ago, mins in (
+                ("106", "Nature World", "movie", "Wild Coasts", 5, 60),
+                ("107", "Documentary Plus", "movie", "Deep Time", 20, 90),
+                ("108", "Kids Zone", "movie", "Puddle Patrol", 12, 30),
+                ("109", "Movie Classics", "movie", "The Long Reel", 47, 120),
+                ("110", "Cooking Hour", "movie", "Quick Suppers", 3, 30),
+                ("111", "Music Mix", "movie", "Live Sessions", 25, 60),
+                ("112", "Drama Series", "movie", "Harbour Lights", 38, 60),
+                ("113", "Science Today", "movie", "Small Worlds", 1, 60),
+                ("114", "Travel Log", "movie", "Rail Journeys", 55, 90),
+                ("115", "Weather Now", "movie", "The Week Ahead", 8, 30),
+                ("116", "Late Show", "movie", "After Hours", 30, 90),
+            )
+        ),
     )
 
     def __init__(self):
@@ -3043,6 +3068,7 @@ class LiveTvFixture:
         self.transcodes = {}  # a transcode session id (the start's `session=`) -> the uuid it serves
         self.segment = None  # `--livetv-segment`: a pathlib.Path, the MPEG-TS file every live segment answers
         self.segment_bytes = None  # that file's bytes, read on the first segment it answers
+        self.anchor = None  # the first "now" the guide was read at: the "ago" airings are measured from it
 
     def channel(self, cid):
         return next((c for c in self.CHANNELS if c["id"] == cid), None)
@@ -3064,17 +3090,30 @@ class LiveTvFixture:
     def grid(self, now):
         """The `Metadata` rows of `GET /{epgIdentifier}/grid` at `now`: one airing per channel that has one,
         on the half hour `now` falls in (`beginsAt` is that half hour, `endsAt` the next one)."""
-        begins = now - now % 1800
+        half = now - now % 1800
         rows = []
         for c in self.CHANNELS:
             airing = c["airing"]
             if airing is None:
                 continue
+            # An airing that names `ago` and `mins` began that many minutes before the FIRST `now` this fixture
+            # was asked about and runs `mins` minutes, then the next programme of the same length follows, so a
+            # long session sees programmes end and move on as a real guide does; the rest air the half hour.
+            if "ago" in airing:
+                if self.anchor is None:
+                    self.anchor = now
+                length = airing["mins"] * 60
+                begins = self.anchor - airing["ago"] * 60
+                begins += max(0, (now - begins) // length) * length
+                ends = begins + length
+            else:
+                begins = half
+                ends = begins + 1800
             thumb = f"{self.ORIGIN}/art/{c['vcn']}.jpg"
             row = {"ratingKey": f"mock-airing-{c['vcn']}-{begins}", "type": airing["type"],
                    "title": airing["title"], "thumb": thumb, "onAir": True,
                    "Media": [{"channelVcn": c["vcn"], "channelIdentifier": c["id"], "protocol": "livetv",
-                              "beginsAt": begins, "endsAt": begins + 1800, "onAir": True}]}
+                              "beginsAt": begins, "endsAt": ends, "onAir": True}]}
             if "grandparentTitle" in airing:
                 row.update(grandparentTitle=airing["grandparentTitle"], grandparentThumb=thumb)
             rows.append(row)
@@ -5753,7 +5792,7 @@ def main():
                          "a real PMS offers (seeded library only), for the value-sort rail's band "
                          "probes. Default off: every other answer is byte-identical")
     ap.add_argument("--livetv-fixture", action="store_true",
-                    help="Live TV for the mock: one DVR (key 7, two tuners) with five channels, a guide, tune "
+                    help="Live TV for the mock: one DVR (key 7, two tuners) with sixteen channels, a guide, tune "
                          "sessions and growing live playlists (LiveTvFixture; module doc). Default off: every "
                          "other answer is byte-identical")
     ap.add_argument("--livetv-busy", action="store_true",

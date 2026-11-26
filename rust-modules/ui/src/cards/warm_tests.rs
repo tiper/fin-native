@@ -174,8 +174,8 @@ impl Rig {
         for i in 0..self.src.len() {
             let x = STYLE.margin_x + i as f32 * pitch - self.shelf.scroll();
             if crate::on_axis(x, STYLE.w, crate::consts::SCR_W, 0.0) {
-                let (srv, path, w, h) = widgets::card_art_request(&self.src.art(i)).unwrap();
-                tex::resolve_wh_on(srv, path, w, h, false);
+                let q = widgets::card_art_request(&self.src.art(i)).unwrap();
+                tex::resolve_wh_on(q.srv, q.path, q.w, q.h, q.png);
             }
         }
     }

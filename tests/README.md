@@ -51,10 +51,10 @@ not a private fixture list. Expected outcomes: **SAME=4, REFUSED_EXPECTED=8, une
 
 - Current, graded in full in each mode (raw exit 0, exactly one SAME, all eight difference counters
   zero): `v13-owned-input-content`, the V13 Flow 12 producer's typed Filmography -> Detail -> Back ->
-  Back flow, 609 frames; and `13-by-id-filmography`, the same controlled domain driven by the
+  Back flow; and `13-by-id-filmography`, the same controlled domain driven by the
   harness's by-id tokens (`focus:`/`press:` -> one typed `ById` input, resolved by the `Id`
-  resolution row), 785 frames. Both are anchors; their frame counts are pinned by
-  `tests/test_replay_fixtures.py`'s census. Any current refusal, including a historical scheduler
+  resolution row). Both are anchors; their frame counts are pinned by
+  `tests/test_replay_fixtures.py`'s census and move every time an anchor is re-recorded. Any current refusal, including a historical scheduler
   reason, fails the gate.
 - Historical, immutable, each REFUSED in both modes (raw exit 1) with the exact early typed reason
   `incompatible owner-input/presentation state; requires V13 capture`, before any graded frame:

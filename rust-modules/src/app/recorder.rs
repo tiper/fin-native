@@ -2866,7 +2866,11 @@ mod tests {
         // `ProductResolutionV2` (the by-id `Id` resolution row, a11y-ids D6) moves the full census
         // from 0xea74_3865_5115_46c5, which `the_pre_content_navigation_recording_shape_is_refused`
         // keeps refused at the shape boundary like every older value.
-        assert_eq!(state_fp(), 0x7410_4747_8858_9e13, "current V13 producer census");
+        // The What's on page: the Live TV screen's shape lists its Recent channels (moved from 0x7410_4747_8858_9e13).
+        // The Channels shelf keeps every channel reachable: the Live TV stack has three shelves (moved from 0x2808_f237_5764_68bd).
+        assert_eq!(state_fp(), 0xb985_c4dc_d4a9_4e97, "current V13 producer census");
+        assert_ne!(state_fp(), 0x2808_f237_5764_68bd, "the census before the Channels shelf");
+        assert_ne!(state_fp(), 0x7410_4747_8858_9e13, "the census before the What's on page");
         assert_ne!(state_fp(), 0x7f1d_280c_909c_8603, "the census before Filmography's Watchlist menu");
         assert_ne!(state_fp(), 0xea74_3865_5115_46c5, "the census without the `Id` resolution row");
         assert_ne!(state_fp(), 0x3ed9_2e0f_25bd_7f8e, "V12 cannot describe captured positive-swap presentation inputs");
