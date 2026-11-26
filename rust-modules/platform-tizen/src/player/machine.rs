@@ -151,6 +151,10 @@ struct Pending {
     /// The native index an audio or subtitle request asked for, which its `PLAYER_TRACK` must echo; `None` for every
     /// other control.
     native: Option<i64>,
+    /// The unanswered subtitle requests this one superseded ([`supersede_subtitle`]), held until its verb has gone out:
+    /// a verb the host refuses ([`Machine::verb_refused`]) puts them back, so a refused request supersedes nothing. Empty
+    /// for every other control.
+    superseded: Vec<Pending>,
 }
 
 /// ISO 639-2's codes that name no language: a track tagged with one cannot be told apart by its language.
@@ -241,6 +245,17 @@ fn note(out: &mut VecDeque<DriverEvent>, attempt: AttemptId, observation: Observ
 
 fn observed<T>(value: T) -> Observed<T> {
     Observed { value, from: EvidenceSource::BackendReport }
+}
+
+/// Take every unanswered subtitle request out of the controls: a newer one was accepted ([`Machine::select_subtitle`]),
+/// and the contract completes only the newer. The host's answer to one taken out matches no control and is ignored. The
+/// caller holds them on the newer request until its verb has gone out ([`Pending::superseded`]). Their own held requests
+/// were superseded by verbs that did go out, so those are dropped.
+fn supersede_subtitle(active: &mut Active) -> Vec<Pending> {
+    let (superseded, kept) = std::mem::take(&mut active.controls).into_iter().partition(|control|
+        matches!(control.operation, Operation::SelectTrack { kind: TrackKind::Subtitle, .. }));
+    active.controls = kept;
+    superseded.into_iter().map(|control| Pending { superseded: Vec::new(), ..control }).collect()
 }
 
 /// The pure step of the Tizen URI driver.
@@ -389,7 +404,10 @@ impl Machine {
                 None
             }
             Verb::Play | Verb::Pause | Verb::Seek { .. } | Verb::AudioTrack { .. } | Verb::TextTrack { .. } => {
-                active.controls.pop();
+                // A refused subtitle request supersedes nothing: the requests it took out are pending again.
+                if let Some(refused) = active.controls.pop() {
+                    active.controls.extend(refused.superseded);
+                }
                 Some(DispatchResult::Refused(refusal.failure()))
             }
         }
@@ -425,7 +443,7 @@ impl Machine {
             _ => return DispatchResult::Refused(Failure::Unsupported),
         };
         active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms),
-            native: None });
+            native: None, superseded: Vec::new() });
         fx.push(Fx::Verb { epoch: active.epoch, verb });
         DispatchResult::Queued
     }
@@ -472,7 +490,7 @@ impl Machine {
         let Ok(command_word) = i64::try_from(command.get()) else { return DispatchResult::Refused(Failure::Unsupported) };
         let operation = Operation::SelectTrack { kind: TrackKind::Audio, choice };
         active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms),
-            native: Some(index) });
+            native: Some(index), superseded: Vec::new() });
         fx.push(Fx::Verb { epoch: active.epoch, verb: Verb::AudioTrack { index, command: command_word } });
         DispatchResult::Queued
     }
@@ -482,6 +500,14 @@ impl Machine {
     /// stream is ([`choose_native_track`]; a Part's sole subtitle stream needs no language), and settled on the host's
     /// `PLAYER_TRACK` ([`CAPS`]). A stream the map does not name, or whose native track cannot be told, is `Unsupported`
     /// and logged.
+    ///
+    /// An accepted request SUPERSEDES a subtitle request the host has not answered yet (the contract lets a second
+    /// `SelectTrack` go out while the first is pending, and completes only the newer): the older one is forgotten, so its
+    /// late `PLAYER_TRACK` neither makes its track the captioned one nor reports it selected. The host answers verbs in
+    /// order, so after a newer pick the native track is the newer one's; after Off it may be the older one's, which draws
+    /// nothing, since the app no longer takes its cues. A refused request supersedes nothing, whether this step refuses it
+    /// or the host refuses its verb: the superseded requests ride on the newer one until its verb has gone out, and a
+    /// refused verb puts them back ([`Machine::verb_refused`]), with their own deadlines.
     pub fn select_subtitle(&mut self, now_ms: u64, attempt: AttemptId, command: CommandId, choice: TrackChoice,
         fx: &mut Vec<Fx>) -> DispatchResult {
         let Some(active) = self.active.as_mut().filter(|a| a.attempt == attempt) else {
@@ -492,6 +518,8 @@ impl Machine {
         }
         let id = match choice {
             TrackChoice::Off => {
+                // Off asks nothing of the host, so nothing can refuse it: what it supersedes is retired at once.
+                drop(supersede_subtitle(active));
                 active.captioned = None;
                 self.pending.push_back(DriverEvent::TrackSettled { attempt, command, kind: TrackKind::Subtitle, choice });
                 return DispatchResult::Queued;
@@ -522,8 +550,9 @@ impl Machine {
         }
         let Ok(command_word) = i64::try_from(command.get()) else { return DispatchResult::Refused(Failure::Unsupported) };
         let operation = Operation::SelectTrack { kind: TrackKind::Subtitle, choice };
+        let superseded = supersede_subtitle(active);
         active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms),
-            native: Some(index) });
+            native: Some(index), superseded });
         fx.push(Fx::Verb { epoch: active.epoch, verb: Verb::TextTrack { index, command: command_word } });
         DispatchResult::Queued
     }

@@ -435,6 +435,9 @@ A selected EMBEDDED text subtitle (SubRip or ASS) is drawn by the app from the h
   cues before the events it settles: the host selects before it answers, so a cue then may already be the new track's, and it is dropped
   rather than drawn as the old one's (the first cue or so of the new track can be lost).
   Picking Off, or another track, from the track menu reaches the driver (`app::playback::commit_track`); only a refused pick re-resolves.
+  An accepted Off or pick supersedes a pick the host has not answered yet, as the contract allows: the late answer to the older one
+  settles nothing and makes no track the captioned one, so Off picked during a switch stays off. A pick that is refused, by the driver or
+  by the host's queue refusing its verb, supersedes nothing: the earlier pick is pending again, and settles or times out as before.
 - **How cues flow.** The host registers `player_set_subtitle_updated_cb` ONCE, at `PREPARED`, for a source with a text track (registration
   in READY is what was measured; registering in PLAYING was not, so a mid-play pick after a start with subtitles Off finds the callback
   already there), posts cues only once a text track was answered, and hands every cue to the library through the fourth export,

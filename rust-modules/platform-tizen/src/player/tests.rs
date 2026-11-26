@@ -1337,6 +1337,81 @@ fn a_cue_raised_while_a_subtitle_switch_is_unanswered_is_never_the_old_tracks() 
     assert_eq!(captions(&mut driver), [(12, 8_000, 1_500, "FRENCH 04".to_owned())]);
 }
 
+/// **A newer subtitle request supersedes an unanswered one** (final review of #1575). The contract lets a second
+/// `SelectTrack` go out while the first is pending, and only the newer one completes. So Off, picked while the host has not
+/// yet answered a pick, turns the cues off for good: the stale `PLAYER_TRACK` that follows neither makes that track the
+/// captioned one nor reports it selected. A newer pick supersedes the same way, and only ITS answer settles.
+#[test]
+fn off_or_a_newer_pick_supersedes_an_unanswered_subtitle_pick() {
+    let (mut driver, fake) = rig();
+    let (a, epoch) = prepared_with_subtitles(&mut driver, &fake, &["fr", "en"]);
+    // English (native 1) is asked; before the host answers, the viewer picks Off.
+    assert_eq!(dispatch(&mut driver, a, 2, pick_sub(11)), DispatchResult::Queued);
+    let off_pick = Operation::SelectTrack { kind: TrackKind::Subtitle, choice: TrackChoice::Off };
+    assert_eq!(dispatch(&mut driver, a, 3, off_pick), DispatchResult::Queued);
+    assert_eq!(poll(&mut driver), [DriverEvent::TrackSettled { attempt: a, command: cmd(3), kind: TrackKind::Subtitle,
+        choice: TrackChoice::Off }]);
+    // The host's late answer to the English pick, then English cues.
+    fake.post(epoch, PlayerKind::Track, 2, 1);
+    assert!(poll(&mut driver).is_empty(), "the superseded pick neither settles nor reports a selection");
+    fake.with(|s| s.cues.push(cue(epoch, 2_000, 1_500, "ENGLISH 01")));
+    poll(&mut driver);
+    assert!(captions(&mut driver).is_empty(), "Off stays off: no caption of the superseded track");
+
+    // English, then French before English is answered: only French's answer settles, and its cues are French.
+    assert_eq!(dispatch(&mut driver, a, 4, pick_sub(11)), DispatchResult::Queued);
+    assert_eq!(dispatch(&mut driver, a, 5, pick_sub(12)), DispatchResult::Queued);
+    fake.post(epoch, PlayerKind::Track, 4, 1);
+    assert!(poll(&mut driver).is_empty(), "the superseded English pick reports nothing");
+    fake.post(epoch, PlayerKind::Track, 5, 0);
+    assert_eq!(poll(&mut driver), [
+        observation(a, Observation::TrackSelected(seen(SUB_FR))),
+        DriverEvent::TrackSettled { attempt: a, command: cmd(5), kind: TrackKind::Subtitle, choice: TrackChoice::Selected(12) },
+    ]);
+    fake.with(|s| s.cues.push(cue(epoch, 4_000, 1_500, "FRENCH 02")));
+    poll(&mut driver);
+    assert_eq!(captions(&mut driver), [(12, 4_000, 1_500, "FRENCH 02".to_owned())]);
+}
+
+/// **A pick the HOST refuses supersedes nothing** (review of #1579). The newer pick's `TextTrack` verb can be refused by the
+/// host's queue (Busy, Stale, Args); the older pick is then still the one the contract holds pending, so it must still
+/// settle (or time out) on the host's answer, and no cue is handed over while it is unanswered.
+#[test]
+fn a_pick_whose_verb_the_host_refuses_leaves_the_earlier_pick_pending() {
+    for answer in [true, false] {
+        let (mut driver, fake) = rig();
+        let (a, epoch) = prepared_with_subtitles(&mut driver, &fake, &["fr", "en"]);
+        // French (native 0) is the settled track.
+        assert_eq!(dispatch(&mut driver, a, 2, pick_sub(12)), DispatchResult::Queued);
+        fake.post(epoch, PlayerKind::Track, 2, 0);
+        poll(&mut driver);
+        // English (native 1) is asked; a pick of French again is then refused by the host's queue.
+        assert_eq!(dispatch(&mut driver, a, 3, pick_sub(11)), DispatchResult::Queued);
+        fake.with(|s| s.refuse_verb = Some(Refusal::Busy));
+        assert_eq!(dispatch(&mut driver, a, 4, pick_sub(12)), DispatchResult::Refused(Failure::Busy));
+        fake.with(|s| s.refuse_verb = None);
+        // The player already raises English cues: with English unanswered none is handed over as French's.
+        fake.with(|s| s.cues.push(cue(epoch, 1_000, 1_500, "ENGLISH 00")));
+        assert!(poll(&mut driver).is_empty());
+        assert!(captions(&mut driver).is_empty(), "no cue while the earlier pick is unanswered (answer: {answer})");
+        if answer {
+            fake.post(epoch, PlayerKind::Track, 3, 1);
+            assert_eq!(poll(&mut driver), [
+                observation(a, Observation::TrackSelected(seen(SUB_EN))),
+                DriverEvent::TrackSettled { attempt: a, command: cmd(3), kind: TrackKind::Subtitle,
+                    choice: TrackChoice::Selected(11) },
+            ], "the earlier pick still settles");
+            fake.with(|s| s.cues.push(cue(epoch, 2_000, 1_500, "ENGLISH 01")));
+            poll(&mut driver);
+            assert_eq!(captions(&mut driver), [(11, 2_000, 1_500, "ENGLISH 01".to_owned())]);
+        } else {
+            fake.advance(TIMING.control_timeout_ms);
+            assert_eq!(poll(&mut driver), [DriverEvent::ControlRefused { attempt: a, command: cmd(3),
+                operation: pick_sub(11), failure: Failure::TimedOut }], "the earlier pick still times out");
+        }
+    }
+}
+
 /// The subtitle's native track is told by its language exactly as an audio stream's is: a language no native TEXT track
 /// reports, or two that do with the ordinal not among them, is refused before the host is asked.
 #[test]
