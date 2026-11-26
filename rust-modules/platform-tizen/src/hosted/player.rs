@@ -12,25 +12,30 @@
 //!
 //! Single consumer: [`PlayerLink::drain`] is called from the loop thread. Producers are any thread
 //! (`plx_host_post`). Nothing here blocks beyond one short mutex.
-use crate::host_abi::{self, PlayerEvent, PlayerKind};
+use crate::host_abi::{self, HostCue, PlayerEvent, PlayerKind};
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
 /// How many player events wait for the loop thread. A playing player makes a few events a second (positions and
-/// buffering are coalesced to one each); its one burst is at PREPARED, when the host posts every native audio track's
-/// language ([`host_abi::AUDIO_LANGUAGE_REPORTS`] at most) and then PREPARED, VIDEO_SIZE and the answers held for it
-/// ([`PREPARED_BURST_EVENTS`]) before the loop has drained anything. The bound holds that burst with room to spare
-/// (asserted below), so it is only reached when the loop is not draining; a lossless event that does not fit is an
-/// overflow the driver must treat as a fault.
-const PLAYER_QUEUE_LIMIT: usize = 64;
+/// buffering are coalesced to one each); its one burst is at PREPARED, when the host posts every native audio and text
+/// track's language ([`host_abi::AUDIO_LANGUAGE_REPORTS`] and [`host_abi::TEXT_LANGUAGE_REPORTS`] at most) and then
+/// PREPARED, VIDEO_SIZE and the answers held for it ([`PREPARED_BURST_EVENTS`]) before the loop has drained anything. The
+/// bound holds that burst with room to spare (asserted below), so it is only reached when the loop is not draining; a
+/// lossless event that does not fit is an overflow the driver must treat as a fault.
+const PLAYER_QUEUE_LIMIT: usize = 128;
 
 /// The events other than the languages the host can post in its PREPARED burst: a held track's and a held seek's
 /// answers, PREPARED, VIDEO_SIZE, STARTED (a play held for PREPARED), and one coalesced BUFFERING and POSITION, with
 /// room for an answer folded from more than one held command.
 const PREPARED_BURST_EVENTS: usize = 12;
 
-const _: () = assert!(host_abi::AUDIO_LANGUAGE_REPORTS + PREPARED_BURST_EVENTS < PLAYER_QUEUE_LIMIT,
-    "the PREPARED burst must fit the player queue");
+const _: () = assert!(host_abi::AUDIO_LANGUAGE_REPORTS + host_abi::TEXT_LANGUAGE_REPORTS + PREPARED_BURST_EVENTS
+    < PLAYER_QUEUE_LIMIT, "the PREPARED burst must fit the player queue");
+
+/// How many subtitle cues wait for the loop thread. The player raises about two a second at most (a cue and the empty
+/// one that ends it), and the loop drains every frame, so the bound is only reached when the loop is not draining. A cue
+/// that does not fit is dropped and counted: it is a subtitle missed, never a fault of the player.
+const CUE_QUEUE_LIMIT: usize = 32;
 
 /// How many epochs are tracked as live at once. The driver opens one at a time and waits for its close; the
 /// bound only keeps a host that never reports `PLAYER_CLOSED` from growing the list.
@@ -50,6 +55,10 @@ struct Inner {
     events: VecDeque<PlayerEvent>,
     overflowed: bool,
     stale: usize,
+    /// The cues of live epochs, on a queue of their own ([`CUE_QUEUE_LIMIT`]).
+    cues: VecDeque<HostCue>,
+    /// Cues dropped for a full cue queue since the last drain.
+    cues_dropped: usize,
 }
 
 pub struct PlayerLink {
@@ -58,7 +67,8 @@ pub struct PlayerLink {
 
 impl PlayerLink {
     pub const fn new() -> Self {
-        Self { inner: Mutex::new(Inner { live: Vec::new(), events: VecDeque::new(), overflowed: false, stale: 0 }) }
+        Self { inner: Mutex::new(Inner { live: Vec::new(), events: VecDeque::new(), overflowed: false, stale: 0,
+            cues: VecDeque::new(), cues_dropped: 0 }) }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -111,6 +121,29 @@ impl PlayerLink {
         Ok(())
     }
 
+    /// Queue the host's cue, or say why not: [`host_abi::E_STALE`] for an epoch that is not live, [`host_abi::E_FULL`]
+    /// for a cue queue that has no room (the cue is dropped and counted; nothing else is touched).
+    pub fn accept_cue(&self, cue: HostCue) -> Result<(), i32> {
+        let mut inner = self.lock();
+        if !inner.live.contains(&cue.epoch) {
+            inner.stale += 1;
+            return Err(host_abi::E_STALE);
+        }
+        if inner.cues.len() >= CUE_QUEUE_LIMIT {
+            inner.cues_dropped += 1;
+            return Err(host_abi::E_FULL);
+        }
+        inner.cues.push_back(cue);
+        Ok(())
+    }
+
+    /// Hand over every queued cue, in order, and how many were dropped for a full queue since the last call. Loop thread.
+    pub fn drain_cues(&self, out: &mut Vec<HostCue>) -> usize {
+        let mut inner = self.lock();
+        out.extend(inner.cues.drain(..));
+        std::mem::take(&mut inner.cues_dropped)
+    }
+
     /// Hand over everything queued, in order. Loop thread.
     pub fn drain(&self, out: &mut Vec<PlayerEvent>) -> Drained {
         let mut inner = self.lock();
@@ -128,6 +161,35 @@ impl Default for PlayerLink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cue(epoch: u32, text: &str) -> HostCue {
+        HostCue { epoch, position_ms: 2_000, duration_ms: 1_500, text: text.to_owned() }
+    }
+
+    /// **Cues have a queue of their own**: a cue of a live epoch is kept in order, a cue of an epoch that is not live is
+    /// stale, and a full cue queue drops the cue and counts it while the player's own events are untouched (a subtitle
+    /// missed is never an overflow that fails the attempt).
+    #[test]
+    fn cues_queue_apart_from_the_player_events_and_a_full_queue_only_drops_cues() {
+        let link = PlayerLink::new();
+        assert_eq!(link.accept_cue(cue(1, "never opened")), Err(host_abi::E_STALE));
+        link.opened(1);
+        for n in 0..CUE_QUEUE_LIMIT {
+            assert_eq!(link.accept_cue(cue(1, &format!("cue {n}"))), Ok(()));
+        }
+        assert_eq!(link.accept_cue(cue(1, "one too many")), Err(host_abi::E_FULL));
+        assert_eq!(link.accept(PlayerEvent { epoch: 1, kind: PlayerKind::Completed, a: 0, b: 0 }), Ok(()));
+        let mut cues = Vec::new();
+        assert_eq!(link.drain_cues(&mut cues), 1, "the dropped cue is counted");
+        assert_eq!(cues.len(), CUE_QUEUE_LIMIT);
+        assert_eq!(cues[0].text, "cue 0");
+        let mut events = Vec::new();
+        assert!(!link.drain(&mut events).overflowed, "a full cue queue is no overflow of the player events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(link.drain_cues(&mut cues), 0, "the count is reset by the drain");
+        assert_eq!(link.accept(PlayerEvent { epoch: 1, kind: PlayerKind::Closed, a: 0, b: 0 }), Ok(()));
+        assert_eq!(link.accept_cue(cue(1, "after the close")), Err(host_abi::E_STALE), "a closed epoch's cue is stale");
+    }
 
     fn ev(epoch: u32, kind: PlayerKind, a: i64) -> PlayerEvent {
         PlayerEvent { epoch, kind, a, b: 0 }
@@ -206,7 +268,7 @@ mod tests {
         );
     }
 
-    /// The PREPARED burst fits: the host posts every native audio track's language (up to the cap) and then PREPARED,
+    /// The PREPARED burst fits: the host posts every native audio and text track's language (up to each cap) and then PREPARED,
     /// VIDEO_SIZE and the answers held for PREPARED in one go, before the loop drains anything (review round 2 of #1566).
     #[test]
     fn the_prepared_burst_fits_the_queue() {
@@ -214,6 +276,9 @@ mod tests {
         link.opened(1);
         for index in 0..host_abi::AUDIO_LANGUAGE_REPORTS {
             assert_eq!(link.accept(ev(1, PlayerKind::AudioLanguage, index as i64)), Ok(()));
+        }
+        for index in 0..host_abi::TEXT_LANGUAGE_REPORTS {
+            assert_eq!(link.accept(ev(1, PlayerKind::TextLanguage, index as i64)), Ok(()));
         }
         let others = [PlayerKind::Track, PlayerKind::SeekDone, PlayerKind::Prepared, PlayerKind::VideoSize,
             PlayerKind::Started, PlayerKind::Buffering, PlayerKind::Position];
@@ -223,7 +288,7 @@ mod tests {
         }
         let mut out = Vec::new();
         assert!(!link.drain(&mut out).overflowed);
-        assert_eq!(out.len(), host_abi::AUDIO_LANGUAGE_REPORTS + others.len());
+        assert_eq!(out.len(), host_abi::AUDIO_LANGUAGE_REPORTS + host_abi::TEXT_LANGUAGE_REPORTS + others.len());
     }
 
     /// A lossless event that does not fit is an overflow the drain reports (never a silent drop); a full

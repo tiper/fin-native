@@ -189,9 +189,12 @@ class TextParsers(unittest.TestCase):
     def test_header_functions_are_the_declarations_only(self):
         self.assertEqual(checker.header_functions(HEADER), ["plx_host_start", "plx_host_post", "plx_host_stop"])
 
-    def test_the_real_header_has_three_functions_and_two_tables(self):
+    def test_the_real_header_has_four_functions_and_three_structs(self):
         real = (HERE.parent / "rust-modules/platform-tizen/include/plx_host.h").read_text()
-        self.assertEqual(checker.header_functions(real), ["plx_host_start", "plx_host_post", "plx_host_stop"])
+        self.assertEqual(checker.header_functions(real), ["plx_host_start", "plx_host_post", "plx_host_post_cue", "plx_host_stop"])
+        self.assertEqual(checker.header_struct_names(real), ["PlxHostApi", "PlxHostEvent", "PlxHostCue"])
+        self.assertEqual([n for _, n in checker.header_struct(real, "PlxHostCue")],
+                         ["size", "epoch", "position_ms", "duration_ms", "text", "len", "reserved"])
         self.assertEqual([n for _, n in checker.header_struct(real, "PlxHostApi")],
                          ["size", "abi_version", "flags", "reserved", "on_stopped", "run_on_host", "player_open", "player_verb"])
         self.assertEqual(checker.header_defines(real)["PLX_HOST_E_FULL"], -6)
@@ -216,6 +219,15 @@ class TextParsers(unittest.TestCase):
 
     def test_abi_agrees(self):
         self.assertEqual(checker.check_abi(HEADER, CSHARP), [])
+
+    def test_a_cue_struct_that_drifts_from_the_header_is_named(self):
+        """The cue (plx_host_post_cue) is marshalled by value like the event: a field the host lays out differently fails the check."""
+        real = (HERE.parent / "rust-modules/platform-tizen/include/plx_host.h").read_text()
+        host = (HERE.parent / "tizen/host/PlxHost/Program.cs").read_text()
+        drifted = host.replace("public uint Len;", "public int Len;")
+        self.assertNotEqual(drifted, host)
+        problems = checker.check_abi(real, drifted)
+        self.assertTrue(any("PlxHostCue" in p for p in problems), problems)
 
     def test_abi_names_a_changed_signature(self):
         problems = checker.check_abi(HEADER.replace("void plx_host_stop(void);", "void plx_host_stop(int code);"), CSHARP)

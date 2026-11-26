@@ -1,8 +1,8 @@
 # mk/platform-tizen.mk -- the Tizen (Samsung television) build. `include`d by the Makefile ONLY when PLATFORM=tizen, so the default
 # `make` and `make -n` for webOS never read this file (`make -n` is byte-identical with and without it: docs/tizen.md, "Verifying that").
 #
-# WHAT IT BUILDS. A shared object, `libplx.so`, that the .NET host (tizen/host/PlxHost/) loads and drives through three C exports
-# (`plx_host_start`, `plx_host_post`, `plx_host_stop`: rust-modules/platform-tizen/include/plx_host.h), and the signed `.tpk` that
+# WHAT IT BUILDS. A shared object, `libplx.so`, that the .NET host (tizen/host/PlxHost/) loads and drives through the C exports
+# its header declares (the `plx_host_*` functions of rust-modules/platform-tizen/include/plx_host.h), and the signed `.tpk` that
 # carries both. The library is the platform crate `plx_platform_tizen` as a cargo STATICLIB (`cargo rustc --crate-type staticlib`,
 # the crate itself stays an rlib: ci/test_no_host_staticlib.py), linked by the host C compiler with `--whole-archive` together with
 # `svg.o` (the nanosvg rasterizer the UI's icons use) and a STATIC SDL2 + SDL2_ttf built from the pins in ci/dependencies.json
@@ -101,7 +101,7 @@ TIZEN_CARGO_ENV    = env -u PLX_SENTRY_DSN -u PLX_SENTRY_DSN_DEV -u PLX_POSTHOG_
 .PHONY: tizen-abi tizen-check tizen-sdl tizen-libass tizen-so tizen-verify tizen-stage tizen-signing tizen-tpk tizen-tpk-nightly print-tizen-config
 .DEFAULT_GOAL := tizen-check
 
-# The three exports the .NET host calls, from the header, and the C# DllImport list and callback table checked against it. Text only.
+# The header's `plx_host_*` exports the .NET host calls, and the C# DllImport list and callback table checked against it. Text only.
 tizen-abi:
 	python3 ci/check-tizen-so.py abi --header $(TIZEN_HEADER) --host-cs $(TIZEN_HOST_CS)
 
@@ -136,13 +136,13 @@ $(TIZEN_BUILD)/getauxval.o: src/compat/getauxval.c
 	$(TIZEN_CC) $(TIZEN_CFLAGS) -c $< -o $@ -O2 -fPIC
 
 # The library's export list: the header's `plx_host_*` functions and nothing else (`local: *`). WITHOUT it every symbol of the whole-archived
-# staticlib would be exported, and `--exclude-libs ALL` would hide the three the host needs.
+# staticlib would be exported, and `--exclude-libs ALL` would hide the ones the host needs.
 $(TIZEN_MAP): $(TIZEN_HEADER) ci/check-tizen-so.py
 	mkdir -p $(TIZEN_BUILD)
 	python3 ci/check-tizen-so.py map --header $(TIZEN_HEADER) --out $@
 
 # `-z defs`: an undefined symbol fails THIS link, not `dlopen` on the emulator (the library is loaded BIND_NOW). `--gc-sections` from the
-# three exported roots drops the code the platform never reaches before the undefined-symbol check, as rustc does for a cdylib.
+# exported `plx_host_*` roots drops the code the platform never reaches before the undefined-symbol check, as rustc does for a cdylib.
 # `--as-needed` keeps DT_NEEDED to what the link truly uses. SDL's archives precede their dependencies; the system libraries come last.
 # The result is written beside its name and renamed, so a failed link never leaves a half-written libplx.so for `tizen-verify` to read.
 tizen-so: tizen-sdl tizen-libass $(TIZEN_BUILD)/svg.o $(TIZEN_COMPAT_OBJ) $(TIZEN_MAP)

@@ -728,9 +728,12 @@ pub(crate) fn commit_track(
         // (`route::commit_subtitle_and_sidecar`): the sidecar policy lives beside the track memory's.
         TrackCommit::Subtitle { render_ordinal, stream_id, sidecar_key, sidecar_codec, memo } => {
             if ps.attempt_view().backend() == Some(plx_media::player::attempt_view::Backend::Uri) {
-                if render_ordinal < 0 || sidecar_key.is_some()
+                // Off names no native track: a driver that hands its cues to the app carries it (`select_uri_subtitle`:
+                // the app no longer draws them), and only a refusal re-resolves it. Any other driver re-resolves Off.
+                let off = stream_id == 0 && sidecar_key.is_none() && pa.uri_delivers_captions();
+                if (!off && (render_ordinal < 0 || sidecar_key.is_some()
                     || pa.uri_maps_track(ps, plx_playback_contract::TrackKind::Subtitle,
-                        stream_id) == Some(false)
+                        stream_id) == Some(false)))
                     || !pa.commit_subtitle_track(ps, render_ordinal, stream_id,
                         sidecar_key.clone(), sidecar_codec.clone(), memo.clone()) {
                     let mode = if stream_id == 0 { plx_media::route::SubMode::Off }
@@ -2251,4 +2254,39 @@ fn perform_skip_prompt(player: &mut plx_media::player::machine::Player,
                 }
             }
 
+}
+
+#[cfg(test)]
+mod uri_subtitle_off_tests {
+    //! **Off on a URI driver that hands its cues to the app** (the Tizen driver). The track menu commits Off as
+    //! `render_ordinal: -1, stream_id: 0`; `commit_track` must hand it to the driver (`select_uri_subtitle`, where Off
+    //! is the app no longer drawing the cues), not to the re-resolve door, which refuses it on a qualifier that
+    //! cannot carry a source track change and leaves the subtitle drawing.
+    use plx_appkit::track_menu::TrackCommit;
+    use plx_playback_contract::uri::NativeTrackIndex;
+    use plx_playback_contract::{Capabilities, Operation, TrackChoice, TrackKind, TrackSelection};
+
+    const CAPTIONING: Capabilities = Capabilities { progressive_uri: true, hls_uri: false, packet_feed: false,
+        pause: true, seek: true, audio_track: true, subtitle_track: true, audio_off: false, subtitle_off: true };
+
+    #[test]
+    fn off_on_a_captioning_uri_driver_is_asked_of_the_driver_not_re_resolved() {
+        let _serial = plx_base::testlock::serial();
+        let subtitle = TrackSelection { kind: TrackKind::Subtitle, id: 77 };
+        let (mut ps, mut pa, handle, route) = plx_media::player::adapter::open_fake_uri_for_test(CAPTIONING,
+            vec![NativeTrackIndex { selection: subtitle, index: 0 }]);
+        handle.set_delivers_captions(true);
+        let mut meta = plx_data::stores::metadata::MetadataStore::default();
+
+        assert!(super::commit_track(&mut ps, &mut pa, &mut meta, TrackCommit::Subtitle { render_ordinal: -1,
+            stream_id: 0, sidecar_key: None, sidecar_codec: String::new(),
+            memo: Some(plx_plex::plex::session::prefs::SubtitleMemo::Off) }), "the Off pick is accepted");
+        let offs: Vec<_> = handle.dispatched().into_iter().filter(|(attempt, _, operation)|
+            *attempt == route.contract_id() && *operation == Operation::SelectTrack { kind: TrackKind::Subtitle,
+                choice: TrackChoice::Off }).collect();
+        assert_eq!(offs.len(), 1, "Off reached the driver once: {:?}", handle.dispatched());
+        assert!(!plx_media::route::play_pending(), "nothing was re-resolved");
+        assert_eq!(pa.backend_snapshot().phase, plx_playback_contract::Phase::Active, "the play goes on");
+        plx_media::route::reset_player_control_for_test(&ps);
+    }
 }

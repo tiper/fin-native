@@ -5,7 +5,7 @@ name: Tizen library CI
 # recipe) and checks what both produced. The x86_64 job verifies the emulator library.
 # The ARMv7 job builds the release package. The link check proves it links against the expected system libraries
 # a Tizen television has (`-z defs`), that its DT_NEEDED set, undefined symbols, exports and glibc ceiling are the allowlist's
-# (`ci/check-tizen-so.py verify`), and that the C header and the .NET host agree on the three exports (`ci/check-tizen-so.py abi`).
+# (`ci/check-tizen-so.py verify`), and that the C header and the .NET host agree on the header's `plx_host_*` exports (`ci/check-tizen-so.py abi`).
 # Nothing here proves that the library RUNS on a television: that is the emulator's, run by hand (docs/tizen.md, "Build, install, launch").
 #
 # NOT A REQUIRED CHECK. `ci.yml`'s two required status names are untouched and do not wait for this workflow, and branch protection is not

@@ -7,9 +7,10 @@
  * only with the crate's `tizen` feature: it runs under `cargo test --lib -p plx_platform_tizen --features
  * tizen`, and a plain `cargo test -p plx_platform_tizen` builds an empty crate.
  *
- * Three exports, no others:
+ * Four exports, no others:
  *     int32_t plx_host_start(const PlxHostApi *api, const char *launch_json);
  *     int32_t plx_host_post(const PlxHostEvent *event);
+ *     int32_t plx_host_post_cue(const PlxHostCue *cue);
  *     void    plx_host_stop(void);
  *
  * THREADS
@@ -157,6 +158,13 @@
  *     selected stream's.
  *     The verb and its event came with no change to the table or the event layout, so PLX_HOST_ABI_VERSION stays 2: the host and the
  *     library ship in one package, and a host without the verb answers it with PLX_HOST_PLAYER_E_ARGS, which the library takes as a refusal.
+ *     _TEXT_TRACK (arg0 = the native text index, arg1 = the library's command id, echoed in PLAYER_TRACK) selects that text track
+ *     (player_select_track(player, PLAYER_STREAM_TYPE_TEXT, index)) and turns the epoch's CUES on (CUE below). It is held before PREPARED
+ *     and answered exactly as _AUDIO_TRACK is (one PLAYER_TRACK per command id, b = the index or -1), and the languages come the same way:
+ *     before PREPARED the host posts ONE PLAYER_TEXT_LANGUAGE per native text track (index 0 up, at most 32). There is no text-off verb:
+ *     the player draws nothing of its own (emulator, 2026-11-26, with and without the callback), so a track turned off is the library's
+ *     to stop drawing, and it drops the cues that still come. The verb, its language event and the cue export change neither the table
+ *     nor the event layout, so PLX_HOST_ABI_VERSION stays 2, for the reason given for _AUDIO_TRACK.
  *   - Events: PlxHostEvent grows (size >= PLX_HOST_EVENT_V2_SIZE) by epoch and two i64 payload words a, b. The
  *     kinds, with their payloads:
  *       PLAYER_PREPARED(a = duration ms)  PLAYER_STARTED  PLAYER_PAUSED  PLAYER_POSITION(a = ms)
@@ -164,6 +172,7 @@
  *       PLAYER_COMPLETED (the player's completed callback, as it fired)  PLAYER_ERROR(a = the player's native error code, or PLX_HOST_PLAYER_FAIL_BASE + n)  PLAYER_INTERRUPTED(a = native code)
  *       PLAYER_CLOSED  PLAYER_STALL (a position read has not returned for several seconds)  PLAYER_TRACK(a = command id, b = index, or -1)
  *       PLAYER_AUDIO_LANGUAGE(a = native audio index, b = its language code's ASCII bytes, the first character in the lowest byte; 0 = no code)
+ *       PLAYER_TEXT_LANGUAGE(a = native text index, b = as PLAYER_AUDIO_LANGUAGE)
  *     The library queues them on a queue of its own (not the input queue), lossless for every kind but
  *     PLAYER_POSITION and PLAYER_BUFFERING, which keep only the latest per epoch. Position is polled on the HOST
  *     side (about every 250 ms while playing, off the request queue) and posted: there is no synchronous
@@ -186,6 +195,18 @@
  *     parks its attempt at the background (it sends CLOSE, and the host answers CLOSED) and, at the foreground, re-opens the same source
  *     at the saved position as a NEW epoch (a PLAYER_OPEN, then the usual PREPARED, seek and PLAY). A host start of the old epoch would
  *     race that restore, so OnResume only logs why it resumed nothing.
+ *   - CUE: once a _TEXT_TRACK has been answered with an index for an epoch, the host hands the library every cue the player raises for
+ *     it (player_set_subtitle_updated_cb, registered ONCE at PREPARED for a source with a text track, never later: the player calls it
+ *     on a thread of its own, measured working when registered in READY, and registering in PLAYING was not measured) with
+ *     plx_host_post_cue, from that thread. A player that refused the registration refuses every _TEXT_TRACK (b = -1). A cue is the text that is due NOW: position_ms is the play position when the
+ *     callback fired (the host's own estimate, from its last position read and the time since; the callback makes no native call),
+ *     duration_ms how long it shows, and text its UTF-8 (the player has already removed SubRip tags and ASS override blocks; a line
+ *     break is a newline). The player also raises an EMPTY cue when one ends and after a seek; the host passes it on with len = 0 and
+ *     duration_ms = 0. len is at most PLX_HOST_CUE_TEXT_MAX: the host cuts a longer text at a character boundary before posting.
+ *     plx_host_post_cue copies the cue and returns at once: PLX_HOST_OK, PLX_HOST_E_ARGS (NULL, a size below sizeof(PlxHostCue), text
+ *     NULL with len > 0, len above the bound), PLX_HOST_E_STATE (the library is not running, or a stop was requested), PLX_HOST_E_STALE
+ *     (the epoch is not live) or PLX_HOST_E_FULL (the cue queue is full: the cue is dropped, the player is not failed). Cues have a queue
+ *     of their own, so a burst of them never overflows the player events.
  *   - THREADS: the requests come from the library's loop thread; the host runs them on its own video thread,
  *     never on the loop thread, and never on the Ecore main thread EXCEPT one step: finding the Ecore window and
  *     binding the player to it run there (Ecore belongs to that thread) while the video thread waits, for at most 3 s. plx_host_post may be called from any thread,
@@ -240,9 +261,12 @@ extern "C" {
 #define PLX_HOST_EVENT_PLAYER_INTERRUPTED 25 /* a = native code: the system took the player */
 #define PLX_HOST_EVENT_PLAYER_CLOSED 26      /* the player of this epoch is released */
 #define PLX_HOST_EVENT_PLAYER_STALL 27       /* a position read has not returned for several seconds */
-#define PLX_HOST_EVENT_PLAYER_TRACK 28       /* a = command id, b = native audio index selected; -1 refused (see player_verb) */
+#define PLX_HOST_EVENT_PLAYER_TRACK 28       /* a = command id, b = native index selected (audio or text); -1 refused (see player_verb) */
 #define PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE 29 /* a = native audio index, b = language code bytes, first char lowest; 0 unknown */
 #define PLX_HOST_AUDIO_LANGUAGE_REPORTS 32      /* the most PLAYER_AUDIO_LANGUAGE events the host posts at one PREPARED */
+#define PLX_HOST_EVENT_PLAYER_TEXT_LANGUAGE 30  /* a = native text index, b = language code bytes, first char lowest; 0 unknown */
+#define PLX_HOST_TEXT_LANGUAGE_REPORTS 32       /* the most PLAYER_TEXT_LANGUAGE events the host posts at one PREPARED */
+#define PLX_HOST_CUE_TEXT_MAX 4096              /* the longest PlxHostCue.len */
 
 /* player_verb's verb */
 #define PLX_HOST_PLAYER_VERB_PLAY 1
@@ -250,6 +274,7 @@ extern "C" {
 #define PLX_HOST_PLAYER_VERB_SEEK 3  /* arg0 = target ms, arg1 = command id */
 #define PLX_HOST_PLAYER_VERB_CLOSE 4
 #define PLX_HOST_PLAYER_VERB_AUDIO_TRACK 5 /* arg0 = native audio index, arg1 = command id */
+#define PLX_HOST_PLAYER_VERB_TEXT_TRACK 6  /* arg0 = native text index, arg1 = command id; turns the epoch's cues on */
 
 typedef void (*PlxHostTask)(void *arg);
 typedef void (*PlxOnStopped)(int32_t code, int32_t clean);
@@ -279,6 +304,17 @@ typedef struct PlxHostEvent {
     int64_t b;
 } PlxHostEvent;
 
+/* One subtitle cue (plx_host_post_cue; see PLAYER, CUE). */
+typedef struct PlxHostCue {
+    uint32_t size;       /* sizeof(PlxHostCue) as the host was built */
+    uint32_t epoch;      /* the player's epoch */
+    int64_t position_ms; /* the play position when the cue became due */
+    int64_t duration_ms; /* how long it shows; 0 for an empty cue */
+    const char *text;    /* UTF-8, len bytes, need not be NUL-terminated; NULL when len is 0 */
+    uint32_t len;        /* at most PLX_HOST_CUE_TEXT_MAX; 0 = the cue on screen ended */
+    uint32_t reserved;   /* 0 */
+} PlxHostCue;
+
 /* What size must cover for version 1: up to and including the last version-1 field. */
 #define PLX_HOST_API_V1_SIZE ((uint32_t)(offsetof(PlxHostApi, run_on_host) + sizeof(PlxRunOnHost)))
 #define PLX_HOST_EVENT_V1_SIZE ((uint32_t)(offsetof(PlxHostEvent, kind) + sizeof(uint32_t)))
@@ -288,6 +324,7 @@ typedef struct PlxHostEvent {
 
 int32_t plx_host_start(const PlxHostApi *api, const char *launch_json);
 int32_t plx_host_post(const PlxHostEvent *event);
+int32_t plx_host_post_cue(const PlxHostCue *cue);
 void plx_host_stop(void);
 
 #ifdef __cplusplus

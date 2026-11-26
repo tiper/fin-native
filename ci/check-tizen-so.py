@@ -10,8 +10,8 @@ THE CONTRACT has three sides that cannot see one another, in three languages: th
 object the linker made. `abi` compares the first two as text and runs ANYWHERE (it is a step of `make check`'s Python gates and of
 the CI job): the `plx_host_*` functions the header declares are exactly the ones the host P/Invokes, and the host's mirror of the callback
 table (`PlxHostApi`) lists the same fields in the same order, which is the only thing that keeps the struct's layout equal on both sides.
-`map` writes the linker's version script from the header: the three names global, everything else local, so SDL, FreeType and every
-Rust symbol stay out of the dynamic table (`--exclude-libs ALL` would hide the three exports too). `verify` reads the linked library
+`map` writes the linker's version script from the header: the header's `plx_host_*` names global, everything else local, so SDL,
+FreeType and every Rust symbol stay out of the dynamic table (`--exclude-libs ALL` would hide those exports too). `verify` reads the linked library
 with the build host's binutils (`readelf`, `nm`) and needs Linux:
 
   * DT_NEEDED is an allowlist, not a deny-list: the C runtime, libgcc_s, and libGLESv2.so.2 (which must be there: the renderer's GL imports
@@ -212,6 +212,11 @@ def header_struct(text: str, name: str) -> list[tuple[str, str]]:
     return fields
 
 
+def header_struct_names(text: str) -> list[str]:
+    """The names of every `typedef struct NAME { ... } NAME;` of the header, in order."""
+    return [name for name, alias in re.findall(r"typedef\s+struct\s+(\w+)\s*\{.*?\}\s*(\w+)\s*;", strip_c_comments(text), re.S) if name == alias]
+
+
 def csharp_struct(text: str, name: str) -> list[tuple[str, str]]:
     """(type, name) of the public fields of `struct NAME { ... }`, in order."""
     text = strip_c_comments(text)
@@ -289,7 +294,8 @@ def check_abi(header_text: str, cs_text: str) -> list[str]:
     for name in sorted(set(theirs) & set(ours)):
         if theirs[name] != ours[name]:
             problems.append(f"{name}: the header says (returns {theirs[name][0]}, {theirs[name][1]} parameter(s)), the host's DllImport says (returns {ours[name][0]}, {ours[name][1]} parameter(s))")
-    for struct in ("PlxHostApi", "PlxHostEvent"):
+    # Every struct the header types (the table, the event, the cue) is marshalled by value by the host, so each is mirrored field for field.
+    for struct in header_struct_names(header_text):
         c_fields, cs_fields = header_struct(header_text, struct), csharp_struct(cs_text, struct)
         want = [(_cs_type_of(t), _norm(n)) for t, n in c_fields]
         have = [(t, _norm(n)) for t, n in cs_fields]

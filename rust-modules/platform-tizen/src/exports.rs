@@ -75,6 +75,17 @@ pub unsafe extern "C" fn plx_host_post(event: *const PlxHostEvent) -> i32 {
     catch_unwind(AssertUnwindSafe(|| HOSTED.post(event))).unwrap_or(host_abi::E_STATE)
 }
 
+/// Hand the library one subtitle cue of a live player epoch; it is copied before the call returns. Any thread. See
+/// `include/plx_host.h`, PLAYER, CUE.
+///
+/// # Safety
+/// `cue` is null or points at a `PlxHostCue` readable as far as its `size`, whose `text` (when `len` > 0) points at `len`
+/// readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn plx_host_post_cue(cue: *const host_abi::PlxHostCue) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| HOSTED.post_cue(cue))).unwrap_or(host_abi::E_STATE)
+}
+
 /// Ask the application to end and return at once; `on_stopped` carries the outcome, within the deadline.
 /// See `include/plx_host.h`, STOP.
 #[no_mangle]
@@ -86,17 +97,18 @@ pub extern "C" fn plx_host_stop() {
 mod tests {
     use super::*;
 
-    /// **The header's three symbols are the three this file exports, with the header's signatures.** The
+    /// **The header's four symbols are the four this file exports, with the header's signatures.** The
     /// assignments fail to compile on a changed type; the text check fails on a missing or renamed export or
     /// a dropped `#[no_mangle]` (a symbol the host's `dlsym` cannot find is a start that never happens).
     #[test]
     fn the_exports_are_the_headers_symbols_with_its_signatures() {
         let _start: unsafe extern "C" fn(*const PlxHostApi, *const c_char) -> i32 = plx_host_start;
         let _post: unsafe extern "C" fn(*const PlxHostEvent) -> i32 = plx_host_post;
+        let _cue: unsafe extern "C" fn(*const host_abi::PlxHostCue) -> i32 = plx_host_post_cue;
         let _stop: extern "C" fn() = plx_host_stop;
         let header = include_str!("../include/plx_host.h");
         let source = include_str!("exports.rs");
-        for symbol in ["plx_host_start", "plx_host_post", "plx_host_stop"] {
+        for symbol in ["plx_host_start", "plx_host_post", "plx_host_post_cue", "plx_host_stop"] {
             assert!(header.contains(&format!("{symbol}(")), "the header declares {symbol}");
             let lines: Vec<&str> = source.lines().collect();
             let at = lines
@@ -115,6 +127,18 @@ mod tests {
         unsafe {
             assert_eq!(plx_host_start(std::ptr::null(), std::ptr::null()), host_abi::E_ARGS);
             assert_eq!(plx_host_post(std::ptr::null()), host_abi::E_ARGS);
+            assert_eq!(plx_host_post_cue(std::ptr::null()), host_abi::E_ARGS);
+            let short = host_abi::PlxHostCue { size: 8, epoch: 1, position_ms: 0, duration_ms: 0, text: std::ptr::null(),
+                len: 0, reserved: 0 };
+            assert_eq!(plx_host_post_cue(&short), host_abi::E_ARGS, "a size below the struct");
+            let text = b"hello";
+            let unstarted = host_abi::PlxHostCue { size: std::mem::size_of::<host_abi::PlxHostCue>() as u32, epoch: 1,
+                position_ms: 2_000, duration_ms: 1_500, text: text.as_ptr().cast(), len: 5, reserved: 0 };
+            assert_eq!(plx_host_post_cue(&unstarted), host_abi::E_STATE, "a cue outside a run");
+            let unbounded = host_abi::PlxHostCue { len: host_abi::CUE_TEXT_MAX + 1, ..unstarted };
+            assert_eq!(plx_host_post_cue(&unbounded), host_abi::E_ARGS, "a text above the bound");
+            let no_text = host_abi::PlxHostCue { text: std::ptr::null(), ..unstarted };
+            assert_eq!(plx_host_post_cue(&no_text), host_abi::E_ARGS, "a length with no text");
         }
     }
 }

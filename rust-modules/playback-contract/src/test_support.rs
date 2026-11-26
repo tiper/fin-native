@@ -29,6 +29,8 @@ struct Script {
     exit_preserved: bool,
     not_ready: Option<crate::uri::UriNotReady>,
     ready_asked: u32,
+    delivers_captions: bool,
+    captions: Vec<crate::uri::UriCaption>,
 }
 
 /// A scriptable [`UriDriver`]. It answers [`DriverSet::capabilities`] with the set it was built
@@ -99,6 +101,15 @@ impl FakeUriHandle {
     }
     /// How many times the adapter has asked whether the driver is ready.
     pub fn ready_asked(&self) -> u32 { self.0.lock().unwrap().ready_asked }
+    /// Make the driver one whose pipeline draws no subtitle and hands the selected track's cues to the app
+    /// ([`UriDriver::delivers_captions`]), as the Tizen driver does.
+    pub fn set_delivers_captions(&self, delivers: bool) {
+        self.0.lock().unwrap().delivers_captions = delivers;
+    }
+    /// Captions the next [`UriDriver::drain_captions`] hands over, in order.
+    pub fn queue_captions(&self, captions: impl IntoIterator<Item = crate::uri::UriCaption>) {
+        self.0.lock().unwrap().captions.extend(captions);
+    }
 }
 
 impl DriverSet for FakeUriDriver {
@@ -171,6 +182,12 @@ impl UriDriver for FakeUriDriver {
 
     fn maps_track(&self, selection: TrackSelection) -> bool {
         self.script.lock().unwrap().mapped.contains(&selection)
+    }
+
+    fn delivers_captions(&self) -> bool { self.script.lock().unwrap().delivers_captions }
+
+    fn drain_captions(&mut self, out: &mut Vec<crate::uri::UriCaption>) {
+        out.append(&mut self.script.lock().unwrap().captions);
     }
 
     fn ready_to_start(&mut self, _: &MainThread) -> Result<(), crate::uri::UriNotReady> {

@@ -55,7 +55,7 @@ use plx_os::tv::secure::StoreMode;
 use plx_os::tv::{IdentityHooks, Libraries, LegacyWebosMedia, SecureHooks, Services, StorageHooks, SystemHooks};
 use plxnative_modules::host::{self, Platform};
 
-/// The process's one hosted run: the host's callbacks, the input queue, the stop gate. The three exports and
+/// The process's one hosted run: the host's callbacks, the input queue, the stop gate. The four exports and
 /// the Ecore handlers reach it; nothing else does.
 pub(crate) static HOSTED: hosted::Hosted = hosted::Hosted::new();
 

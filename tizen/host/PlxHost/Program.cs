@@ -4,9 +4,9 @@
 // library's window belongs); OnPause and OnResume are forwarded with plx_host_post; OnTerminate calls plx_host_stop and waits for the library's
 // on_stopped. The library makes its own window, draws, reads the remote and runs the application; this host draws nothing.
 //
-// THE CONTRACT is rust-modules/platform-tizen/include/plx_host.h, and the three declarations in `Native` below, the two structs, the delegates for
+// THE CONTRACT is rust-modules/platform-tizen/include/plx_host.h, and the four declarations in `Native` below, the three structs, the delegates for
 // its function pointers and the `PLX_HOST_*` constants are written from it. Version 2 adds the media player: the table's player_open and player_verb
-// are implemented by PlxPlayer.cs (over the device's libcapi-media-player, PlayerNative.cs), and its events come back through plx_host_post. `make PLATFORM=tizen tizen-abi` (ci/check-tizen-so.py) reads this file and the header as text
+// are implemented by PlxPlayer.cs (over the device's libcapi-media-player, PlayerNative.cs), and its events come back through plx_host_post; a selected subtitle's cues come back through plx_host_post_cue (PlxPlayer.cs, OnCue). `make PLATFORM=tizen tizen-abi` (ci/check-tizen-so.py) reads this file and the header as text
 // and fails on a name, a signature, a constant's value, a struct field's name, order or width, or a delegate's widths that differs, so the two cannot
 // drift apart. (The media player's own DllImports are in PlayerNative.cs and are the device library's, not this contract's.)
 //
@@ -56,6 +56,21 @@ namespace PlxHost
         public long B;
     }
 
+    // plx_host.h: PlxHostCue (plx_host_post_cue). `Text` points at the player's own UTF-8 for the duration of the call (the library copies
+    // it before it returns), `Len` bytes of it, NULL when Len is 0. 40 bytes on x86_64; on 32-bit ARM the pointer is 4 bytes and the struct
+    // is padded to 40 by the i64 alignment, exactly as the C compiler lays out the header's struct.
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PlxHostCue
+    {
+        public uint Size;
+        public uint Epoch;
+        public long PositionMs;
+        public long DurationMs;
+        public IntPtr Text;
+        public uint Len;
+        public uint Reserved;
+    }
+
     // plx_host.h: PlxOnStopped, PlxRunOnHost, PlxHostTask.
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void PlxOnStopped(int code, int clean);
@@ -82,6 +97,7 @@ namespace PlxHost
         internal const int PLX_HOST_ABI_VERSION = 2;
         internal const int PLX_HOST_OK = 0;
         internal const int PLX_HOST_E_STATE = -2;
+        internal const int PLX_HOST_E_FULL = -6;
         internal const int PLX_HOST_E_STALE = -7;
         internal const int PLX_HOST_PLAYER_OK = 0;
         internal const int PLX_HOST_PLAYER_E_UNAVAILABLE = -1;
@@ -106,17 +122,24 @@ namespace PlxHost
         internal const int PLX_HOST_EVENT_PLAYER_TRACK = 28;
         internal const int PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE = 29;
         internal const int PLX_HOST_AUDIO_LANGUAGE_REPORTS = 32;
+        internal const int PLX_HOST_EVENT_PLAYER_TEXT_LANGUAGE = 30;
+        internal const int PLX_HOST_TEXT_LANGUAGE_REPORTS = 32;
+        internal const int PLX_HOST_CUE_TEXT_MAX = 4096;
         internal const int PLX_HOST_PLAYER_VERB_PLAY = 1;
         internal const int PLX_HOST_PLAYER_VERB_PAUSE = 2;
         internal const int PLX_HOST_PLAYER_VERB_SEEK = 3;
         internal const int PLX_HOST_PLAYER_VERB_CLOSE = 4;
         internal const int PLX_HOST_PLAYER_VERB_AUDIO_TRACK = 5;
+        internal const int PLX_HOST_PLAYER_VERB_TEXT_TRACK = 6;
 
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int plx_host_start(ref PlxHostApi api, [MarshalAs(UnmanagedType.LPUTF8Str)] string launchJson);
 
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int plx_host_post(ref PlxHostEvent ev);
+
+        [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int plx_host_post_cue(ref PlxHostCue cue);
 
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
         internal static extern void plx_host_stop();
@@ -444,6 +467,29 @@ namespace PlxHost
             catch (Exception e)
             {
                 Log("exception from plx_host_post(player kind " + kind + "): " + e.GetType().Name + ": " + e.Message);
+            }
+        }
+
+        // One subtitle cue for the library, from the player's subtitle thread (plx_host.h, CUE): a non-blocking plx_host_post_cue. `text` is
+        // the player's own buffer, read by the library before the call returns. E_STALE and E_STATE are expected (a late cue of a closed epoch,
+        // a stop) and silent; E_FULL drops this one cue (the library logs how many it dropped); anything else is logged.
+        internal static void PostCue(uint epoch, long positionMs, long durationMs, IntPtr text, uint len)
+        {
+            if (!running) return;
+            try
+            {
+                var cue = new PlxHostCue
+                {
+                    Size = (uint)Marshal.SizeOf<PlxHostCue>(), Epoch = epoch, PositionMs = positionMs, DurationMs = durationMs,
+                    Text = len == 0 ? IntPtr.Zero : text, Len = len, Reserved = 0,
+                };
+                int rc = Native.plx_host_post_cue(ref cue);
+                if (rc != Native.PLX_HOST_OK && rc != Native.PLX_HOST_E_STALE && rc != Native.PLX_HOST_E_STATE && rc != Native.PLX_HOST_E_FULL)
+                    Log("plx_host_post_cue returned " + rc);
+            }
+            catch (Exception e)
+            {
+                Log("exception from plx_host_post_cue: " + e.GetType().Name + ": " + e.Message);
             }
         }
 

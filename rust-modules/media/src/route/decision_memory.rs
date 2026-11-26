@@ -428,10 +428,12 @@ pub fn confirm_uri_audio_pick(ps: &mut PlaybackSession, audio: CarriedAudio, mem
     if let Some(memo) = memo { remember_track_pick(ps, TrackPick::Audio(memo)); }
 }
 
-/// The product URI driver renders its selected embedded subtitle. No side reader, burn refresh,
-/// or Feed subtitle mailbox may run for this confirmed native selection.
+/// A URI driver confirmed a subtitle pick (`stream_id` 0 = Off): either its pipeline draws the
+/// selected embedded subtitle (webOS), or it hands the track's cues to the app (`app_draws`, Tizen),
+/// which draws them at `ordinal`. No side reader, burn refresh, or Feed subtitle mailbox may run for
+/// this confirmed native selection.
 pub fn confirm_uri_subtitle_pick(ps: &mut PlaybackSession, ordinal: i32, stream_id: i64,
-    memo: Option<SubtitleMemo>) {
+    memo: Option<SubtitleMemo>, app_draws: bool) {
     let changed = subtitle_pick_changed(ps.cur_sub_sid, stream_id,
         ps.sub_mode == SubMode::ForcedOnly);
     ps.sub_mode = SubMode::of_stream(stream_id);
@@ -441,7 +443,9 @@ pub fn confirm_uri_subtitle_pick(ps: &mut PlaybackSession, ordinal: i32, stream_
     }
     ps.cur_sub_ordinal = ordinal;
     ps.cur_sub_sidecar = false;
-    ps.cur_sub_client_drawable = false;
+    // A driver whose pipeline draws the subtitle leaves the app nothing to draw; one that hands its cues over
+    // (`UriDriver::delivers_captions`) has the app draw the embedded track at `ordinal`.
+    ps.cur_sub_client_drawable = app_draws && stream_id > 0 && ordinal >= 0;
     ps.cur_memory_note = false;
     queue_put_selection(cur_sid(ps), cur_part_id(ps), cur_audio_sid(ps), cur_sub_sid(ps));
     if let Some(memo) = memo.filter(|_| changed) {
