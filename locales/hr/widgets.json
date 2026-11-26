@@ -260,5 +260,8 @@
   "widgets.verdict.tuners_busy": "Svi su prijamnici zauzeti",
   "widgets.live.channel_context": "{number} · {programme}",
   "widgets.live.badge": "UŽIVO",
-  "widgets.live.next_at": "Sljedeće u {time}"
+  "widgets.live.next_at": "Sljedeće u {time}",
+  "widgets.live.entry_none": "Nema kanala {number}",
+  "widgets.live.entry_more": "još +{count} · ▲ ▼ za pomicanje",
+  "widgets.live.playing": "Reproducira se"
 }

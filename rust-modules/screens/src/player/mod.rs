@@ -819,6 +819,11 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Machine<H> for PlayerScreen 
                 fx.invalidate(plx_machine::present::Provenance::Input);
                 Handled::Yes
             }
+            ScreenEvent::App(AppMsg::LiveChannelPicked { sid, dvr, channel }) => {
+                self.live_pick(H::session(cx), H::lineup(cx), (*sid, dvr, channel), cx.tick.ms);
+                fx.invalidate(plx_machine::present::Provenance::Input);
+                Handled::Yes
+            }
             ScreenEvent::App(AppMsg::PlayerStart { now, hud_ms }) => {
                 self.live.started(*now);
                 self.hud = HudState::IDLE;

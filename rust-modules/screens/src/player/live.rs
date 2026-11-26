@@ -12,7 +12,8 @@
 //! | Down, CH- | step to the next lower number |
 //! | Left, Right, OK | raise the banner, nothing else |
 //! | BACK, STOP | leave: a single press at every phase (the debounce, buffering, playing) |
-//! | everything else | where it was: play/pause, the digits (number entry is PR5), EXIT |
+//! | 0-9 | open number entry (`channel_entry_panel`, `PlayerReq::OpenChannelEntry`); a pending zap is dropped |
+//! | everything else | where it was: play/pause, EXIT |
 use super::*;
 use plx_data::livetv::Channel;
 use zap::{Observed, ZapEffect};
@@ -43,7 +44,7 @@ impl PlayerScreen {
         Observed { now, playing: playing(ps, lineup), lineup, no_frame: no_frame(ps) }
     }
 
-    /// A live channel's keys. `None` leaves the press to the rest of the page (play/pause, the digits, EXIT).
+    /// A live channel's keys. `None` leaves the press to the rest of the page (play/pause, EXIT).
     pub(super) fn live_key<H: PlayerLike>(
         &mut self,
         ps: &plx_media::route::PlaybackSession,
@@ -67,6 +68,17 @@ impl PlayerScreen {
         if let Some(dir) = step {
             if fresh {
                 self.live.press(dir, &Self::observed(ps, lineup, now));
+                fx.invalidate(plx_machine::present::Provenance::Input);
+            }
+            return Some(Handled::Yes);
+        }
+        // A digit opens number entry (PR5). A run of presses whose window has not closed is dropped first, so it cannot
+        // tune under the panel; the panel names the channel ON SCREEN (what it tags "Playing"), never the zap's target.
+        if let Some(digit) = consts::pin_digit(sym, wcode) {
+            if fresh {
+                self.live.cancel_zap();
+                let playing = playing(ps, lineup).map(|c| (c.sid, c.dvr.clone(), c.channel.clone()));
+                Self::ask(fx, PlayerReq::OpenChannelEntry { first: digit - b'0', playing });
                 fx.invalidate(plx_machine::present::Provenance::Input);
             }
             return Some(Handled::Yes);
@@ -103,6 +115,25 @@ impl PlayerScreen {
         }
         if let ZapEffect::Tune(ch) = self.live.tick(&Self::observed(ps, lineup, now)) {
             Self::ask(fx, PlayerReq::Tune { sid: ch.sid, dvr: ch.dvr, channel: ch.channel, title: ch.name });
+        }
+    }
+
+    /// **Number entry chose a channel** (`AppMsg::LiveChannelPicked`): stand the zap on it ([`zap::Live::jump`]), so the
+    /// next frame asks for the one `PlayerReq::Tune`, with the banner and the art following. A channel the lineup no
+    /// longer lists, or a session that is no longer live, is no pick.
+    pub(super) fn live_pick(
+        &mut self,
+        ps: &plx_media::route::PlaybackSession,
+        lineup: &[Channel],
+        pick: (plx_plex::plex::ServerId, &str, &str),
+        now: u32,
+    ) {
+        let (sid, dvr, channel) = pick;
+        if !plx_media::route::is_live(ps) {
+            return;
+        }
+        if let Some(target) = lineup.iter().find(|c| c.sid == sid && c.dvr == dvr && c.channel == channel) {
+            self.live.jump(target, &Self::observed(ps, lineup, now));
         }
     }
 

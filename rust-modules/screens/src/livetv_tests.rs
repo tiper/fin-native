@@ -685,6 +685,53 @@ fn the_restored_page_seats_the_channel_the_player_left() {
     }
 }
 
+fn digit_key(sym: u32, edge: Edge) -> ScreenEvent<TestHost> {
+    ScreenEvent::Input(InputEvent { at: Tick::default(), source: plx_machine::machine::Source::Script,
+        kind: InputKind::Key { key: Key::Other, sym, wcode: 0, edge, at_edge: false } })
+}
+
+fn picked(channel: &str) -> ScreenEvent<TestHost> {
+    ScreenEvent::App(crate::registry::AppMsg::LiveChannelPicked { sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: channel.into() })
+}
+
+/// **A digit typed on the What's on page opens number entry** (Live TV PR5): one request for the panel carrying the digit
+/// and nothing else, taken only on the key's press, and only when the lineup has a number to type.
+#[test]
+fn a_digit_on_the_page_opens_number_entry() {
+    let (store, mut screen) = seeded();
+    for (sym, digit) in [(48, 0), (53, 5), (57, 9)] {
+        let (handled, out) = step_handled(&mut screen, store.view(), Some(FIRST_CARD_ELEM), &digit_key(sym, Edge::Down));
+        assert_eq!(handled, Handled::Yes, "sym {sym}");
+        let panels: Vec<_> = out.iter().filter_map(|s| match &s.fx {
+            Fx::App(AppFx::Content(ContentReq::Panel(panel))) => Some(panel.clone()), _ => None,
+        }).collect();
+        assert_eq!(panels, vec![ContentPanel::ChannelEntry { first: digit }], "sym {sym}");
+        assert!(asked_plays(&out).is_empty(), "opening the panel plays nothing");
+    }
+    // a held key or its release opens nothing
+    for edge in [Edge::Repeat, Edge::Up] {
+        let (_, out) = step_handled(&mut screen, store.view(), Some(FIRST_CARD_ELEM), &digit_key(53, edge));
+        assert!(!out.iter().any(|s| matches!(&s.fx, Fx::App(AppFx::Content(ContentReq::Panel(_))))), "{edge:?}");
+    }
+    // a page with no lineup has no number to type: the digit is not taken
+    let mut empty = LiveTvScreen::new(ENTRY);
+    let (handled, out) = step_handled(&mut empty, LiveTvView::LOADING, None, &digit_key(53, Edge::Down));
+    assert_eq!(handled, Handled::No);
+    assert!(out.is_empty());
+}
+
+/// **The pick plays through the page's own play path**, the request a card's OK makes (named by identity); a channel
+/// the lineup no longer lists plays nothing.
+#[test]
+fn a_pick_from_number_entry_plays_the_channel_like_a_card() {
+    let (store, mut screen) = seeded();
+    let out = step(&mut screen, store.view(), None, &picked("C102"));
+    assert_eq!(asked_plays(&out), vec![PlayIntent::Live {
+        sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: "C102".into(), title: "Cartoons".into(),
+    }]);
+    assert!(asked_plays(&step(&mut screen, store.view(), None, &picked("C999"))).is_empty());
+}
+
 /// A restore with nobody told, or told of a channel the lineup no longer lists, keeps the focus the engine restored.
 #[test]
 fn a_restore_with_no_left_channel_seats_nothing() {

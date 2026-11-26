@@ -260,5 +260,8 @@
   "widgets.verdict.tuners_busy": "Todos os sintonizadores estão ocupados",
   "widgets.live.channel_context": "{number} · {programme}",
   "widgets.live.badge": "EM DIRETO",
-  "widgets.live.next_at": "A seguir, às {time}"
+  "widgets.live.next_at": "A seguir, às {time}",
+  "widgets.live.entry_none": "Nenhum canal {number}",
+  "widgets.live.entry_more": "+{count} mais · ▲ ▼ para rolar",
+  "widgets.live.playing": "A reproduzir"
 }

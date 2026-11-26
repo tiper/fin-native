@@ -4484,12 +4484,40 @@ pub(crate) fn open_failed_tracks(ps: &plx_media::route::PlaybackSession, anchor:
         anchor,
         source: plx_screens::preplay_panel::Source::Failed { part_id: plx_media::route::cur_part_id(ps), pick: plx_media::route::failed_pick(ps) },
     });
+    present_once(d, arg, Style::PlayerPanel { survives_failure: true });
+}
+
+/// **Present a surface that is only ever one**: refused when one of its kind is already up, and when one is already
+/// PARKED for this frame's commit (a surface mounts at the commit, once a frame, so two requests in one frame cannot
+/// see each other in the tree). A later request for a parked surface is folded into it ([`AppArg::absorb`]: number
+/// entry's later keys), not presented again.
+fn present_once(d: &mut Dispatcher<AppHost>, arg: AppArg, style: Style) {
     let id = plx_ui::screen::ScreenArg::id(&arg);
     if surface_up(d, move |up| plx_ui::screen::ScreenArg::id(up) == id) {
         return;
     }
-    d.nav.next_style = Style::PlayerPanel { survives_failure: true };
+    if let Some(parked) = d.parked_present_mut(move |up| plx_ui::screen::ScreenArg::id(up) == id) {
+        parked.absorb(&arg);
+        return;
+    }
+    d.nav.next_style = style;
     d.request(MachineId::Nav, NavOp::Present(arg));
+}
+
+/// **Present number entry over the live player** (`PlayerReq::OpenChannelEntry`): a `Style::PlayerPanel`, which leaves
+/// the player page live (`surface_policy`: host Live, panel Live), so the video plane keeps presenting under the panel
+/// where a `Sheet` or an `Alert` would freeze the host into the transparent hole. The pick comes back to the player
+/// instance as `AppMsg::LiveChannelPicked`. A second copy of the panel is never presented: one already up hears the
+/// key as input, and one parked for this frame's commit takes it as one more opening key ([`present_once`]).
+pub(crate) fn open_channel_entry(
+    first: u8,
+    playing: Option<plx_screens::channel_entry_panel::PlayingKey>,
+    d: &mut Dispatcher<AppHost>,
+) {
+    let Some(InputOwner::Entry(entry)) = d.nav.input_owner() else { return };
+    let Some(host) = d.nav.instance_of(entry) else { return };
+    let arg = AppArg::ChannelEntry(plx_screens::channel_entry_panel::ChannelEntryArg::opened_by(host, first, playing));
+    present_once(d, arg, Style::PlayerPanel { survives_failure: false });
 }
 
 /// Which player panel owns input right now, if one does.
@@ -4640,12 +4668,7 @@ pub(crate) fn open_content_panel(
     // this function's is the PRESENTING: refuse a second copy of one already up, hand the
     // container the style through its one-shot handshake, and request the op.
     let Some((style, arg)) = panel.surface(host, subject) else { return };
-    let id = plx_ui::screen::ScreenArg::id(&arg);
-    if surface_up(d, move |up| plx_ui::screen::ScreenArg::id(up) == id) {
-        return;
-    }
-    d.nav.next_style = style;
-    d.request(MachineId::Nav, NavOp::Present(arg));
+    present_once(d, arg, style);
 }
 
 /// A rect as the bit-preserving anchor an argument carries — `LibraryMenuArg::anchor`'s rule, so

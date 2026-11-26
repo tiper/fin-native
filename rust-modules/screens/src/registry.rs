@@ -380,6 +380,11 @@ pub enum PlayerReq {
     /// names the item and the attempt's part, and the style (`bridge::open_failed_tracks`).
     /// `anchor` is the drawn rect of the read-out's control (bits), never a fallback.
     OpenFailedTracks { anchor: [u32; 4] },
+    /// **A digit was typed over a live channel: open number entry** (Live TV PR5, `screens::channel_entry_panel`).
+    /// `first` is the digit (0-9) and `playing` the channel on screen by identity, so the panel tags it. Presented as
+    /// a `Style::PlayerPanel` over the player page, which leaves the video plane live under it
+    /// (`bridge::open_channel_entry`). The pick comes back as `AppMsg::LiveChannelPicked`, never as a second tune path.
+    OpenChannelEntry { first: u8, playing: Option<crate::channel_entry_panel::PlayingKey> },
 
     /// **A press on a control of the discs committed**, after the engine's tvOS dip has played
     /// (`PressCommit`, [`PlayerScreen`](crate::player::PlayerScreen)): perform this command. The screen resolves the command of the control the
@@ -1411,6 +1416,10 @@ pub enum ContentPanel {
     /// About sheet (`screens::about_panel`) reading the collection store's current collection; it
     /// carries nothing, for `Bio`'s reason.
     CollectionAbout,
+    /// **Number entry** (`screens::channel_entry_panel`): the Live TV page's channel-number panel, opened by a digit
+    /// typed on the What's on page. `first` is that digit (0-9). It takes no subject: the lineup is the Live TV
+    /// store's and nothing is playing under the page.
+    ChannelEntry { first: u8 },
 }
 
 impl ContentPanel {
@@ -1472,6 +1481,11 @@ impl ContentPanel {
                     }),
                 )
             }
+            // Over a page the panel is a compact surface, so the page under it stays live and cached.
+            Self::ChannelEntry { first } => (
+                Style::Compact,
+                AppArg::ChannelEntry(crate::channel_entry_panel::ChannelEntryArg::opened_by(host, first, None)),
+            ),
             Self::Tracks { page } => (
                 Style::Alert,
                 AppArg::TracksPanel(crate::tracks_panel::TracksPanelArg { page }),
@@ -1786,6 +1800,10 @@ pub enum AppMsg {
     /// **The app took no request for the tune the player asked for** (`PlayerReq::Tune`): its zap ends on this word, not
     /// on an inference from timing.
     LiveTuneRefused,
+    /// **Number entry chose a channel** (Live TV PR5), delivered by `screens::channel_entry_panel` to the instance that
+    /// opened it. The What's on page plays it through its own play path; the live player hands it to its zap machine
+    /// (`ZapEvent::Jump`), which makes the one `PlayerReq::Tune`. Named by identity (server, DVR, key).
+    LiveChannelPicked { sid: plx_plex::plex::ServerId, dvr: String, channel: String },
     PlayerFollowRow { slot: plx_appkit::player_hud::ControlSlot, now: u32 },
     PlayerCancelNext { decline: bool },
     PlayerHudCommand { command: plx_appkit::player_hud::command::HudCommand, now: u32 },
@@ -2249,6 +2267,11 @@ pub enum AppArg {
     /// *Audio & Subtitles* before playback (`screens::preplay_panel`, #1532): presented over the
     /// Detail page (`Source::Page`) or over the playback failure screen (`Source::Failed`).
     PreplayPanel(crate::preplay_panel::PreplayArg),
+    /// **Number entry** (`screens::channel_entry_panel`, Live TV PR5): the channel-number panel a typed digit opens, over
+    /// the What's on page (`Style::Compact`) or over the live player (`Style::PlayerPanel`). It carries the host
+    /// instance the pick is reported to, the digits that opened it (one key, or several that arrived in the same frame
+    /// and were folded in by `AppArg::absorb`) and the channel already on screen.
+    ChannelEntry(crate::channel_entry_panel::ChannelEntryArg),
     /// The Detail page's *Track information* sheet (§6.2's page-owned panels). It carries only the
     /// 1-based PAGE the sheet opens at — a boot address like `Settings`'s root, not an identity —
     /// because the sheet describes `metadata::current()` and the host it is presented over is the
@@ -2350,7 +2373,7 @@ impl AppArg {
             Self::Settings(_) | Self::FirstRunConsent(_) | Self::LibraryMenu(_)
             | Self::AccountMenu | Self::WatchlistMenu(_) | Self::ItemMenu(_)
             | Self::PlayerOverlay(_) | Self::AltSources(_) | Self::VersionsPanel(_)
-            | Self::PreplayPanel(_) | Self::TracksPanel(_) | Self::AboutPanel | Self::PersonBio | Self::CollectionAbout => ("", Surface),
+            | Self::PreplayPanel(_) | Self::ChannelEntry(_) | Self::TracksPanel(_) | Self::AboutPanel | Self::PersonBio | Self::CollectionAbout => ("", Surface),
         };
         RouteProbe { word, kind }
     }
@@ -2363,6 +2386,16 @@ impl AppArg {
     pub fn is_library_family(&self) -> bool {
         matches!(self, AppArg::Library | AppArg::LibraryCollections { .. } | AppArg::LibraryRecommended { .. })
     }
+
+    /// **A second request for this surface arrived while the first is still parked** (two keys in one frame, before
+    /// the commit that mounts it): the surface is one, so the later request is folded into the parked argument
+    /// rather than presented again. Only number entry carries anything to fold (its later digits); every other
+    /// surface's second request is simply refused by the caller.
+    pub fn absorb(&mut self, later: &AppArg) {
+        if let (AppArg::ChannelEntry(parked), AppArg::ChannelEntry(later)) = (self, later) {
+            parked.absorb(later);
+        }
+    }
 }
 
 pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,LibraryCollections{section:u32},LibraryRecommended{section:u32},Search,Watchlist,LiveTv,Player,Content:{Detail{sid:u32,rk:str},Person{sid:u32,key:str,guid:str,name:str,thumb:str},Filmography{sid:u32,key:str},Collection{sid:u32,rk:str,sec:i64,tag:i64,name:str},Catalog{hex:str}},Settings:SettingsPage{Root,Playback,AudioSubtitles,Favourites,LibraryFavourites,Privacy,Legal,About,Document(u8),Preview(u8),ConsentStage(u8),Language,Contribute},FirstRunConsent(u8),LibraryMenu{host:u32,target:{epoch:u32,sid:u32,section:u64},kind:u32,anchor:[u32;4]},\
@@ -2370,6 +2403,7 @@ pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,LibraryC
      AltSources{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
      VersionsPanel{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
      PreplayPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],source:{Page,Failed{part_id:u64}}},\
+     ChannelEntry{host:u32,digits:str,playing:Option<{sid:u32,dvr:str,channel:str}>},\
      TracksPanel{page:i32},AboutPanel,PersonBio,CollectionAbout,AccountMenu,\
      ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32},Catalog{state:u32},WatchlistAdd{hex:str},HeroOverflow{rows:len}},\
      host:u32,focus:Option<{entry:u32,elem:u32}>,anchor:[u32;4],loaded_episode:bool,from_home:bool,catalog:Option<{guid:str}>},\
@@ -2418,6 +2452,8 @@ impl LogicalState for AppArg {
             Self::VersionsPanel(arg) => { c.u32(14); arg.write(c); }
             // 15, forward of the Versions panel's 14.
             Self::PreplayPanel(arg) => { c.u32(15); arg.write(c); }
+            // 16, forward of the Audio & Subtitles panel's 15.
+            Self::ChannelEntry(arg) => { c.u32(16); arg.write(c); }
             // The seven PAGE variants keep the canon bytes `Legacy(Route)` wrote — a `0` tag and
             // then the route's own — so a recording taken before the fold and one taken after are
             // byte-comparable at every page frame. Only the SHAPE STRING moved, which is what the
@@ -2470,6 +2506,7 @@ impl plx_ui::screen::ScreenArg for AppArg {
             | AppArg::AltSources(_)
             | AppArg::VersionsPanel(_)
             | AppArg::PreplayPanel(_)
+            | AppArg::ChannelEntry(_)
             | AppArg::TracksPanel(_)
             | AppArg::AboutPanel
             | AppArg::PersonBio
@@ -2531,6 +2568,8 @@ impl plx_ui::screen::ScreenArg for AppArg {
             AppArg::VersionsPanel(_) => 30,
             // 32, forward of the Live TV page's 31.
             AppArg::PreplayPanel(_) => 32,
+            // 33, forward of the Audio & Subtitles panel's 32.
+            AppArg::ChannelEntry(_) => 33,
         })
     }
     fn title(&self) -> Option<&str> {
@@ -2664,6 +2703,9 @@ where
             AppArg::PreplayPanel(arg) => {
                 let tracks = preplay_tracks_of(H::metadata(cx), arg);
                 Box::new(crate::preplay_panel::PreplayPanelScreen::new(entry, arg.clone(), tracks))
+            }
+            AppArg::ChannelEntry(arg) => {
+                Box::new(crate::channel_entry_panel::ChannelEntryScreen::new(entry, arg.clone(), H::livetv(cx).channels))
             }
             AppArg::TracksPanel(arg) => Box::new(
                 crate::tracks_panel::TracksPanelScreen::new(entry, *arg),
@@ -2872,6 +2914,11 @@ pub fn every_surface_arg() -> Vec<AppArg> {
             anchor: [0; 4],
             source: crate::preplay_panel::Source::Page,
         }),
+        AppArg::ChannelEntry(crate::channel_entry_panel::ChannelEntryArg {
+            host: plx_machine::machine::InstanceId(1),
+            digits: "2".into(),
+            playing: None,
+        }),
         AppArg::TracksPanel(crate::tracks_panel::TracksPanelArg { page: 1 }),
         AppArg::AboutPanel,
         AppArg::PersonBio,
@@ -2890,6 +2937,7 @@ pub fn every_surface_arg() -> Vec<AppArg> {
             | AppArg::AltSources(_)
             | AppArg::VersionsPanel(_)
             | AppArg::PreplayPanel(_)
+            | AppArg::ChannelEntry(_)
             | AppArg::TracksPanel(_)
             | AppArg::AboutPanel
             | AppArg::PersonBio
@@ -2978,6 +3026,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
     crate::versions_panel::SHAPE,
     crate::livetv::LiveTvScreen::SHAPE,
     crate::preplay_panel::SHAPE,
+    crate::channel_entry_panel::SHAPE,
 ];
 
 /// The pin over [`SCREEN_SHAPES`] — bump it in the same edit that adds an entry, and say why.
@@ -3200,7 +3249,9 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // `alt_sources::SHAPE[1]` carry it). Previous pin: 0xa2bc_fa1b_e96e_0118.
 // The live player's banner, zap and art phases join the Player and Live TV screens' canon (Live TV PR4: `zap`, `art`,
 // `banner`, and the page's `left` channel). Previous pin: 0x86ab_da53_b2fd_6524. Re-record incompatible replay anchors.
-const SCREEN_SHAPES_PIN: u64 = 0xeb60_634f_6b5f_c9ac;
+// Number entry (Live TV PR5) joins as `AppArg::ChannelEntry` (canon tag 16) with the panel's `channel_entry_panel::SHAPE`.
+// Previous pin: 0xeb60_634f_6b5f_c9ac.
+const SCREEN_SHAPES_PIN: u64 = 0x62a1_9fdc_6c66_d317;
 
 #[cfg(test)]
 mod arg_tests {
@@ -3579,6 +3630,7 @@ mod a11y_coverage_tests {
             AppArg::AltSources(_) => Covered("AltSources", crate::alt_sources::tests::focus_and_hit::alt_sources_conforms),
             AppArg::VersionsPanel(_) => Covered("VersionsPanel", crate::versions_panel::tests::versions_panel_conforms),
             AppArg::PreplayPanel(_) => Covered("PreplayPanel", crate::preplay_panel::tests::preplay_panel_conforms),
+            AppArg::ChannelEntry(_) => Covered("ChannelEntry", crate::channel_entry_panel::tests::channel_entry_conforms),
             AppArg::TracksPanel(_) => Covered("TracksPanel", crate::tracks_panel::tests::tracks_panel_conforms),
             AppArg::AboutPanel => Covered("AboutPanel", crate::about_panel::tests::about_panel_conforms),
             AppArg::PersonBio => Covered("PersonBio", crate::person_bio::tests::person_bio_conforms),
@@ -3634,10 +3686,10 @@ mod a11y_coverage_tests {
         }
     }
 
-    /// How many leaf arms the table has: 23 flat `AppArg` arms, 5 `ContentArg`, 23 `SettingsPage` and
+    /// How many leaf arms the table has: 24 flat `AppArg` arms, 5 `ContentArg`, 23 `SettingsPage` and
     /// `FirstRunConsent`. A new arm fails [`coverage`] to compile, and then this to pass until the census
     /// below holds it too.
-    const ARMS: usize = 52;
+    const ARMS: usize = 53;
 
     /// **A value of every leaf arm** the table names: the registry's own page and surface censuses, plus
     /// the arms those leave out (Filmography and every Settings page).

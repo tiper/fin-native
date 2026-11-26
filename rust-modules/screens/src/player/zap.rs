@@ -11,6 +11,7 @@
 //!   Idle --Step--> Pending{target, last} --Step--> Pending{target', now}   (the window restarts)
 //!   Pending --Tick, DEBOUNCE_MS after the last press, target is not what plays--> Tuning{target}  + Effect::Tune(target)
 //!   Pending --Tick, DEBOUNCE_MS after the last press, target IS what plays--> Idle   (Up then Down: nothing to retune)
+//!   Idle | Pending | Tuning --Jump{target}--> Pending{target, a window already run out}   (number entry chose it: the next tick tunes)
 //!   Tuning --Step--> Pending{next of target, now}     (a press after the tune fired: a new window)
 //!   Tuning --Session: the session plays target and its first frame is up--> Idle
 //!   Tuning --Refused: the app took no request for the tune (AppMsg::LiveTuneRefused)--> Idle
@@ -50,6 +51,10 @@ pub enum Zap {
 pub enum ZapEvent<'a> {
     /// ▲ / CH+ (`dir` +1) or ▼ / CH- (-1) at `now`, over `lineup` (in number order), the session playing `playing`
     Step { dir: i32, lineup: &'a [Channel], playing: Option<&'a Channel>, now: u32 },
+    /// number entry chose `target` at `now` (Live TV PR5): a target stood on directly, not stepped to. It tunes at the
+    /// next tick: the viewer already waited for it (the entry's own 2.5 s, or a number that fits one channel), so it
+    /// carries no debounce window of its own, and it follows the same art, banner, session and refusal path as a step.
+    Jump { target: &'a Channel, now: u32 },
     /// time passing; `playing` is what the session plays, so a window that closes on the channel already playing
     /// asks for nothing
     Tick { now: u32, playing: Option<&'a Channel> },
@@ -92,6 +97,11 @@ impl Zap {
                 }
                 let next = if dir < 0 { at.checked_sub(1).unwrap_or(lineup.len() - 1) } else { (at + 1) % lineup.len() };
                 *self = Zap::Pending { target: lineup[next].clone(), last: now };
+                ZapEffect::None
+            }
+            ZapEvent::Jump { target, now } => {
+                // a window that has already run out: the next tick starts the stream
+                *self = Zap::Pending { target: target.clone(), last: now.wrapping_sub(DEBOUNCE_MS) };
                 ZapEffect::None
             }
             ZapEvent::Tick { now, playing } => match self {
@@ -223,7 +233,21 @@ impl Live {
 
     /// BACK / STOP: the viewer is leaving, so no tune may follow the Exit the same frame the debounce would have closed.
     pub fn leave(&mut self) {
+        self.cancel_zap();
+    }
+
+    /// Drop a pending zap: no tune may follow. BACK / STOP leave this way, and so does a digit that opens number
+    /// entry, so a press run's window cannot close under the panel and tune a channel the viewer is typing past.
+    pub fn cancel_zap(&mut self) {
         self.zap.step(ZapEvent::Cancel);
+    }
+
+    /// Number entry chose `target` ([`ZapEvent::Jump`]): the banner and the art follow it at once and the next tick
+    /// asks for the one tune, exactly as a zap's does.
+    pub fn jump(&mut self, target: &Channel, o: &Observed<'_>) {
+        self.zap.step(ZapEvent::Jump { target, now: o.now });
+        self.art.step(ArtEvent::Zapping, o.now);
+        self.reveal(o.now);
     }
 
     /// The app started a stream on this page (`AppMsg::PlayerStart`: a tune, or a zap landing): the banner is raised.

@@ -260,5 +260,8 @@
   "widgets.verdict.tuners_busy": "Tous les tuners sont occupés",
   "widgets.live.channel_context": "{number} · {programme}",
   "widgets.live.badge": "EN DIRECT",
-  "widgets.live.next_at": "Ensuite à {time}"
+  "widgets.live.next_at": "Ensuite à {time}",
+  "widgets.live.entry_none": "Aucune chaîne {number}",
+  "widgets.live.entry_more": "+{count} de plus · ▲ ▼ pour défiler",
+  "widgets.live.playing": "En cours"
 }

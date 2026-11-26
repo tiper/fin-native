@@ -358,15 +358,15 @@ A live channel has **no transport**. `PlayerScreen::hud_drawn` and `hud_up` are 
 scrubber, the control row, Info, Chapters and the track menus are not drawn and cannot be reached; what is drawn is the
 art ground and the banner (`player/live.rs`), and what a key does is `PlayerScreen::live_key`, ahead of the VOD ladder:
 Up, Down, CH+ and CH- step the zap; Left, Right and OK only raise the banner; BACK and STOP leave in ONE press at every phase
-(the debounce, buffering, playing: the VOD transport's hide-first BACK never sees a live channel), and drop a zap still pending so no tune follows the exit; Play/Pause, the digits
-and EXIT fall through to the ladder as before (number entry is the next PR's). A failure read-out still owns the frame
+(the debounce, buffering, playing: the VOD transport's hide-first BACK never sees a live channel), and drop a zap still pending so no tune follows the exit; the digits 0-9 open number
+entry (section below); Play/Pause and EXIT fall through to the ladder as before. A failure read-out still owns the frame
 first, as on any playback. VOD input is untouched: every VOD player test passes unmodified.
 
 The decisions are three named phases in `player/zap.rs`, pure, stepped from keys, the Tick and the app's addressed words
-(`Live::press`, `reveal`, `started`, `refused`, `leave`, `tick`; no clock read, no session read): **`Zap`** (`Idle`,
+(`Live::press`, `reveal`, `started`, `refused`, `leave`, `cancel_zap`, `jump`, `tick`; no clock read, no session read): **`Zap`** (`Idle`,
 `Pending` while presses are collected, `Tuning` after the ask until the session shows the target's first frame) with a
 600 ms debounce (`DEBOUNCE_MS`) and ONE `PlayerReq::Tune` per run of presses, named by the channel's identity. Its events
-are `Step`, `Tick`, `Session`, `Refused` and `Cancel`, all in the table at the top of `zap.rs`: a window that closes on
+are `Step`, `Jump`, `Tick`, `Session`, `Refused` and `Cancel`, all in the table at the top of `zap.rs`: a window that closes on
 the channel already playing (Up then Down, or a full lap) ends in `Idle` and asks for nothing; a tune the app took no
 request for ends the zap on **`AppMsg::LiveTuneRefused`** (sent by `app::playback::tune_live_channel`'s refusal arm), never
 on an inference from timing; BACK / STOP are `Cancel`. **`Art`** is driven by one `ArtEvent` a frame (`Zapping`, `NoFrame`,
@@ -388,3 +388,25 @@ live predicate is `plx_media::route::is_live(ps)`; `HudModel` carries no live fl
 stops it and tells the page the player was launched from (`bridge::seat_live_channel`, `AppMsg::LiveTvSeat`, a covered
 page still receives an addressed command); `LiveTvScreen` keeps it and, on `Enter::Restored`, seats that channel's card:
 its Recent tile, else its On now poster, else its Channels tile (`left_elem`). OK on that card tunes it again.
+
+## Number entry (Live TV PR5)
+
+A digit typed on the What's on page or over the live player opens **one registered surface**, `AppArg::ChannelEntry`
+(`channel_entry_panel.rs`, canon tag 16, page id 33, namespace `channel_entry`): a top-right panel on the safe frame
+(`ui::popover::corner_panel`: right 96, top 54, 560 wide) with the typed number, a window of five rows on `TableView`'s
+lineup face (`TableView::lineup`, `Row::lead`: the number in its own column, the station beside it) and "+N more" under
+the window. **What it decides is one pure machine**, `channel_entry::NumberEntry` (`Fresh`, `Typing`, `Done`; events
+`Digit`, `Moved`, `Touch`, `Ok`, `Back`, `Tick`; one effect, `Seat`, `Tune` or `Leave`; time passed in): the digits
+narrow the lineup by PREFIX of each number's DIGITS (`6.1` is `61`: there is no dot key; the row shows `6.1`); a prefix that fits exactly ONE channel tunes at once, anything else only seats the highlight
+(the exact match, else the first that is not on screen) and waits `IDLE_MS` (2.5 s) after the last key, which restarts on
+every key; OK tunes the highlight, BACK closes with no tune; the channel already on screen is tagged "Playing" and never
+retuned. The panel reports a choice as `AppMsg::LiveChannelPicked` to the instance named on its argument and starts
+nothing itself, so a pick takes the host's own tune path: the page's `ContentReq::Play`, and over the player
+`ZapEvent::Jump` (`Live::jump`), which makes the ONE `PlayerReq::Tune` on the next frame with the banner and art
+following, exactly as a zap. The page opens it as `ContentPanel::ChannelEntry` (`Style::Compact`); the player asks
+`PlayerReq::OpenChannelEntry`, presented as `Style::PlayerPanel` (`bridge::open_channel_entry`), which leaves the host
+live so the video plane keeps presenting under it, and the digit drops a zap still pending (`Live::cancel_zap`).
+It is one surface however many keys ask for it: a request for a panel that is mounted is refused (the key reaches it as
+input), and one for a panel whose `Present` is still parked for this frame's commit is folded into the parked argument
+as one more opening digit (`bridge::present_once`, `Dispatcher::parked_present_mut`, `AppArg::absorb`). A panel dismissed
+from outside (a press that misses it) hears `Closing` and stops acting, so its timer cannot tune afterwards.

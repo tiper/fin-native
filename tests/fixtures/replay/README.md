@@ -765,3 +765,9 @@ observed refused and recorded afresh (`tests/focusfp.sh --rec --only 12,13`, `pl
 preserved; shape `5605084147580227429`). `make check-replay` replays them SAME in Targets and Resolve (902 and 1204 frames,
 every difference counter zero); the four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md`
 has the record.
+
+Number entry (Live TV PR5) added the registered surface `AppArg::ChannelEntry` to the screen census, which moved
+`SCREEN_SHAPES_PIN` again, so the two current anchors were recorded afresh
+(`tests/focusfp.sh --rec --only 12,13`, `plxnative-rec rerecord`, `anchor: true` preserved; shape `8097297399644097420`).
+`make check-replay` replays them SAME in Targets and Resolve (908 and 1204 frames, every difference counter zero); the
+four historical fixtures keep their expected refusal. `docs/ui-replay-v13-anchor.md` has the record.

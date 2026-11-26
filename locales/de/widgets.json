@@ -256,5 +256,8 @@
   "widgets.verdict.tuners_busy": "Alle Tuner sind belegt",
   "widgets.live.channel_context": "{number} · {programme}",
   "widgets.live.badge": "LIVE",
-  "widgets.live.next_at": "Danach um {time}"
+  "widgets.live.next_at": "Danach um {time}",
+  "widgets.live.entry_none": "Kein Sender {number}",
+  "widgets.live.entry_more": "+{count} weitere · ▲ ▼ zum Scrollen",
+  "widgets.live.playing": "Läuft"
 }

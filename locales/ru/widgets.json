@@ -264,5 +264,8 @@
   "widgets.verdict.tuners_busy": "Все тюнеры заняты",
   "widgets.live.channel_context": "{number} · {programme}",
   "widgets.live.badge": "В ЭФИРЕ",
-  "widgets.live.next_at": "Дальше в {time}"
+  "widgets.live.next_at": "Дальше в {time}",
+  "widgets.live.entry_none": "Нет канала {number}",
+  "widgets.live.entry_more": "ещё +{count} · ▲ ▼ для прокрутки",
+  "widgets.live.playing": "Идёт"
 }

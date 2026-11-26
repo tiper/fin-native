@@ -137,6 +137,76 @@ fn note_tune(app: &mut App) {
     app.runtime.bridge(&mut app.bridge).note_live_tune(&app.player.session);
 }
 
+/// A digit key's press, as the keyboard or a remote delivers it.
+fn digit_press(d: u8, now: u32) -> InputEvent<u32> {
+    InputEvent {
+        at: Tick { ms: now, dt_us: 16_000 },
+        source: plx_machine::machine::Source::Script,
+        kind: plx_machine::machine::InputKind::Key {
+            key: Key::Other,
+            sym: 48 + u32::from(d),
+            wcode: 0,
+            edge: plx_machine::machine::Edge::Down,
+            at_edge: false,
+        },
+    }
+}
+
+/// The number-entry surfaces in the tree, with what each has typed.
+fn entries(app: &App) -> Vec<String> {
+    app.pages.nav.modals.surfaces.iter().filter_map(|s| {
+        let panel = s.entry.inst.as_ref()?.screen.as_any()?.downcast_ref::<plx_screens::channel_entry_panel::ChannelEntryScreen>()?;
+        Some(panel.machine().typed().to_string())
+    }).collect()
+}
+
+/// **Two digits in one frame open ONE number entry, with both digits.** A surface mounts at the commit, once a frame, so
+/// the second key's request cannot see the first panel in the tree: it must be folded into the parked request, not
+/// presented again (two panels would each tune their own highlight, and the lower one would tune after the top one
+/// was dismissed or still reads "No channel").
+#[test]
+fn two_digits_in_one_frame_open_one_number_entry_over_the_player() {
+    let _serial = plx_base::testlock::serial();
+    let _session = plx_plex::plex::session::TempSession::new("livetv-entry-two-digits");
+    plx_plex::plex::reset_servers_for_test();
+    let mut app = app();
+    let mut now = 0;
+    open_live(&mut app, &mut now);
+    start_channel(&mut app, &mut now);
+    note_tune(&mut app);
+    let publish = |app: &mut App| app.runtime.bridge(&mut app.bridge).publish_playback(&app.player.session, true, None);
+    publish(&mut app);
+    let at = now + 16;
+    step(&mut app, &mut now, vec![digit_press(1, at), digit_press(0, at)]);
+    for _ in 0..24 {
+        publish(&mut app);
+        step(&mut app, &mut now, Vec::new());
+    }
+    assert_eq!(entries(&app), vec!["10".to_string()], "one surface, typed with both keys");
+    // a third key reaches that one surface as input, not a second panel
+    publish(&mut app);
+    let at = now + 16;
+    step(&mut app, &mut now, vec![digit_press(2, at)]);
+    publish(&mut app);
+    step(&mut app, &mut now, Vec::new());
+    assert_eq!(entries(&app).len(), 1);
+}
+
+/// The same over the What's on page, where the panel is a `ContentPanel`.
+#[test]
+fn two_digits_in_one_frame_open_one_number_entry_over_the_page() {
+    let _serial = plx_base::testlock::serial();
+    let _session = plx_plex::plex::session::TempSession::new("livetv-entry-two-digits-page");
+    plx_plex::plex::reset_servers_for_test();
+    let mut app = app();
+    let mut now = 0;
+    open_live(&mut app, &mut now);
+    let at = now + 16;
+    step(&mut app, &mut now, vec![digit_press(1, at), digit_press(0, at)]);
+    settle(&mut app, &mut now);
+    assert_eq!(entries(&app), vec!["10".to_string()]);
+}
+
 /// The server admits the tune the rig's plan resolution never makes: the session holds a live session
 /// and the landing notes it, as `run`'s `pump_play` arm does for a real tune.
 fn admit(app: &mut App) {

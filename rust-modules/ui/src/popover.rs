@@ -250,6 +250,24 @@ impl Placement {
         overflow: Overflow::ClampToRoom,
         keep: crate::consts::SAFE,
     };
+
+    /// A panel with no opener, in the safe frame's top-right corner ([`corner_panel`]): below the
+    /// corner point, hung from its right edge, the height cut to the room under it.
+    pub const CORNER: Placement = Placement {
+        order: SideOrder::Fixed(&[Side::Below]),
+        cross: Cross::Hang,
+        overflow: Overflow::ClampToRoom,
+        keep: crate::consts::SAFE,
+    };
+}
+
+/// **A panel that no control opened, in the safe frame's top-right corner** (Live TV's number entry,
+/// SPEC-5: right 96, top 54): [`anchor_panel`] over a zero-size anchor at the corner, so the panel's
+/// right edge is the frame's and its top is the frame's. `size` is the panel's own `(w, h)`; the side
+/// is `Below`, so [`Popover::rise_offset`] settles it down into place.
+pub fn corner_panel(w: f32, h: f32) -> Anchored {
+    let keep = Placement::CORNER.keep;
+    anchor_panel(Rect::new(keep.x + keep.w, keep.y, 0.0, 0.0), (w, h), h, 0.0, Placement::CORNER)
 }
 
 /// [`anchor_panel`]'s answer: the panel's rect and the side of the anchor it took (which is where

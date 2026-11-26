@@ -323,20 +323,100 @@ fn a_refused_tune_ends_the_zap_on_the_apps_word() {
     assert!(page.live.zap.is_idle());
 }
 
-/// What the live page does not take stays the page's: the digits (number entry is PR5) and the transport's
-/// play/pause.
+/// What the live page does not take stays the page's: the transport's play/pause.
 #[test]
-fn digits_and_play_pause_keep_their_meaning_on_a_live_channel() {
+fn play_pause_keeps_its_meaning_on_a_live_channel() {
     let _g = plx_base::testlock::serial();
     let (ps, mut page) = live(101, PlaybackState::Playing);
     frames(&ps, &mut page, 0, 64);
-    // the "5" key: not a zap, not an exit, not a banner
-    let (handled, reqs) = down(&ps, &mut page, 53, 0, 1_000);
-    assert_eq!((handled, reqs), (Handled::No, Vec::new()));
-    assert!(page.live.zap.is_idle());
     let (handled, reqs) = down(&ps, &mut page, 0, plx_ui::consts::WCODE_PLAYPAUSE, 1_100);
     assert_eq!(handled, Handled::Yes);
     assert!(!reqs.is_empty() && !reqs.contains(&PlayerReq::Exit), "{reqs:?}");
+}
+
+/// The request that opens number entry over channel `n`, which is the one on screen.
+fn open_entry(n: u32, first: u8) -> PlayerReq {
+    let c = ch(n);
+    PlayerReq::OpenChannelEntry { first, playing: Some((c.sid, c.dvr, c.channel)) }
+}
+
+fn picked(n: u32) -> ScreenEvent<TestHost> {
+    let c = ch(n);
+    ScreenEvent::App(AppMsg::LiveChannelPicked { sid: c.sid, dvr: c.dvr, channel: c.channel })
+}
+
+/// **A digit over a live channel opens number entry** (Live TV PR5): one request naming the digit and the channel on
+/// screen, nothing tuned, no banner. The digit's own kinds (the keypad's `sym` or the remote's `wcode`) both count, and
+/// a held digit or its release asks for nothing more.
+#[test]
+fn a_digit_opens_number_entry_over_a_live_channel() {
+    let _g = plx_base::testlock::serial();
+    for (sym, wcode, digit) in [(53, 0, 5), (0, 53, 5), (48, 0, 0), (57, 0, 9)] {
+        let (ps, mut page) = live(101, PlaybackState::Playing);
+        frames(&ps, &mut page, 0, 64);
+        let (handled, reqs) = down(&ps, &mut page, sym, wcode, 1_000);
+        assert_eq!((handled, reqs), (Handled::Yes, vec![open_entry(101, digit)]), "sym {sym} wcode {wcode}");
+        assert!(page.live.zap.is_idle());
+        for edge in [Edge::Repeat, Edge::Up] {
+            assert_eq!(key(&ps, &mut page, sym, wcode, edge, 1_050), (Handled::Yes, Vec::new()), "{edge:?}");
+        }
+    }
+}
+
+/// **A pending zap is cancelled when number entry opens**: a run of presses whose window had not closed must not
+/// tune under the panel, and the entry's own pick is the only tune that follows.
+#[test]
+fn opening_number_entry_cancels_a_pending_zap() {
+    let _g = plx_base::testlock::serial();
+    let (ps, mut page) = live(101, PlaybackState::Playing);
+    frames(&ps, &mut page, 0, 64);
+    down(&ps, &mut page, SDLK_UP, 0, 1_000);
+    assert!(matches!(page.live.zap, Zap::Pending { .. }));
+    let (handled, reqs) = down(&ps, &mut page, 53, 0, 1_100);
+    assert_eq!((handled, reqs), (Handled::Yes, vec![open_entry(101, 5)]), "the panel names the channel ON SCREEN, not the zap's target");
+    assert!(page.live.zap.is_idle(), "the pending zap is gone");
+    assert_eq!(frames(&ps, &mut page, 1_116, 2_500), Vec::<PlayerReq>::new(), "the window closes on nothing");
+}
+
+/// **A pick from number entry is one `PlayerReq::Tune`**, through the same zap path (no second tune path): the
+/// banner and the art follow the channel at once, the tune is asked for on the next frame, once, and the session
+/// landing on it settles everything.
+#[test]
+fn a_pick_from_number_entry_is_one_tune_through_the_zap() {
+    let _g = plx_base::testlock::serial();
+    let (ps, mut page) = live(101, PlaybackState::Playing);
+    frames(&ps, &mut page, 0, 64);
+    let (handled, reqs) = run(&ps, &mut page, 1_000, picked(103));
+    assert_eq!((handled, reqs), (Handled::Yes, Vec::new()), "the pick asks for nothing by itself: the frame does");
+    assert_eq!(shown(&ps, &page).as_deref(), Some("103"), "the banner follows the pick");
+    assert_eq!(page.live.banner_alpha(1_000), 1.0);
+    assert_eq!((page.live.art, page.live.art_alpha(1_000)), (Art::Covering, 1.0), "the target's art covers the picture");
+    let (asked_at, reqs) = until_asked(&ps, &mut page, 1_016);
+    assert_eq!((reqs, asked_at), (vec![tune_of(103)], 1_016), "one Tune, on the next frame: the viewer already waited");
+    assert_eq!(frames(&ps, &mut page, asked_at + 16, asked_at + 2_000), Vec::<PlayerReq>::new(), "and no second");
+    assert!(matches!(page.live.zap, Zap::Tuning { .. }));
+    // the channel lands: the art fades, the zap ends
+    let (landed, _) = live(103, PlaybackState::Playing);
+    frames(&landed, &mut page, asked_at + 2_016, asked_at + 3_000);
+    assert!(page.live.zap.is_idle());
+    assert_eq!(page.live.art, Art::Settled);
+    assert_eq!(shown(&landed, &page).as_deref(), Some("103"));
+}
+
+/// A channel the lineup no longer lists is not tuned, and a tune the app refuses ends the pick on the app's word.
+#[test]
+fn a_pick_of_a_vanished_channel_tunes_nothing_and_a_refused_one_ends() {
+    let _g = plx_base::testlock::serial();
+    let (ps, mut page) = live(101, PlaybackState::Playing);
+    frames(&ps, &mut page, 0, 64);
+    run(&ps, &mut page, 1_000, picked(900));
+    assert!(page.live.zap.is_idle());
+    assert_eq!(frames(&ps, &mut page, 1_016, 2_000), Vec::<PlayerReq>::new());
+    run(&ps, &mut page, 3_000, picked(104));
+    let (asked_at, reqs) = until_asked(&ps, &mut page, 3_016);
+    assert_eq!(reqs, vec![tune_of(104)]);
+    run(&ps, &mut page, asked_at + 16, ScreenEvent::App(AppMsg::LiveTuneRefused));
+    assert!(page.live.zap.is_idle());
 }
 
 /// A lineup with nothing to step to leaves the press a no-op that still swallows it.

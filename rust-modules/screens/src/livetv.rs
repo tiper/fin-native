@@ -31,7 +31,7 @@ use plx_ui::fmt::{self, Airing, AiringPhase, Wall};
 use plx_ui::tile::Resume;
 use plx_ui::widgets::{AmbientWash, Art, PageGround, StatusKind, StatusOverlay};
 use plx_ui::{Env, Rect};
-use crate::registry::{captions, tile_facts, AppFx, AppMsg, ContentReq, HomeReq, HomeTab, LiveTvLike, PlayIntent};
+use crate::registry::{captions, tile_facts, AppFx, AppMsg, ContentPanel, ContentReq, HomeReq, HomeTab, LiveTvLike, PlayIntent};
 
 #[cfg(test)]
 pub(crate) mod cards_harness;
@@ -482,9 +482,14 @@ impl LiveTvScreen {
         let view = H::livetv(cx);
         let channel = view.channels.get(index)?;
         if elem % 2 == 1 && channel.now.is_empty() { return None; }
-        Some(ContentReq::Play { play: PlayIntent::Live {
+        Some(Self::play(channel))
+    }
+
+    /// Play a channel: the one request a card's OK and number entry's pick both make.
+    fn play(channel: &Channel) -> ContentReq {
+        ContentReq::Play { play: PlayIntent::Live {
             sid: channel.sid, dvr: channel.dvr.clone(), channel: channel.channel.clone(), title: channel.name.clone(),
-        }, resume_ns: 0 })
+        }, resume_ns: 0 }
     }
 
     fn tick<H: LiveTvLike>(&mut self, t: Tick, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
@@ -693,6 +698,24 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
             }
             ScreenEvent::App(AppMsg::LiveTvSeat { sid, dvr, channel }) => {
                 self.left = Some((*sid, dvr.clone(), channel.clone()));
+                Handled::Yes
+            }
+            // number entry chose a channel: played through the page's own play path, like a card's OK
+            ScreenEvent::App(AppMsg::LiveChannelPicked { sid, dvr, channel }) => {
+                let lineup = H::livetv(cx).channels;
+                if let Some(c) = lineup.iter().find(|c| c.sid == *sid && c.dvr == *dvr && c.channel == *channel) {
+                    fx.push(Fx::App(AppFx::Content(Self::play(c))));
+                    fx.invalidate(Provenance::Input);
+                }
+                Handled::Yes
+            }
+            // a digit opens number entry over the page (PR5); a page with no lineup has no number to type
+            ScreenEvent::Input(InputEvent { kind: InputKind::Key { sym, wcode, edge: Edge::Down, at_edge: false, .. }, .. })
+                if pin_digit(*sym, *wcode).is_some() && !H::livetv(cx).channels.is_empty() =>
+            {
+                let first = pin_digit(*sym, *wcode).map_or(0, |d| d - b'0');
+                fx.push(Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::ChannelEntry { first }))));
+                fx.invalidate(Provenance::Input);
                 Handled::Yes
             }
             ScreenEvent::Uncover => {

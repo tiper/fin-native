@@ -73,7 +73,7 @@
     "pat:solid:[0-9]+(\\.[0-9]+)?(:[0-9]+(\\.[0-9]+)?)?",
     "txt:s[0-9a-f]{8}(\\+s[0-9a-f]{8})*",
     "press phase=(idle|down|up) live=[01] active=[01] long=[01]",
-    "(about|account|alt|audio|bio|catalog|collection|consent|contribute|detail|diagnostics|filmography|home|hud-about|hud-detail|hud-gallery|hud-preview|itemmenu|language|legal|legal-document|library|library-order|library_menu|livetv|login|menu|more|nav|onboard|person|picker|playback|player|player-hud|preplay|privacy|privacy-preview|profiles|recommended|search|settings|settings-about|timing|tracks|under-posters|under-posters-movie|under-posters-show|versions|watchlist|watchlist_menu)(\\.([a-z][a-z0-9_]*|0|[1-9][0-9]*)){1,6}"
+    "(about|account|alt|audio|bio|catalog|channel_entry|collection|consent|contribute|detail|diagnostics|filmography|home|hud-about|hud-detail|hud-gallery|hud-preview|itemmenu|language|legal|legal-document|library|library-order|library_menu|livetv|login|menu|more|nav|onboard|person|picker|playback|player|player-hud|preplay|privacy|privacy-preview|profiles|recommended|search|settings|settings-about|timing|tracks|under-posters|under-posters-movie|under-posters-show|versions|watchlist|watchlist_menu)(\\.([a-z][a-z0-9_]*|0|[1-9][0-9]*)){1,6}"
   ],
   "literals": [
     "a11y: refused focus nav.watchlist unknown owner=filmography",
