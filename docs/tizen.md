@@ -405,7 +405,7 @@ Measured on the TV 10.0 emulator against `tests/mock_pms.py`:
 **Not measured:** a retail set. Whether Smart Hub stays hidden, and what the letterbox bars show (the plane's own background,
 expected black), is the tester's next nightly.
 
-## The media keys are grabbed (retail report and emulator run, 2026-11-26)
+## The media keys are grabbed (retail report and emulator runs, 2026-11-26)
 
 On the first retail set (discussion #1460) the remote's dedicated Play/Pause key paused and resumed the video, and the TV also
 raised its own "Not Available" popup. The OK button did not raise it. A key the window has not grabbed is delivered to the app
@@ -423,7 +423,14 @@ Measured on the TV 10.0 emulator:
 - The log reads `ecore: media keys grabbed TOPMOST; refused []`.
 - During playback, Pause (`XF86AudioPause`, code 209) still reaches the app and pauses (`player event Paused`), and Play
   (`XF86AudioPlay`, code 208) resumes (`Started`).
-- The emulator raised no popup before or after the change.
+- The skin remote's Play/Pause button is `KEY_PLAY_PAUSE`, code 244, in the skin's `controller/Smart(2016)/layout.xml`.
+  The skin numbers its buttons in evdev (Up is 103), and `ecp-cli keycode` takes the same numbers, so `ecp-cli keycode 244`
+  presses it from a script. The app receives it as X keycode 252, `XF86PlayBack` -> `PlayPause`.
+- The popup appears about 1 s after the key and stays about 2.5 s, so a capture taken right after the key misses it. Frames
+  captured every 300 ms for 4 s after code 244:
+  - on Smart Hub, where no app grabs the key: "Not Available" shows;
+  - on the app's Home, built before the grab (2026-11-25): "Not Available" shows;
+  - on the app's Home, built with the grab: the log reads the key and no popup shows.
 
 **Not measured:** whether the popup is gone on a retail set, and which name the retail remote's toggle key sends. It is the
 tester's next nightly.

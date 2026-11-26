@@ -741,8 +741,8 @@ E10-E13 are later runs on the same emulator. Measured on the emulator only; no r
   Samsung; ES2 context, RGBA8888; `eglMakeCurrent` on the Rust render thread; `eglSwapInterval(0)`
   then 1; renderer "YaGL GLESv2"; first frame presented, `glGetError` 0. The emulator draws through
   YaGL over llvmpipe, so this is no GPU, compositor or frame-rate result.
-- E7. Keys. Injected with `ecp-cli` as evdev events: Right keycode 114, Left 113, Up 111, Down 116 and
-  Return 36, reported as Ecore key names. Every press changed the colour. Key to frame took 8-30 ms (key
+- E7. Keys. Injected with `ecp-cli keycode`, which takes evdev numbers (Right 106, Left 105, Up 103, Down 108,
+  Return 28); the app reported X keycodes (evdev + 8: Right 114, Left 113, Up 111, Down 116, Return 36) and Ecore key names. Every press changed the colour. Key to frame took 8-30 ms (key
   on the host thread, colour on the render thread): an emulator figure, not a retail one. Back, media
   keys, digits and the channel rocker were not exercised by this run (the colour button came later, E11), and a
   retail remote's codes are not measured.
