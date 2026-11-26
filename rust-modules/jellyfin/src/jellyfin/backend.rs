@@ -271,7 +271,7 @@ impl JfBackend {
         let mut p = transcode::plan(m, spec, &dev)?;
         if let Some(v) = server {
             if p.copy_video == !v.video_encode && p.copy_audio == !v.audio_encode {
-                p.server_url = v.url;
+                p.server_url = v.url.map(|u| transcode::server_stream(&u, p.burn_subtitle));
             }
         }
         Some((c, p))

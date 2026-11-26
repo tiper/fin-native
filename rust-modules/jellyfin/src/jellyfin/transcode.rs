@@ -15,7 +15,7 @@
 //! Jellyfin's HLS is not offered: the player's segmented route is built for Plex's playlist shape
 //! and credential, so a request for it is refused and the player keeps to the progressive stream.
 
-use super::paths::Transcode;
+use super::paths::{append_param, without_param, Transcode};
 use super::playback_info::Encoders;
 use super::time::ms_to_ticks;
 use plx_plex::plex::{Ceiling, MediaContainer, Metadata, Stream, TranscodeDelivery, TranscodeOffset, TranscodeSource, TranscodeSpec};
@@ -196,6 +196,18 @@ pub fn plan(mut m: Metadata, spec: &TranscodeSpec<'_>, dev: &Device<'_>) -> Opti
         decision: refusal.unwrap_or(MediaContainer { size: 1, total_size: 1, metadata: vec![m], ..Default::default() }),
         server_url: None,
     })
+}
+
+/// The server's own stream (`Verdict::url`) with its subtitle replaced by a burn of `burn_subtitle`,
+/// or none: the server names no burn for a profile that draws text subtitles, and a re-encode shows
+/// only the server's burn (#49).
+pub fn server_stream(url: &str, burn_subtitle: Option<i64>) -> String {
+    let mut url = without_param(&without_param(url, "SubtitleMethod"), "SubtitleStreamIndex");
+    if let Some(index) = burn_subtitle {
+        append_param(&mut url, "SubtitleStreamIndex", &index.to_string());
+        append_param(&mut url, "SubtitleMethod", "Encode");
+    }
+    url
 }
 
 /// The position of the audio track to carry: the one asked for, else the selected one, else the
@@ -398,6 +410,16 @@ mod tests {
         s.client_subtitles = true;
         s.subtitle_stream_id = 0;
         assert_eq!(plan(item("h264", &[("aac", 2)]), &s, &device()).unwrap().burn_subtitle, None);
+    }
+
+    #[test]
+    fn the_servers_stream_burns_the_planned_subtitle_and_nothing_else() {
+        let url = "/v/stream.mkv?MediaSourceId=s&SubtitleStreamIndex=3&SubtitleMethod=Embed&TranscodeReasons=VideoBitrateNotSupported";
+        assert_eq!(server_stream(url, Some(5)),
+                   "/v/stream.mkv?MediaSourceId=s&TranscodeReasons=VideoBitrateNotSupported&SubtitleStreamIndex=5&SubtitleMethod=Encode");
+        assert_eq!(server_stream("/v/stream.mkv?MediaSourceId=s", Some(2)),
+                   "/v/stream.mkv?MediaSourceId=s&SubtitleStreamIndex=2&SubtitleMethod=Encode");
+        assert_eq!(server_stream(url, None), "/v/stream.mkv?MediaSourceId=s&TranscodeReasons=VideoBitrateNotSupported");
     }
 
     // The model spells DTS Plex's way ("dca"); the server matches a copy against "dts".
