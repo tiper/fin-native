@@ -1257,7 +1257,7 @@ mirrored in `img.rs`'s decode-budget note.
 
 | UI element | request (all `minSize=1`) | source aspect differs from the box → |
 |---|---|---|
-| Poster card | `width=250&height=375`, `url=thumb` | long side overshoots; cropped at draw (`art_uv`), except on Live TV's On now and Channels shelves (`RowStyle::PROGRAMME`), where art more than 8% off 2:3 is contained whole over its own blurred copy (`art_fit::place`), or, for art with transparency (a channel's logo), over the flat Recent-plate ground instead of a blur (`art_fit::BackdropSpec::ground`) |
+| Poster card | `width=250&height=375`, `url=thumb` | long side overshoots; cropped at draw (`art_uv`), except on Live TV's On now shelf (`RowStyle::PROGRAMME`), where art more than 8% off 2:3 is contained whole over its own blurred copy (`art_fit::place`), or, for a programme image with transparency, over the flat Recent-plate ground instead of a blur (`art_fit::BackdropSpec::ground`); Live TV's Channels shelf is not a poster row, it draws the 250 x 140 channel plate |
 | Landscape still (episode / shelf) | `width=420&height=236`, still → show art → poster | cropped at draw (`art_uv`) |
 | Person headshot, profile avatar | `width=300&height=300`, `url=thumb` | cropped at draw, headshots riding high (`Crop::Headshot`) |
 | Profile chip avatar | `width=128&height=128` | cropped at draw |

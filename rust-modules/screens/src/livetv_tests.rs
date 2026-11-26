@@ -148,7 +148,8 @@ fn own_store_supplies_adjacent_recent_and_on_now_shelves_with_distinct_art() {
     assert_eq!((StackPage::<TestHost>::shelf_foot(&screen.page, &context, Sec::Channels), StackPage::<TestHost>::shelf_foot_open(&screen.page, &context, Sec::Channels)), (0.0, 0.0));
     let channels = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Channels).unwrap();
     assert_eq!(CardSource::<TestHost>::len(&channels), 1, "the channel without a programme that is not in Recent");
-    assert!(matches!(CardSource::<TestHost>::art(&channels, 0), Art::Poster(Some(_))), "the lineup's own tile");
+    let Art::Channel { logo, number, name, .. } = CardSource::<TestHost>::art(&channels, 0) else { panic!("a channel plate") };
+    assert_eq!((logo, number, name), ("/logos/103.jpg", "103", "Music"), "the same plate as Recent's");
     assert_eq!(CardSource::<TestHost>::elem(&channels, 0), FIRST_CARD_ELEM + 4, "channel 103, its tile on the even elements");
     let recent_cards = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Recent).unwrap();
     let now = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Now).unwrap();
@@ -237,9 +238,9 @@ fn an_empty_recent_is_no_recent_shelf_with_programmes_on_with_a_bare_lineup_or_w
                 assert_eq!((len(Sec::Now), len(Sec::Channels)), (0, 2), "{case}: the lineup shelf");
                 assert_eq!(screen.page.regions().content, &[CHANNELS_GROUP], "{case}");
                 assert_eq!(screen.page.mode, Mode::ChannelsOnly, "{case}");
-                assert!(matches!(specs[3].kind, Kind::Shelf { style, .. } if *style == NOW_STYLE), "{case}: the earlier shelf's own row style");
+                assert!(matches!(specs[3].kind, Kind::Shelf { style, .. } if *style == PLATE_STYLE), "{case}: the plate style, Recent's");
                 let cards = first.as_ref().expect("lineup cards");
-                assert!(matches!(CardSource::<TestHost>::art(cards, 0), Art::Poster(Some(_))), "{case}: a poster tile, not a plate");
+                assert!(matches!(CardSource::<TestHost>::art(cards, 0), Art::Channel { .. }), "{case}: a channel plate, not a poster tile");
                 assert!(CardSource::<TestHost>::progress(cards, 0).is_none(), "{case}");
                 assert_eq!(CardSource::<TestHost>::elem(cards, 1), FIRST_CARD_ELEM + 2, "{case}");
                 assert_eq!(CardSource::<TestHost>::index_of(cards, &(FIRST_CARD_ELEM + 2)), Some(1), "{case}");
@@ -406,9 +407,9 @@ fn settled_rect(screen: &mut LiveTvScreen, view: LiveTvView<'_>, elem: u32) -> R
 
 /// Scenario A: the tab opens while the lineup is still loading, then a lineup with no guide data arrives. A
 /// shelf's style is copied once when its body is made, so a row that keeps a key across the two draws the
-/// lineup's tiles at the Recent row's size.
+/// lineup's tiles as plates, never as posters.
 #[test]
-fn a_bare_lineup_that_arrives_after_loading_is_drawn_in_poster_tiles() {
+fn a_bare_lineup_that_arrives_after_loading_is_drawn_in_channel_plates() {
     let mut screen = LiveTvScreen::new(ENTRY);
     let loading = LiveTvView::for_test(LiveTvStatus::Loading, &[], &[], 7_777);
     step(&mut screen, loading, None, &ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(RECENT_GROUP) }));
@@ -418,19 +419,19 @@ fn a_bare_lineup_that_arrives_after_loading_is_drawn_in_poster_tiles() {
     let view = store.view();
     step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
     let tile = settled_rect(&mut screen, view, FIRST_CARD_ELEM);
-    assert_eq!((tile.w, tile.h), (RowStyle::HOME.w, RowStyle::HOME.h), "the lineup's tile is a poster, not a 250 x 140 plate");
+    assert_eq!((tile.w, tile.h), (RowStyle::CHANNEL.w, RowStyle::CHANNEL.h), "the lineup's tile is a 250 x 140 plate, not a poster");
 }
 
 /// Scenario B: a lineup with no guide data, then a channel is tuned: it becomes Recent while the others stay
 /// reachable. The Recent plate is a plate (140 tall), whatever the row held before it, and the lineup's
-/// other channels stay in poster tiles.
+/// other channels stay in plates, in the Channels shelf under it.
 #[test]
-fn tuning_a_channel_in_a_bare_lineup_makes_a_plate_and_leaves_the_rest_in_posters() {
+fn tuning_a_channel_in_a_bare_lineup_makes_a_recent_plate_and_leaves_the_rest_in_channel_plates() {
     let (mut store, mut screen) = (LiveTvStore::default(), LiveTvScreen::new(ENTRY));
     store.install_for_test(bare_lineup());
     step(&mut screen, store.view(), None, &ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(RECENT_GROUP) }));
     let first = settled_rect(&mut screen, store.view(), FIRST_CARD_ELEM);
-    assert_eq!((first.w, first.h), (RowStyle::HOME.w, RowStyle::HOME.h), "before the tune: the lineup in poster tiles");
+    assert_eq!((first.w, first.h), (RowStyle::CHANNEL.w, RowStyle::CHANNEL.h), "before the tune: the lineup in plates");
     // channel 102 is tuned: the store bumps its revision and Recent holds it
     store.install_for_test(bare_lineup());
     let recent = [store.view().channels[1].clone()];
@@ -440,7 +441,7 @@ fn tuning_a_channel_in_a_bare_lineup_makes_a_plate_and_leaves_the_rest_in_poster
     assert_eq!((plate.w, plate.h), (RowStyle::CHANNEL.w, RowStyle::CHANNEL.h), "Recent's tile is a 250 x 140 plate");
     for index in [0_u32, 2] {
         let tile = settled_rect(&mut screen, view, FIRST_CARD_ELEM + index * 2);
-        assert_eq!((tile.w, tile.h), (RowStyle::HOME.w, RowStyle::HOME.h), "channel {index} is still reachable, in a poster tile");
+        assert_eq!((tile.w, tile.h), (RowStyle::CHANNEL.w, RowStyle::CHANNEL.h), "channel {index} is still reachable, in a plate");
         assert!(tile.y > plate.y + plate.h, "under Recent");
     }
 }
@@ -495,24 +496,24 @@ fn every_mode_lists_its_rows_and_every_channel_has_a_tile_somewhere() {
     }
 }
 
-/// **The posters contain their art on a backdrop; the plates do not read the fit.** On now and the
-/// Channels shelf stand on `RowStyle::PROGRAMME` (owner 2026-11-26, "square should fit with blurred bg",
-/// over the cover-crop default of #1557), Recent's plates on the cover-fit `CHANNEL` style, and a 2:3
-/// poster draws as it does on Home (`art_fit`'s tests pin the placement itself).
+/// **The posters contain their art on a backdrop; the plates do not read the fit.** On now stands on
+/// `RowStyle::PROGRAMME` (owner 2026-11-26, "square should fit with blurred bg", over the cover-crop default
+/// of #1557), the plates of Recent and Channels on the cover-fit `CHANNEL` style, and a 2:3 poster draws as it
+/// does on Home (`art_fit`'s tests pin the placement itself).
 #[test]
-fn the_poster_rows_contain_their_art_and_the_plates_keep_the_cover_fit() {
+fn the_poster_row_contains_its_art_and_the_plates_keep_the_cover_fit() {
     use plx_ui::art_fit::ArtFit;
     assert_eq!(NOW_STYLE.fit, ArtFit::ContainOnBlur);
-    assert_eq!(RECENT_STYLE.fit, ArtFit::Cover);
+    assert_eq!(PLATE_STYLE.fit, ArtFit::Cover);
     let tile = |s: &RowStyle| (s.w, s.h, s.gap, s.focus_scale, s.radius);
     assert_eq!(tile(&NOW_STYLE), tile(&RowStyle::HOME), "the tile, its pitch and its pop are Home's");
 }
 
-/// **The Channels shelf's own style contains its art**, read off the section the page actually declares
-/// (not the const the page is meant to use): square channel art (a Pluto logo, a "Star Trek" mark) was
-/// cover-cropped at both sides. On now and Channels are `ContainOnBlur`, Recent's plates `Cover`.
+/// **The declared sections' art fits**, read off the sections the page actually declares (not the consts the
+/// page is meant to use): On now's posters are `ContainOnBlur`; the plates of Recent and Channels are `Cover`,
+/// which the plate's logo (contained in its own box) does not read.
 #[test]
-fn the_declared_channels_and_on_now_sections_contain_their_art() {
+fn the_declared_on_now_section_contains_its_art_and_the_plate_sections_keep_the_cover_fit() {
     use plx_ui::art_fit::ArtFit;
     let _policy = captions::PolicyPin::default_setting();
     let (mut store, mut screen) = seeded();
@@ -524,9 +525,30 @@ fn the_declared_channels_and_on_now_sections_contain_their_art() {
     let mut specs = Vec::new();
     StackPage::<TestHost>::sections(&screen.page, &context, &mut specs);
     let fit = |k: Sec| specs.iter().find(|s| s.key == k).and_then(|s| match s.kind { Kind::Shelf { style, .. } => Some(style.fit), _ => None });
-    assert_eq!(fit(Sec::Channels), Some(ArtFit::ContainOnBlur), "the Channels shelf");
+    assert_eq!(fit(Sec::Channels), Some(ArtFit::Cover), "the Channels shelf's plates");
     assert_eq!(fit(Sec::Now), Some(ArtFit::ContainOnBlur), "the On now shelf");
     assert_eq!(fit(Sec::Recent), Some(ArtFit::Cover), "Recent's logo plates keep the cover fit");
+}
+
+/// **The Channels shelf draws channel plates, not posters** (owner 2026-11-26, "Why channels are vertical"):
+/// the shelf's declared section style is the Recent plate's (`RowStyle::CHANNEL`), its tile is 250 x 140
+/// at the 280 pitch, and its cards are `Art::Channel`.
+#[test]
+fn the_channels_shelf_declares_the_plate_style_and_draws_250_by_140_plates() {
+    let _policy = captions::PolicyPin::default_setting();
+    let (store, mut screen) = seeded();
+    let view = store.view();
+    step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+    assert_eq!(screen.page.mode, Mode::NowChannels, "the silent channel is in Channels");
+    let context = cx(view, None);
+    let mut specs = Vec::new();
+    StackPage::<TestHost>::sections(&screen.page, &context, &mut specs);
+    let style = specs.iter().find(|s| s.key == Sec::Channels).and_then(|s| match s.kind { Kind::Shelf { style, .. } => Some(*style), _ => None }).expect("a shelf");
+    assert!(style == RowStyle::CHANNEL, "the Channels shelf is Recent's plate");
+    let channels = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Channels).unwrap();
+    assert!(matches!(CardSource::<TestHost>::art(&channels, 0), Art::Channel { .. }), "a channel plate");
+    let tile = settled_rect(&mut screen, view, FIRST_CARD_ELEM + 4);
+    assert_eq!((tile.w, tile.h), (250.0, 140.0), "the Channels tile is the Recent plate's size");
 }
 
 /// Recent only: a stored Recent that holds every channel, with no programme on, is one row of plates.
@@ -545,7 +567,7 @@ fn a_recent_row_with_no_programme_on_is_one_row_of_plates() {
     let context = cx(view, None);
     let mut specs = Vec::new();
     StackPage::<TestHost>::sections(&screen.page, &context, &mut specs);
-    assert!(specs.iter().find(|s| s.key == Sec::Recent).is_some_and(|s| matches!(s.kind, Kind::Shelf { style, .. } if *style == RECENT_STYLE)));
+    assert!(specs.iter().find(|s| s.key == Sec::Recent).is_some_and(|s| matches!(s.kind, Kind::Shelf { style, .. } if *style == PLATE_STYLE)));
     let plates = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Recent).unwrap();
     assert_eq!(CardSource::<TestHost>::len(&plates), 2);
     assert!(matches!(CardSource::<TestHost>::art(&plates, 0), Art::Channel { .. }));
@@ -557,7 +579,8 @@ fn a_recent_row_with_no_programme_on_is_one_row_of_plates() {
 }
 
 /// The Channels shelf stands under the other rows without moving them: Recent's plates at 300, On now's
-/// posters 544 (heading ink 496), and its tiles below On now's.
+/// posters 544 (heading ink 496), and its plates, 250 x 140 like Recent's, below On now's at 1023 (heading ink
+/// 975).
 #[test]
 fn the_channels_shelf_stands_under_on_now_and_moves_nothing_above_it() {
     let (mut store, mut screen) = seeded();
@@ -572,7 +595,8 @@ fn the_channels_shelf_stands_under_on_now_and_moves_nothing_above_it() {
     let tile = settled_rect(&mut screen, view, FIRST_CARD_ELEM + 4);
     assert_eq!((plate.y, plate.h), (300.0, 140.0));
     assert_eq!(poster.y, 544.0);
-    assert_eq!((tile.w, tile.h), (RowStyle::HOME.w, RowStyle::HOME.h));
+    assert_eq!((tile.w, tile.h), (RowStyle::CHANNEL.w, RowStyle::CHANNEL.h), "a plate, like Recent's");
+    assert_eq!((tile.x, tile.y), (poster.x, 1023.0), "the first Channels plate stands in On now's first column");
     assert!(tile.y > poster.y + poster.h, "the Channels shelf is under On now's posters");
 }
 
@@ -607,15 +631,16 @@ fn focusing_on_now_with_channels_below_does_not_scroll_the_page() {
     // and an Up to Recent leaves it where it was
     let (scroll, ..) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM);
     assert_eq!(scroll, 0.0, "Up to Recent: the page stays at rest");
-    // Down to On now again, then onto Channels: the page scrolls to show the tile, which ends within the safe frame
+    // Down to On now again, then onto Channels: the page scrolls to show the plate, which ends within the safe
+    // frame. The plates stand at 1023, 140 tall, so the page ends 227 up
     rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 1);
     let (scroll, _, _, tile) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 4);
-    assert!(scroll > 0.0, "the Channels tile has to be brought up");
+    assert!((scroll - 227.0).abs() < 0.1, "the Channels plate is brought up to the end of the page: scroll {scroll}");
     assert!(tile.y + tile.h <= SCR_H - MARGIN_Y, "the focused Channels tile ends at {}", tile.y + tile.h);
-    // Up to On now from there: the shared minimal reveal brings the poster's block to the page's top margin
-    // (it is above the screen), the same as every stacked page; BACK or an unfocused page is what homes it
+    // Up to On now from there: the plates' label band closes, which ends the page 8 sooner (219), and On now's
+    // posters, which stood in the safe frame already, stay in it; BACK or an unfocused page is what homes it
     let (back, _, poster, _) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 1);
-    assert!((back - 442.0).abs() < 0.1, "On now's heading ends at the top margin 54 (the block's top, 496, is brought to the margin): scroll {back} from {scroll}");
+    assert!((back - 219.0).abs() < 0.1, "On now's poster focused: the page rests at its end, 219 (not at the top margin 442 it took when the Channels tiles were posters): scroll {back} from {scroll}");
     assert!(poster.y >= MARGIN_Y && poster.y + poster.h <= SCR_H - MARGIN_Y, "On now's poster is in the safe frame: {}", poster.y);
     // and the page comes home with focus gone
     for frame in 1..=90 {
@@ -669,4 +694,28 @@ fn a_restore_with_no_left_channel_seats_nothing() {
     assert!(seated_elems(&step(&mut screen, view, Some(FIRST_CARD_ELEM), &ScreenEvent::Enter(Enter::Restored))).is_empty());
     step(&mut screen, view, None, &left("C999"));
     assert!(seated_elems(&step(&mut screen, view, Some(FIRST_CARD_ELEM), &ScreenEvent::Enter(Enter::Restored))).is_empty());
+}
+
+/// **The top chrome tucks when the first row has scrolled up under it, whatever that row is.** The handoff's
+/// `gone_at` is the first row's pitch: Recent's plates are 140 tall, not a poster's 375, so with the page
+/// resting 227 down (a Channels plate focused) the plates stand at 73..213 under the top bar and the chrome
+/// has to be gone; at scroll 0 it stands shown. (With the poster pitch, 457, it tucked from a target of 397.)
+#[test]
+fn the_chrome_tucks_at_the_channels_rest_under_a_plate_first_page_and_stands_at_the_top() {
+    use plx_ui::screen::Screen;
+    let (mut store, mut screen) = seeded();
+    let recent = [store.view().channels[0].clone()];
+    store.install_for_test(store.view().channels.to_vec());
+    let view = with_recent(&store, &recent);
+    step(&mut screen, view, None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
+    assert_eq!(screen.page.mode, Mode::RecentNowChannels);
+    let (scroll, ..) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM);
+    assert_eq!((scroll, Screen::<TestHost>::chrome_tuck(&screen)), (0.0, 0.0), "at the top: the chrome shown");
+    rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 1);
+    let (scroll, ..) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 4);
+    assert!((scroll - 227.0).abs() < 0.1, "the Channels rest: {scroll}");
+    assert_eq!(Screen::<TestHost>::chrome_tuck(&screen), 1.0, "the plates are under the top bar: the chrome is gone");
+    let (scroll, ..) = rest_with_focus(&mut screen, view, FIRST_CARD_ELEM + 1);
+    assert!((scroll - 219.0).abs() < 0.1, "back on On now: {scroll}");
+    assert_eq!(Screen::<TestHost>::chrome_tuck(&screen), 1.0, "still tucked (it returns below 102)");
 }

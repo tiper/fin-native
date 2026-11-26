@@ -1,15 +1,16 @@
 //! The What's on page (Live TV's landing page, the handoff's `SPEC-1` / `SPEC-2`): the profile's Recent
 //! channels on top, the programmes airing now below, and the channels with neither under them: three adjacent
 //! shared card shelves over the store's one lineup. A Recent tile, a programme poster and a Channels tile all ask
-//! the content owner to play their channel.
+//! the content owner to play their channel. A channel is drawn as one thing wherever it stands, the handoff's
+//! 250 x 140 channel plate (Recent and Channels); only a programme is a poster (On now).
 //!
 //! **On now has one fixed order**: the most recent start first, a tie in lineup order. **Recent never
 //! reorders** (the store keeps it, newest first) and is hidden while it is empty. **Every channel stays
-//! reachable**: a third shelf, the page's earlier "Channels" shelf (the lineup's own tile and caption),
-//! holds the lineup channels with no programme on that are not in Recent, under the other rows, and is
-//! hidden while that set is empty. It is the interim path for a channel without guide data (the Pluto
-//! channels of a server that has none) until the Guide and Browse pages replace it; with nothing recent
-//! and nothing on it is the page's only row. A lineup with no channel at all is the store's empty read-out.
+//! reachable**: a third shelf, the page's earlier "Channels" shelf (the same channel plates as Recent, which
+//! may run past five and scroll like On now), holds the lineup channels with no programme on that are not in
+//! Recent, under the other rows, and is hidden while that set is empty. It is the interim path for a channel
+//! without guide data (the Pluto channels of a server that has none) until the Guide and Browse pages replace
+//! it; with nothing recent and nothing on it is the page's only row. A lineup with no channel at all is the store's empty read-out.
 //! Which rows the page shows is decided once, by [`Mode`] in `Page::sync`, and matched everywhere after.
 //! The page reads the frame's wall time ([`LiveTvLike::wall`]) for its captions and progress bars, and asks
 //! for a frame when the words of any airing change.
@@ -49,11 +50,11 @@ const BOARD_HEADING: f32 = 56.0;
 /// The air from the bottom of a shelf's tiles to the heading of the shelf under it at rest (the handoff's
 /// 48, to the line box's top).
 const BOARD_GAP_AT_REST: f32 = 48.0;
-/// Recent's tiles: a logo plate, 250 x 140 on the poster pitch, so a poster stands under each tile.
-const RECENT_STYLE: RowStyle = RowStyle::CHANNEL;
-/// On now's posters and the Channels shelf's: the Home poster tile, with art that is not poster-shaped
-/// contained on its own blurred copy (a logo with transparency: on the Recent plates' flat ground)
-/// rather than cover-cropped (`RowStyle::PROGRAMME`).
+/// The channel plate of Recent's tiles and of the Channels shelf's: a logo plate, 250 x 140 on the poster
+/// pitch, so a poster stands under each Recent tile.
+const PLATE_STYLE: RowStyle = RowStyle::CHANNEL;
+/// On now's posters: the Home poster tile, with art that is not poster-shaped contained on its own blurred
+/// copy rather than cover-cropped (`RowStyle::PROGRAMME`).
 const NOW_STYLE: RowStyle = RowStyle::PROGRAMME;
 const STATUS_FRAME: Rect = Rect { x: MARGIN_X, y: plx_ui::page_header::GRID_TOP, w: SCR_W - 2.0 * MARGIN_X, h: SCR_H - plx_ui::page_header::GRID_TOP - MARGIN_Y };
 
@@ -69,6 +70,15 @@ impl Sec {
             Sec::Now => NOW_GROUP,
             Sec::Channels => CHANNELS_GROUP,
             Sec::Status => STATUS_GROUP,
+        }
+    }
+
+    /// The tile style of a shelf section; `None` for the sections that are not shelves.
+    const fn style(self) -> Option<&'static RowStyle> {
+        match self {
+            Sec::Recent | Sec::Channels => Some(&PLATE_STYLE),
+            Sec::Now => Some(&NOW_STYLE),
+            Sec::Head | Sec::Status => None,
         }
     }
 }
@@ -210,6 +220,13 @@ impl Page {
             })
     }
 
+    /// The first row's pitch: the scroll at which what stands under the top chrome at rest has gone (a plate
+    /// row's is shorter than a poster row's, so the chrome tucks sooner). `0` with no row, which the handoff
+    /// floors.
+    fn first_row_pitch(&self) -> f32 {
+        self.mode.head().and_then(Sec::style).map_or(0.0, RowStyle::pitch_fixed)
+    }
+
     fn regions(&self) -> PageRegions<'_> {
         PageRegions { header: None, content: &self.content, rail: None, back_walks_header: false, arrival: Arrival::Content, pending: None }
     }
@@ -250,13 +267,14 @@ fn lineup_index(channels: &[Channel], of: &Channel) -> Option<usize> {
     channels.iter().position(|c| c.sid == of.sid && c.dvr == of.dvr && c.channel == of.channel)
 }
 
-/// Which shelf a [`Cards`] serves: it decides the cards' art, words and element ids.
+/// Which kind of tile a [`Cards`] serves: it decides the cards' art, words and element ids.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Row {
-    Recent,
+    /// A channel plate: Recent's, and the Channels shelf's (the lineup channels with no programme on that are
+    /// not in Recent).
+    Plates,
+    /// A programme poster: On now's.
     Now,
-    /// The page's earlier "Channels" shelf: the lineup channels with no programme on that are not in Recent.
-    Channels,
 }
 
 struct Cards<'a> { view: LiveTvView<'a>, order: &'a [usize], row: Row, wall: Option<Wall> }
@@ -278,8 +296,8 @@ impl Cards<'_> {
         }
         Some(Resume { frac: fmt::frac(channel.begins_at, channel.ends_at, w)?, left_ms: (channel.ends_at - w.unix_s()).max(0) * 1_000 })
     }
-    /// The low bit of a card's element id: Recent's tiles and the Channels shelf's are even (no channel is in
-    /// both), On now's posters odd.
+    /// The low bit of a card's element id: the plates (Recent's and the Channels shelf's, no channel is in both)
+    /// are even, On now's posters odd.
     fn parity(&self) -> u32 { u32::from(self.row == Row::Now) }
 }
 impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
@@ -293,8 +311,7 @@ impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
     }
     fn art(&self, i: usize) -> Art<'_> {
         let Some((index, channel)) = self.channel(i) else { return Art::Poster(None) };
-        if self.row == Row::Channels { return Art::Poster(self.view.tiles.get(index).map(|tile| tile_facts::of(tile))); }
-        if self.row == Row::Recent {
+        if self.row == Row::Plates {
             return Art::Channel { sid: channel.sid.raw(), logo: &channel.thumb, number: &channel.vcn, name: &channel.name };
         }
         Art::Poster(self.view.tiles.get(index).map(|tile| {
@@ -309,7 +326,7 @@ impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
             facts
         }))
     }
-    /// The poster's bar; a channel tile has none.
+    /// The poster's bar; a channel plate has none.
     fn progress(&self, i: usize) -> Option<f32> {
         if self.row != Row::Now { return None; }
         self.channel(i).and_then(|(_, c)| self.resume(c)).map(|r| r.frac)
@@ -318,14 +335,10 @@ impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
         let Some((_, channel)) = self.channel(i) else { return TileLabel::default() };
         use plx_os::i18n::msg;
         match self.row {
-            Row::Channels => match self.view.tiles.get(self.channel(i).map_or(usize::MAX, |(index, _)| index)) {
-                Some(item) => captions::shelf_label(&captions::live_tv_policy(), item, false),
-                None => TileLabel::default(),
-            },
             // "On now: <programme>" over when it started and how long is left; a channel with no
-            // programme is its name alone.
-            Row::Recent if channel.now.is_empty() => captions::live_label(channel.name.clone(), None),
-            Row::Recent => captions::live_label(msg::browse_livetv_recent_on_now(&channel.now),
+            // programme (every Channels plate) is its name alone.
+            Row::Plates if channel.now.is_empty() => captions::live_label(channel.name.clone(), None),
+            Row::Plates => captions::live_label(msg::browse_livetv_recent_on_now(&channel.now),
                 self.wall.and_then(|w| fmt::airing_line(Airing::Tile, channel.begins_at, channel.ends_at, w))),
             // The programme over its channel, number first ("Ch 2009 · Station · 42m left").
             Row::Now => {
@@ -362,7 +375,8 @@ impl<H: LiveTvLike> StackPage<H> for Page {
         // Each row is its own section, with its own style: a shelf keeps its style from the body it was made
         // with, so a key never stands for two row styles. The head of the content is seated by its own rule
         // (`CONTENT_HEAD_SEAT`): the first row there is.
-        for (k, style, name) in [(Sec::Recent, &RECENT_STYLE, "recent"), (Sec::Now, &NOW_STYLE, "on_now"), (Sec::Channels, &NOW_STYLE, "channels")] {
+        for (k, name) in [(Sec::Recent, "recent"), (Sec::Now, "on_now"), (Sec::Channels, "channels")] {
+            let style = k.style().expect("a shelf has a style");
             let spec = SectionSpec::new(k, Kind::Shelf { style, heading }, k.group()).named(name);
             out.push(if self.mode.head() == Some(k) { spec.seated(plx_ui::page_regions::CONTENT_HEAD_SEAT) } else { spec });
         }
@@ -383,7 +397,7 @@ impl<H: LiveTvLike> StackPage<H> for Page {
     fn reveal_foot(&self, _k: Sec) -> bool { false }
     fn fallback(&self, _cx: &Cx<'_, H>, out: &mut Vec<Sec>) { out.extend([Sec::Recent, Sec::Now, Sec::Channels, Sec::Status, Sec::Head]); }
     fn cards<'a>(&'a self, cx: &'a Cx<'_, H>, k: Sec) -> Option<Cards<'a>> {
-        let (order, row) = match k { Sec::Recent => (&self.recent, Row::Recent), Sec::Now => (&self.airings, Row::Now), Sec::Channels => (&self.rest, Row::Channels), _ => return None };
+        let (order, row) = match k { Sec::Recent => (&self.recent, Row::Plates), Sec::Now => (&self.airings, Row::Now), Sec::Channels => (&self.rest, Row::Plates), _ => return None };
         self.mode.has(k).then(|| Cards { view: H::livetv(cx), order, row, wall: H::wall(cx) })
     }
     fn card_has_menu(&self, _cx: &Cx<'_, H>, _k: Sec, _elem: &u32) -> bool { false }
@@ -475,7 +489,7 @@ impl LiveTvScreen {
 
     fn tick<H: LiveTvLike>(&mut self, t: Tick, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
         self.page.header_row(cx.measure).step(self.page.entry, cx.focus.current, &mut self.page.header_capsules, &mut self.page.header_pop, t.dt());
-        self.page.handoff.step(t.dt(), self.stack.scroll(), self.stack.target(), NOW_STYLE.pitch_fixed(), false);
+        self.page.handoff.step(t.dt(), self.stack.scroll(), self.stack.target(), self.page.first_row_pitch(), false);
         // The page's own haze, fixed: it does not follow the focused tile.
         let haze = AmbientWash::target(theme::WASH_LIVE_TV, [theme::WASH_LIVE_TV_W; 4]);
         if self.ground_seeded {

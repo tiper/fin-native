@@ -22,12 +22,15 @@ impl LiveTvLike for LiveHost {
     fn livetv<'a>(cx: &Cx<'a, Self>) -> LiveTvView<'a> { cx.views }
 }
 const ENTRY: EntryId = EntryId(9);
+/// The shelves a mount can put under test: Recent's and the Channels shelf's cards are both plates.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shelf { Now, Recent, Channels }
 struct Harness {
     store: plx_data::stores::livetv::LiveTvStore,
     /// The profile's Recent row: the first channels of the lineup, at most [`MAX_RECENT`].
     recent: Vec<plx_data::livetv::Channel>,
     /// The shelf this mount puts under test.
-    row: Row,
+    row: Shelf,
     screen: LiveTvScreen,
     focus: Option<FocusKey<u32>>,
     press: f32,
@@ -35,16 +38,16 @@ struct Harness {
     n: usize,
 }
 /// The On now shelf of an `n`-channel lineup, a Recent row of its first five above it.
-pub(crate) fn mount(n: usize) -> Box<dyn CardHarness> { Box::new(Harness::new(n, Row::Now)) }
+pub(crate) fn mount(n: usize) -> Box<dyn CardHarness> { Box::new(Harness::new(n, Shelf::Now)) }
 /// The Recent shelf of an `n`-channel lineup (at most five tiles), On now below it.
-pub(crate) fn mount_recent(n: usize) -> Box<dyn CardHarness> { Box::new(Harness::new(n, Row::Recent)) }
+pub(crate) fn mount_recent(n: usize) -> Box<dyn CardHarness> { Box::new(Harness::new(n, Shelf::Recent)) }
 /// The Channels shelf of an `n`-channel lineup with no programme and nothing recent: the page's only row.
-pub(crate) fn mount_channels(n: usize) -> Box<dyn CardHarness> { Box::new(Harness::new(n, Row::Channels)) }
+pub(crate) fn mount_channels(n: usize) -> Box<dyn CardHarness> { Box::new(Harness::new(n, Shelf::Channels)) }
 
 pub(crate) fn livetv_conforms() -> plx_ui::a11y::Namespaces {
     use plx_ui::a11y::{conform, A11yPath};
     let _guard = plx_base::testlock::serial();
-    let h = Harness::new(3, Row::Recent);
+    let h = Harness::new(3, Shelf::Recent);
     let cx = h.cx();
     let namespace = conform::<LiveHost, _>(&h.screen, &cx);
     for section in ["recent", "on_now"] {
@@ -58,10 +61,10 @@ pub(crate) fn livetv_conforms() -> plx_ui::a11y::Namespaces {
 }
 
 impl Harness {
-    fn new(n: usize, row: Row) -> Self {
+    fn new(n: usize, row: Shelf) -> Self {
         let mut store = plx_data::stores::livetv::LiveTvStore::default();
         // the Channels shelf is a lineup with no guide data and nothing tuned
-        let programmes = row != Row::Channels;
+        let programmes = row != Shelf::Channels;
         store.install_for_test((0..n).map(|i| plx_data::livetv::Channel {
             sid: plx_plex::plex::ServerId::UNSET, dvr: "1".into(), channel: format!("c{i}"),
             vcn: i.to_string(), name: format!("Channel {i}"), thumb: String::new(),
@@ -96,7 +99,7 @@ impl Harness {
 }
 impl CardHarness for Harness {
     fn cards(&self) -> Vec<u32> {
-        let (n, odd) = match self.row { Row::Now => (self.n, 1), Row::Recent => (self.n.min(MAX_RECENT), 0), Row::Channels => (self.n, 0) };
+        let (n, odd) = match self.row { Shelf::Now => (self.n, 1), Shelf::Recent => (self.n.min(MAX_RECENT), 0), Shelf::Channels => (self.n, 0) };
         (0..n).map(|i| FIRST_CARD_ELEM + i as u32 * 2 + odd).collect()
     }
     fn focused(&self) -> Option<u32> { self.focus.map(|k| k.elem) }
@@ -146,7 +149,7 @@ mod geometry {
     use plx_ui::focus::{FocusEngine, Outcome};
 
     fn settled(n: usize) -> Harness {
-        let mut h = Harness::new(n, Row::Now);
+        let mut h = Harness::new(n, Shelf::Now);
         h.tick(60);
         h
     }

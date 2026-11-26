@@ -164,13 +164,13 @@ impl RowStyle {
         under_tile: 0.0,
         fit: ArtFit::Cover,
     };
-    /// **A shelf of Live TV channel plates** (the handoff's Recent channels): 250 x 140 on HOME's pitch, so a
+    /// **A shelf of Live TV channel plates** (the handoff's Recent channels, and the Channels shelf): 250 x 140 on HOME's pitch, so a
     /// column of plates stands over a column of posters and Down lands straight below. Motion, pop, glow and
     /// radius are HOME's; only the height differs.
     pub const CHANNEL: RowStyle = RowStyle { h: 140.0, ..RowStyle::HOME };
-    /// **A shelf of Live TV programme posters** (On now, Channels): [`RowStyle::HOME`]'s tile and motion,
+    /// **A shelf of Live TV programme posters** (On now): [`RowStyle::HOME`]'s tile and motion,
     /// with art that is not poster-shaped contained whole over its own blurred copy (art with
-    /// transparency, a channel's logo, over the Recent plates' flat ground instead)
+    /// transparency, a programme image, over the Recent plates' flat ground instead)
     /// ([`ArtFit::ContainOnBlur`], owner 2026-11-26: "square should fit with blurred bg") instead of
     /// cover-cropped. A 2:3 poster draws exactly as on Home.
     pub const PROGRAMME: RowStyle = RowStyle { fit: ArtFit::ContainOnBlur, ..RowStyle::HOME };
