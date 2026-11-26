@@ -149,12 +149,99 @@ impl ShadeBlock {
     }
 }
 
+/// **The side shade of an [`EdgeShade`]: where along the hero's left the darkness stands.**
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SideShade {
+    /// A separable product of a horizontal and a vertical smoothstep: `peak` left of
+    /// `horizontal[0]` falling to nothing at `horizontal[1]`, nothing above `vertical[0]` rising to
+    /// `peak` at `vertical[1]`. Its iso-lines run straight along both axes, so it reads as a plate
+    /// with a top edge and a right edge; Home keeps it, Detail left it (discussion #1460).
+    Box { horizontal: [f32; 2], vertical: [f32; 2] },
+    /// **An ellipse about a corner** (`origin`, the screen's bottom-left on Detail). Exactly 0 on
+    /// and outside the ellipse of semi-axes `reach` centred on `origin`, rising inward across a band
+    /// `feather` px wide (measured along the shorter semi-axis, wider along the longer one) to hold
+    /// `peak` inside it: `peak * smoothstep(t)` with `t = (1 - d) * min(reach) / feather`, where
+    /// `d = |(q.x / reach.x, q.y / reach.y)|` is the point's elliptical radius (`q` the offset from
+    /// `origin`, y pointing up). `d` is homogeneous, so its gradient is constant along a ray and at
+    /// most `1 / min(reach)` anywhere: the side shade never changes faster than
+    /// `1.5 * peak / feather` per px, in any direction, and every iso-line is a curve.
+    Ellipse { origin: [f32; 2], reach: [f32; 2], feather: f32 },
+}
+
+impl SideShade {
+    /// An ellipse whose feather fits inside it.
+    pub fn ellipse(origin: [f32; 2], reach: [f32; 2], feather: f32) -> Self {
+        debug_assert!(reach[0] > 0.0 && reach[1] > 0.0 && feather > 0.0 && feather <= reach[0].min(reach[1]),
+            "a feather inside a non-empty ellipse");
+        SideShade::Ellipse { origin, reach, feather }
+    }
+
+    /// The side's share of `peak` at `(x, y)`, 0 to 1, from the same values the shader is handed
+    /// ([`GroundShade::uniforms`]).
+    fn at(self, x: f32, y: f32) -> f32 {
+        let progress = |v: f32, lo: f32, hi: f32| ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+        let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
+        match self {
+            SideShade::Box { horizontal: [left, right], vertical: [start, full] } => {
+                (1.0 - smooth(progress(x, left, right))) * smooth(progress(y, start, full))
+            }
+            SideShade::Ellipse { origin, reach, .. } => {
+                let (qx, qy) = (x - origin[0], origin[1] - y);
+                let (ux, uy) = (qx * (1.0 / reach[0]), qy * (1.0 / reach[1]));
+                let d = (ux * ux + uy * uy).sqrt();
+                smooth(((1.0 - d) * self.band()).clamp(0.0, 1.0))
+            }
+        }
+    }
+
+    /// `min(reach) / feather`: how many units of `t` one unit of elliptical radius is (0 for a box).
+    fn band(self) -> f32 {
+        match self {
+            SideShade::Box { .. } => 0.0,
+            SideShade::Ellipse { reach, feather, .. } => reach[0].min(reach[1]) / feather,
+        }
+    }
+
+    /// The side's support's bounds: nothing at or right of `.0`, nothing at or above `.1`.
+    fn support(self) -> (f32, f32) {
+        match self {
+            SideShade::Box { horizontal, vertical } => (horizontal[1], vertical[0]),
+            SideShade::Ellipse { origin, reach, .. } => (origin[0] + reach[0], origin[1] - reach[1]),
+        }
+    }
+
+    fn placed(self, ox: f32, oy: f32, s: f32) -> Self {
+        match self {
+            SideShade::Box { horizontal, vertical } => SideShade::Box {
+                horizontal: horizontal.map(|x| x * s + ox),
+                vertical: vertical.map(|y| y * s + oy),
+            },
+            SideShade::Ellipse { origin, reach, feather } => SideShade::Ellipse {
+                origin: [origin[0] * s + ox, origin[1] * s + oy],
+                reach: reach.map(|a| a * s),
+                feather: feather * s,
+            },
+        }
+    }
+
+    /// The shader's two vectors: `u_sc[0]` and `u_sc[4]`, whose `z` is 1 for an ellipse.
+    fn uniforms(self) -> ([f32; 4], [f32; 4]) {
+        match self {
+            SideShade::Box { horizontal: [left, right], vertical: [start, full] } => {
+                ([left, right, start, full], [0.0; 4])
+            }
+            SideShade::Ellipse { origin, reach, .. } => {
+                ([1.0 / reach[0], 1.0 / reach[1], self.band(), 0.0], [origin[0], origin[1], 1.0, 0.0])
+            }
+        }
+    }
+}
+
 /// Edge-anchored shade and shelf ramp sharing one ink. The overlap is a soft maximum,
 /// so it cannot produce the dark seam of two independently blended overlays.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EdgeShade {
-    horizontal: [f32; 2],
-    vertical: [f32; 2],
+    side: SideShade,
     top: Option<([f32; 2], f32)>,
     shelf: [(f32, f32); 3],
     peak: f32,
@@ -162,19 +249,17 @@ pub struct EdgeShade {
 }
 
 impl EdgeShade {
-    /// An optional full-width top fade, given as its vertical bounds and peak alpha. Its
-    /// alpha and the side alpha can crossfade before the lower ramp joins them.
-    pub fn new(horizontal: [f32; 2], vertical: [f32; 2], top: Option<([f32; 2], f32)>,
-        shelf: [(f32, f32); 3], peak: f32, join: f32) -> Self {
-        Self { horizontal, vertical, top, shelf, peak, join }
+    /// The side shade at `peak`, an optional full-width top fade given as its vertical bounds and
+    /// peak alpha, and the shelf ramp. The top fade's alpha and the side alpha can crossfade before
+    /// the lower ramp joins them.
+    pub fn new(side: SideShade, top: Option<([f32; 2], f32)>, shelf: [(f32, f32); 3], peak: f32, join: f32) -> Self {
+        Self { side, top, shelf, peak, join }
     }
 
     fn at(self, x: f32, y: f32) -> f32 {
         let progress = |v: f32, lo: f32, hi: f32| ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
         let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
-        let side = self.peak
-            * (1.0 - smooth(progress(x, self.horizontal[0], self.horizontal[1])))
-            * smooth(progress(y, self.vertical[0], self.vertical[1]));
+        let side = self.peak * self.side.at(x, y);
         let upper = side + self.top.map_or(0.0, |([start, end], peak)| {
             peak * (1.0 - smooth(progress(y, start, end)))
         });
@@ -200,8 +285,7 @@ impl EdgeShade {
 
     fn placed(self, ox: f32, oy: f32, s: f32) -> Self {
         Self {
-            horizontal: self.horizontal.map(|x| x * s + ox),
-            vertical: self.vertical.map(|y| y * s + oy),
+            side: self.side.placed(ox, oy, s),
             top: self.top.map(|(bounds, peak)| (bounds.map(|y| y * s + oy), peak)),
             shelf: self.shelf.map(|(y, a)| (y * s + oy, a)),
             ..self
@@ -226,7 +310,8 @@ impl GroundShade {
         Self { edge: Some(edge), ..Self::NONE }
     }
 
-    /// The shader's mode/count uniform. The edge field has its own three-vector layout.
+    /// The shader's mode/count uniform. The edge field has its own layout, `u_sc[0..=4]`, with `u_sc[4].z` the side mode
+    /// (0 the box, 1 the ellipse, whose corner is `u_sc[4].xy`).
     pub fn shader_count(&self) -> f32 {
         if self.edge.is_some() { -1.0 } else { self.live() as f32 }
     }
@@ -278,7 +363,7 @@ impl GroundShade {
         if let Some(edge) = self.edge {
             let [x, y, _, h] = rect;
             return y + h > edge.shelf[0].0
-                || (edge.peak > 0.0 && x < edge.horizontal[1] && y + h > edge.vertical[0])
+                || (edge.peak > 0.0 && { let (right, top) = edge.side.support(); x < right && y + h > top })
                 || edge.top.is_some_and(|([_, end], peak)| peak > 0.0 && y < end);
         }
         self.blocks.iter().any(|b| b.reaches(rect))
@@ -325,15 +410,15 @@ impl GroundShade {
     pub fn uniforms(&self) -> [[f32; 4]; VEC4S] {
         let mut u = [[0.0; 4]; VEC4S];
         if let Some(edge) = self.edge {
-            let [left, right] = edge.horizontal;
-            let [start, full] = edge.vertical;
             let [(top, a), (mid, b), (foot, c)] = edge.shelf;
-            u[0] = [left, right, start, full];
+            let (side, corner) = edge.side.uniforms();
+            u[0] = side;
             u[1] = [top, mid, foot, a];
             u[2] = [b, c, edge.peak, edge.join];
             if let Some(([start, end], peak)) = edge.top {
                 u[3] = [start, end, peak, 0.0];
             }
+            u[4] = corner;
             return u;
         }
         for (i, b) in self.blocks.iter().enumerate() {
@@ -440,19 +525,24 @@ mod tests {
 
     #[test]
     fn edge_shade_translates_and_scales_with_its_painter() {
-        let edge = EdgeShade::new([280.0, 960.0], [110.0, 405.0], Some(([20.0, 260.0], 0.32)),
-            [(768.0, 0.0), (886.0, 0.25), (1012.0, 0.93)], 0.59, 0.10);
-        let shade = GroundShade::from_edge(edge);
-        assert_eq!(shade.shader_count(), -1.0);
-        let moved = shade.scaled(0.5).placed(13.0, -40.0, 0.75);
-        for (x, y) in [(0.0, 0.0), (500.0, 190.0), (250.0, 580.0), (250.0, 950.0), (1900.0, 1040.0)] {
-            assert!((moved.at(x * 0.75 + 13.0, y * 0.75 - 40.0) - shade.at(x, y) * 0.5).abs() < 1e-6);
+        for side in [
+            SideShade::Box { horizontal: [280.0, 960.0], vertical: [110.0, 405.0] },
+            SideShade::ellipse([0.0, 1080.0], [960.0, 970.0], 300.0),
+        ] {
+            let edge = EdgeShade::new(side, Some(([20.0, 260.0], 0.32)),
+                [(768.0, 0.0), (886.0, 0.25), (1012.0, 0.93)], 0.59, 0.10);
+            let shade = GroundShade::from_edge(edge);
+            assert_eq!(shade.shader_count(), -1.0);
+            let moved = shade.scaled(0.5).placed(13.0, -40.0, 0.75);
+            for (x, y) in [(0.0, 0.0), (500.0, 190.0), (250.0, 580.0), (250.0, 950.0), (1900.0, 1040.0)] {
+                assert!((moved.at(x * 0.75 + 13.0, y * 0.75 - 40.0) - shade.at(x, y) * 0.5).abs() < 1e-6);
+            }
+            assert_eq!(shade.scaled(0.0), GroundShade::NONE);
+            assert!(shade.reaches([1000.0, 150.0, 500.0, 100.0]));
+            assert!(!shade.reaches([1000.0, 260.0, 500.0, 500.0]));
+            assert_eq!(moved.uniforms()[3], [-25.0, 155.0, 0.16, 0.0]);
+            assert!(shade.reaches([1000.0, 770.0, 500.0, 100.0]));
         }
-        assert_eq!(shade.scaled(0.0), GroundShade::NONE);
-        assert!(shade.reaches([1000.0, 150.0, 500.0, 100.0]));
-        assert!(!shade.reaches([1000.0, 260.0, 500.0, 500.0]));
-        assert_eq!(moved.uniforms()[3], [-25.0, 155.0, 0.16, 0.0]);
-        assert!(shade.reaches([1000.0, 770.0, 500.0, 100.0]));
     }
 
     #[test]
