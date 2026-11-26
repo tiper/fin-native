@@ -313,7 +313,7 @@ mod tests {
     }
 
     fn image(tex: u32) -> ArtImage {
-        ArtImage { tex, w: 250.0, h: 375.0, backdrop: 0, shown: 1.0 }
+        ArtImage { tex, w: 250.0, h: 375.0, backdrop: 0, ink: None, shown: 1.0 }
     }
 
     fn key_of(frame: &SampleFrame<'_>, sty: &RowStyle, arts: &[Art<'_>], led: &[ArtImage], focused: usize) -> Option<u64> {

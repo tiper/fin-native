@@ -1257,7 +1257,7 @@ mirrored in `img.rs`'s decode-budget note.
 
 | UI element | request (all `minSize=1`) | source aspect differs from the box → |
 |---|---|---|
-| Poster card | `width=250&height=375`, `url=thumb` | long side overshoots; cropped at draw (`art_uv`), except on Live TV's On now shelf (`RowStyle::PROGRAMME`), where art more than 8% off 2:3 is contained whole over its own blurred copy (`art_fit::place`), or, for a programme image with transparency, over the flat Recent-plate ground instead of a blur (`art_fit::BackdropSpec::ground`); Live TV's Channels shelf is not a poster row, it draws the 250 x 140 channel plate |
+| Poster card | `width=250&height=375`, `url=thumb` | long side overshoots; cropped at draw (`art_uv`), except on Live TV's On now shelf (`RowStyle::PROGRAMME`), where art more than 8% off 2:3 is contained whole over its own blurred copy (`art_fit::place`), or, for a programme image with transparency, over the flat Recent-plate ground instead of a blur (`art_fit::CopySpec::ground`); Live TV's Channels shelf is not a poster row, it draws the 250 x 140 channel plate |
 | Landscape still (episode / shelf) | `width=420&height=236`, still → show art → poster | cropped at draw (`art_uv`) |
 | Person headshot, profile avatar | `width=300&height=300`, `url=thumb` | cropped at draw, headshots riding high (`Crop::Headshot`) |
 | Profile chip avatar | `width=128&height=128` | cropped at draw |
@@ -1265,6 +1265,7 @@ mirrored in `img.rs`'s decode-budget note.
 | Home hero backdrop | `width=1280&height=720`, `url=art` | overflowed off-panel (`Rect::cover`) |
 | Detail backdrop | `width=1920&height=1080`, `url=art` | overflowed off-panel (`Rect::cover`) |
 | Hero clearLogo | `width=600&height=240&format=png` | contained in its column (`hero_logo::fit`) |
+| Live TV channel logo (the 250 x 140 plate) | `width=436&height=168&format=png` (twice its slot, for the focus pop, as the logos are) | contained in the plate's 218 x 84 slot, sized by the mark's INK, not the canvas (a resizer pads a logo with clear texels): the request asks for the picture's ink box (`art_fit::Derive::Ink`), found once at decode, and the plate draws that window of the texture, a texel or two wider, and never past 2 px a texel (`hero_logo::fit_ink`); a logo with no visible texel draws the channel's name instead |
 
 ---
 
