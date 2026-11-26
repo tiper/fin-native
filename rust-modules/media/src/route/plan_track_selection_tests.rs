@@ -990,12 +990,22 @@ fn a_selected_dca_track_is_picked_when_the_table_has_a_dts_row() {
 }
 
 /// Auto and Forced decide through the same canonicaliser, and Forced's DTS needs the table row
-/// but not the ceiling (7.1 DTS-HD MA: Auto converts, Forced feeds the core).
+/// but not the ceiling. A 7.1 DTS-HD MA plays as its 5.1 core in BOTH modes on a set whose DTS row
+/// holds the core (#1537: a B9 with `DTS/6` played the core under Force Direct Play while Auto had the
+/// server convert it to 5.1 AAC); a row narrower than the core still sends it to the server.
 #[test]
 fn auto_and_forced_agree_on_the_dca_spelling() {
     let caps = dts_row_caps();
     assert!(audio_direct_plays_with(&caps, DirectPlayMode::Auto, "dca", 6, 0));
-    assert!(!audio_direct_plays_with(&caps, DirectPlayMode::Auto, "dca", 8, 0));
+    assert!(audio_direct_plays_with(&caps, DirectPlayMode::Auto, "dca", 8, 0), "#1537: Auto feeds the 5.1 core");
+    // The URI backend hands the original to the set's own player, which reads the stream whole:
+    // Auto keeps a 7.1 DTS-HD MA from it (the play stays in Standard, which feeds the core).
+    assert!(!uri_original_audio_plays(&caps, DirectPlayMode::Auto, "dca", 8, 0), "the TV's player gets the 7.1 stream");
+    assert!(uri_original_audio_plays(&caps, DirectPlayMode::Auto, "dca", 6, 0));
+    assert!(uri_original_audio_plays(&caps, DirectPlayMode::Forced, "dca", 8, 0), "Force applies no ceiling, as before");
+    let stereo_row = plx_os::devcaps::Caps { audio_channels: [("dts".into(), 2)].into(), ..dts_row_caps() };
+    assert!(!audio_direct_plays_with(&stereo_row, DirectPlayMode::Auto, "dca", 8, 0), "a 2ch row cannot take the core");
+    assert!(!audio_direct_plays_with(&stereo_row, DirectPlayMode::Auto, "dca", 6, 0));
     assert!(audio_direct_plays_with(&caps, DirectPlayMode::Forced, "dca", 6, 0));
     assert!(audio_direct_plays_with(&caps, DirectPlayMode::Forced, "dca", 8, 0));
     assert!(audio_direct_plays_with(&caps, DirectPlayMode::Forced, "DTS", 8, 0));
@@ -1005,6 +1015,22 @@ fn auto_and_forced_agree_on_the_dca_spelling() {
     }
     assert!(audio_direct_plays_with(&assumed, DirectPlayMode::Forced, "ac3", 8, 0));
     assert!(!audio_direct_plays_with(&assumed, DirectPlayMode::Forced, "truehd", 8, 0));
+}
+
+/// #1537: an encoder session's guess follows the SESSION profile, which bounds DTS by the layout:
+/// a 7.1 DTS-HD MA the direct-play pick takes on a `DTS/6` row is converted to `ac3` by a remux, so a
+/// remux whose `/decision` names no codecs must not describe `dca`.
+#[test]
+fn a_remux_of_a_7_1_dts_pick_guesses_the_conversion() {
+    let caps = dts_row_caps();
+    let stream = |codec: &str, channels| plx_data::metadata::Stream {
+        codec: codec.into(), channels, sampling_rate: 48_000, ..Default::default()
+    };
+    let tracks = [stream("dca", 8), stream("dca", 6)];
+    assert!(audio_direct_plays_with(&caps, DirectPlayMode::Auto, "dca", 8, 48_000), "control: the pick takes the 7.1");
+    assert_eq!(session_carried_acodec(&caps, &tracks, Some(&(0, "dca".into(), 1))).as_deref(), Some("ac3"));
+    assert_eq!(session_carried_acodec(&caps, &tracks, Some(&(1, "dca".into(), 2))).as_deref(), Some("dca"));
+    assert_eq!(session_carried_acodec(&caps, &tracks, None), None);
 }
 
 /// **DTS the app decodes** (S4 PR 2): a set with no DTS row direct-plays a DTS track in

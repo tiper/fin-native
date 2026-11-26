@@ -111,8 +111,9 @@ pub struct StandardDirectPlay {
     /// profile's setting) admits this source's layering: it has none, or it plays as a base layer or as a
     /// declared stream. A Profile 5 file on a set without Dolby Vision is the refusal.
     pub dolby_vision: bool,
-    /// The selected audio track plays on the SET'S OWN decoder (`audio_natively_plays_with`: the
-    /// table's row, the Load's channel and rate limits, the direct-play mode). Standard may also decode
+    /// The selected audio track plays on the SET'S OWN decoder (`plan::uri_original_audio_plays`:
+    /// `audio_natively_plays_with`, i.e. the table's row, the Load's channel and rate limits and the
+    /// direct-play mode, plus, in Auto, the row's bound on the track's whole layout). Standard may also decode
     /// a codec in the app, which the TV's pipeline cannot, so that is not enough here.
     pub audio: bool,
     /// The Part's container is one Standard streams (`part_is_streamable`: .mkv, .mp4, .m4v). Any other

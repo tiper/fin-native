@@ -26,9 +26,10 @@ use super::probe::Location;
 // bounds and sample rate, shared with the device profile.
 pub use plx_os::devcaps::DP_AUDIO_CODECS;
 
-/// Codec, channel and rate check for an actual selected track, against the capability value `caps`
-/// of the attempt asking. Codec-only membership is insufficient on devices whose DTS decoder stops
-/// at 5.1 or whose AAC decoder stops at stereo, on the PCM path, which can name only some rates,
+/// Codec, channel and rate check for an actual selected track the app's own demuxer will be fed
+/// direct, against the capability value `caps` of the attempt asking (a DTS track is judged by the
+/// core it is fed as, `Caps::audio_supports`). Codec-only membership is insufficient on devices
+/// whose DTS row stops below the 5.1 core or whose AAC decoder stops at stereo, on the PCM path, which can name only some rates,
 /// and for a source above the rate ceiling the profile asks the server for (the app-decoded lossless
 /// codecs have none: the app resamples a faster track, `devcaps::pcm_load_rate`). The rate half is
 /// `devcaps::audio_track_fits` (see `devcaps::AUDIO_RATE_CEILING`, #951).
@@ -37,6 +38,15 @@ pub use plx_os::devcaps::DP_AUDIO_CODECS;
 /// server is sent ([`TranscodeSpec::caps`]) and the plan that chose the track come from the same one.
 pub fn is_dp_audio_track_with(caps: &plx_os::devcaps::Caps, codec: &str, channels: i64, sample_rate: i64) -> bool {
     caps.audio_supports(codec, channels) && plx_os::devcaps::audio_track_fits(codec, channels, sample_rate)
+}
+
+/// [`is_dp_audio_track_with`] as an ENCODER SESSION's profile ([`profile_for_delivery`]) states it:
+/// that profile keeps a DTS row's bound on the track's own layout (`Caps::audio_layout_supports`),
+/// so the server converts a 7.1 DTS-HD MA on a `DTS/6` set even though the direct-play ask would
+/// admit it (#1537). A guess at what a session copies (`remux_output_acodec`, `classify_outcome`)
+/// reads this, never the direct-play predicate.
+pub fn is_session_audio_track_with(caps: &plx_os::devcaps::Caps, codec: &str, channels: i64, sample_rate: i64) -> bool {
+    caps.audio_layout_supports(codec, channels) && plx_os::devcaps::audio_track_fits(codec, channels, sample_rate)
 }
 
 /// Subtitle codecs Original client-renders (`ff.rs` / the track menu). This is the
@@ -220,6 +230,15 @@ pub fn direct_play_video_codecs(caps: &plx_os::devcaps::Caps) -> Vec<&'static st
 /// The Load payload cannot drift whatever PMS chooses: `route.rs` reads the OUTPUT codecs off
 /// the /decision response (`decision_codecs`) and describes those, not the profile's wish.
 fn profile_for_delivery(caps: &plx_os::devcaps::Caps, delivery: TranscodeDelivery) -> String {
+    profile_with(caps, delivery, false)
+}
+
+/// [`profile_for_delivery`], with `dts_fed_as_core` saying whether a DTS track the server leaves alone
+/// reaches the app's own demuxer, which feeds its core: then a DTS row that holds the core admits every
+/// DTS-family width ([`plx_os::devcaps::profile_audio_channels`], #1537). Only the direct-play ask
+/// says so ([`profile_for`]): an encoder session's output may go to the TV's own player (the URI
+/// backend's server legs), which reads a copied DTS-HD stream whole, so it keeps the row as it is.
+fn profile_with(caps: &plx_os::devcaps::Caps, delivery: TranscodeDelivery, dts_fed_as_core: bool) -> String {
     let dp_video = direct_play_video_codecs(caps).join(",");
     // The table-gated copy codecs, in list order. Each one is advertised only when the table
     // carries ITS row, and each brings the row's own bound (see `row_limits`).
@@ -299,7 +318,10 @@ fn profile_for_delivery(caps: &plx_os::devcaps::Caps, delivery: TranscodeDeliver
     );
     let audio_limits = caps.audio_channels.iter()
         .filter(|(codec, _)| caps.audio_has(codec))
-        .map(|(codec, channels)| audio_limit(profile_codec_name(codec), "audio.channels", *channels))
+        .map(|(codec, channels)| {
+            let bound = if dts_fed_as_core { plx_os::devcaps::profile_audio_channels(codec, *channels) } else { *channels };
+            audio_limit(profile_codec_name(codec), "audio.channels", bound)
+        })
         .collect::<String>();
     // The rate ceiling (`devcaps::AUDIO_RATE_CEILING`, #951) goes on every codec of the transcode
     // target list and every lossy app-decoded row that `devcaps::audio_rate_bounded` names, the same
@@ -343,8 +365,10 @@ fn profile_for_delivery(caps: &plx_os::devcaps::Caps, delivery: TranscodeDeliver
     )
 }
 
+/// The profile of the direct-play ask ([`Client::mde_decision`]): only the Feed backend direct-plays
+/// what it admits, so a DTS track is fed as its core ([`profile_with`]).
 fn profile_for(caps: &plx_os::devcaps::Caps) -> String {
-    profile_for_delivery(caps, TranscodeDelivery::ProgressiveMkv)
+    profile_with(caps, TranscodeDelivery::ProgressiveMkv, true)
 }
 
 /// The forced-direct-play profile: the engine's own formats, no device limits, no transcode
@@ -1393,9 +1417,29 @@ mod tests {
         // transcode target and the channel limitation's scopeName. `dts` appears nowhere.
         assert!(list_of(&profile, "audioCodec=").contains(&"dca".into()));
         assert!(list_of(target_of(&profile), "audioCodec=").contains(&"dca".into()));
-        assert!(profile.contains("scope=videoAudioCodec&scopeName=dca&type=upperBound&name=audio.channels&value=6&replace=true"));
+        assert!(profile.contains("scope=videoAudioCodec&scopeName=dca&type=upperBound&name=audio.channels&value=8&replace=true"));
         assert!(!profile.contains("dts"), "{profile}");
         assert!(!profile.contains("truehd"));
+    }
+
+    /// #1537: a DTS row that holds the 5.1 core lets PMS direct-play a 7.1 DTS-HD MA (the pipeline
+    /// feeds its core), so the direct-play ask's `dca` bound is the widest DTS-HD layout, not the row's
+    /// 6. An encoder session, and a row narrower than the core (a learned stereo ceiling), state the
+    /// row as it is.
+    #[test]
+    fn a_dts_row_that_holds_the_core_lets_the_server_direct_play_7_1_dts_hd() {
+        let bound = |n: u32| format!("scope=videoAudioCodec&scopeName=dca&type=upperBound&name=audio.channels&value={n}&replace=true");
+        let mut caps = Caps::assumed();
+        caps.audio.push_str(",dts");
+        caps.audio_channels.insert("dts".into(), 6);
+        let profile = super::profile_for(&caps);
+        assert!(profile.contains(&bound(8)) && !profile.contains(&bound(6)), "{profile}");
+        // An encoder session's output may reach the TV's own player whole: it keeps the row's 6.
+        let session = super::profile_for_delivery(&caps, super::TranscodeDelivery::ProgressiveMkv);
+        assert!(session.contains(&bound(6)) && !session.contains(&bound(8)), "{session}");
+        caps.audio_channels.insert("dts".into(), 2);
+        let profile = super::profile_for(&caps);
+        assert!(profile.contains(&bound(2)) && !profile.contains(&bound(8)), "{profile}");
     }
 
     /// FLAC is decoded in the app and fed as PCM: offered for direct play (and Force) on a set

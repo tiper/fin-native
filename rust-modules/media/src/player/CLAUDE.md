@@ -61,7 +61,7 @@ file as a progressive URL carrier (`KnownSource::url_carrier`) and `ResolvePort:
 against `ProductEvidence::opted_in()`. `ProductQualifier` answers `Unknown` unless Standard would direct-play
 that original: the plan carries its own verdicts in `OriginalRequest::standard` (`StandardDirectPlay`, built in
 `build_stream` from `video_direct_plays` against `env.caps`, the frozen DV decision,
-`audio_natively_plays_with` and `part_is_streamable`, never re-derived by the qualifier), and `url_carrier`
+`uri_original_audio_plays` and `part_is_streamable`, never re-derived by the qualifier), and `url_carrier`
 certifies a DV record only where the frozen decision admitted it. So a codec or raster the caps refuse, a
 Profile 5 file on a set without Dolby Vision, an audio track only the app decodes or the set cannot decode,
 and a container Standard hands the server to remux (anything but .mkv/.mp4/.m4v) play exactly as in Standard.

@@ -914,6 +914,22 @@ fn aac51_source_outcome_unverified() {
     assert_eq!(classify_outcome(&plx_os::devcaps::caps(), Some(&mc), Some(&copyable), plx_plex::plex::AudioEnhancements::NONE), EnhancementOutcome::Off);
 }
 
+/// #1537: on a `DTS/6` row an encoder session converts a 7.1 DTS-HD MA at baseline (its profile
+/// keeps the row on the layout), so a transcode in the answer proves nothing: `Unverified`.
+#[test]
+fn a_7_1_dts_on_a_core_row_is_converted_at_baseline() {
+    let mc: plx_plex::plex::MediaContainer = serde_json::from_str(
+        r#"{"Metadata":[{"Media":[{"Part":[{"decision":"transcode","Stream":[{"streamType":1,"decision":"copy"},{"streamType":2,"codec":"ac3","decision":"transcode"}]}]}]}]}"#,
+    ).unwrap();
+    let mut caps = plx_os::devcaps::Caps::assumed();
+    caps.audio.push_str(",dts");
+    caps.audio_channels.insert("dts".into(), 6);
+    let wide = CarriedAudio::from_stream(&track(1, "dca", 8, true), 0);
+    let core = CarriedAudio::from_stream(&track(1, "dca", 6, true), 0);
+    assert_eq!(classify_outcome(&caps, Some(&mc), Some(&wide), PREF), EnhancementOutcome::Unverified);
+    assert_eq!(classify_outcome(&caps, Some(&mc), Some(&core), PREF), EnhancementOutcome::Applied);
+}
+
 // ---- Q-TOP (b) beside the enhancement: a remembered subtitle on the forced burn ------------------
 
 /// What the profile remembered for show 4242: the English text track.

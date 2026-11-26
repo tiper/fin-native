@@ -13011,7 +13011,8 @@ pub(super) enum RetranscodeWorkerOutcome {
 
 /// The audio codec a codec-preserving remux is GUESSED to deliver when its `/decision` cannot be
 /// read (the answer, when there is one, replaces this). An enhanced remux re-encodes the audio
-/// (I4), and a carried track the profile cannot admit is converted by the server, both to the
+/// (I4), and a carried track the session profile cannot admit (`plex::is_session_audio_track_with`,
+/// which bounds a DTS track by its own layout, #1537) is converted by the server, both to the
 /// profile's first target (`ac3`) — the source codec would describe bytes that never arrive
 /// (silent audio). A plain remux of an admissible track copies it; with no carried track (the
 /// server default) it falls back to the file's own default codec.
@@ -13019,7 +13020,7 @@ fn remux_output_acodec(
     caps: &plx_os::devcaps::Caps, enhanced: bool, carried: Option<&CarriedAudio>, src_acodec: &str,
 ) -> String {
     let carried = carried.filter(|a| !a.codec.is_empty());
-    if enhanced || carried.is_some_and(|a| !plx_plex::plex::is_dp_audio_track_with(caps, &a.codec, a.channels, a.sample_rate)) {
+    if enhanced || carried.is_some_and(|a| !plx_plex::plex::is_session_audio_track_with(caps, &a.codec, a.channels, a.sample_rate)) {
         "ac3".to_owned()
     } else {
         carried.map_or_else(|| src_acodec.to_owned(), |a| a.codec.clone())
