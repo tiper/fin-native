@@ -147,6 +147,12 @@ impl Harness {
         Self { runtime, retained }
     }
 
+    #[cfg(all(feature = "sim", feature = "play-feed"))]
+    pub(crate) fn swap_parts(&mut self, runtime: &mut RuntimeOwners, retained: &mut BridgeRetained) {
+        std::mem::swap(&mut self.runtime, runtime);
+        std::mem::swap(&mut self.retained, retained);
+    }
+
     pub(crate) fn bridge(&mut self) -> Bridge<'_> {
         self.runtime.bridge(&mut self.retained)
     }

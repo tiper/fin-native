@@ -472,6 +472,15 @@ fn catalan_month_day_captions_use_format_and_standalone_month_names() {
 }
 
 #[test]
+fn croatian_month_captions_use_the_cldr_date_patterns() {
+    let cx = LocaleContext::resolve(Preference::Hr, None, None, None, None);
+
+    assert_eq!(cx.month_day(10, 12, MonthWidth::Medium).as_deref(), Some("12. lis"));
+    assert_eq!(cx.month_day(10, 12, MonthWidth::Long).as_deref(), Some("12. listopada"));
+    assert_eq!(cx.month_year(2024, 10).as_deref(), Some("lis 2024."));
+}
+
+#[test]
 fn pseudo_locale_month_day_captions_follow_english() {
     let pseudo = LocaleContext::pseudo_for_test();
     assert_eq!(pseudo.month_day(3, 12, MonthWidth::Medium).as_deref(), Some("12 Mar"));
@@ -921,12 +930,6 @@ fn month_year_names_the_month_stand_alone_where_the_language_declines_it() {
 }
 
 #[test]
-fn today_is_a_calendar_date_from_the_wall_clock() {
-    let [year, month, day] = local_calendar_today().expect("a representable date");
-    assert!(year >= 2026 && (1..=12).contains(&month) && (1..=31).contains(&day));
-}
-
-#[test]
 fn time_of_day_respects_the_format_locale_and_clock_override() {
     let locale = |fmt, clock| LocaleContext::resolve(Preference::Es, None, Some(fmt), clock, None);
     let us = locale("en-US", None);
@@ -941,33 +944,40 @@ fn time_of_day_respects_the_format_locale_and_clock_override() {
 }
 
 #[test]
-fn local_clock_time_uses_the_os_timezone_and_checks_time_t_range() {
-    const CHILD: &str = "PLX_LOCAL_CLOCK_TIME_CASE";
-    if std::env::var(CHILD).is_ok() {
-        // 2026-11-09 10:19:04 UTC; Europe/Madrid is 11:19 at this instant.
-        assert_eq!(local_clock_time(1_794_219_544), Some([11, 19]));
-        // Spring-forward: 01:59:59 CET is followed by 03:00 CEST.
-        assert_eq!(local_clock_time(1_774_745_999), Some([1, 59]));
-        assert_eq!(local_clock_time(1_774_746_000), Some([3, 0]));
-        let twelve = LocaleContext::resolve(Preference::En, None, Some("en-US"), Some("12"), None);
-        assert_eq!(local_clock_time(1_774_745_999).and_then(|time| twelve.time_of_day(time)).as_deref(), Some("1:59\u{202f}AM"));
-        assert_eq!(local_clock_time(1_774_746_000).and_then(|time| twelve.time_of_day(time)).as_deref(), Some("3:00\u{202f}AM"));
-        // Fall-back: 02:59:59 CEST is followed by 02:00 CET.
-        assert_eq!(local_clock_time(1_792_889_999), Some([2, 59]));
-        assert_eq!(local_clock_time(1_792_890_000), Some([2, 0]));
-        assert_eq!(local_clock_time(0), None);
-        assert_eq!(local_clock_time(-1), None);
-        assert_eq!(local_clock_time(i64::MAX), None);
+fn local_utc_offset_follows_the_os_timezone_including_its_clock_changes() {
+    const CHILD: &str = "PLX_LOCAL_UTC_OFFSET_CASE";
+    if let Ok(zone) = std::env::var(CHILD) {
+        let hours = |h: i32| h * 3_600;
+        let cases: &[(i64, i32)] = match zone.as_str() {
+            "UTC" => &[(1_795_649_400, 0)],
+            // Spring-forward: 01:59:59 CET (+1) is followed by 03:00 CEST (+2); fall-back at 01:00 UTC.
+            "Europe/Madrid" => &[(1_774_745_999, hours(1)), (1_774_746_000, hours(2)), (1_792_889_999, hours(2)), (1_792_890_000, hours(1))],
+            "Asia/Kolkata" => &[(1_795_649_400, 19_800)],
+            "America/Los_Angeles" => &[(1_795_651_800, hours(-8))],
+            // The zones a day apart from their opposites: +13 is not -11, +14 is not -10.
+            "Pacific/Auckland" => &[(1_767_268_800, hours(13))],
+            "Pacific/Pago_Pago" => &[(1_767_312_000, hours(-11))],
+            "Pacific/Kiritimati" => &[(1_767_268_800, hours(14))],
+            other => panic!("no cases for {other}"),
+        };
+        for &(at, want) in cases {
+            assert_eq!(local_utc_offset(at), Some(want), "{zone} at {at}");
+        }
+        assert_eq!(local_utc_offset(0), None);
+        assert_eq!(local_utc_offset(-1), None);
+        assert_eq!(local_utc_offset(i64::MAX), None);
         return;
     }
-    let name = format!("{}::local_clock_time_uses_the_os_timezone_and_checks_time_t_range",
+    let name = format!("{}::local_utc_offset_follows_the_os_timezone_including_its_clock_changes",
         module_path!().split_once("::").unwrap().1);
-    let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", &name, "--test-threads=1"])
-        .env("TZ", "Europe/Madrid").env(CHILD, "1").output().unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success() && stdout.contains("1 passed"),
-        "local clock time failed under Europe/Madrid:\n{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+    for zone in ["UTC", "Europe/Madrid", "Asia/Kolkata", "America/Los_Angeles", "Pacific/Auckland", "Pacific/Pago_Pago", "Pacific/Kiritimati"] {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--test-threads=1"])
+            .env("TZ", zone).env(CHILD, zone).output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && stdout.contains("1 passed"),
+            "the UTC offset failed under {zone}:\n{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+    }
 }
 
 #[test]

@@ -16,7 +16,7 @@
 //! HTTP, deadline and transport causes for route policy.
 use super::client::{Client, JsonDeadlineOutcome, QueryBuilder, StreamUrl};
 use super::models::MediaContainer;
-use super::params::{Ceiling, TranscodeDelivery, TranscodeSpec};
+use super::params::{Ceiling, TranscodeDelivery, TranscodeSource, TranscodeSpec};
 use super::probe::Location;
 
 // `DP_AUDIO_CODECS` — the AUDIO codec set the buffer-feed pipeline decodes — is defined in
@@ -453,8 +453,12 @@ impl Client {
         );
         let copy_ok = !hls && !(s.contract.no_video_copy && !s.contract.remux);
         let protocol = if hls { "hls" } else { "http" };
+        let path = match s.source {
+            TranscodeSource::Library(rating_key) => format!("/library/metadata/{rating_key}"),
+            TranscodeSource::Live(key) => key.to_owned(),
+        };
         let mut q = QueryBuilder::new("")
-            .str("path", &format!("/library/metadata/{}", s.rating_key))
+            .str("path", &path)
             .int("mediaIndex", s.media_index as i64)
             .int("partIndex", 0)
             .str("protocol", protocol)
@@ -690,22 +694,32 @@ impl Client {
 
     /// GET /video/:/transcode/universal/stop — free both the physical encoder and the Streaming
     /// Resource bandwidth allocation owned by `session`.
-    /// Returns whether the request reached the server and came back accepted.
+    /// Returns whether the server answered 2xx.
     ///
-    /// Reported rather than discarded, for the reason [`Client::get_ok`] exists: this is a
-    /// body-less WRITE whose caller is off the main thread (`route::scrobble_stop`'s worker), and
-    /// the bool is the only thing that can say it landed. What a silently lost stop leaves behind is
-    /// specific — the server keeps ENCODING into a session nothing will read again, the leaked
-    /// server-side encoder `docs/parity-gaps.md` names on the retranscode path. Like
-    /// [`super::library::Client::scrobble`], it does not tell a 200 from a 404: `get_ok` is
-    /// `http_get`'s own success, which is the honest limit of a GET whose body carries nothing.
+    /// Reported rather than discarded: this is a body-less WRITE whose caller is off the main
+    /// thread (`route::scrobble_stop`'s worker), and the bool is the only thing that can say it
+    /// landed. What a silently lost stop leaves behind is specific — the server keeps ENCODING into
+    /// a session nothing will read again, the leaked server-side encoder `docs/parity-gaps.md`
+    /// names on the retranscode path. A 404 means no transcoder ever ran under `session` (it only
+    /// reached `/decision`): the stop's own close never reaches the Streaming Resource that
+    /// decision reserved, so it is closed through [`Client::transcode_resource_reconciled`], and
+    /// the stop still returns `false`.
     #[track_caller]
     pub fn transcode_stop(&self, session: &str) -> bool {
         if session.is_empty() {
             return false;
         }
         crate::alt!(b => b.transcode_stop(session));
-        self.get_ok(&self.transcode_stop_query(session, true))
+        match self.get_status(&self.transcode_stop_query(session, true)) {
+            Some(200..=299) => true,
+            // Decision-only session: close its reserved stream slot, or the server holds it
+            // until its own timeout.
+            Some(404) => {
+                let _ = self.transcode_resource_reconciled(session);
+                false
+            }
+            _ => false,
+        }
     }
 
     /// Stop the physical encoder while deliberately preserving its Streaming Resource. Runtime
@@ -780,7 +794,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::{
-        link_policy, Ceiling, Client, LinkPolicy, Location, TranscodeDelivery, TranscodeSpec,
+        link_policy, Ceiling, Client, LinkPolicy, Location, TranscodeDelivery, TranscodeSource, TranscodeSpec,
     };
     use plx_os::devcaps::Caps;
     use crate::plex::{AudioEnhancements, EncodeContract, Origin, ServerId};
@@ -814,7 +828,7 @@ mod tests {
         audio: AudioEnhancements,
     ) -> TranscodeSpec<'a> {
         TranscodeSpec {
-            rating_key: "5",
+            source: TranscodeSource::Library("5"),
             media_index: 0,
             session: "s1",
             encoder_session: "s1",
@@ -833,29 +847,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_live_session_is_not_prefixed_with_library_metadata() {
+        let mut live = spec(false, false);
+        live.source = TranscodeSource::Live("/livetv/sessions/9b9fe727-0000-46db-b94c-ef512e3e61d2");
+        let query = a_client().transcode_query(&live);
+        assert!(query.contains("path=%2Flivetv%2Fsessions%2F9b9fe727-0000-46db-b94c-ef512e3e61d2&"), "{query}");
+        assert_eq!(query.replace("path=%2Flivetv%2Fsessions%2F9b9fe727-0000-46db-b94c-ef512e3e61d2&", "path=%2Flibrary%2Fmetadata%2F5&"),
+            a_client().transcode_query(&spec(false, false)), "the source changes no encode contract parameter");
+    }
+
     /// PMS acknowledges `/stop` before its cleanup worker erases the physical session. The
     /// matching ping exact-looks up that half of the lifecycle: 200 while the physical map entry
     /// exists, 404 after it is gone. Other statuses prove neither state and must fail closed; the
     /// logical Streaming Resource has its own close method and is deliberately not inferred here.
     //
-    // Dev-only, this test through `resource_close_is_posted_and_accepts_only_terminated_or_absent`
-    // below: each drives a plaintext loopback PMS with a real, token-bearing client, which a store
-    // build's `CredentialPolicy::HttpsOnly` refuses before the request reaches the wire (see
-    // `http::credential_transport_allowed`) — the refused call's return value fails the fixture's
-    // own assertion. The store-build case is covered instead by `auth.rs`'s `e2e_real_curl_*`
-    // HTTPS harness.
+    /// A plaintext loopback PMS that answers one connection per entry of `statuses`, in order,
+    /// with an empty body, publishing each request line; and a client pointed at it.
     #[cfg(feature = "devtriggers")]
-    #[test]
-    fn transcode_ping_distinguishes_present_absent_and_unknown_cleanup_state() {
-        use std::io::{BufRead, BufReader, Write};
+    fn loopback_pms(
+        statuses: &'static [&'static str],
+    ) -> (
+        Client,
+        std::sync::mpsc::Receiver<String>,
+        std::thread::JoinHandle<()>,
+    ) {
         use plx_base::testnet::{self, CLIENT_WAIT};
+        use std::io::{BufRead, BufReader, Write};
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().unwrap().port() as i32;
         let (tx, rx) = std::sync::mpsc::channel();
         let server = std::thread::spawn(move || {
-            for status in ["200 OK", "404 Not Found", "500 Internal Server Error"] {
-                let (mut socket, _) = testnet::accept_within(&listener, CLIENT_WAIT).expect("accept ping");
+            for status in statuses {
+                let (mut socket, _) =
+                    testnet::accept_within(&listener, CLIENT_WAIT).expect("accept");
                 let mut line = String::new();
                 BufReader::new(&socket)
                     .read_line(&mut line)
@@ -868,7 +894,6 @@ mod tests {
                 .expect("response");
             }
         });
-
         let client = Client::new(
             ServerId::from_raw(1),
             "mach",
@@ -876,6 +901,20 @@ mod tests {
             "tok",
             "cid",
         );
+        (client, rx, server)
+    }
+
+    // Dev-only, this test through `resource_close_is_posted_and_accepts_only_terminated_or_absent`
+    // below: each drives a plaintext loopback PMS with a real, token-bearing client, which a store
+    // build's `CredentialPolicy::HttpsOnly` refuses before the request reaches the wire (see
+    // `http::credential_transport_allowed`) — the refused call's return value fails the fixture's
+    // own assertion. The store-build case is covered instead by `auth.rs`'s `e2e_real_curl_*`
+    // HTTPS harness.
+    #[cfg(feature = "devtriggers")]
+    #[test]
+    fn transcode_ping_distinguishes_present_absent_and_unknown_cleanup_state() {
+        let (client, rx, server) =
+            loopback_pms(&["200 OK", "404 Not Found", "500 Internal Server Error"]);
         assert_eq!(client.transcode_session_present("encoder-one"), Some(true));
         assert_eq!(client.transcode_session_present("encoder-two"), Some(false));
         assert_eq!(client.transcode_session_present("encoder-three"), None);
@@ -940,35 +979,8 @@ mod tests {
     #[cfg(feature = "devtriggers")]
     #[test]
     fn resource_close_is_posted_and_accepts_only_terminated_or_absent() {
-        use std::io::{BufRead, BufReader, Write};
-        use plx_base::testnet::{self, CLIENT_WAIT};
-
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().unwrap().port() as i32;
-        let (tx, rx) = std::sync::mpsc::channel();
-        let server = std::thread::spawn(move || {
-            for status in ["200 OK", "404 Not Found", "500 Internal Server Error"] {
-                let (mut socket, _) = testnet::accept_within(&listener, CLIENT_WAIT).expect("accept close");
-                let mut line = String::new();
-                BufReader::new(&socket)
-                    .read_line(&mut line)
-                    .expect("request line");
-                tx.send(line).expect("publish request");
-                write!(
-                    socket,
-                    "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                )
-                .expect("response");
-            }
-        });
-
-        let client = Client::new(
-            ServerId::from_raw(1),
-            "mach",
-            Origin::http("127.0.0.1", port),
-            "tok",
-            "cid",
-        );
+        let (client, rx, server) =
+            loopback_pms(&["200 OK", "404 Not Found", "500 Internal Server Error"]);
         assert_eq!(
             client.transcode_resource_reconciled("resource-one"),
             Some(true)
@@ -987,6 +999,30 @@ mod tests {
                 "{line}",
             );
         }
+        server.join().unwrap();
+    }
+
+    /// A session that only ever ran `/decision` has no transcoder: PMS answers its `/stop` 404
+    /// and its Streaming Resource, which holds a stream slot, is left to the server's timeout. The
+    /// stop must then close the resource itself, or two quick start/stop cycles exhaust a
+    /// server's stream limit.
+    // Dev-only: see the comment on `transcode_ping_distinguishes_present_absent_and_unknown_cleanup_state`.
+    #[cfg(feature = "devtriggers")]
+    #[test]
+    fn a_stop_that_finds_no_transcoder_still_closes_the_reserved_resource() {
+        let (client, rx, server) = loopback_pms(&["404 Not Found", "200 OK"]);
+        assert!(!client.transcode_stop("decided-only"));
+        let stop = rx.recv().expect("stop request");
+        assert!(
+            stop.starts_with("GET /video/:/transcode/universal/stop?"),
+            "{stop}"
+        );
+        let close = rx.recv().expect("the resource close after a 404 stop");
+        assert!(close.starts_with("POST /status/sessions/close?"), "{close}");
+        assert!(
+            close.contains("X-Plex-Session-Identifier=decided-only"),
+            "{close}"
+        );
         server.join().unwrap();
     }
 

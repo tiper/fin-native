@@ -71,6 +71,7 @@ pub mod notify_job;
 pub mod notify_map;
 pub mod person;
 pub mod collection;
+pub mod livetv;
 pub(crate) mod deck;
 pub(crate) mod deck_group;
 pub mod page_cache;
@@ -94,6 +95,7 @@ pub struct Stores {
     pub metadata: metadata::MetadataStore,
     pub person: person::PersonStore,
     pub collection: collection::CollectionStore,
+    pub livetv: livetv::LiveTvStore,
     pub search: search::SearchStore,
     /// The player's subtitle search & download (`crate::subsearch`). Appended last.
     pub subtitle_search: subsearch::SubSearchStore,
@@ -130,6 +132,7 @@ impl Default for Stores {
             metadata: metadata::MetadataStore::default(),
             person: person::PersonStore::default(),
             collection: collection::CollectionStore::default(),
+            livetv: livetv::LiveTvStore::default(),
             search: search::SearchStore::default(),
             subtitle_search: subsearch::SubSearchStore::default(),
             viewstate: std::cell::RefCell::new(viewstate::ViewStateStore::default()),
@@ -243,6 +246,20 @@ pub fn person_run(&mut self, cmd: person::PersonCmd, input: &crate::person::Pers
         self.collection.view()
     }
 
+    pub fn livetv_run(&mut self, cmd: livetv::LiveTvCmd, input: &livetv::LiveTvInput<'_>) -> bool {
+        self.livetv.run(cmd, &self.landgate, input)
+    }
+
+    pub fn livetv_pump(&mut self, input: &livetv::LiveTvInput<'_>) -> bool {
+        self.livetv.pump(&self.landgate, input)
+    }
+
+    pub fn livetv_note_unseated(&mut self, key: crate::livetv::RecentKey, input: &livetv::LiveTvInput<'_>) -> bool {
+        self.livetv.note_unseated(key, input)
+    }
+
+    pub fn livetv_view(&self) -> crate::livetv::LiveTvView<'_> { self.livetv.view() }
+
     pub fn subtitle_search_run(&mut self, cmd: subsearch::SubSearchCmd) -> bool {
         let _step = plx_base::step::StepScope::enter();
         self.subtitle_search.run(cmd)
@@ -302,6 +319,7 @@ pub fn person_pump(&mut self, input: &crate::person::PersonInput<'_>) -> bool {
     pub fn take_jobs_of(&mut self, id: StoreId) -> Vec<StoreJob> {
         match id {
             StoreId::Notify => self.notify.take_jobs(),
+            StoreId::LiveTv => self.livetv.take_jobs(),
             StoreId::Watchlist => self.watchlist.take_jobs(),
             StoreId::Metadata => self.metadata.take_jobs(),
             StoreId::Collection => self.collection.take_jobs(),
@@ -327,6 +345,7 @@ pub fn person_pump(&mut self, input: &crate::person::PersonInput<'_>) -> bool {
     fn has_jobs_of(&self, id: StoreId) -> bool {
         match id {
             StoreId::Notify => self.notify.has_jobs(),
+            StoreId::LiveTv => self.livetv.has_jobs(),
             StoreId::Watchlist => self.watchlist.has_jobs(),
             StoreId::Metadata => self.metadata.has_jobs(),
             StoreId::Collection => self.collection.has_jobs(),
@@ -685,6 +704,7 @@ pub fn person_pump(&mut self, input: &crate::person::PersonInput<'_>) -> bool {
         match id {
             StoreId::Browse => self.browse.borrow().gen(),
             StoreId::Collection => self.collection.gen(),
+            StoreId::LiveTv => self.livetv.gen(),
             StoreId::Hubs => self.hubs.gen(),
             StoreId::Metadata => self.metadata.gen(),
             StoreId::Person => self.person.gen(),
@@ -734,6 +754,9 @@ pub fn person_pump(&mut self, input: &crate::person::PersonInput<'_>) -> bool {
         if let Some(generation) = self.catalog.take_notice() {
             notices.push((StoreId::Catalog, generation));
         }
+        if let Some(generation) = self.livetv.take_notice() {
+            notices.push((StoreId::LiveTv, generation));
+        }
         notices
     }
 }
@@ -763,6 +786,8 @@ pub enum StoreId {
     Catalog,
     /// Never recorded; appended without moving existing ordinals.
     Notify,
+    /// Independent DVR lineup and guide; appended without moving recorded ordinals.
+    LiveTv,
 }
 
 /// Route-scoped background work, distinct from a user command. Polling an idle store must not
@@ -794,6 +819,7 @@ impl StoreWork {
 /// lane a store is pumped on, a job carries the request itself and the port its answer goes to.
 #[derive(Debug, PartialEq)]
 pub enum StoreJob {
+    LiveTv(plx_machine::job::Job<crate::livetv::LiveTvReq>, crate::livetv::LiveTvPort),
     /// A profile-addressed preference edit, merged on the serial storage runner. Not taped.
     BrowsePreferences(plx_machine::job::Job<crate::browse::preferences_job::BrowsePreferencesReq>,
         crate::browse::preferences_job::BrowsePreferencesPort),
@@ -923,7 +949,8 @@ impl StoreJob {
             // `frame_ingest`, the Browse pump's own discovery step) starts it through
             // `StoreRunner::start` as `Direct`, byte for byte as its unrecorded spawn was.
             Self::BrowseDiscovery(..) => Admission::Home,
-            Self::WatchlistList(..) | Self::WatchlistRematch(..) | Self::WatchlistDelta(..)
+            Self::LiveTv(..)
+            | Self::WatchlistList(..) | Self::WatchlistRematch(..) | Self::WatchlistDelta(..)
             | Self::WatchlistResolve(..) | Self::WatchlistWrite(..) | Self::NotifyStream(..)
             | Self::Catalog(..)
             | Self::SubtitleSearch(..)
@@ -946,6 +973,7 @@ impl StoreJob {
         match self {
             Self::Detail(..) | Self::MetaSeason(..) | Self::MetaEpisodes(..) | Self::MetaRelated(..) | Self::MetaAltSources(..) => StoreId::Metadata,
             Self::Collection(..) => StoreId::Collection,
+            Self::LiveTv(..) => StoreId::LiveTv,
             Self::Person(..) => StoreId::Person,
             Self::NotifyStream(..) => StoreId::Notify,
             Self::WatchlistList(..) | Self::WatchlistRematch(..) | Self::WatchlistDelta(..)
@@ -962,7 +990,7 @@ impl StoreJob {
 }
 
 impl StoreId {
-    pub const ALL: [StoreId; 13] = [
+    pub const ALL: [StoreId; 14] = [
         StoreId::Browse,
         StoreId::Hubs,
         StoreId::Metadata,
@@ -976,6 +1004,7 @@ impl StoreId {
         StoreId::Watchlist,
         StoreId::Catalog,
         StoreId::Notify,
+        StoreId::LiveTv,
     ];
 
     /// The library's ordinal for this store (spec §5.1: the library never names `StoreId`).
@@ -1002,6 +1031,7 @@ impl StoreId {
             StoreId::Watchlist => "watchlist",
             StoreId::Catalog => "catalog",
             StoreId::Notify => "notify",
+            StoreId::LiveTv => "livetv",
         }
     }
 }
@@ -1018,6 +1048,7 @@ pub enum StoreCmd {
     Collection(collection::CollectionCmd),
     ViewState(viewstate::ViewStateCmd),
     SubtitleSearch(subsearch::SubSearchCmd),
+    LiveTv(livetv::LiveTvCmd),
 }
 
 impl StoreCmd {
@@ -1031,6 +1062,7 @@ impl StoreCmd {
             StoreCmd::Collection(_) => StoreId::Collection,
             StoreCmd::ViewState(_) => StoreId::ViewState,
             StoreCmd::SubtitleSearch(_) => StoreId::SubtitleSearch,
+            StoreCmd::LiveTv(_) => StoreId::LiveTv,
         }
     }
 }
@@ -1495,7 +1527,9 @@ mod tests {
         }
         assert_eq!(StoreId::Notify.ord(), StoreOrd(12));
         assert_eq!(StoreId::Notify.name(), "notify");
-        assert_eq!(StoreId::from_ord(StoreOrd(13)), None);
+        assert_eq!(StoreId::LiveTv.ord(), StoreOrd(13));
+        assert_eq!(StoreId::LiveTv.name(), "livetv");
+        assert_eq!(StoreId::from_ord(StoreOrd(14)), None);
         let original = ["browse", "hubs", "metadata", "search", "person", "viewstate",
             "collection", "subsearch", "viewreconcile", "viewstop", "watchlist", "catalog"];
         for (ord, name) in original.into_iter().enumerate() {

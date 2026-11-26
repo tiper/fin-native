@@ -42,7 +42,7 @@ fn a_leading_missing_aac_timestamp_is_backfilled_from_frame_duration() {
             duration_ns: Some(21_333_333),
         },
     ];
-    assert_eq!(resolve_audio_stamps(&mut stamps), Ok(2));
+    assert_eq!(resolve_audio_stamps(&mut stamps, 0), Ok(2));
     assert_eq!(stamps[0].raw_ns, Some(878_666_667));
     assert_eq!(stamps[2].raw_ns, Some(921_333_333));
 }
@@ -66,7 +66,7 @@ fn a_timestamp_free_aac_segment_uses_only_its_frame_clock() {
             duration_ns: Some(20_000_000),
         },
     ];
-    assert_eq!(resolve_audio_stamps(&mut stamps), Ok(3));
+    assert_eq!(resolve_audio_stamps(&mut stamps, 0), Ok(3));
     assert_eq!(
         stamps.iter().map(|stamp| stamp.raw_ns).collect::<Vec<_>>(),
         [Some(0), Some(20_000_000), Some(40_000_000)]
@@ -88,7 +88,7 @@ fn an_unanchored_aac_timestamp_hole_fails_closed() {
         },
     ];
     assert_eq!(
-        resolve_audio_stamps(&mut stamps),
+        resolve_audio_stamps(&mut stamps, 0),
         Err("AAC timestamp hole has no duration anchor")
     );
 }
@@ -103,6 +103,57 @@ fn a_later_ts_idr_recovers_cached_parameter_sets() {
     assert_eq!(ts_h264_access_unit(&later, &mut sets, &mut out), Ok(true));
     assert!(out.starts_with(&[0, 0, 0, 1, 0x67, 1, 0, 0, 0, 1, 0x68, 2]));
     assert!(out.ends_with(&later));
+}
+
+/// A Live TV recording's later segment carries no SPS/PPS (2026-10-21): the sets the previous
+/// segment of the SAME playlist left are carried over, and another playlist never inherits them.
+#[test]
+fn a_live_segment_without_parameter_sets_inherits_them_from_its_own_playlist_only() {
+    let at = |path: &str| crate::hls::Segment {
+        sequence: 1,
+        duration: std::time::Duration::from_secs(1),
+        resource: crate::hls::Resource::new(plx_net::net::origin::Origin::http("192.0.2.10", 32400), path).unwrap(),
+    };
+    let session = "/livetv/sessions/9b9fe727/d459eaef";
+    assert_eq!(carry_scope(&at(&format!("{session}/00000.ts"))), session);
+    assert_eq!(carry_scope(&at(&format!("{session}/00001.ts?X-Plex-Token=t"))), session);
+    assert_ne!(carry_scope(&at("/video/:/transcode/universal/session/other/base/00001.ts")), session);
+
+    // the previous segment's sets, cloned into the next one, go in front of its bare IDR
+    let mut previous = H264ParamSets::default();
+    let mut out = Vec::new();
+    ts_h264_access_unit(&[0, 0, 1, 0x67, 1, 0, 0, 1, 0x68, 2, 0, 0, 1, 0x65, 3], &mut previous, &mut out).unwrap();
+    let mut next = previous.clone();
+    assert_eq!(ts_h264_access_unit(&[0, 0, 1, 0x65, 4], &mut next, &mut out), Ok(true));
+    assert!(out.starts_with(&[0, 0, 0, 1, 0x67, 1, 0, 0, 0, 1, 0x68, 2]));
+}
+
+/// A live recording starts three seconds behind its edge and is polled twice a second (measured
+/// on the TV 2026-10-21: started on its first segment it stalled at every late one); a PMS
+/// VOD transcode's playlist keeps the VOD cadence and starts at once.
+#[test]
+fn a_live_playlist_starts_behind_its_edge_and_is_polled_faster() {
+    assert!(!live_start_ready(true, false, 760_000_000, false), "one segment is no cushion");
+    assert!(!live_start_ready(true, false, 2_760_000_000, false));
+    assert!(live_start_ready(true, false, 3_760_000_000, false));
+    assert!(live_start_ready(true, true, 0, false), "once started, every segment goes as it lands");
+    assert!(live_start_ready(true, false, 760_000_000, true), "an ended recording never grows into the cushion");
+    assert!(live_start_ready(false, false, 0, false), "a PMS transcode is never held");
+    assert_eq!(playlist_poll(true, 3), std::time::Duration::from_millis(500));
+    assert_eq!(playlist_poll(false, 3), std::time::Duration::from_millis(1_000));
+    assert_eq!(playlist_poll(false, 0), std::time::Duration::from_millis(250));
+}
+
+/// A reopened live playlist starts a cushion behind its edge, not on the first segment it still
+/// lists: a reload of a long recording must not replay it from the tune.
+#[test]
+fn a_reopened_live_playlist_starts_at_its_edge_not_its_first_segment() {
+    let recording = [1_000_000_000i64; 600];
+    assert_eq!(live_edge_start_index(&recording), 597, "597, 598 and 599 hold three seconds");
+    assert_eq!(live_edge_start_index(&[2_000_000_000; 10]), 8, "8 and 9 hold four seconds");
+    assert_eq!(live_edge_start_index(&[1_000_000_000; 3]), 0, "exactly the cushion: the first");
+    assert_eq!(live_edge_start_index(&[760_000_000]), 0, "one segment is no cushion");
+    assert_eq!(live_edge_start_index(&[]), 0);
 }
 
 #[test]
@@ -199,3 +250,44 @@ fn without_parameters_only_adts_is_usable() {
     assert_eq!(adts_framed(&raw, None), None, "raw AAC with nothing to frame it with");
 }
 
+
+/// **A tuner cut with no audio timestamp keeps its frame spacing.** A tuner stream's lanes are read
+/// against the stream's raw origin (ten seconds here), and a frame clock synthesized from zero sat
+/// before that origin: every frame clamped onto one content time (PR #993 review). The clock starts
+/// at the cut's first published picture instead; an independent segment stays zero-based.
+#[test]
+fn a_timestamp_free_tuner_cut_keeps_its_aac_frame_spacing() {
+    fn placed(clock: &mut crate::hls::SegmentClock, stream_start_ns: Option<i64>) -> Vec<i64> {
+        let mut stamps: Vec<AudioStamp> = (0..3)
+            .map(|au| AudioStamp { au, raw_ns: None, duration_ns: Some(21_333_333) })
+            .collect();
+        let mut aus: Vec<HlsAu> = (0..3)
+            .map(|_| HlsAu { data: Vec::new(), pts_ns: 0, key: 1, es: 2 })
+            .collect();
+        let (synthesized, tail) = stamp_segment_audio(&mut stamps, stream_start_ns, clock, &mut aus).unwrap();
+        assert_eq!(synthesized, 3);
+        assert_eq!(tail, aus.iter().map(|au| au.pts_ns).max());
+        aus.iter().map(|au| au.pts_ns / 1_000_000).collect()
+    }
+    let mut timeline = crate::hls::SegmentTimeline::default();
+
+    // The tune's first cut: a discarded picture at 10 s is the shared origin, the IDR is at 10.5 s.
+    let mut first = timeline.begin(std::time::Duration::from_secs(1)).unwrap();
+    first.share_origin();
+    first.normalize_video(10_000_000_000);
+    assert_eq!(first.normalize_video(10_500_000_000).0, 500);
+    assert_eq!(placed(&mut first, Some(10_500_000_000)), [500, 521, 542], "from the IDR, a frame apart");
+    timeline.commit(first);
+
+    // A cut that continues it, whose first picture is at 11 s of the stream's clock.
+    let mut second = timeline.begin(std::time::Duration::from_secs(1)).unwrap();
+    second.continue_stream(first.stream_anchors());
+    assert_eq!(second.normalize_video(11_000_000_000).0, 1_000);
+    assert_eq!(placed(&mut second, Some(11_000_000_000)), [1_000, 1_021, 1_042]);
+    timeline.commit(second);
+
+    // An independent segment (VOD, a PMS transcode): zero-based on its own boundary, as before.
+    let mut independent = timeline.begin(std::time::Duration::from_secs(1)).unwrap();
+    independent.normalize_video(77_000_000_000);
+    assert_eq!(placed(&mut independent, None), [2_000, 2_021, 2_042]);
+}

@@ -13,6 +13,8 @@ pub(crate) mod hud_source;
 #[cfg(feature = "devtriggers")]
 mod a11y_state;
 #[cfg(feature = "devtriggers")]
+mod api;
+#[cfg(feature = "devtriggers")]
 mod anim_diagnostics;
 mod card_motion_policy;
 mod player_presentation;
@@ -54,6 +56,7 @@ pub(crate) mod words;
 pub(crate) mod page_title;
 pub(crate) mod clock;
 mod clock_notice;
+mod server_security_notice;
 mod hint_taught;
 mod recorder;
 mod window_activity;
@@ -203,6 +206,9 @@ pub(crate) struct App {
     /// already finished by then). See `input::menu_play_tick`, driven every frame beside
     /// `pump_detail()` (`app/run.rs`).
     pub(crate) menu_play_await: Option<MenuPlayAwait>,
+    /// Socket replies owned by the frame loop until their command settles.
+    #[cfg(feature = "devtriggers")]
+    api_waiting: std::collections::VecDeque<api::InFlight>,
     /// A title another app asked to open (`deeplink`), until Home is up to hand it to
     /// `menu_play_await`.
     pub(crate) deeplink: deeplink::DeepLink,

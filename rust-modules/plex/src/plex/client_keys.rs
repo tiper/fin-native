@@ -132,6 +132,18 @@ impl ClientKeys {
     pub fn facts(&self, sid: ServerId) -> Option<&ClientFacts> {
         self.1.iter().find(|(slot, _)| *slot == sid).map(|(_, facts)| facts)
     }
+    /// The `machineIdentifier` the registry holds for `sid`: the DURABLE name of a server (a slot is
+    /// stable only for the life of the process). `None` for a slot the roster does not hold and for
+    /// one nobody has learned the identifier of yet.
+    pub fn machine_of(&self, sid: ServerId) -> Option<&str> {
+        self.facts(sid).map(|facts| facts.machine_id.as_str()).filter(|machine| !machine.is_empty())
+    }
+    /// The slot that holds the server named `machine`, the inverse of [`ClientKeys::machine_of`]:
+    /// `None` for a server the roster does not hold (and for the empty name, which no server has).
+    pub fn sid_of_machine(&self, machine: &str) -> Option<ServerId> {
+        if machine.is_empty() { return None; }
+        self.slots().find(|&sid| self.facts(sid).is_some_and(|facts| facts.machine_id == machine))
+    }
 
     /// Replace only scripted key values, retaining the separately captured complete roster.
     #[cfg(any(test, feature = "test-support"))]
@@ -350,6 +362,20 @@ mod tests {
 
     fn a_client(slot: u16, token: &str) -> Client {
         Client::new(ServerId::from_raw(slot), "mach", Origin::http("10.0.0.1", 32400), token, "cid-42")
+    }
+
+    #[test]
+    fn a_server_is_named_by_its_machine_and_found_by_it() {
+        let rows = [(ServerId::from_raw(0), "machine-a"), (ServerId::from_raw(3), "machine-b"), (ServerId::from_raw(5), "")];
+        let keys = ClientKeys::captured(ServerId::UNSET, 1, 0, rows.iter().map(|(sid, machine)| {
+            (*sid, None, ClientFacts { machine_id: (*machine).into(), described: None, source: None, stream_allowed: false })
+        }));
+        assert_eq!(keys.machine_of(ServerId::from_raw(3)), Some("machine-b"));
+        assert_eq!(keys.machine_of(ServerId::from_raw(5)), None, "a slot nobody has learned the machine of");
+        assert_eq!(keys.machine_of(ServerId::from_raw(9)), None, "a slot the roster does not hold");
+        assert_eq!(keys.sid_of_machine("machine-b"), Some(ServerId::from_raw(3)));
+        assert_eq!(keys.sid_of_machine("machine-gone"), None);
+        assert_eq!(keys.sid_of_machine(""), None, "the empty name is no server");
     }
 
     #[test]

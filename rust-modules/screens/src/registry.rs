@@ -332,6 +332,8 @@ pub enum PlayerReq {
     /// and the panel stays up. `true` = the key was PLAY, `false` = PAUSE; a PLAYPAUSE toggle is
     /// neither and is carried as `None`.
     Transport(Option<bool>),
+    /// CH+/CH−: +1 is the next higher channel in the lineup, −1 the next lower. The app only tunes a Live TV request.
+    Channel(i32),
     /// Seek to this position in ns and resume if paused — the Chapters strip's OK, and OK or PLAY
     /// taking the scrub's pending key target (a playing film simply seeks and plays on).
     SeekTo(i64),
@@ -421,6 +423,8 @@ pub enum HomeTab {
     /// The Watchlist mark, before Search (docs/watchlist-plan.md §2.4 W45).
     Watchlist,
     Search,
+    /// The server's Live TV channels (`screens::livetv`), after the library type pills.
+    LiveTv,
 }
 
 /// Addressed bootstrap/diagnostic intentions. They use the same owned step and focus engine as
@@ -563,7 +567,8 @@ pub struct ItemMenuArg {
     pub catalog: Option<CatalogRef>,
     /// What the Watchlist knew of the menu's title when it opened (captured, never re-read): the
     /// catalog id, the membership and whether the rows say "Show". `None` when the item has no
-    /// catalog id or plex.tv could not be reached, and the Watchlist row is then omitted. Not part
+    /// catalog id or plex.tv could not be reached; membership-aware rows are then omitted.
+    /// `WatchlistAdd` carries its catalog identity directly and needs no face. Not part
     /// of the argument's identity or canonical form: it is a fact about the title, not a second
     /// menu.
     pub watchlist: Option<crate::item_menu::watchlist::Face>,
@@ -579,7 +584,7 @@ pub struct CatalogRef {
     pub title: String,
 }
 
-/// Which of the three menus this is, and the data its row set is built from.
+/// The menu's role and the data its rows are built from.
 ///
 /// No `Debug`, deliberately: `PmsMovie` is a wire DTO with none, and deriving one for it would put
 /// a household's viewing on the far end of any `{:?}` — which `eventlog::scrub` cannot make safe,
@@ -587,6 +592,8 @@ pub struct CatalogRef {
 /// the tree-wide grep that enforces it).
 #[derive(Clone)]
 pub enum ItemMenuKind {
+    /// A catalog credit's single Add to Watchlist action. No library item is required.
+    WatchlistAdd { hex: [u8; 12] },
     /// A card row — a home shelf, the Library grid, a Search result shelf, a person's filmography,
     /// the detail page's Related shelf. `from_deck` is the SHELF's answer, not the item's: the
     /// deck-removal row exists only on Continue Watching.
@@ -619,6 +626,7 @@ pub enum ItemMenuKind {
 impl PartialEq for ItemMenuKind {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::WatchlistAdd { hex: a }, Self::WatchlistAdd { hex: b }) => a == b,
             (Self::Card { row: a, from_deck: da }, Self::Card { row: b, from_deck: db }) =>
                 da == db && a.sid == b.sid && a.rk == b.rk && a.kind == b.kind,
             (Self::Episode { mark: a, .. }, Self::Episode { mark: b, .. }) => a == b,
@@ -645,6 +653,7 @@ impl plx_machine::machine::LogicalState for ItemMenuArg {
     fn write(&self, c: &mut plx_machine::machine::Canon) {
         c.u32(u32::from(self.sid.raw())).str(&self.rk);
         match &self.kind {
+            ItemMenuKind::WatchlistAdd { hex } => { c.u32(5).str(&plx_data::watchlist::encode_hex(hex)); }
             ItemMenuKind::Card { row, from_deck } => { c.u32(0).bool(*from_deck).u32(row.kind as u32); }
             ItemMenuKind::Episode { mark, .. } => { c.u32(1).u32(*mark as u32); }
             ItemMenuKind::Season { mark, show_rk, index } => { c.u32(2).u32(*mark as u32).str(show_rk).u64(*index as u64); }
@@ -1393,6 +1402,7 @@ impl ContentPanel {
 /// happens when the request is REFUSED (a PMS/native route transition still owns the reducer):
 /// the page's navigation is skipped, which is what the page's own discarded `started` bool used
 /// to decide.
+#[derive(Clone, PartialEq)]
 pub enum PlayIntent {
     /// An item off this page's own metadata.
     Item {
@@ -1419,6 +1429,26 @@ pub enum PlayIntent {
         /// As [`PlayIntent::Item`]'s.
         version: Option<plx_plex::plex::MediaId>,
     },
+    /// A Live TV channel (`screens::livetv`, Home's Live TV row): tune `channel` on DVR `dvr` of
+    /// server `sid` and watch the session the tune opens. `title` stays the channel's name; the
+    /// guide's number and current airing use the player's context line. The resolve worker performs the tune and its
+    /// decision (`route::request_live`); a channel has no resume point, version or PlayQueue.
+    Live {
+        sid: plx_plex::plex::ServerId,
+        dvr: String,
+        channel: String,
+        title: String,
+    },
+}
+
+impl std::fmt::Debug for PlayIntent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Item { sid, rk, .. } => write!(f, "PlayIntent::Item({}, {rk})", sid.raw()),
+            Self::Movie { item, .. } => write!(f, "PlayIntent::Movie({}, {})", item.sid.raw(), item.rk),
+            Self::Live { sid, dvr, channel, .. } => write!(f, "PlayIntent::Live({}, {dvr}, {channel})", sid.raw()),
+        }
+    }
 }
 
 pub trait ContentLike: AppLike<Memory = PageMemory> + ScreenInputsLike {}
@@ -1459,6 +1489,22 @@ pub trait MetadataLike: AppLike + Sized {
 pub trait HomeLike: AppLike<Memory = PageMemory> + ScreenInputsLike + Sized {
     fn clock_facts<'a>(cx: &Cx<'a, Self>) -> Option<&'a plx_plex::plex::ClockFacts>;
     fn hubs<'a>(cx: &Cx<'a, Self>) -> plx_data::pms::HubsView<'a>;
+}
+
+/// A host publishing the Live TV store's retained view for this frame.
+pub trait LiveTvLike: AppLike<Memory = PageMemory> + Sized {
+    fn livetv<'a>(cx: &Cx<'a, Self>) -> plx_data::livetv::LiveTvView<'a>;
+    /// **This frame's wall-clock time** (Unix second and UTC offset), as the loop published it
+    /// beside `today`: what a clock face, "22m left" or an airing's progress is derived from
+    /// (`plx_ui::fmt::airing_line`, `frac`). A page reads no clock. `None` before the first
+    /// publication, under a replay (which has no wall clock) and where the platform cannot say: the
+    /// page then draws no clock face and no progress.
+    ///
+    /// A provided method so a host that has no clock still compiles; `AppHost` (`src/app/bridge.rs`)
+    /// answers the publication.
+    fn wall(_cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> {
+        None
+    }
 }
 
 /// A host that publishes this frame's playback session (spec §2.3). The player's owned screens
@@ -2039,6 +2085,8 @@ pub mod page_id {
     pub const WATCHLIST: ScreenId = ScreenId(25);
     pub const LIBRARY_COLLECTIONS: ScreenId = ScreenId(28);
     pub const LIBRARY_RECOMMENDED: ScreenId = ScreenId(29);
+    /// 31, forward of the Versions panel's 30: the Live TV page.
+    pub const LIVETV: ScreenId = ScreenId(31);
 }
 
 /// **A screen argument: everything the container needs to mount one screen, and nothing else.**
@@ -2138,6 +2186,9 @@ pub enum AppArg {
     /// from the bookmark mark. It carries nothing — the list is the store's, the order is the
     /// store's sort and filter.
     Watchlist,
+    /// The Live TV page (`screens::livetv`): a PEER of Home on the strip. It carries nothing — the
+    /// channels are the Live TV store's (`plx_data::livetv`).
+    LiveTv,
     /// Playback. Its panels are NOT here — they are entries on the player page's own
     /// `ModalStack` ([`Self::PlayerOverlay`]), and the container owns which one is up.
     Player,
@@ -2177,6 +2228,7 @@ impl AppArg {
             Self::Library | Self::LibraryCollections { .. } | Self::LibraryRecommended { .. } => ("library", Content),
             Self::Search => ("search", Content),
             Self::Watchlist => ("watchlist", Content),
+            Self::LiveTv => ("livetv", Content),
             Self::Player => ("player", Player),
             Self::Content(ContentArg::Detail { .. }) => ("detail", Content),
             Self::Content(ContentArg::Person { .. } | ContentArg::Filmography { .. }) => ("person", Content),
@@ -2200,12 +2252,12 @@ impl AppArg {
     }
 }
 
-pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,LibraryCollections{section:u32},LibraryRecommended{section:u32},Search,Watchlist,Player,Content:{Detail{sid:u32,rk:str},Person{sid:u32,key:str,guid:str,name:str,thumb:str},Filmography{sid:u32,key:str},Collection{sid:u32,rk:str,sec:i64,tag:i64,name:str},Catalog{hex:str}},Settings:SettingsPage{Root,Playback,AudioSubtitles,Favourites,LibraryFavourites,Privacy,Legal,About,Document(u8),Preview(u8),ConsentStage(u8),Language,Contribute},FirstRunConsent(u8),LibraryMenu{host:u32,target:{epoch:u32,sid:u32,section:u64},kind:u32,anchor:[u32;4]},\
+pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,LibraryCollections{section:u32},LibraryRecommended{section:u32},Search,Watchlist,LiveTv,Player,Content:{Detail{sid:u32,rk:str},Person{sid:u32,key:str,guid:str,name:str,thumb:str},Filmography{sid:u32,key:str},Collection{sid:u32,rk:str,sec:i64,tag:i64,name:str},Catalog{hex:str}},Settings:SettingsPage{Root,Playback,AudioSubtitles,Favourites,LibraryFavourites,Privacy,Legal,About,Document(u8),Preview(u8),ConsentStage(u8),Language,Contribute},FirstRunConsent(u8),LibraryMenu{host:u32,target:{epoch:u32,sid:u32,section:u64},kind:u32,anchor:[u32;4]},\
      PlayerOverlay{Tracks(tab:i32),Info,Chapters,More(page:u8)},\
      AltSources{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
      VersionsPanel{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
      TracksPanel{page:i32},AboutPanel,PersonBio,CollectionAbout,AccountMenu,\
-     ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32},Catalog{state:u32}},\
+     ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32},Catalog{state:u32},WatchlistAdd{hex:str}},\
      host:u32,focus:Option<{entry:u32,elem:u32}>,anchor:[u32;4],loaded_episode:bool,from_home:bool,catalog:Option<{guid:str}>},\
      WatchlistMenu{host:u32,options:{type:u32,sort:u32,descending:bool,show:u32},anchor:[u32;4]}}";
 
@@ -2223,7 +2275,7 @@ pub fn every_page_arg() -> Vec<AppArg> {
         }),
         AppArg::Content(ContentArg::Collection(plx_plex::plex::collections::CollectionRef::by_tag(sid, 0, 1, ""))),
         AppArg::Content(ContentArg::Catalog { hex: [0; 12] }),
-        AppArg::Search, AppArg::Watchlist, AppArg::Player,
+        AppArg::Search, AppArg::Watchlist, AppArg::Player, AppArg::LiveTv,
     ]
 }
 
@@ -2266,6 +2318,8 @@ impl LogicalState for AppArg {
             // 12 and 13, forward of Watchlist's 11 (both are in `ARG_SHAPE`).
             Self::LibraryCollections { section } => { c.u32(0).u32(12).u32(*section); }
             Self::LibraryRecommended { section } => { c.u32(0).u32(13).u32(*section); }
+            // 14, forward of Recommended's 13.
+            Self::LiveTv => { c.u32(0).u32(14); }
             Self::Content(arg) => { c.u32(1); arg.write(c); }
             Self::Settings(page) => { c.u32(2); page.write(c); }
             Self::FirstRunConsent(stage) => { c.u32(3).u8(*stage); }
@@ -2282,7 +2336,7 @@ impl plx_ui::screen::ScreenArg for AppArg {
     /// them fade the bar with the page.
     fn chrome(&self) -> Chrome {
         match self {
-            AppArg::Home | AppArg::Library | AppArg::Search | AppArg::Watchlist => Chrome::TabBar,
+            AppArg::Home | AppArg::Library | AppArg::Search | AppArg::Watchlist | AppArg::LiveTv => Chrome::TabBar,
             // The two sub-pages of a library keep the bar, as the Library they are pushed over.
             AppArg::LibraryCollections { .. } | AppArg::LibraryRecommended { .. } => Chrome::TabBar,
             AppArg::Login
@@ -2343,6 +2397,7 @@ impl plx_ui::screen::ScreenArg for AppArg {
             // 28 and 29, forward of the catalog page's 27.
             AppArg::LibraryCollections { .. } => page_id::LIBRARY_COLLECTIONS.0,
             AppArg::LibraryRecommended { .. } => page_id::LIBRARY_RECOMMENDED.0,
+            AppArg::LiveTv => page_id::LIVETV.0,
             AppArg::Search => page_id::SEARCH.0,
             AppArg::Player => 11,
             // The ROOT payload is a boot address, not an identity: one Settings surface and one
@@ -2452,7 +2507,7 @@ pub struct AppMounter {
 /// it for its own host exactly as the dispatcher instantiates everything else.
 impl<H> Mounter<H> for AppMounter
 where
-    H: plx_machine::machine::Host<Arg = AppArg> + HomeLike + LibraryLike + SearchLike + PlayerLike + AuthLike + PersonLike + CollectionLike + MetadataLike,
+    H: plx_machine::machine::Host<Arg = AppArg> + HomeLike + LiveTvLike + LibraryLike + SearchLike + PlayerLike + AuthLike + PersonLike + CollectionLike + MetadataLike,
 {
     fn mount(
         &mut self,
@@ -2585,6 +2640,8 @@ where
             // The list is the store's: the page mounts on "loading" and the application feeds it
             // the rows, the options and the matched facts (`WatchlistIn`) on its first frames.
             AppArg::Watchlist => Box::new(crate::watchlist::page::WatchlistScreen::loading(entry)),
+            // The page reads the Live TV store independently of Home's catalog.
+            AppArg::LiveTv => Box::new(crate::livetv::LiveTvScreen::new(entry)),
             // Phase 9: the player is an OWNED screen — the instance that holds the HUD, the scrub
             // gesture, the held-key timer, the control row's springs and the Up Next countdown,
             // and that answers `RenderStrategy::VideoPlane`. Its transport is pinned from the
@@ -2718,6 +2775,7 @@ pub fn every_surface_arg() -> Vec<AppArg> {
             | AppArg::LibraryRecommended { .. }
             | AppArg::Search
             | AppArg::Watchlist
+            | AppArg::LiveTv
             | AppArg::Player
             | AppArg::Content(_) => {
                 panic!("a page argument is not a surface: its word is `route=`")
@@ -2785,6 +2843,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
     crate::watchlist::menu::SHAPE,
     crate::catalog::CatalogScreen::SHAPE,
     crate::versions_panel::SHAPE,
+    crate::livetv::LiveTvScreen::SHAPE,
 ];
 
 /// The pin over [`SCREEN_SHAPES`] — bump it in the same edit that adds an entry, and say why.
@@ -2985,7 +3044,9 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // Previous pin: 0xf852_85cc_f116_356b. Re-record incompatible replay anchors.
 // The Library menu retains its parent scroll across a Genre drill-in and the selected library
 // through its closing morph. Previous pin: 0x7e36_4373_746a_c3dc.
-const SCREEN_SHAPES_PIN: u64 = 0x1427_1d82_bf6b_e04c;
+// Filmography's add-only menu adds WatchlistAdd{hex} to ARG_SHAPE (canonical kind tag 5).
+// Live TV adds its route and a screen shape for the store status, shelves and current airings.
+const SCREEN_SHAPES_PIN: u64 = 0x17bd_9205_2e59_cd6e;
 
 #[cfg(test)]
 mod arg_tests {
@@ -3011,7 +3072,14 @@ mod arg_tests {
     #[test]
     fn two_different_surface_variants_never_share_a_screen_id() {
         use plx_ui::screen::ScreenArg;
-        let args = every_surface_arg();
+        let mut args = every_surface_arg();
+        // The flat pages share the id space with the surfaces: Live TV's page was handed the
+        // Versions panel's 30 while this swept the surfaces alone (PR #993 review).
+        args.extend([
+            AppArg::Login, AppArg::Profiles, AppArg::Onboard, AppArg::Home, AppArg::Library,
+            AppArg::LibraryCollections { section: 0 }, AppArg::LibraryRecommended { section: 0 },
+            AppArg::Search, AppArg::Watchlist, AppArg::LiveTv, AppArg::Player,
+        ]);
         for (i, a) in args.iter().enumerate() {
             for b in args.iter().skip(i + 1) {
                 if a.id() == b.id() {
@@ -3024,6 +3092,19 @@ mod arg_tests {
                 }
             }
         }
+    }
+
+    /// **The Live TV page is not the Versions panel.** Both answered `ScreenId(30)`, and
+    /// `same_instance` is derived from the id, so the container could take a mounted panel for the
+    /// page (PR #993 review).
+    #[test]
+    fn the_live_tv_page_and_the_versions_panel_are_different_instances() {
+        use plx_ui::screen::ScreenArg;
+        let panel = every_surface_arg().into_iter()
+            .find(|a| matches!(a, AppArg::VersionsPanel(_))).expect("the Versions panel is a surface");
+        assert_ne!(AppArg::LiveTv.id(), panel.id());
+        assert!(!AppArg::LiveTv.same_instance(&panel) && !panel.same_instance(&AppArg::LiveTv));
+        assert_eq!(panel.id(), ScreenId(30), "an allocated id is never renumbered");
     }
 
     // ---- the bar-wearing alphabet -------------------------------------------------------------
@@ -3059,6 +3140,7 @@ mod arg_tests {
             AppArg::LibraryRecommended { section: 0 },
             AppArg::Search,
             AppArg::Watchlist,
+            AppArg::LiveTv,
         ] {
             assert!((r.chrome() == Chrome::TabBar), "a bar-wearing page carries the chip");
         }
@@ -3355,6 +3437,7 @@ mod a11y_coverage_tests {
             AppArg::LibraryRecommended { .. } => Covered("LibraryRecommended", crate::library::cards_harness::recommended_conforms),
             AppArg::Search => Covered("Search", crate::search::cards_harness::search_conforms),
             AppArg::Watchlist => Covered("Watchlist", crate::watchlist::page_tests::watchlist_conforms),
+            AppArg::LiveTv => Covered("LiveTv", crate::livetv::cards_harness::livetv_conforms),
             AppArg::Player => Covered("Player", crate::player::step_ladder_tests::player_conforms),
             AppArg::Content(content) => match content {
                 ContentArg::Detail { .. } => Covered("Content::Detail", crate::detail::tests::detail_conforms),
@@ -3395,10 +3478,10 @@ mod a11y_coverage_tests {
         }
     }
 
-    /// How many leaf arms the table has: 21 flat `AppArg` arms, 5 `ContentArg`, 22 `SettingsPage` and
+    /// How many leaf arms the table has: 22 flat `AppArg` arms, 5 `ContentArg`, 22 `SettingsPage` and
     /// `FirstRunConsent`. A new arm fails [`coverage`] to compile, and then this to pass until the census
     /// below holds it too.
-    const ARMS: usize = 49;
+    const ARMS: usize = 50;
 
     /// **A value of every leaf arm** the table names: the registry's own page and surface censuses, plus
     /// the arms those leave out (Filmography and every Settings page).

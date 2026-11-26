@@ -455,6 +455,7 @@ fn a_session_resolved_for_a_preview_never_reports_a_timeline() {
         title: "Trailer".into(),
         ctx: plx_data::metadata::TRAILER_CONTEXT.into(),
         preview: true,
+        live: None,
         version: None,
         show_rk: String::new(),
     });
@@ -1333,4 +1334,693 @@ fn a_stop_that_spawns_no_worker_still_consumes_the_record() {
     let left = reported_timeline_left_behind();
     leave_recording_pms_case(&mut ps);
     assert_eq!(left, None);
+}
+
+// The official client's Live TV sequence (`docs/pms-api.md` §10), as a loopback server answers it.
+// The tune's body nests the session the way the server log names its levels; it was not captured.
+const LIVE_TUNED: &[u8] = br#"{"MediaContainer":{"size":1,"MediaSubscription":[{"id":112,
+    "MediaGrabOperation":[{"Metadata":{"key":"/livetv/sessions/9b9fe727-0000-46db-b94c-ef512e3e61d2",
+    "ratingKey":"355108","type":"episode"}}]}]}}"#;
+const LIVE_DECIDED: &[u8] = br#"{"MediaContainer":{"Metadata":[{"Media":[{"videoCodec":"h264","audioCodec":"aac",
+    "Part":[{"key":"/livetv/sessions/9b9fe727-0000-46db-b94c-ef512e3e61d2/cid-live/index.m3u8?offset=-1.000000",
+    "decision":"directplay"}]}]}]}}"#;
+const LIVE_TRANSCODED: &[u8] = br#"{"MediaContainer":{"Metadata":[{"Media":[{"Part":[{
+    "decision":"transcode","Stream":[{"streamType":1,"codec":"h264"},{"streamType":2,"codec":"aac"}]
+    }]}]}]}}"#;
+
+/// A loopback PMS for the live sequence: answers the tune and the decision with their shapes and
+/// everything else with an empty container, handing each request line down the channel.
+fn live_pms(decision_refused: bool) -> (i32, std::sync::mpsc::Receiver<String>) {
+    live_pms_with_codecs(decision_refused, "h264", "aac")
+}
+
+fn live_pms_with_codecs(decision_refused: bool, video: &str, audio: &str)
+    -> (i32, std::sync::mpsc::Receiver<String>) {
+    let live_decided = String::from_utf8_lossy(LIVE_DECIDED)
+        .replace("\"h264\"", &format!("\"{video}\""))
+        .replace("\"aac\"", &format!("\"{audio}\""));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port() as i32;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
+            match plx_base::testnet::accept(&listener) {
+                Ok((mut socket, _)) => {
+                    let first = drain_http(&mut socket);
+                    let decision = first.starts_with("GET /video/:/transcode/universal/decision?");
+                    if decision && decision_refused {
+                        // PMS 1.43.3 on the TV, 2026-10-21: "unable to find a matching profile".
+                        write_status(&mut socket, 400);
+                    } else {
+                        let body = if first.starts_with("POST /livetv/dvrs/7/channels/C101.242.ersatztv.org/tune") {
+                            LIVE_TUNED
+                        } else if decision {
+                            if query_param(&first, "directPlay") == Some("0") {
+                                LIVE_TRANSCODED
+                            } else {
+                                live_decided.as_bytes()
+                            }
+                        } else {
+                            EMPTY_MC
+                        };
+                        write_json(&mut socket, body);
+                    }
+                    if tx.send(first).is_err() {
+                        return;
+                    }
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(4)),
+            }
+        }
+    });
+    (port, rx)
+}
+
+fn assert_live_conversion(video: &str, audio: &str, no_video_copy: bool) {
+    let mut ps = PlaybackSession::IDLE;
+    let _guard = fresh_registry(&mut ps);
+    let (port, rx) = live_pms_with_codecs(false, video, audio);
+    let sid = plx_plex::plex::register_for_test("live-codecs", "127.0.0.1", port, "tok", "cid");
+    let mut env = ResolveEnv::snapshot(&ps, plx_data::stores::metadata::MetadataStore::default().view(), sid, "");
+    let mut caps = (*env.caps).clone();
+    caps.hevc = true;
+    caps.audio = "aac,ac3,eac3".into();
+    env.caps = std::sync::Arc::new(caps);
+    env.live = Some(LiveTune { dvr: "7".into(), channel: "C101.242.ersatztv.org".into() });
+    let plan = build_stream(&plx_base::task::OffFrame::for_test(), "", "", "", "", &env);
+    assert!(!plan.source_decodable, "the HLS reader must accept both source codecs");
+    assert!(plan.url.contains("/start.m3u8?"), "{}", plan.url);
+    assert_eq!(plan.tsession, plan.sess);
+    assert!(!plan.tsession.is_empty());
+    assert_eq!(plan.contract.no_video_copy, no_video_copy);
+    assert_eq!((plan.vcodec.as_str(), plan.acodec.as_str()), ("h264", "aac"));
+    let requests: Vec<_> = (0..3).map(|_| rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()).collect();
+    let conversion = &requests[2];
+    assert_eq!(query_param(conversion, "path"), Some("%2Flivetv%2Fsessions%2F9b9fe727-0000-46db-b94c-ef512e3e61d2"));
+    assert_eq!(query_param(conversion, "directPlay"), Some("0"));
+    assert_eq!(query_param(conversion, "directStream"), Some("0"));
+    assert_eq!(query_param(conversion, "directStreamAudio"), Some("0"));
+    let profile = query_param(conversion, "X-Plex-Client-Profile-Extra").unwrap();
+    assert!(profile.contains("videoCodec%3Dh264%26audioCodec%3Daac"), "{profile}");
+}
+
+#[test]
+fn live_h264_ac3_converts_to_the_readers_aac_output() {
+    assert_live_conversion("h264", "ac3", false);
+}
+
+#[test]
+fn live_hevc_aac_refuses_video_copy_even_when_the_tv_decodes_hevc() {
+    assert_live_conversion("hevc", "aac", true);
+}
+
+#[test]
+fn live_mpeg2_converts_to_h264_aac() {
+    assert_live_conversion("mpeg2video", "ac3", true);
+}
+
+#[test]
+fn a_live_decision_that_names_no_codecs_converts_instead_of_assuming_h264_aac() {
+    assert_live_conversion("", "", true);
+}
+
+#[test]
+fn a_live_switch_waits_for_the_abandoned_tune_to_free_its_tuner() {
+    use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+    use std::time::Duration;
+    let mut ps = PlaybackSession::IDLE;
+    let _guard = fresh_registry(&mut ps);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port() as i32;
+    let (wire_tx, wire_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let mut release = Some(release_rx);
+        let mut first_tune = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while done_rx.try_recv().is_err() && std::time::Instant::now() < deadline {
+            let Ok((mut socket, _)) = plx_base::testnet::accept(&listener) else {
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            };
+            let line = drain_http(&mut socket);
+            wire_tx.send(line.clone()).unwrap();
+            if line.starts_with("POST /livetv/") && line.contains("/channels/A/tune?") {
+                let release = release.take().unwrap();
+                first_tune = Some(std::thread::spawn(move || {
+                    release.recv_timeout(Duration::from_secs(10)).unwrap();
+                    write_json(&mut socket, LIVE_TUNED);
+                }));
+            } else if line.starts_with("POST /livetv/") {
+                if stopped.load(Ordering::SeqCst) { write_json(&mut socket, LIVE_TUNED); }
+                else { write_status(&mut socket, 503); }
+            } else {
+                if line.starts_with("POST /:/timeline?") && query_param(&line, "state") == Some("stopped") {
+                    stopped.store(true, Ordering::SeqCst);
+                }
+                write_json(&mut socket, if line.starts_with("GET /video/:/transcode/universal/decision?") {
+                    LIVE_DECIDED
+                } else { EMPTY_MC });
+            }
+        }
+        if let Some(first_tune) = first_tune { first_tune.join().unwrap(); }
+    });
+    let sid = plx_plex::plex::register_for_test("live-switch", "127.0.0.1", port, "tok", "cid");
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    assert!(request_live(&mut ps, &mut meta, plx_os::devcaps::caps(), sid, "7", "A", "A"));
+    let first = wire_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(first.contains("/channels/A/tune?"), "{first}");
+    cancel_play(&mut ps);
+    assert!(request_live(&mut ps, &mut meta, plx_os::devcaps::caps(), sid, "7", "B", "B"));
+    let mut requests = vec![first];
+    if let Ok(early) = wire_rx.recv_timeout(Duration::from_millis(200)) { requests.push(early); }
+    release_tx.send(()).unwrap();
+    let finished = wait_resolve_workers_for_test(Duration::from_secs(10));
+    let landing = PLAY_SLOT.lock().unwrap().take();
+    cancel_play(&mut ps);
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
+    done_tx.send(()).unwrap();
+    server.join().unwrap();
+    requests.extend(wire_rx.try_iter());
+    assert!(finished, "the resolves and their retirement must finish");
+    let plan = landing.expect("B must land").plan;
+    assert!(!plan.url.is_empty(), "B must tune successfully: {:?}", plan.verdict);
+    let order: Vec<_> = requests.iter().filter_map(|line| {
+        if line.contains("/channels/A/tune?") { Some("tune A") }
+        else if line.contains("/channels/B/tune?") { Some("tune B") }
+        else if line.starts_with("POST /:/timeline?") && query_param(line, "state") == Some("stopped") { Some("stopped A") }
+        else { None }
+    }).collect();
+    assert_eq!(order, ["tune A", "stopped A", "tune B"], "{requests:?}");
+}
+
+#[test]
+fn live_resolve_fence_times_out_cancels_and_waits_for_retirement() {
+    use std::time::Duration;
+    let mut ps = PlaybackSession::IDLE;
+    let _guard = fresh_registry(&mut ps);
+    cancel_play(&mut ps);
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
+    let gen = PLAY_GEN.load(Ordering::SeqCst);
+    let older = ResolveWorker::enter();
+    let current = ResolveWorker::enter();
+    assert!(!current.wait_for_previous(gen, Duration::ZERO), "timeout must refuse another tune");
+    let retirement = ResolveWorker::enter();
+    drop(older);
+    assert!(!current.wait_for_previous(gen, Duration::ZERO), "retirement still holds the tuner");
+    drop(retirement);
+    assert!(current.wait_for_previous(gen, Duration::ZERO));
+    cancel_play(&mut ps);
+    assert!(!current.wait_for_previous(gen, Duration::ZERO), "a canceled worker must not tune");
+}
+
+#[test]
+fn a_live_channel_tunes_then_reports_under_its_session_and_its_stop_frees_the_tuner() {
+    use std::time::Duration;
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let (port, rx) = live_pms(false);
+    let sid = plx_plex::plex::register_for_test("route-live", "127.0.0.1", port, "tok-live", "cid-live");
+    let mut env = ResolveEnv::snapshot(&ps, plx_data::stores::metadata::MetadataStore::default().view(), sid, "");
+    env.live = Some(LiveTune { dvr: "7".into(), channel: "C101.242.ersatztv.org".into() });
+    let plan = build_stream(&plx_base::task::OffFrame::for_test(), "", "", "", "", &env);
+    let next = || rx.recv_timeout(Duration::from_secs(5)).expect("a request");
+
+    let tune = next();
+    assert!(tune.starts_with("POST /livetv/dvrs/7/channels/C101.242.ersatztv.org/tune?"), "{tune}");
+    assert_eq!(
+        query_param(&tune, "X-Plex-Session-Identifier"),
+        Some(plan.sess.as_str()),
+        "PMS refuses a tune without a session id (400), and it is the one the playback reports under"
+    );
+    assert_eq!(query_param(&tune, "X-Plex-Client-Identifier"), Some("cid-live"));
+    let decision = next();
+    assert_eq!(query_param(&decision, "path"), Some("%2Flivetv%2Fsessions%2F9b9fe727-0000-46db-b94c-ef512e3e61d2"));
+    assert_eq!(query_param(&decision, "directPlay"), Some("1"));
+    assert_eq!(query_param(&decision, "hasMDE"), Some("1"), "the client's own decision is what PMS calls a direct play");
+    assert_eq!(query_param(&decision, "subtitles"), Some("none"));
+    assert_eq!(query_param(&decision, "X-Plex-Client-Profile-Name"), Some("Generic"), "PMS 400s a profile-less decision");
+    let profile = query_param(&decision, "X-Plex-Client-Profile-Extra").expect("a profile augmentation");
+    assert!(profile.contains("mpegts") && !profile.contains("direct-play"),
+        "an HLS target and no direct-play profile, or PMS decides a conversion: {profile}");
+    assert_eq!(query_param(&decision, "session"), Some(plan.sess.as_str()), "the decision and the URL share one session");
+
+    let live = plan.live.clone().expect("the plan names the recording");
+    assert_eq!((live.key.as_str(), live.rating_key.as_str()), ("/livetv/sessions/9b9fe727-0000-46db-b94c-ef512e3e61d2", "355108"));
+    assert!(plan.url.contains("/livetv/sessions/9b9fe727-0000-46db-b94c-ef512e3e61d2/cid-live/index.m3u8?offset=-1.000000&"), "{}", plan.url);
+    assert!(plan.url.contains("X-Plex-Token=tok-live") && plan.url.contains(&format!("X-Plex-Session-Identifier={}", plan.sess)));
+    assert_eq!((plan.vcodec.as_str(), plan.acodec.as_str()), ("h264", "aac"));
+    assert!(plan.tsession.is_empty() && plan.pq_id.is_empty(), "a direct play with no PlayQueue");
+
+    apply_plan(&mut ps, plan, "");
+    assert!(is_live(&ps));
+    let lease = begin_timeline_reporting(&ps).expect("a live play reports without a ratingKey of its own");
+    assert!(report_timeline(&lease, plx_plex::plex::TimelineState::Playing, 12_000, 12_000));
+    let playing = next();
+    assert!(playing.starts_with("POST /:/timeline?key=%2Flivetv%2Fsessions%2F9b9fe727-0000-46db-b94c-ef512e3e61d2&ratingKey=355108&state=playing&time=0&duration=0&playbackTime=12000"), "{playing}");
+
+    scrobble_stop(&mut ps, None, None);
+    drain_scrobble();
+    let stopped = next();
+    assert!(stopped.starts_with("POST /:/timeline?key=%2Flivetv%2Fsessions%2F9b9fe727-0000-46db-b94c-ef512e3e61d2"), "{stopped}");
+    assert_eq!(query_param(&stopped, "state"), Some("stopped"));
+    assert_eq!(query_param(&stopped, "continuing"), Some("0"));
+    assert!(!is_live(&ps), "the stop retires the session");
+}
+
+#[test]
+fn a_refused_live_decision_still_plays_the_session_s_own_playlist() {
+    use std::time::Duration;
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let (port, rx) = live_pms(true);
+    let sid = plx_plex::plex::register_for_test("route-live-400", "127.0.0.1", port, "tok-live", "cid-live");
+    let mut env = ResolveEnv::snapshot(&ps, plx_data::stores::metadata::MetadataStore::default().view(), sid, "");
+    env.live = Some(LiveTune { dvr: "7".into(), channel: "C101.242.ersatztv.org".into() });
+    let plan = build_stream(&plx_base::task::OffFrame::for_test(), "", "", "", "", &env);
+    for _ in 0..2 {
+        rx.recv_timeout(Duration::from_secs(5)).expect("the tune, then the refused decision");
+    }
+    assert!(plan.live.is_some(), "the recording is still the plan's to stop");
+    let own = format!("/livetv/sessions/9b9fe727-0000-46db-b94c-ef512e3e61d2/{}/index.m3u8?offset=-1.000000&", plan.sess);
+    assert!(plan.url.contains(&own), "the consumer is named after the tune's session id: {}", plan.url);
+    assert_eq!((plan.vcodec.as_str(), plan.acodec.as_str()), ("h264", "aac"));
+}
+
+/// **The blocker from the maintainer's webOS 4.5 run** (PR #993, 2026-11-15): a channel whose own
+/// playlist cannot be decoded falls back to the live universal transcoder — the session the tune is
+/// already recording, asked fresh at the edge — instead of ending playback. Nothing here stops that
+/// session: the `transcode stopped ok=0` in his log was the app stopping an encode that never ran.
+#[test]
+fn a_live_channel_s_refused_own_playlist_converts_the_recording_it_opened() {
+    use std::time::Duration;
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let (port, rx) = live_pms(false);
+    let sid = plx_plex::plex::register_for_test("route-live-open-failed", "127.0.0.1", port, "tok-live", "cid-live");
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    assert!(request_live(&mut ps, &mut meta, plx_os::devcaps::caps(), sid, "7",
+        "C101.242.ersatztv.org", "Channel one"));
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
+    let plan = pump_play(&mut ps, &mut meta).expect("the tune lands");
+    settle_plan_start_in_unit_test(&mut ps, plan.route_start);
+    // The tune and its direct-play decision are on the wire before the open that fails; drain both so
+    // the request this test reads next can only be the conversion's.
+    assert!(rx.recv_timeout(Duration::from_secs(5)).expect("the tune").starts_with("POST /livetv/dvrs/7/"));
+    assert!(rx.recv_timeout(Duration::from_secs(5)).expect("the decision").starts_with("GET /video/:/transcode/universal/decision?"));
+    // The demuxer then failed on the cut's edge (no SPS/IDR), which is the failure this rung exists for.
+    assert!(matches!(dispatch_live_refusal_conversion(&mut ps), RecoveryDispatch::Flying { .. }));
+    let mut decision = None;
+    while let Ok(line) = rx.recv_timeout(Duration::from_secs(5)) {
+        if line.starts_with("GET /video/:/transcode/universal/decision?") {
+            decision = Some(line);
+            break;
+        }
+    }
+    let decision = decision.expect("the conversion asks the server for a decision");
+    assert_eq!(query_param(&decision, "path"), Some("%2Flivetv%2Fsessions%2F9b9fe727-0000-46db-b94c-ef512e3e61d2"),
+        "the source is the session the tune opened, not a library ratingKey: {decision}");
+    assert_eq!(query_param(&decision, "directPlay"), Some("0"), "a conversion never copies as a direct play");
+    assert!(rx.recv_timeout(Duration::from_millis(400)).is_err(),
+        "the recording is the live timeline's to stop: the conversion requests nothing after its decision");
+}
+
+/// One live resolve under `mode`: the plan, and every request it put on the wire.
+fn live_plan_under(mode: plx_plex::plex::session::DirectPlayMode, decision_refused: bool, video: &str, audio: &str)
+    -> (Plan, Vec<String>) {
+    let mut ps = PlaybackSession::IDLE;
+    let _guard = fresh_registry(&mut ps);
+    let (port, rx) = live_pms_with_codecs(decision_refused, video, audio);
+    let sid = plx_plex::plex::register_for_test("live-mode", "127.0.0.1", port, "tok", "cid");
+    let mut env = ResolveEnv::snapshot(&ps, plx_data::stores::metadata::MetadataStore::default().view(), sid, "");
+    let mut caps = (*env.caps).clone();
+    caps.hevc = true;
+    caps.audio = "aac,ac3,eac3".into();
+    env.caps = std::sync::Arc::new(caps);
+    env.direct_play_mode = mode;
+    env.live = Some(LiveTune { dvr: "7".into(), channel: "C101.242.ersatztv.org".into() });
+    let plan = build_stream(&plx_base::task::OffFrame::for_test(), "", "", "", "", &env);
+    let mut requests = Vec::new();
+    while let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(400)) {
+        requests.push(line);
+    }
+    (plan, requests)
+}
+
+/// **Direct Play: Disabled is a permission, not a codec fact** (PR #993 review). A channel the set
+/// decodes still goes through the transcoder, and the "read it as recorded" fallback for an
+/// undescribed playlist is a direct play too, so a refused conversion reads out instead. The
+/// recording stays the plan's either way, so its stop frees the tuner.
+#[test]
+fn a_live_channel_never_direct_plays_while_direct_play_is_disabled() {
+    use plx_plex::plex::session::DirectPlayMode;
+    let (plan, requests) = live_plan_under(DirectPlayMode::Disabled, false, "h264", "aac");
+    assert!(plan.source_decodable, "the codecs are still the set's to decode");
+    assert!(plan.url.contains("/start.m3u8?"), "{}", plan.url);
+    assert_eq!(plan.tsession, plan.sess);
+    assert!(!plan.contract.no_video_copy, "the contract does not forbid the copy the reader could take");
+    assert_eq!(requests.len(), 3, "the tune, its decision, the conversion's: {requests:?}");
+    assert_eq!(query_param(&requests[2], "directPlay"), Some("0"), "the conversion, not the original");
+    assert!(plan.live.is_some());
+
+    let (plan, _) = live_plan_under(DirectPlayMode::Disabled, true, "h264", "aac");
+    assert!(plan.url.is_empty(), "no as-recorded read: {}", plan.url);
+    assert_eq!(plan.verdict, Some(PlayVerdict::DirectPlayDisabled));
+    assert!(plan.live.is_some(), "the refused plan still owns the recording it tuned");
+
+    // A cut the set could not play anyway is not the setting's doing: no "turn it off" read-out.
+    let mut ps = PlaybackSession::IDLE;
+    let _guard = fresh_registry(&mut ps);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port() as i32;
+    let decided = String::from_utf8_lossy(LIVE_DECIDED).replace("\"h264\"", "\"mpeg2video\"");
+    let server = std::thread::spawn(move || {
+        for served in 0..3 {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut socket = loop {
+                if let Ok((socket, _)) = plx_base::testnet::accept(&listener) { break socket; }
+                assert!(std::time::Instant::now() < deadline, "request {served} never came");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            };
+            let first = drain_http(&mut socket);
+            match served {
+                0 => write_json(&mut socket, LIVE_TUNED),
+                1 => write_json(&mut socket, decided.as_bytes()),
+                _ => { assert!(first.contains("directPlay=0"), "{first}"); write_status(&mut socket, 400) }
+            }
+        }
+    });
+    let sid = plx_plex::plex::register_for_test("live-disabled-undecodable", "127.0.0.1", port, "tok", "cid");
+    let mut env = ResolveEnv::snapshot(&ps, plx_data::stores::metadata::MetadataStore::default().view(), sid, "");
+    env.direct_play_mode = DirectPlayMode::Disabled;
+    env.live = Some(LiveTune { dvr: "7".into(), channel: "C101.242.ersatztv.org".into() });
+    let plan = build_stream(&plx_base::task::OffFrame::for_test(), "", "", "", "", &env);
+    server.join().unwrap();
+    assert!(plan.url.is_empty() && plan.verdict.is_none(), "{:?}", plan.verdict);
+    assert!(plan.live.is_some());
+}
+
+/// **Force Direct Play never asks for a conversion** (PR #993 review): a cut the reader cannot
+/// take is refused with the Forced read-out and nothing more goes on the wire, a supported one
+/// plays, and an undescribed playlist is read as recorded, which is the original.
+#[test]
+fn a_forced_live_channel_plays_the_original_or_refuses_without_a_conversion() {
+    use plx_plex::plex::session::DirectPlayMode;
+    for (video, audio, failure) in [
+        ("mpeg2video", "ac3", ForcedFailure::Video),
+        // A decision that names only the video still names a cut the reader cannot take.
+        ("mpeg2video", "", ForcedFailure::Video),
+        ("h264", "ac3", ForcedFailure::Audio { codec: "Dolby Digital".into() }),
+    ] {
+        let (plan, requests) = live_plan_under(DirectPlayMode::Forced, false, video, audio);
+        assert_eq!(plan.verdict, Some(PlayVerdict::Forced(failure)), "{video}/{audio}");
+        assert!(plan.url.is_empty() && plan.tsession.is_empty());
+        assert_eq!(requests.len(), 2, "the tune and its decision only: {requests:?}");
+        assert!(plan.live.is_some(), "the refused plan still owns the recording it tuned");
+    }
+    let (plan, _) = live_plan_under(DirectPlayMode::Forced, false, "h264", "aac");
+    assert!(plan.verdict.is_none() && plan.url.contains("/cid-live/index.m3u8?"), "{}", plan.url);
+
+    let (plan, requests) = live_plan_under(DirectPlayMode::Forced, true, "h264", "aac");
+    assert!(plan.verdict.is_none() && plan.url.contains("/index.m3u8?offset=-1.000000&"), "{}", plan.url);
+    assert!(plan.tsession.is_empty());
+    assert_eq!(requests.len(), 2, "the tune and its refused decision only: {requests:?}");
+}
+
+/// **The as-recorded fallback is the original route, and says so** (PR #993 review). The refused
+/// conversion left its encoder id and fixed-HLS contract on the plan, so the session's own playlist
+/// installed as the PMS HLS recipe: a later failure of that playlist found the channel's
+/// conversion already spent and read out. It installs as the original, and that rung stays.
+#[test]
+fn the_as_recorded_live_fallback_installs_the_original_route_and_keeps_its_conversion() {
+    use std::time::Duration;
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let (port, rx) = live_pms(true);
+    let sid = plx_plex::plex::register_for_test("route-live-as-recorded", "127.0.0.1", port, "tok-live", "cid-live");
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    assert!(request_live(&mut ps, &mut meta, plx_os::devcaps::caps(), sid, "7",
+        "C101.242.ersatztv.org", "Channel one"));
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
+    let plan = pump_play(&mut ps, &mut meta).expect("the tune lands");
+    assert!(ps.url.contains("/index.m3u8?offset=-1.000000&"), "premise: the session's own playlist: {}", ps.url);
+    assert_eq!(ps.planned_feed_offer(), Some(crate::route::backend_policy::OfferId::FEED_ORIGINAL));
+    assert!(ps.tsession.is_empty() && ps.cur_contract == plx_plex::plex::EncodeContract::default(),
+        "no encoder runs for a playlist read as recorded");
+    assert!(is_live(&ps), "the recording is still the session's to stop");
+    settle_plan_start_in_unit_test(&mut ps, plan.route_start);
+    assert!(matches!(dispatch_live_refusal_conversion(&mut ps), RecoveryDispatch::Flying { .. }),
+        "the channel's conversion is still there to try when the playlist fails to decode");
+    drop(rx);
+}
+
+/// **A live channel's conversion reopens through the Feed start door.** Maintainer's webOS 4.5 run
+/// on a Threadfin channel (PR #993): the demuxer refused the cut, the conversion flew and landed,
+/// and the reload's Start was refused with "no qualified feed offer for this resolved route",
+/// because the flight named the URI backend's HLS recipe and the start door only admits Feed
+/// recipes. The landing must install, and the reload it asks for must pass the door on the Feed
+/// HLS recipe, so playback actually restarts.
+#[test]
+fn a_live_channel_s_conversion_restarts_playback_through_the_feed_door() {
+    use std::time::Duration;
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let (port, rx) = live_pms(false);
+    let sid = plx_plex::plex::register_for_test("route-live-restart", "127.0.0.1", port, "tok-live", "cid-live");
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    assert!(request_live(&mut ps, &mut meta, plx_os::devcaps::caps(), sid, "7",
+        "C101.242.ersatztv.org", "Channel one"));
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
+    let plan = pump_play(&mut ps, &mut meta).expect("the tune lands");
+    settle_plan_start_in_unit_test(&mut ps, plan.route_start);
+    assert!(ps.backend_planned_feed_allowed(), "premise: the channel's own playlist started on Feed");
+    assert!(matches!(dispatch_live_refusal_conversion(&mut ps), RecoveryDispatch::Flying { .. }));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let landing = loop {
+        if let Some(landing) = take_ready_recovery_flight(&mut ps) {
+            break landing;
+        }
+        assert!(std::time::Instant::now() < deadline, "the conversion never landed");
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    assert!(matches!(landing.verdict, RecoveryVerdict::Install), "the conversion installs its route");
+    assert!(ps.backend_planned_feed_allowed(),
+        "the converted channel's reload must pass the Feed start door, not be refused");
+    assert_eq!(ps.planned_feed_offer(), Some(crate::route::backend_policy::OfferId::FEED_PMS_HLS));
+    assert!(ps.backend_offer_admitted(plx_playback_contract::BackendKind::Feed,
+        crate::route::backend_policy::OfferId::FEED_PMS_HLS));
+    drop(rx);
+}
+
+/// **A live conversion gets no rung control.** Maintainer's review of `b35a7aaf4` (PR #993): the
+/// converted channel's HLS worker was handed an ABR controller, and every candidate it primed asked
+/// PMS for a decision on `/library/metadata/` (a live session has no rating key), was refused and
+/// stopped, every ~1.8 s. The same installed route with the channel taken away does get control, so
+/// this fails if the live gate goes.
+#[test]
+fn a_live_conversion_gets_no_abr_rung_control() {
+    use std::time::Duration;
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let (port, rx) = live_pms(false);
+    let sid = plx_plex::plex::register_for_test("route-live-abr", "127.0.0.1", port, "tok-live", "cid-live");
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    assert!(request_live(&mut ps, &mut meta, plx_os::devcaps::caps(), sid, "7",
+        "C101.242.ersatztv.org", "Channel one"));
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
+    let plan = pump_play(&mut ps, &mut meta).expect("the tune lands");
+    settle_plan_start_in_unit_test(&mut ps, plan.route_start);
+    assert!(matches!(dispatch_live_refusal_conversion(&mut ps), RecoveryDispatch::Flying { .. }));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(landing) = take_ready_recovery_flight(&mut ps) {
+            assert!(matches!(landing.verdict, RecoveryVerdict::Install), "the conversion installs its route");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the conversion never landed");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(hls_abr_control(&ps).is_none(), "a live conversion must not start rung control");
+
+    ps.cur_live = None;
+    if let Some(request) = ps.request.as_mut() { request.live = None; }
+    assert!(hls_abr_control(&ps).is_some(), "premise: the same converted route off a channel gets rung control");
+    drop(rx);
+}
+
+/// **The converted channel's master opens.** Maintainer's webOS 4.5 retest of `d430c7e61` (PR #993):
+/// the conversion passed the Feed door, then the reader refused PMS's master with `invalid playlist
+/// URI: empty path component`, because the flight sent the DVR path as `session=` too and PMS names
+/// the variant `session/{session}/base/index.m3u8`. The DVR source stays in `path`, `session=` is the
+/// bare encoder id the planned live transcode uses, and the master PMS builds from that request is
+/// followed through the real HLS reader to the variant it plays.
+#[test]
+fn a_live_conversion_names_a_bare_encoder_and_its_master_variant_opens() {
+    use std::time::Duration;
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let (port, rx) = live_pms(false);
+    let sid = plx_plex::plex::register_for_test("route-live-variant", "127.0.0.1", port, "tok-live", "cid-live");
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    assert!(request_live(&mut ps, &mut meta, plx_os::devcaps::caps(), sid, "7",
+        "C101.242.ersatztv.org", "Channel one"));
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
+    let plan = pump_play(&mut ps, &mut meta).expect("the tune lands");
+    settle_plan_start_in_unit_test(&mut ps, plan.route_start);
+    let playback = sess(&ps);
+    assert!(!playback.is_empty() && !playback.contains('/'), "premise: a bare playback id: {playback}");
+    assert!(matches!(dispatch_live_refusal_conversion(&mut ps), RecoveryDispatch::Flying { .. }));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(landing) = take_ready_recovery_flight(&mut ps) {
+            assert!(matches!(landing.verdict, RecoveryVerdict::Install), "the conversion installs its route");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the conversion never landed");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    const DVR: &str = "%2Flivetv%2Fsessions%2F9b9fe727-0000-46db-b94c-ef512e3e61d2";
+    let decision = std::iter::from_fn(|| rx.recv_timeout(Duration::from_millis(500)).ok())
+        .filter(|line| line.starts_with("GET /video/:/transcode/universal/decision?"))
+        .find(|line| query_param(line, "directPlay") == Some("0"))
+        .expect("the conversion's decision");
+    assert_eq!(query_param(&decision, "path"), Some(DVR), "{decision}");
+    assert_eq!(query_param(&decision, "session"), Some(playback.as_str()), "{decision}");
+    let master_url = url(&ps);
+    let master_path = &master_url[master_url.find("/video/").expect("a PMS transcode URL")..];
+    assert!(master_path.starts_with("/video/:/transcode/universal/start.m3u8?"), "{master_path}");
+    assert_eq!(query_param(master_path, "path"), Some(DVR), "the DVR source stays in path");
+    let encoder = query_param(master_path, "session").expect("an encoder id");
+    assert_eq!(encoder, playback, "session= is the bare encoder id, never the DVR path");
+    // What PMS answers for that request (`tests/mock_pms.py`, the measured live master).
+    let master = format!("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1280x720,\
+        CODECS=\"avc1.64001f,mp4a.40.2\"\nsession/{encoder}/base/index.m3u8\n");
+    use plx_play_feed::hls::{parse_master, Resource};
+    let source = Resource::new(plx_net::net::origin::Origin::http("127.0.0.1", port), master_path).expect("the master URL is readable");
+    let parsed = parse_master(&source, &master).expect("the reader accepts the converted channel's master");
+    assert_eq!(parsed.variant.resource.path,
+        format!("/video/:/transcode/universal/session/{encoder}/base/index.m3u8"));
+}
+
+#[test]
+fn a_live_plan_abandoned_after_its_tune_still_stops_the_recording() {
+    let live = plx_plex::plex::livetv::LiveSession { key: "/livetv/sessions/abcdef01".into(), rating_key: String::new() };
+    let tuned_only = Plan { sid: ServerId::from_raw(3), live: Some(live.clone()), ..Default::default() };
+    let resources = abandoned_plan_resources(&tuned_only).expect("a tuned session is a server object to retire");
+    assert_eq!(resources.live, Some((live.clone(), String::new())));
+    let decided = Plan { sess: "s1".into(), live: Some(live.clone()), ..Default::default() };
+    let resources = abandoned_plan_resources(&decided).unwrap();
+    assert_eq!((resources.identities, resources.live), (vec!["s1".to_string()], Some((live, "s1".to_string()))));
+    assert!(abandoned_plan_resources(&Plan::default()).is_none());
+}
+
+#[test]
+fn a_full_stop_retires_the_live_request_but_replacement_keeps_its_descriptor() {
+    let mut ps = PlaybackSession::IDLE;
+    let _guard = fresh_registry(&mut ps);
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    assert!(request_live(&mut ps, &mut meta, plx_os::devcaps::caps(), ServerId::UNSET,
+        "7", "channel-1", "Channel one"));
+    assert!(is_live(&ps));
+    let mut adapter = crate::player::adapter::PlayerAdapter::new(unsafe { plx_base::task::MainThread::assume() });
+    assert!(crate::player::stop_for_replacement(&mut ps, &mut adapter));
+    assert_eq!(live_request(&ps).unwrap().1.channel, "channel-1", "retry retains its descriptor");
+    crate::player::stop_playback(&mut ps, &mut adapter);
+    assert!(!is_live(&ps), "Back retires the actual live request, even without a landed engine");
+    assert!(!can_retry_current_play(&ps));
+    // No library-only facet may ever manufacture /library/metadata/ for a live request.
+    assert!(request_live(&mut ps, &mut meta, plx_os::devcaps::caps(), ServerId::UNSET,
+        "7", "channel-2", "Channel two"));
+    for video in [VideoLane::AsPlanned, VideoLane::Encode, VideoLane::Both] {
+        assert!(matches!(dispatch_refusal_conversion(&mut ps, 0, video), RecoveryDispatch::Refused));
+    }
+    crate::player::stop_playback(&mut ps, &mut adapter);
+}
+
+/// A converted channel that fails is tried again by tuning it again, and starts at the live edge.
+/// Its playhead names nothing on a channel, and a resume rebuild needs a library ratingKey that a live
+/// recording never has: the retry used to carry the position into that rebuild, which is refused
+/// without one, so the channel never started again.
+#[test]
+fn a_live_retry_tunes_again_and_starts_at_the_edge_not_at_the_failed_position() {
+    use std::time::Duration;
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let (port, rx) = live_pms(false);
+    let sid = plx_plex::plex::register_for_test("route-live-retry", "127.0.0.1", port, "tok-live", "cid-live");
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    assert!(request_live(&mut ps, &mut meta, plx_os::devcaps::caps(), sid, "7",
+        "C101.242.ersatztv.org", "Channel one"));
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
+    let first = pump_play(&mut ps, &mut meta).expect("the first tune lands");
+    assert_eq!(first.resume_ns, 0, "a first tune starts at the edge");
+    settle_plan_start_in_unit_test(&mut ps, first.route_start);
+
+    // The channel failed 30 seconds into its picture; the retry is handed that playhead.
+    assert!(retry_current_play(&mut ps, &mut meta, 30_000_000_000, None,
+        crate::player::report::AttemptOrigin::UserRetry), "a tuned channel can be tuned again");
+    assert_eq!(unpresented_resume_ns(&ps), 0, "the retry carries no position to return to");
+    assert!(PLAY_RESUME.lock().unwrap_or_else(|e| e.into_inner()).is_none(), "and no resume is pending");
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
+    let retried = pump_play(&mut ps, &mut meta).expect("the retried tune lands");
+    assert_eq!(retried.resume_ns, 0, "the retry starts at the live edge");
+    settle_plan_start_in_unit_test(&mut ps, retried.route_start);
+
+    let mut tunes = 0;
+    while tunes < 2 {
+        let line = rx.recv_timeout(Duration::from_secs(5)).expect("PMS sees the first tune and the retried one");
+        tunes += usize::from(line.starts_with("POST /livetv/dvrs/7/channels/C101.242.ersatztv.org/tune?"));
+    }
+    scrobble_stop(&mut ps, None, None);
+    drain_scrobble();
+}
+
+#[test]
+fn a_channel_change_s_tune_waits_for_the_playing_channel_s_stopped() {
+    use std::time::Duration;
+    let mut ps = PlaybackSession::IDLE;
+    let _guard = fresh_registry(&mut ps);
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(5)), "no earlier worker is left");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port() as i32;
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let server = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while std::time::Instant::now() < deadline {
+            match plx_base::testnet::accept(&listener) {
+                Ok((mut socket, _)) => {
+                    let first = drain_http(&mut socket);
+                    let stopped = first.contains("state=stopped");
+                    let _ = seen_tx.send(stopped);
+                    if stopped {
+                        // One tuner: the server answers the stop only once the test lets it.
+                        let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                        write_json(&mut socket, EMPTY_MC);
+                        return;
+                    }
+                    write_json(&mut socket, EMPTY_MC);
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(4)),
+            }
+        }
+    });
+    let sid = plx_plex::plex::register_for_test("live-ch-change", "127.0.0.1", port, "tok", "cid");
+    ps.cur_sid = sid;
+    ps.cur_live = Some(plx_plex::plex::livetv::LiveSession {
+        key: "/livetv/sessions/9b9fe727-0000-46db-b94c-ef512e3e61d2".into(), rating_key: String::new() });
+    scrobble_stop(&mut ps, None, None);
+    while !seen_rx.recv_timeout(Duration::from_secs(5)).expect("the stopped reaches the server") {}
+    assert!(!wait_resolve_workers_for_test(Duration::from_millis(200)),
+        "the next tune's resolve fence must still see the playing channel's stop in flight");
+    release_tx.send(()).unwrap();
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(5)), "the fence opens once the tuner is freed");
+    server.join().unwrap();
 }

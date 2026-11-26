@@ -508,7 +508,9 @@ class SubjectBearing(unittest.TestCase):
         "screens/src/home/mod.rs": ("home.hero.play", "home.hero.watchlist", "*.card.*"),
         "screens/src/item_menu.rs": ("itemmenu.*",),
         "screens/src/item_menu/watchlist.rs": ("itemmenu.*",),   # a Catalog menu's rows have no key: unpressable
+        "screens/src/registry.rs": ("itemmenu.*",),   # Filmography's add-only menu opens from a captured catalog ID.
         "screens/src/library/recommended.rs": ("*.card.*",),
+        "screens/src/livetv.rs": ("*.card.*",),
         "screens/src/player/mod.rs": PLAYER_WORDS,
         "screens/src/player/overlay.rs": ("more.fold.previous", "more.fold.next", "more.fold.from_beginning",
                                           "more.rung.*", "menu.audio.*", "menu.sub.*", "menu.off", "menu.forced",

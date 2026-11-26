@@ -296,7 +296,16 @@ episode view's cards are 4 columns wide, wider than a poster, so no value gains 
 input, not a read:** a screen reads no clock and fetches no date; the application's loop publishes the
 calendar date once per frame (`Bridge::publish_today`, read from the platform at most once a minute through
 `app::clock::today`, the loop its one caller) and `LibraryLike::today` hands it in from the frame's views,
-and `CaptionCache` keys its labels on it so "Today" rebuilds at midnight. The Under posters page's picture
+and `CaptionCache` keys its labels on it so "Today" rebuilds at midnight. **The time of day is the same kind of
+input:** the loop publishes one clock reading per frame, the wall-clock instant and the zone's UTC offset at it
+(`Bridge::publish_clock`, from `app::clock::reading`, whose date and offset are ONE per-minute zone read; the offset
+is absent where the zone cannot be read, and then there is no `Wall`, while the Live TV store still takes its `now` from
+the same instant), a page receives the `Wall` as `LiveTvLike::wall`, the player on `HudModel::wall` (the app's `hud_model` copies the published wall into
+the model it sends, so the screen has no second route to it), and every clock face, "22m left" and progress fraction is derived from them by the pure
+`plx_ui::fmt::airing_line` / `left` / `frac` (each takes the `Wall`, and decides through `plx_ui::fmt::phase`; `None`
+under a replay: no clock face, never a guessed one). **The words are never cached in a published fact:** the player's
+live info keeps the guide's raw begin and end and the HUD words the airing at draw, with the screen's
+`clock_fingerprint` following the airing's phase stamp so a frame is owed when the minute turns. The Under posters page's picture
 illustrates the mode as a library sorted by Year while the Sort value row has focus: each sample's own year
 (through `registry::sort_info::year_value`, the Year sort's own wording) replaces its caption lines (`RootPicture::sorted`; the details pickers never preview it). The picture never adds sort choices.
 

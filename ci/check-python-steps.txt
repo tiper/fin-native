@@ -160,6 +160,7 @@ python3 ci/rc.py --selftest
 # The issue labeler's pure logic (.github/workflows/issue-labels.yml): what survives a model
 # answer, dry-run output and `user-report` from the author's association. No network.
 python3 ci/label-issue.py --selftest
+python3 ci/test_issue_support.py
 # The two host-side readers of the back-buffer-wait captures, against synthetic traces/JSONL.
 python3 tools/analyze-sched-trace.py --self-test
 python3 tools/analyze-hwcnt-wait.py --self-test
@@ -429,6 +430,8 @@ python3 ci/test_readonly_generated.py
 # free-space/clock override refused unless every root is named. Temp dirs, a faked two-volume device check and a shutil stand-in for `ditto`
 # (one darwin-only test drives the real one); touches no real cache, config or volume.
 python3 ci/test_cold_store.py
+# The mock PMS's opt-in Live TV fixture (--livetv-fixture): DVRs, guide, tune/busy, live decisions and playlists; no sockets.
+python3 tests/test_mock_pms_livetv.py
 python3 ci/test_verdict_data_captured_inputs_source_oracle.py
 # Current owned hold-hint codec source controls; runtime oracles also execute in the Rust suite.
 python3 tests/test_owned_hold_hint_codec.py

@@ -1,0 +1,14 @@
+{
+  "widgets.reason.jail_help": "Popravak zahtijeva rootani TV i pristup aplikaciji Homebrew Channel. Pomoć: github.com/tiper/fin-native/blob/main/docs/native-video-sandbox.md",
+  "widgets.panel.jail": "sandbox ove instalacije blokira pristup uređaju /dev/rtkmem; FinNative može ponuditi potvrđeni popravak putem root pristupa aplikacije Homebrew Channel",
+  "widgets.repair.question": "Popraviti sandbox aplikacije FinNative?",
+  "widgets.repair.body": "Upotrijebite root pristup aplikacije Homebrew Channel za ažuriranje sandboxa aplikacije FinNative LG-ovim izvornim profilom. Za to je potreban rootani TV. Nakon toga zatvorite i ponovno otvorite FinNative.",
+  "widgets.repair.reopen": "Zatvorite i ponovno otvorite FinNative prije reprodukcije videozapisa.",
+  "widgets.repair.start_failed": "Nije moguće pokrenuti popravak. Zatvorite i ponovno otvorite FinNative pa pokušajte opet.",
+  "widgets.tracks.enh_note_burn": "Titlovi ostaju uključeni. Vaš poslužitelj ponovno će obraditi videozapis kako bi ih zadržao, pa slika može biti nešto manje oštra.",
+  "widgets.tracks.enh_reason_not_analyzed": "Još nije dostupno za ovaj videozapis. Vaš poslužitelj najprije mora analizirati zvuk.",
+  "widgets.tracks.enh_reason_refused": "Vaš poslužitelj nije mogao uključiti ovu mogućnost za ovaj videozapis.",
+  "widgets.menu.quality_converted_note": "Vaš poslužitelj konvertira ovaj videozapis.",
+  "widgets.tracks.enh_reason_converting": "Nije dostupno dok vaš poslužitelj konvertira ovaj videozapis.",
+  "widgets.tracks.enh_reason_not_copyable": "Vaš poslužitelj trenutačno ne može ovo dodati ovom videozapisu."
+}

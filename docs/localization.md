@@ -1,12 +1,12 @@
 # Help translate PlxNative
 
-PlxNative's interface is available in English, Spanish, French, Italian, European Portuguese, German, Hungarian, Russian, Polish, Dutch and Belarusian
-(official Cyrillic orthography). Help improve a translation or contribute another language through a pull request
+PlxNative's interface is available in English, Spanish, French, Italian, European Portuguese, German, Hungarian, Russian, Polish, Dutch,
+Belarusian (official Cyrillic orthography) and Croatian. Help improve a translation or contribute another language through a pull request
 at https://github.com/plxnative/plx-native.
 
 ## Translate a message
 
-Catalogs live in `locales/en`, `locales/es`, `locales/fr`, `locales/it`, `locales/pt`, `locales/de`, `locales/hu`, `locales/ru`, `locales/pl`, `locales/nl` and `locales/be`, split by UI area. English is the
+Catalogs live in `locales/en`, `locales/es`, `locales/fr`, `locales/it`, `locales/pt`, `locales/de`, `locales/hu`, `locales/ru`, `locales/pl`, `locales/nl`, `locales/be` and `locales/hr`, split by UI area. English is the
 source: each scoped, stable key has a `value`, translator `description`, and optional typed
 `args`. The other languages contain the same keys, except the English-only ones (described
 below), with translated string or plural values.
@@ -50,7 +50,7 @@ lists under `"optional"`: the app hands every language all of them, and a langua
 message with the ones its grammar wants (the Library rail's decade is "2020s" in English and
 "2020–29" in French, which reads the `{end}` the English leaves out). Each language needs exactly the categories its
 `plurals` entry in `locales/languages.json` declares, no more: Belarusian, Russian and Polish `one`, `few`, `many`, and
-`other`; Spanish, French, Italian and Portuguese `one`, `many`, and `other`; English, German, Hungarian and Dutch `one` and `other`.
+`other`; Spanish, French, Italian and Portuguese `one`, `many`, and `other`; English, German, Hungarian and Dutch `one` and `other`; Croatian `one`, `few`, and `other`.
 
 Use readable, natural wording. Belarusian switch labels use `Укл.` and `Выкл.`, Russian `Вкл.` and `Выкл.`. Preserve the meaning of consent and privacy disclosures exactly.
 Third-party license texts stay verbatim. Screenshots of the affected screen help reviewers assess
@@ -72,7 +72,7 @@ the Library's Sort & Filter menu, and the
 collection page's meta line and season marks. When one of these tests fails, shorten
 the wording; do not abbreviate it past readability.
 
-Review the affected screens with the desktop simulator. `PLXNATIVE_LOCALE=es`, `fr`, `it`, `pt`, `de`, `hu`, `ru`, `pl`, `nl`, `be` or `en`
+Review the affected screens with the desktop simulator. `PLXNATIVE_LOCALE=es`, `fr`, `it`, `pt`, `de`, `hu`, `ru`, `pl`, `nl`, `be`, `hr` or `en`
 selects a language for a simulator launch; `PLXNATIVE_FORMAT_LOCALE=de-DE` exercises separate
 regional formatting. Set `PLXNATIVE_CLOCK` to `12`, `24` or `locale` to exercise the player HUD clock.
 Time-of-day formatting uses ICU hour-minute patterns and day periods for the format locale. The
@@ -133,7 +133,8 @@ or Hebrew UI language needs a mirrored layout before it can be offered.
 ## Runtime behavior
 
 Settings → Language defaults to the television's UI language. Explicit English, Spanish, French, Italian,
-Portuguese, German, Hungarian, Russian, Polish, Dutch and Belarusian choices apply the next time the app starts. The running UI and Plex request language
+Portuguese, German, Hungarian, Russian, Polish, Dutch, Belarusian and Croatian choices apply the next time the app starts.
+The running UI and Plex request language
 remain unchanged until then; playback is not interrupted. The contribution action displays this
 guide's URL and QR code for opening on another device.
 

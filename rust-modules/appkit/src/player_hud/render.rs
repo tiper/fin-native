@@ -122,7 +122,7 @@ pub struct Frame<'a> {
 /// The compiled state this frame draws, or `None` when the package has no state for it
 /// ([`frame_state`], the lookup every geometry consumer takes too).
 fn state_for<'c>(compiled: &'c Compiled, open: u8, f: &Frame<'_>) -> Option<&'c CompiledState> {
-    let chapters = crate::chapters_panel::has_chapters(f.meta);
+    let chapters = !f.model.is_live && crate::chapters_panel::has_chapters(f.meta);
     super::geometry::frame_state_content(compiled, open, f.slot, chapters, f.model.is_episode, f.model.paused).map(|(state, skip)| state.skip_variant(skip))
 }
 
@@ -633,6 +633,12 @@ fn walk<H: Host>(
                     }
                 }
                 DrawOp::Playbar { track, fill, track_ink, clock_size, knob, clocks, mark, clock_rects, .. } => {
+                    if f.model.is_live {
+                        let rect = Rect { w: track.w, ..clock_rects.elapsed };
+                        sections::text_view(plx_os::i18n::msg::browse_home_live_tv(), *clock_size, true,
+                            theme::TINT_WHITE, 1, 1.0).draw(q, sections::line_frame(rect, *clock_size, true));
+                        continue;
+                    }
                     let mut live = Playbar::live(f.model, f.busy, f.focus, row.since_play_ms(f.now), f.now);
                     live.clock_grow = row.preview.motion.clock_grow(f.now);
                     // a cancelled scrub's knob returns to the playhead rather than jumping to it
@@ -894,6 +900,7 @@ fn draw_control(
     state: &CompiledState,
     c: &crate::hud_format::compile::ControlRect,
 ) {
+    if f.model.is_live && c.act.is_some_and(|command| !command.shown_live()) { return; }
     let native_tab = !c.is_action && c.widget == Widget::Pill && c.command == "toggle_section" && c.face == Default::default()
         && c.rest == Rest::Film && c.focus == Focus::Accent;
     let row_index = state.row_ids.iter().position(|id| id.as_deref() == Some(c.id.as_str()));
@@ -948,7 +955,7 @@ fn draw_control(
         Widget::Pill => {
             let Some(section) = c.section.as_deref() else { return };
             let Some(i) = tab_of_section(section) else { return };
-            let labels = tab_labels(crate::chapters_panel::has_chapters(f.meta));
+            let labels = tab_labels(!f.model.is_live && crate::chapters_panel::has_chapters(f.meta));
             let Some(Ok(label)) = usize::try_from(i).ok().and_then(|i| labels[i]).map(CString::new) else { return };
             let (focused, selected) = hud_tab_state(f.transport, f.focus, f.tab, i);
             // the state the walk is in says which sections are open: their tabs read selected, whatever the

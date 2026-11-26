@@ -913,6 +913,30 @@ impl Drop for Pms {
 }
 
 impl Bridge<'_> {
+    /// Put the Recent channels' seat where the profile publication would: the seat the session holds
+    /// now (published by `TempSession::seated`). The list is the memory door's, read by each step.
+    #[cfg(all(feature = "sim", feature = "play-feed"))]
+    pub(crate) fn seat_recent_for_test(&mut self) {
+        self.retained.seat_watch.restored = plx_plex::plex::session::current_snapshot().seat();
+    }
+    /// A live tune of `dvr`/`channel` on `sid`, noted the way the landing notes it.
+    #[cfg(all(feature = "sim", feature = "play-feed"))]
+    pub(crate) fn note_recent_for_test(&mut self, sid: plx_plex::plex::ServerId, dvr: &str, channel: &str) {
+        self.note_channel(sid, dvr, channel);
+    }
+    /// The frame's clock as the loop would have published it, so the Live TV step has a clock (the
+    /// instant alone: no zone, which the step does not need).
+    #[cfg(all(feature = "sim", feature = "play-feed"))]
+    pub(crate) fn clock_for_test(&mut self, unix_s: i64) {
+        self.publish_clock(Some(crate::app::clock::Reading { unix_ms: unix_s * 1_000, utc_offset_s: None }));
+    }
+    /// The `now` the Live TV store's next step is handed (`BridgeRetained::livetv_input`).
+    pub(crate) fn livetv_now_for_test(&self) -> Option<i64> {
+        self.retained.livetv_input(&self.retained.client_keys).now
+    }
+}
+
+impl Bridge<'_> {
     /// Seat the plex.tv account a Watchlist rig scripts: the Bridge reads the registry for the identity
     /// it hands the stores (`Bridge::watchlist_input`), so the rig publishes a profile (with the
     /// plex.tv credential when `credential`) and, where the test holds no scratch session of its own,

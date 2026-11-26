@@ -2,7 +2,7 @@
 
 `tests/fixtures/replay/v13-owned-input-content` is a new synthetic recording, not a rewrite of an older golden. The actual simulator's `--write-synthetic-initial` producer and product recorder captured Filmography → Detail → Back → Back. The official `tools/plxnative-rec check` and `import` accepted the unchanged capture. The imported manifest adds only `anchor: true`; its recorded initial state, hash, fingerprint and segment bytes remain the producer's.
 
-Targets and Resolve each replay all recorded frames (922 since the second 2026-11-17 re-recording below) with raw exit 0, `verdict=SAME`, and all eight difference counters zero. Current V13 recordings must continue to replay; an unsupported current or unknown profile is never an expected refusal.
+Targets and Resolve each replay all 609 recorded frames with raw exit 0, `verdict=SAME`, and all eight difference counters zero. Current V13 recordings must continue to replay; an unsupported current or unknown profile is never an expected refusal.
 
 The four pre-V13 recordings remain byte-for-byte unchanged, including the historical fixture whose directory ends in `-current`. `tests/replay-historical-profiles.json` binds the reviewed schema-3 fingerprints 4239819007634745513 and 13512213413816145485 to their exact manifest and segment SHA-256 values. Only these fully parsed immutable artifacts receive the typed early refusal `incompatible owner-input/presentation state; requires V13 capture`. The diagnostic grants no old-profile replay authority. Unknown, modified, malformed, truncated and extra-field artifacts cannot earn an expected refusal.
 
@@ -48,3 +48,12 @@ recorded on Home. The recording is also kept short, one second between the BACKs
 decoded-recording budget (`rec/strict_json.rs`, `Budget`) refused a 1.5 MB take at load
 (`record JSON/budget`, line 13918 of 15444 -- the replay's generic `invalid or incompatible
 recording`), because Home frames cost about 100 KB per 100 frames.
+
+**Re-recorded for Filmography Watchlist (#1418).** The item-menu argument adds a catalog ID,
+moving the V13 census to `16067387704449319837`. Both current anchors were recorded with the
+synthetic simulator using `tests/focusfp.sh --rec --only 12,13` and installed with
+`plxnative-rec rerecord`. Targets and Resolve each grade 614 frames for
+`v13-owned-input-content` and 792 for `13-by-id-filmography`, with all difference counters at zero.
+The four historical fixtures still receive their expected refusal in both modes.
+
+**Re-recorded for Live TV (#993) with Filmography Watchlist.** The current V13 producer fingerprint is `8363262880582770195`. The synthetic flows from `tests/focusfp.sh --rec --only 12,13` have 609 and 785 frames, respectively. The historical fixture bytes and their refusal allowlist are preserved.

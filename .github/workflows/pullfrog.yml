@@ -1,0 +1,35 @@
+# Entry point for Pullfrog console, mentions and configured automations.
+name: Pullfrog
+run-name: ${{ inputs.name || github.workflow }}
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        type: string
+        description: Agent prompt
+      name:
+        type: string
+        description: Run name
+
+permissions:
+  contents: read
+
+jobs:
+  pullfrog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run Pullfrog
+        uses: pullfrog/pullfrog@19ed08a1c60d607423b3096ae625ddb70bc161ca # v0.1.142
+        env:
+          PULLFROG_FORCE_LOCAL_CLI: '1'
+        with:
+          prompt: ${{ inputs.prompt }}
+          push: disabled
+          timeout: 17m

@@ -56,6 +56,7 @@ use plx_screens::registry::{AppArg, AppFx, InlineAppFx, ExternalAppFx, AppMounte
 #[cfg(test)]
 use plx_screens::registry::HomeReq;
 use plx_data::stores::{StoreCmd, StoreId};
+use plx_plex::plex::session::prefs::{MemoryEntry, RecentChannelEntry};
 use plx_plex::plex::session::{LibraryPage, LibraryViews};
 use plx_ui::containers::modal::{HostRender, HostUpdate, Phase, Style};
 use plx_ui::dispatch::{CxParts, Dispatcher, FrameReport, Rig, Split};
@@ -71,7 +72,7 @@ use plx_machine::machine::{
 };
 use plx_machine::present::Present;
 use plx_ui::screen::{
-    At, FocusSource, ReturnState, Screen, ScreenEvent,
+    At, FocusSource, Focusable, ReturnState, Screen, ScreenEvent,
 };
 
 struct LibraryPageVisit {
@@ -160,11 +161,12 @@ fn refresh_chrome(
     chrome: &mut super::chrome::ChromeSnapshot,
     measure: &dyn Measure,
     directory: plx_data::stores::browse::DirectoryView<'_>,
+    live_tv: bool,
     captured: Option<(&plx_plex::plex::session::CurrentProfile, &plx_plex::plex::session::Session)>,
 ) {
     match captured {
-        Some(captured) => chrome.refresh_with_profile(measure, directory, Some(captured)),
-        None => chrome.refresh(measure, directory),
+        Some(captured) => chrome.refresh_with_profile(measure, directory, live_tv, Some(captured)),
+        None => chrome.refresh(measure, directory, live_tv),
     }
 }
 
@@ -183,6 +185,7 @@ pub(crate) struct AppViews<'a> {
     pub(crate) search: plx_data::search::view::SearchView<'a>,
     pub(crate) person: plx_data::person::PersonView<'a>,
     pub(crate) collection: plx_data::collection::CollectionView<'a>,
+    pub(crate) livetv: plx_data::livetv::LiveTvView<'a>,
     /// Stage A of the store-ownership migration (`docs/stores-as-machines.md`): the owner's
     /// borrowed read handle, shaped like [`plx_data::person::PersonView`]. It still reads the
     /// process-wide `metadata` statics underneath — see `plx_data::metadata::MetadataView`'s doc.
@@ -202,6 +205,11 @@ pub(crate) struct AppViews<'a> {
     /// playback session is, so a screen RECEIVES the date it words ("Today", "27 Oct") and fetches
     /// none. `None` before the first publication and when the platform cannot say.
     pub(crate) today: Option<[i32; 3]>,
+    /// **This frame's wall-clock time** (Unix second and UTC offset), published by the loop beside
+    /// `today` ([`Bridge::publish_clock`]): what a clock face, "22m left" and an airing's progress
+    /// are derived from, so no screen reads a clock. `None` before the first publication, under a
+    /// replay and where the platform cannot say.
+    pub(crate) wall: Option<plx_ui::fmt::Wall>,
     /// **The kind of page beneath the page these views are read for** on the navigation stack,
     /// folded in by the dispatcher per page ([`Host::views_over`]); `None` for a root, and for
     /// every context that is not a page's own. What a page that names where BACK goes reads
@@ -222,9 +230,9 @@ impl Bridge<'_> {
         AppViews { inputs: &self.retained.screen_inputs, native_preview_available: self.retained.live_screen_inputs, clock: &self.retained.clock_facts, marker_prefs: self.retained.marker_prefs, auth: self.session.read(), hubs: self.retained.hubs.view(), listing: self.retained.listing.view(),
             directory: self.retained.directory.view(), section_hubs: self.retained.section_hubs.view(),
             search: self.retained.search.view(), metadata: self.stores.metadata_view(),
-            person: self.stores.person_view(), collection: self.stores.collection_view(), subtitle_search: self.stores.subtitle_search_view(), session,
+            person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session,
             transport_paused: self.retained.transport_paused,
-            today: self.retained.today, beneath: None }
+            today: self.retained.today, wall: self.retained.wall(), beneath: None }
     }
 }
 
@@ -280,7 +288,19 @@ impl plx_screens::registry::ScreenInputsLike for AppHost {
 
 impl HomeLike for AppHost {
     fn clock_facts<'a>(cx: &Cx<'a, Self>) -> Option<&'a plx_plex::plex::ClockFacts> { Some(cx.views.clock) }
-    fn hubs<'a>(cx: &Cx<'a, Self>) -> plx_data::pms::HubsView<'a> { cx.views.hubs }
+    fn hubs<'a>(cx: &Cx<'a, Self>) -> plx_data::pms::HubsView<'a> {
+        if !cx.views.inputs.backends.feed { return cx.views.hubs; }
+        let live = cx.views.livetv;
+        cx.views.hubs.with_shelf(plx_data::livetv::LIVE_TV_HUB,
+            plx_os::i18n::msg::browse_home_live_tv(), live.tiles, live.revision())
+    }
+}
+
+impl plx_screens::registry::LiveTvLike for AppHost {
+    fn livetv<'a>(cx: &Cx<'a, Self>) -> plx_data::livetv::LiveTvView<'a> {
+        cx.views.livetv
+    }
+    fn wall(cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> { cx.views.wall }
 }
 
 impl plx_screens::registry::CollectionLike for AppHost {
@@ -595,6 +615,10 @@ pub(crate) struct Bridge<'a> {
 /// Per-App publications, capture scratch and resource bookkeeping, never machine owners.
 /// These remain separate from RuntimeOwners and are lent at the same App boundary.
 pub(crate) struct BridgeRetained {
+    #[cfg(feature = "devtriggers")]
+    api_profile_correlation: u32,
+    #[cfg(feature = "devtriggers")]
+    api_profile_admission: Option<(u32, Option<u64>)>,
     marker_access: super::preferences::MarkerAccessRunner,
     marker_prefs: plx_appkit::skip_policy::MarkerPrefsView,
     marker_now: u32,
@@ -662,6 +686,11 @@ pub(crate) struct BridgeRetained {
     /// This frame's publication of the calendar date — see `AppViews::today`. Refreshed by
     /// [`Bridge::publish_today`] from the loop, once per iteration; `None` until the first one.
     today: Option<[i32; 3]>,
+    /// This frame's publication of the clock — the ONE reading of it ([`Bridge::publish_clock`], from
+    /// the loop, once per iteration; `None` until the first one and under a replay). The screens'
+    /// `AppViews::wall` and the Live TV store's `now` are both taken from it ([`BridgeRetained::wall`],
+    /// [`BridgeRetained::livetv_input`]).
+    clock: Option<super::clock::Reading>,
     /// **Is the hardware video plane bound?** `Player::video_plane_bound`, published here by the
     /// loop on its edges — the rig's own copy of the one bit, for the privileged call at draw
     /// entry (`clear_opaque_region`), which the `Rig` trait gives no argument.
@@ -792,6 +821,40 @@ impl Bridge<'_> {
 }
 
 impl BridgeRetained {
+    /// The wall time of this frame's clock reading: `None` where there is no reading or the zone's
+    /// offset could not be read ([`super::clock::Reading::wall`]).
+    fn wall(&self) -> Option<plx_ui::fmt::Wall> {
+        self.clock.and_then(super::clock::Reading::wall)
+    }
+
+    /// **The Live TV store's captured input for this step**: the clients, the second of the frame's clock
+    /// reading (`None` where the loop published none, which is not the epoch; present without the zone) and
+    /// the seat the seat trigger last restored for, with the Recent list the memory door holds for it,
+    /// read now (`route::recall_all`) and kept nowhere, so a profile publication, this process's own
+    /// write and a re-seeded mirror are all seen by the next step without a refresh to forget.
+    fn livetv_input<'a>(&'a self, keys: &'a plx_plex::plex::ClientKeys) -> plx_data::livetv::LiveTvInput<'a> {
+        plx_data::livetv::LiveTvInput {
+            keys,
+            now: self.clock.map(super::clock::Reading::unix_s),
+            recent: match self.seat_watch.restored.user() {
+                None => plx_data::livetv::RecentSeat::Unseated,
+                Some(user) => plx_data::livetv::RecentSeat::Seated(plx_media::route::recall_all::<RecentChannelEntry>(user)),
+            },
+        }
+    }
+
+    #[cfg(feature = "devtriggers")]
+    pub(super) fn api_profile_reply_to(&mut self) -> plx_session::auth::owner::ReplyTo {
+        self.api_profile_correlation = self.api_profile_correlation.wrapping_add(1);
+        self.api_profile_admission = None;
+        plx_session::auth::owner::ReplyTo { instance: 0, correlation: self.api_profile_correlation }
+    }
+
+    #[cfg(feature = "devtriggers")]
+    pub(super) fn take_api_profile_admission(&mut self) -> Option<(u32, Option<u64>)> {
+        self.api_profile_admission.take()
+    }
+
     #[cfg(test)]
     pub(super) fn fixture_views<'a>(&'a self, auth: &'a plx_session::auth::SessionMachine,
         stores: &'a plx_data::stores::Stores) -> AppViews<'a> {
@@ -800,8 +863,8 @@ impl BridgeRetained {
             hubs: self.hubs.view(), listing: self.listing.view(), directory: self.directory.view(),
             section_hubs: self.section_hubs.view(), search: self.search.view(),
             metadata: stores.metadata_view(), person: stores.person_view(), collection: stores.collection_view(),
-            subtitle_search: stores.subtitle_search_view(), session: &self.playback,
-            transport_paused: self.transport_paused, today: self.today, beneath: None }
+            subtitle_search: stores.subtitle_search_view(), livetv: stores.livetv_view(), session: &self.playback,
+            transport_paused: self.transport_paused, today: self.today, wall: self.wall(), beneath: None }
     }
 
     /// A Bridge booted from a controlled Home. It always runs the `Live` store runner, whatever
@@ -983,6 +1046,10 @@ impl BridgeRetained {
             recorded_clients: std::collections::BTreeMap::new(),
             initial_subhash: 0,
 
+            #[cfg(feature = "devtriggers")]
+            api_profile_correlation: 0,
+            #[cfg(feature = "devtriggers")]
+            api_profile_admission: None,
             session_ready: None,
             seat_watch: SeatWatch::new(),
 
@@ -1009,6 +1076,7 @@ impl BridgeRetained {
             transport_paused: false,
             playback_live: false,
             today: None,
+            clock: None,
             video_plane: false,
             measure: plx_ui::rec::Measurements::Live(measure),
             hubs: reads.hubs,
@@ -1164,6 +1232,7 @@ impl Bridge<'_> {
         match tab {
             HomeTab::Movies => self.retained.directory.view().preferred(plx_data::browse::SecKind::Movie).is_some(),
             HomeTab::Shows => self.retained.directory.view().preferred(plx_data::browse::SecKind::Show).is_some(),
+            HomeTab::LiveTv => self.livetv_available(),
             _ => true,
         }
     }
@@ -1626,19 +1695,21 @@ impl Bridge<'_> {
         let route = d.top_or_mounting_arg().cloned().unwrap_or(AppArg::Home);
         let route = &route;
         if wears_tab_bar(route) {
+            let live_tv = self.livetv_available();
             d.nav.tabs.strip_fallback = Some(match route {
                 AppArg::Search => plx_ui::widgets::TAB_KEY_SEARCH,
                 AppArg::Watchlist => plx_ui::widgets::TAB_KEY_WATCHLIST,
+                AppArg::LiveTv => plx_ui::widgets::TAB_KEY_LIVETV,
                 _ => plx_screens::home::STRIP_HOME_ELEM,
             });
             if let Some(io) = &self.retained.home_io {
-                refresh_chrome(&mut self.retained.chrome, &self.retained.measure, self.retained.directory.view(),
+                refresh_chrome(&mut self.retained.chrome, &self.retained.measure, self.retained.directory.view(), live_tv,
                     Some((&io.profile, &io.preferences)));
             } else {
-                refresh_chrome(&mut self.retained.chrome, &self.retained.measure, self.retained.directory.view(), None);
+                refresh_chrome(&mut self.retained.chrome, &self.retained.measure, self.retained.directory.view(), live_tv, None);
             }
             // The page's own pill: Home's is the first, and a library page's is its library's type.
-            self.retained.chrome_selection = pill_of_arg(route, self.retained.directory.view()).unwrap_or(0) as u32;
+            self.retained.chrome_selection = pill_of_arg(route, self.retained.directory.view(), live_tv).unwrap_or(0) as u32;
             let selected = self.navigation_presentation(&d.nav).view_tab.unwrap_or(self.retained.chrome_selection) as i32;
             self.publish_strip(d, selected);
         } else {
@@ -1872,6 +1943,13 @@ impl Bridge<'_> {
         parts.owner = plx_machine::machine::InputOwner::Entry(entry);
         parts.focus.current = ret.focus;
         let cx = parts.cx::<AppHost>(self.views(), &self.retained.measure);
+        if let Some(page) = screen.downcast_ref::<plx_screens::filmography::FilmographyScreen>() {
+            let hex = page.watchlist_hex(ret.focus)?;
+            let focus = ret.focus?;
+            let rect = Focusable::<AppHost>::place(page, &focus.elem, &cx, At::Drawn)?.rect;
+            return Some(strip_menu_arg(plx_plex::plex::ServerId::UNSET, "",
+                ItemMenuKind::WatchlistAdd { hex }, entry, ret.focus, Some(rect)));
+        }
         if let Some(page) = screen.downcast_ref::<plx_screens::detail::DetailScreen>() {
             let sid = match &e.arg { AppArg::Content(ContentArg::Detail { sid, .. }) => *sid, _ => return None };
             let rect = page.focused_rect::<AppHost>(ret.focus, &cx, At::Drawn);
@@ -2118,6 +2196,67 @@ impl Bridge<'_> {
         changed
     }
 
+    /// Read the complete tunable lineup from this Bridge's store, including off-page refreshes.
+    pub(crate) fn livetv_view(&self) -> plx_data::livetv::LiveTvView<'_> {
+        self.stores.livetv_view()
+    }
+
+    pub(crate) fn livetv_available(&self) -> bool {
+        self.retained.screen_inputs.backends.feed && !self.livetv_view().channels.is_empty()
+    }
+
+    /// Capture the clients at the boundary and step the store with the frame's time and seat, then
+    /// drain every request this step emits.
+    pub(crate) fn livetv_pump(&mut self) -> bool {
+        if !self.retained.screen_inputs.backends.feed { return false; }
+        super::adapters::stores::refill_client_keys(&mut self.retained.client_keys);
+        let changed = self.stores.livetv_pump(&self.retained.livetv_input(&self.retained.client_keys));
+        self.start_store_jobs_of(StoreId::LiveTv);
+        changed
+    }
+
+    pub(crate) fn livetv_run(&mut self, cmd: plx_data::livetv::LiveTvCmd) -> bool {
+        if !self.retained.screen_inputs.backends.feed {
+            let none = plx_plex::plex::ClientKeys::default();
+            return matches!(cmd, plx_data::livetv::LiveTvCmd::Reset)
+                && self.stores.livetv_run(cmd, &self.retained.livetv_input(&none));
+        }
+        super::adapters::stores::refill_client_keys(&mut self.retained.client_keys);
+        let changed = self.stores.livetv_run(cmd, &self.retained.livetv_input(&self.retained.client_keys));
+        self.start_store_jobs_of(StoreId::LiveTv);
+        changed
+    }
+
+    /// A live channel's plan landed: note the channel it asked for. The landing is the gate: `pump_play`
+    /// hands the loop a start only for a plan the server admitted (a refused tune, all tuners busy or a
+    /// failed one, lands as nothing), and `run`'s `pump_play` arm is this method's one caller. Every live
+    /// play and every zap lands there.
+    pub(crate) fn note_live_tune(&mut self, ps: &plx_media::route::PlaybackSession) {
+        let Some((sid, live)) = plx_media::route::live_request(ps) else { return };
+        let (dvr, channel) = (live.dvr.clone(), live.channel.clone());
+        self.note_channel(sid, &dvr, &channel);
+    }
+
+    /// Note a tuned channel in the profile's Recent. **Seated**: the memory door is the only list, so
+    /// this is the write (`route::remember`, which leaves a channel already stored where it is and
+    /// applies the cap); the next step's input reads the list. **Unseated**:
+    /// nothing can be stored, so the store keeps it for the session.
+    fn note_channel(&mut self, sid: plx_plex::plex::ServerId, dvr: &str, channel: &str) {
+        let Some(user) = self.retained.seat_watch.restored.user().map(str::to_owned) else {
+            super::adapters::stores::refill_client_keys(&mut self.retained.client_keys);
+            let key = plx_data::livetv::RecentKey { sid, dvr: dvr.to_owned(), channel: channel.to_owned() };
+            self.stores.livetv_note_unseated(key, &self.retained.livetv_input(&self.retained.client_keys));
+            self.start_store_jobs_of(StoreId::LiveTv);
+            return;
+        };
+        super::adapters::stores::refill_client_keys(&mut self.retained.client_keys);
+        let Some(entry) = plx_data::livetv::entry_of(sid, dvr, channel, &self.retained.client_keys) else {
+            plx_base::eventlog::log(&format!("livetv: recent channel not remembered — server slot {} has no machine id", sid.raw()));
+            return;
+        };
+        plx_media::route::remember::<RecentChannelEntry>(&user, entry.key(), entry.noted());
+    }
+
     /// The catalog page's frame pass: the store's landing pass (a refused read asked again, a
     /// landing for a switched profile dropped), then the title it owes a read under the new profile
     /// opened again ([`Bridge::catalog_open`], which reads the identity now), then every job those
@@ -2257,7 +2396,7 @@ fn start_jobs(&mut self, jobs: Vec<plx_data::stores::StoreJob>) -> usize {
         }
         self.retained.late_store_jobs += late;
         plx_base::eventlog::log(&format!(
-            "stores: WARN {late} store job(s) reached a pump unstarted ({} so far): a sender bypassed its Bridge drain (metadata_run / metadata_pump_season / person_pump / collection_pump / catalog_open / catalog_pump / subsearch_pump / search_run / search_pump / reconcile_pump / browse_run / browse_discover_pump / hubs_run / viewstate_run / viewstate_pump / notify_pump / start_store_jobs_in / start_store_jobs_of / start_store_jobs)",
+            "stores: WARN {late} store job(s) reached a pump unstarted ({} so far): a sender bypassed its Bridge drain (metadata_run / metadata_pump_season / person_pump / collection_pump / livetv_run / livetv_pump / catalog_open / catalog_pump / subsearch_pump / search_run / search_pump / reconcile_pump / browse_run / browse_discover_pump / hubs_run / viewstate_run / viewstate_pump / notify_pump / start_store_jobs_in / start_store_jobs_of / start_store_jobs)",
             self.retained.late_store_jobs
         ));
     }
@@ -2310,9 +2449,9 @@ fn start_jobs(&mut self, jobs: Vec<plx_data::stores::StoreJob>) -> usize {
     #[cfg(test)]
     pub(crate) fn assert_no_store_jobs_left_for_test(&self) {
         assert!(!self.stores.has_jobs(),
-            "a store job sits on an outbox: its sender neither ran through its store's Bridge drain (metadata_run / metadata_pump_season / person_pump / collection_pump / catalog_open / catalog_pump / subsearch_pump / search_run / search_pump / reconcile_pump / browse_run / browse_discover_pump / hubs_run / viewstate_run / viewstate_pump / notify_pump / start_store_jobs_in / start_store_jobs_of) nor drained with Bridge::start_store_jobs");
+            "a store job sits on an outbox: its sender neither ran through its store's Bridge drain (metadata_run / metadata_pump_season / person_pump / collection_pump / livetv_run / livetv_pump / catalog_open / catalog_pump / subsearch_pump / search_run / search_pump / reconcile_pump / browse_run / browse_discover_pump / hubs_run / viewstate_run / viewstate_pump / notify_pump / start_store_jobs_in / start_store_jobs_of) nor drained with Bridge::start_store_jobs");
         assert_eq!(self.retained.late_store_jobs, 0,
-            "a pump's backstop had to start store jobs their sender left unstarted: that sender bypassed its Bridge drain (metadata_run / metadata_pump_season / person_pump / collection_pump / catalog_open / catalog_pump / subsearch_pump / search_run / search_pump / reconcile_pump / browse_run / browse_discover_pump / hubs_run / viewstate_run / viewstate_pump / notify_pump / start_store_jobs_in / start_store_jobs_of / start_store_jobs)");
+            "a pump's backstop had to start store jobs their sender left unstarted: that sender bypassed its Bridge drain (metadata_run / metadata_pump_season / person_pump / collection_pump / livetv_run / livetv_pump / catalog_open / catalog_pump / subsearch_pump / search_run / search_pump / reconcile_pump / browse_run / browse_discover_pump / hubs_run / viewstate_run / viewstate_pump / notify_pump / start_store_jobs_in / start_store_jobs_of / start_store_jobs)");
     }
 
     pub(crate) fn metadata_view(&self) -> plx_data::metadata::MetadataView<'_> {
@@ -2870,6 +3009,20 @@ impl Bridge<'_> {
     pub(crate) fn publish_today(&mut self, today: Option<[i32; 3]>) {
         self.retained.today = today;
     }
+
+    /// **Publish this frame's clock reading** — the one publication of the clock (`AppViews::wall` and the
+    /// Live TV store's `now` both come from it). Called once per iteration by the loop, beside
+    /// [`Self::publish_today`], with `clock::reading()` (the loop is that door's one caller).
+    pub(crate) fn publish_clock(&mut self, reading: Option<super::clock::Reading>) {
+        self.retained.clock = reading;
+    }
+
+    /// The wall time of the clock reading last published ([`Self::publish_clock`]; `None` without a
+    /// reading or without the zone's offset), for the app code that derives from it outside any
+    /// screen's views (the HUD model's projected finish time).
+    pub(crate) fn wall(&self) -> Option<plx_ui::fmt::Wall> {
+        self.retained.wall()
+    }
 }
 
 impl Bridge<'_> {
@@ -2933,9 +3086,9 @@ impl Bridge<'_> {
             let publication = self.session.publication();
             let cx = parts.cx::<AppHost>(AppViews { inputs: &self.retained.screen_inputs, native_preview_available: self.retained.live_screen_inputs, clock: &self.retained.clock_facts, marker_prefs: self.retained.marker_prefs, auth: publication.read(),
                 hubs: self.retained.hubs.view(), listing: self.retained.listing.view(), directory: self.retained.directory.view(),
-                section_hubs: self.retained.section_hubs.view(), search: self.retained.search.view(), metadata: self.stores.metadata_view(), person: self.stores.person_view(), collection: self.stores.collection_view(), subtitle_search: self.stores.subtitle_search_view(), session: &self.retained.playback,
+                section_hubs: self.retained.section_hubs.view(), search: self.retained.search.view(), metadata: self.stores.metadata_view(), person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session: &self.retained.playback,
                 transport_paused: self.retained.transport_paused,
-                today: self.retained.today, beneath: None,
+                today: self.retained.today, wall: self.retained.wall(), beneath: None,
             }, &self.retained.measure);
             let handled = self.session.step(event, &cx, fx);
             // #132: the owner logs nothing, and the Profiles screen cannot see a read-out that
@@ -3011,6 +3164,10 @@ impl Bridge<'_> {
         match msg {
             AppMsg::Store(StoreCmd::Person(command)) => {
                 if self.person_run(command.clone()) { fx.invalidate(plx_machine::present::Provenance::Landing(to)); }
+                return Handled::Yes;
+            }
+            AppMsg::Store(StoreCmd::LiveTv(command)) => {
+                self.livetv_run(command.clone());
                 return Handled::Yes;
             }
             AppMsg::Store(StoreCmd::Collection(command)) => {
@@ -3308,7 +3465,7 @@ impl Rig<AppHost> for Bridge<'_> {
         plx_ui::screen::NavPresentation::from_transition(
             nav.tabs.stack.page_alpha(), nav.tabs.stack.chrome_alpha(),
             nav.tabs.stack.pending_dest()
-                .and_then(|arg| pill_of_arg(arg, self.retained.directory.view()))
+                .and_then(|arg| pill_of_arg(arg, self.retained.directory.view(), self.livetv_available()))
                 .map(|tab| tab as u32),
             self.retained.blur_dissolve,
         )
@@ -3323,9 +3480,9 @@ impl Rig<AppHost> for Bridge<'_> {
                 hubs: self.retained.hubs.view(),
                 listing: self.retained.listing.view(),
                 directory: self.retained.directory.view(),
-                section_hubs: self.retained.section_hubs.view(), search: self.retained.search.view(), metadata: self.stores.metadata_view(), person: self.stores.person_view(), collection: self.stores.collection_view(), subtitle_search: self.stores.subtitle_search_view(), session: &self.retained.playback,
+                section_hubs: self.retained.section_hubs.view(), search: self.retained.search.view(), metadata: self.stores.metadata_view(), person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session: &self.retained.playback,
                 transport_paused: self.retained.transport_paused,
-                today: self.retained.today, beneath: None,
+                today: self.retained.today, wall: self.retained.wall(), beneath: None,
             },
             measure: &self.retained.measure,
         }
@@ -3378,7 +3535,7 @@ impl Rig<AppHost> for Bridge<'_> {
         #[cfg(test)]
         self.retained.keyboard_calls.push(up);
         #[cfg(not(test))]
-        if up { crate::textinput::start(); } else { crate::textinput::stop(); }
+        if up { crate::textinput::start(self.shell()); } else { crate::textinput::stop(self.shell()); }
     }
     fn adopt_system_keyboard(&mut self) {
         #[cfg(test)]
@@ -3607,6 +3764,12 @@ impl Bridge<'_> {
             SessionFx::RestartReply { to, accepted } => out.push(Fx::Deliver(
                 MachineId::Instance(InstanceId(to.instance)), Delivery::Screen(ScreenEvent::Async(
                     RequestId(to.correlation), AppMsg::RestartReply { correlation: to.correlation, accepted })))),
+            #[cfg(feature = "devtriggers")]
+            SessionFx::SelectionReply { to, accepted, flow_epoch } if to.instance == 0 => {
+                if to.correlation == self.retained.api_profile_correlation {
+                    self.retained.api_profile_admission = Some((to.correlation, accepted.then_some(flow_epoch)));
+                }
+            }
             SessionFx::SelectionReply { to, accepted, flow_epoch } => out.push(Fx::Deliver(
                 MachineId::Instance(InstanceId(to.instance)), Delivery::Screen(ScreenEvent::Async(
                     RequestId(to.correlation), AppMsg::SelectionReply { correlation: to.correlation, accepted, flow_epoch })))),
@@ -3621,6 +3784,7 @@ impl Bridge<'_> {
             }
         }
     }
+
 }
 
 fn step_store(cmd: &StoreCmd, _cx: &Cx<'_, AppHost>, _fx: &mut Effects<'_, AppHost>) -> Handled {
@@ -3630,6 +3794,7 @@ fn step_store(cmd: &StoreCmd, _cx: &Cx<'_, AppHost>, _fx: &mut Effects<'_, AppHo
         StoreCmd::Metadata(_) => unreachable!("Metadata is stepped by Bridge's owned store"),
         StoreCmd::Search(_) => unreachable!("Search is stepped by Bridge with its Browse directory"),
         StoreCmd::Person(_) => unreachable!("Person is stepped by Bridge's owned store"),
+        StoreCmd::LiveTv(_) => unreachable!("Live TV is stepped by Bridge with time and client keys"),
         StoreCmd::Collection(_) => unreachable!("Collection is stepped by Bridge's owned store"),
         StoreCmd::ViewState(_) => unreachable!("ViewState is stepped by Bridge with its Browse owner"),
         StoreCmd::SubtitleSearch(_) => unreachable!("SubtitleSearch is stepped by Bridge's owned store"),
@@ -4857,17 +5022,18 @@ pub(crate) fn wears_tab_bar(arg: &AppArg) -> bool {
 /// The Library's pill is its TYPE, and the argument carries none (which library the grid shows is
 /// the `browse` store's business): the answer is the section the store is pointing at, which
 /// `nav_tab`'s `LibraryCmd::Enter` has already aimed.
-fn pill_of_arg(arg: &AppArg, directory: plx_data::stores::browse::DirectoryView<'_>) -> Option<usize> {
+fn pill_of_arg(arg: &AppArg, directory: plx_data::stores::browse::DirectoryView<'_>, live_tv: bool) -> Option<usize> {
     use crate::app::chrome::{pill_of, Pill};
     match arg {
-        AppArg::Home => pill_of(directory, Pill::Home),
-        AppArg::Search => pill_of(directory, Pill::Search),
-        AppArg::Watchlist => pill_of(directory, Pill::Watchlist),
+        AppArg::Home => pill_of(directory, live_tv, Pill::Home),
+        AppArg::Search => pill_of(directory, live_tv, Pill::Search),
+        AppArg::Watchlist => pill_of(directory, live_tv, Pill::Watchlist),
+        AppArg::LiveTv => pill_of(directory, live_tv, Pill::LiveTv),
         // The grid and the two pages its header pushes (Collections, Recommended) are all the
         // library's: they select its type's pill, the pill they were opened from.
         arg if arg.is_library_family() => {
             let kind = directory.current().map(|i| directory.sections()[i].kind)?;
-            pill_of(directory, Pill::Section(kind))
+            pill_of(directory, live_tv, Pill::Section(kind))
         }
         _ => None,
     }
@@ -4905,16 +5071,18 @@ pub(crate) fn nav_tab(
     ret: Option<ReturnState<u32, PageMemory>>,
 ) {
     use crate::app::chrome::Pill;
+    if tab == HomeTab::LiveTv && !rig.livetv_available() { return; }
     let arg = match tab {
         HomeTab::Home => {
             // Keep the pill the user was standing on under focus. An IDENTITY, not an index: a
             // pill can appear or disappear while the dip runs, and `HomeCmd::FocusStrip` is
             // delivered when Home MOUNTS, not now.
-            if let Some(pill) = focus_pill.filter(|pill| crate::app::chrome::pill_of(rig.retained.directory.view(), *pill).is_some()) {
+            if let Some(pill) = focus_pill.filter(|pill| crate::app::chrome::pill_of(rig.retained.directory.view(), rig.livetv_available(), *pill).is_some()) {
                 let want = match pill {
                     Pill::Home => HomeTab::Home,
                     Pill::Search => HomeTab::Search,
                     Pill::Watchlist => HomeTab::Watchlist,
+                    Pill::LiveTv => HomeTab::LiveTv,
                     Pill::Section(plx_data::browse::SecKind::Movie) => HomeTab::Movies,
                     Pill::Section(plx_data::browse::SecKind::Show) => HomeTab::Shows,
                 };
@@ -4958,6 +5126,7 @@ pub(crate) fn nav_tab(
         }
         HomeTab::Search => AppArg::Search,
         HomeTab::Watchlist => AppArg::Watchlist,
+        HomeTab::LiveTv => AppArg::LiveTv,
     };
     nav_peer(d, arg, ret);
 }
@@ -5623,6 +5792,9 @@ mod recording_erasure_tests;
 #[cfg(test)]
 #[path = "consent_owner_tests.rs"]
 mod consent_owner_tests;
+#[cfg(all(test, feature = "sim", feature = "play-feed"))]
+#[path = "livetv_routing_tests.rs"]
+mod livetv_routing_tests;
 #[cfg(test)]
 #[path = "session_worker_adapter_tests.rs"]
 mod session_worker_adapter_tests;

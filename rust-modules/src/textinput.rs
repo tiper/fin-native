@@ -2,7 +2,17 @@
 //!
 //! Four calls wide: [`available`] asks whether this set has a panel, [`start`]/[`stop`] raise and
 //! dismiss it, and [`drain`] takes what has been typed. The app draws no keyboard of its own — the
-//! television draws it, over our surface, and hands the text back as ordinary SDL events.
+//! television draws it, over our surface, and hands the text back (as ordinary SDL events on webOS).
+//!
+//! ## The platform raises the panel, and on Tizen it is not SDL's
+//!
+//! [`available`], [`start`] and [`stop`] reach the panel through the platform's `Shell`
+//! (`keyboard_available`, `show_keyboard`, `hide_keyboard`). An SDL shell takes the trait's defaults,
+//! which are the SDL calls this note describes, so the television and a desktop are unchanged. Tizen
+//! states its own: Ecore IMF on the host's main thread (`plx_platform_tizen`'s `ime`), whose commits
+//! arrive through `EventSink::text` like an SDL `SDL_TEXTINPUT`, and whose panel says when the viewer
+//! closed it (`EventSink::keyboard_dismissed`, the keyboard drop a background edge also asks for).
+//! The SDL traps below are SDL's; there the focus read logs `focus=?` (no SDL window).
 //!
 //! ## Why this is plain SDL and not a webOS call
 //!
@@ -86,6 +96,7 @@
 //! text-input one, and it is not in this module's gift.
 #![allow(dead_code)]
 
+use crate::app::platform::Shell;
 use crate::app::SDL_WINDOW_INPUT_FOCUS;
 use plx_base::eventlog::log;
 use std::os::raw::c_void;
@@ -159,8 +170,10 @@ fn has_focus() -> Option<bool> {
 
 /// Does this build/firmware claim a system keyboard? Probed, never assumed — see the module doc.
 /// A `false` here means the field can still be typed into by other means but no panel will rise.
-pub(crate) fn available() -> bool {
-    plx_shell_sdl::text::has_screen_keyboard()
+/// The platform's answer (`Shell::keyboard_available`): SDL's on the television and a desktop, Ecore
+/// IMF's on Tizen.
+pub(crate) fn available(shell: &dyn Shell) -> bool {
+    shell.keyboard_available()
 }
 
 /// Raise the keyboard. Idempotent: calling it while the panel is already up is not an error, and
@@ -170,7 +183,7 @@ pub(crate) fn available() -> bool {
 /// free on this platform: it re-issues `WebOSShowScreenKeyboard` — a real `text_model` IME
 /// activation over wayland — each time. [`STARTED`] is what makes the contract true rather than
 /// merely harmless.
-pub(crate) fn start() {
+pub(crate) fn start(shell: &dyn Shell) {
     unsafe {
         if *addr_of!(STARTED) {
             return;
@@ -188,18 +201,18 @@ pub(crate) fn start() {
         // `focus=0` means SDL will enable text events and then silently skip the panel.
         log(&format!(
             "keyboard: start support={} focus={}",
-            i32::from(available()),
+            i32::from(available(shell)),
             match has_focus() {
                 Some(f) => i32::from(f).to_string(),
                 None => "?".into(), // bind() was never called — a boot-order bug, not a TV fact
             }
         ));
-        plx_shell_sdl::text::start_input();
+        shell.show_keyboard();
     }
 }
 
 /// Dismiss it. Also idempotent.
-pub(crate) fn stop() {
+pub(crate) fn stop(shell: &dyn Shell) {
     unsafe {
         // Guarded, and not only for symmetry: `screens::search::SearchScreen` requests this on
         // every BACK and every leave, including ones where the field was never edited. Unguarded, that would call
@@ -215,7 +228,7 @@ pub(crate) fn stop() {
         // panel simply never returns — which looks exactly like the driver's own reopen wedge and
         // is not it. With both transitions logged, one log answers which of the two you have.
         log("keyboard: stop");
-        plx_shell_sdl::text::stop_input();
+        shell.hide_keyboard();
     }
 }
 
@@ -413,6 +426,29 @@ mod tests {
     /// itself takes a NULL window and an uninitialised video is the shell crate's own test,
     /// `the_real_sdl_answers_a_null_window_with_video_uninitialised`: this module's calls are stubbed under
     /// test, so only the shell crate can reach the real ones.)
+    /// **The panel is the platform's, not SDL's** (the Tizen report: a field that raised nothing because
+    /// `start` called SDL, which Tizen does not run). A shell that states its own keyboard answers
+    /// `available`, and `start`/`stop` raise and dismiss through it exactly once per edge, however often the
+    /// field asks.
+    #[test]
+    fn the_keyboard_is_raised_and_dismissed_through_the_platforms_shell_once_per_edge() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let _g = BUF.lock().unwrap_or_else(|e| e.into_inner());
+        let shell = crate::app::platform::KeyboardShell::default();
+        assert!(available(&shell), "the platform's answer, not SDL's (none on a host)");
+        // SAFETY: the module's own singleton, under its test lock.
+        unsafe { *addr_of_mut!(STARTED) = false };
+        start(&shell);
+        start(&shell);
+        assert_eq!(shell.shows.load(Relaxed), 1, "a raise per edge, not per call");
+        stop(&shell);
+        stop(&shell);
+        assert_eq!(shell.hides.load(Relaxed), 1, "a dismissal per edge");
+        start(&shell);
+        assert_eq!(shell.shows.load(Relaxed), 2, "and it rises again after a dismissal");
+        stop(&shell);
+    }
+
     #[test]
     fn a_null_window_has_no_focus_reading_and_asks_sdl_nothing() {
         let _g = BUF.lock().unwrap_or_else(|e| e.into_inner());

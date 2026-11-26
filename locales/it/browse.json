@@ -6,6 +6,7 @@
   "browse.action.more": "ALTRO",
   "browse.account.own": "Questo account",
   "browse.chrome.home": "Home",
+  "browse.chrome.live_tv": "TV",
   "browse.chrome.search": "Cerca",
   "browse.kind.movies": "Film",
   "browse.kind.tv_shows": "Serie TV",
@@ -191,6 +192,7 @@
   "browse.kind.films": "Film",
   "browse.kind.tv_shows_sentence": "Serie TV",
   "browse.home.continue_watching": "Continua a guardare",
+  "browse.home.live_tv": "TV in diretta",
   "browse.detail.unrated": "NC",
   "browse.crew.director": "Regia",
   "browse.crew.writer": "Sceneggiatura",
@@ -257,6 +259,11 @@
   "browse.extra.extra": "Extra",
   "browse.person.other": "Altro",
   "browse.library.no_collections": "Nessuna raccolta in {library}",
+  "browse.livetv.channels": "Canali",
+  "browse.livetv.on_now": "In onda ora",
+  "browse.livetv.channel": "Canale {number} · {name}",
+  "browse.livetv.loading": "Caricamento dei canali…",
+  "browse.livetv.empty": "Nessun canale disponibile",
   "browse.collection.loading": "Caricamento raccolta…",
   "browse.collection.empty": "Nessun elemento di questa raccolta è presente nelle tue librerie",
   "browse.collection.unavailable": "Questa raccolta non è disponibile per questo profilo",
@@ -285,5 +292,6 @@
   "browse.clock.key_changed": "La chiave del tuo server è cambiata. Collega la TV a Internet una volta per consentire all'app di verificarla di nuovo.",
   "browse.detail.mark_episode_watched": "Segna episodio come visto",
   "browse.detail.mark_episode_unwatched": "Segna episodio come non visto",
-  "browse.detail.minutes_left": "{minutes} min rimanenti"
+  "browse.detail.minutes_left": "{minutes} min rimanenti",
+  "browse.server_security.notice": "Aggiorna il server Plex {name} per sicurezza."
 }
