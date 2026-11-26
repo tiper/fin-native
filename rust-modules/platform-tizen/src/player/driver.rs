@@ -84,7 +84,8 @@ impl<P: HostPlayer> DriverSet for TizenUriDriver<P> {
                 self.machine.start(now, self.port.offered().is_ok(), attempt, source, requirements, &mut fx),
             Operation::Play | Operation::Pause | Operation::Seek(_) =>
                 self.machine.control(now, attempt, command, operation, &mut fx),
-            Operation::SelectTrack { kind: TrackKind::Audio, choice } => self.machine.select_audio(attempt, command, choice),
+            Operation::SelectTrack { kind: TrackKind::Audio, choice } =>
+                self.machine.select_audio(now, attempt, command, choice, &mut fx),
             Operation::SelectTrack { kind: TrackKind::Subtitle, choice } =>
                 self.machine.select_subtitle(attempt, command, choice),
             Operation::Stop(reason) => self.machine.stop(now, attempt, reason, &mut fx),
@@ -136,7 +137,7 @@ impl<P: HostPlayer> UriDriver for TizenUriDriver<P> {
         self.machine.plane_owned()
     }
 
-    /// Only the source's first audio stream: the one the host player starts on (see [`CAPS`]).
+    /// An audio stream the active source's track map names (see [`CAPS`]).
     fn maps_track(&self, selection: TrackSelection) -> bool {
         self.machine.maps_track(selection)
     }

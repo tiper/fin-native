@@ -2019,9 +2019,11 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   `DriverSet` + `UriDriver` over a `HostPlayer` port that `hosted` implements; every request and event carries the epoch
   and a completion after a stop is dropped. Capabilities: progressive URI, pause, seek, and `audio_track` (a deviation
   from D4's "progressive, pause, seek only": the planner issues `SelectTrack` for any title whose audio stream the server
-  states, so the offer of a title fails without it; the driver settles that request for the source's one audio stream by
-  construction, not on native evidence, and `TizenQualifier` certifies ONLY a source with a single audio stream until the
-  retail default stream is measured), and `subtitle_off` (a second deviation, below). `TizenQualifier` certifies a source only where Standard would direct-play it
+  states, so the offer of a title fails without it; the driver settles a Part's sole audio stream by construction (no host
+  call, as before the verb), and for a stream with siblings asks the host player for the native index whose language (`PLAYER_AUDIO_LANGUAGE`, posted before PREPARED) is the stream's, never by position alone
+  (`PLX_HOST_PLAYER_VERB_AUDIO_TRACK`), refuses one it cannot tell, and settles it on the host's `PLAYER_TRACK` answer, and
+  `TizenQualifier` certifies the selected stream wherever it sits; whether the native index follows PMS's order on a retail
+  set is unmeasured, `docs/tizen.md`, "The audio track is selected"), and `subtitle_off` (a second deviation, below). `TizenQualifier` certifies a source only where Standard would direct-play it
   and never a converted PMS output. `subtitle_choice = Off` (any subtitle stream, none selected) is carried: the driver states
   `subtitle_off` (the host gives the player no subtitle, and the emulator run in `docs/tizen.md`, "Subtitles off", showed
   none drawn from a default-flagged embedded track), so `SubtitleOff` is refused only on evidence without it. A selected
@@ -2032,7 +2034,7 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
   behind `uri`; `mk/platform-tizen.mk` builds with it (`TIZEN_URI=0` builds without), and the identity line says which build it is.
   The shared conformance suite (`plx_playback_contract::uri_conformance`, D7) runs over `FakeUriDriver` and this driver, and
   the mock's `--extra-media-video-only` serves a local video-only file for the audio-less emulator. Still open: an emulator run of it with the video-only mock; H6 on a
-  retail set (decode, sound, armv7, the TV-menu round trip); a picture through this driver (the window's alpha and the straighten pass are PR B2's; this driver emits no `Presented`); the retail player's default audio stream; and how a real PMS answers `X-Plex-Platform: Tizen`.
+  retail set (decode, sound, armv7, the TV-menu round trip); a picture through this driver (the window's alpha and the straighten pass are PR B2's; this driver emits no `Presented`); the retail player's native audio order, language codes and `player_select_track` in READY (`docs/tizen.md`, "The audio track is selected", "Not measured"); and how a real PMS answers `X-Plex-Platform: Tizen`.
 - As landed (PR B2, the video plane under our UI and Home): measured on the TV 10.0 x86_64 emulator 2026-11-22 (scratch
   probe; emulator only): (a) with the window alpha ON the native player's OVERLAY video shows only through pixels the frame
   clears to (0, 0, 0, 0), the UI around it intact (the player route clears that way whether or not a plane is bound, `app/run.rs`

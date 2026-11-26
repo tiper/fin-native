@@ -108,5 +108,26 @@ namespace PlxHost
 
         [DllImport(MediaLib, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int player_set_interrupted_cb(IntPtr player, IntCallback interrupted, IntPtr userData);
+
+        // The audio tracks (TizenFX API8 Interop.Player.cs GetTrackCount / SelectTrack / GetCurrentTrack / GetTrackLanguageCode, the entry points
+        // PlayerTrackInfo.cs wraps). player_stream_type_e: PLAYER_STREAM_TYPE_AUDIO is 1 (PlayerEnums.cs StreamType: Audio = 1, Video, Text).
+        // All four are valid only in the READY, PLAYING or PAUSED state (PlayerTrackInfo.cs ValidatePlayerState), so never before PREPARED;
+        // an index is valid when 0 <= index < player_get_track_count (PlayerTrackInfo.cs `Selected`). UNVERIFIED on a Samsung set: that the
+        // native index numbers the audio streams in the container's order, which is PMS's (docs/tizen.md, "The audio track is selected").
+        internal const int STREAM_TYPE_AUDIO = 1;
+
+        [DllImport(MediaLib, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int player_get_track_count(IntPtr player, int type, out int count);
+
+        [DllImport(MediaLib, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int player_select_track(IntPtr player, int type, int index);
+
+        [DllImport(MediaLib, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int player_get_current_track(IntPtr player, int type, out int index);
+
+        // player_get_track_language_code(player, type, index, char **code): `code` is allocated by the library and released by the caller with
+        // free(); TizenFX frees it with LibcSupport.Free. Marshal.FreeHGlobal is free() on every non-Windows .NET runtime.
+        [DllImport(MediaLib, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int player_get_track_language_code(IntPtr player, int type, int index, out IntPtr code);
     }
 }

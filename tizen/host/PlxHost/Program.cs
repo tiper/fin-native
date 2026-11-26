@@ -103,10 +103,14 @@ namespace PlxHost
         internal const int PLX_HOST_EVENT_PLAYER_INTERRUPTED = 25;
         internal const int PLX_HOST_EVENT_PLAYER_CLOSED = 26;
         internal const int PLX_HOST_EVENT_PLAYER_STALL = 27;
+        internal const int PLX_HOST_EVENT_PLAYER_TRACK = 28;
+        internal const int PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE = 29;
+        internal const int PLX_HOST_AUDIO_LANGUAGE_REPORTS = 32;
         internal const int PLX_HOST_PLAYER_VERB_PLAY = 1;
         internal const int PLX_HOST_PLAYER_VERB_PAUSE = 2;
         internal const int PLX_HOST_PLAYER_VERB_SEEK = 3;
         internal const int PLX_HOST_PLAYER_VERB_CLOSE = 4;
+        internal const int PLX_HOST_PLAYER_VERB_AUDIO_TRACK = 5;
 
         [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int plx_host_start(ref PlxHostApi api, [MarshalAs(UnmanagedType.LPUTF8Str)] string launchJson);

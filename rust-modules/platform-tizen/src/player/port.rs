@@ -57,6 +57,8 @@ pub enum Verb {
     /// Seek to `ms`; `command` is the library's command id, echoed in `PLAYER_SEEK_DONE`.
     Seek { ms: i64, command: i64 },
     Close,
+    /// Select the audio track at native `index`; `command` is the library's command id, echoed in `PLAYER_TRACK`.
+    AudioTrack { index: i64, command: i64 },
 }
 
 /// What the driver asks of the host's player, and the clock its deadlines read.
@@ -107,6 +109,7 @@ impl HostPlayer for HostedPlayer {
             Verb::Pause => (host_abi::VERB_PAUSE, 0, 0),
             Verb::Seek { ms, command } => (host_abi::VERB_SEEK, ms, command),
             Verb::Close => (host_abi::VERB_CLOSE, 0, 0),
+            Verb::AudioTrack { index, command } => (host_abi::VERB_AUDIO_TRACK, index, command),
         };
         self.hosted.player_verb(epoch, code, a, b).map_err(Refusal::of)
     }

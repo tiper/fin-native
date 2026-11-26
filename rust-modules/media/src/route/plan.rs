@@ -2173,6 +2173,9 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
                     audio_ordinal: source_audio.as_ref().filter(|(position, _, sid)| *position >= 0 && *sid > 0)
                         .map(|(position, _, _)| i64::from(plx_data::metadata::audio_ordinal(tracks, *position as usize))),
                     has_multiple_audio_tracks: tracks.len() > 1,
+                    audio_language: source_audio.as_ref()
+                        .and_then(|(position, _, _)| usize::try_from(*position).ok().and_then(|i| tracks.get(i)))
+                        .map_or_else(String::new, |track| track.lang_code.clone()),
                     subtitle_source: source_sub_stream.map(|sub| super::uri_preflight::SourceSubtitle {
                         codec: sub.codec.to_lowercase(), embedded: !sub.external }),
                     subtitle_choice,
