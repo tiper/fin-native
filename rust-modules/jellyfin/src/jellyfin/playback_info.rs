@@ -139,6 +139,8 @@ pub struct Source {
     pub id: String,
     pub supports_direct_play: bool,
     pub transcoding_url: Option<String>,
+    /// A live source the server has opened (`autoOpenLiveStream`): what closes it.
+    pub live_stream_id: Option<String>,
 }
 
 /// The server's verdict for one item.
