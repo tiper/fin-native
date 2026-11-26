@@ -214,6 +214,10 @@ def write_splash(src: Path, out: Path, lift=None) -> None:
     the field behind it, so the mark does not go grey. Passing the app's own `theme::SURFACE_APP`
     (#2C2C2E) additionally makes the splash match the FIRST FRAME the app draws, so boot stops
     stepping from near-black to the shelf gray.
+
+    The shipped splash does NOT use it: since 2026-11-25 `assets/splash-master.png` has a pure
+    #000000 field so OLED panels keep it switched off (`docs/distribution.md` §10.2). Cut it with
+    `--splash` alone.
     """
     im = Image.open(src).convert("RGB")
     if lift:
