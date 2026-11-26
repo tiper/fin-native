@@ -18,7 +18,7 @@
 use super::paths::{append_param, without_param, Transcode};
 use super::playback_info::Encoders;
 use super::time::ms_to_ticks;
-use plx_plex::plex::{Ceiling, MediaContainer, Metadata, Stream, TranscodeDelivery, TranscodeOffset, TranscodeSource, TranscodeSpec};
+use plx_plex::plex::{Ceiling, Media, MediaContainer, Metadata, Stream, TranscodeDelivery, TranscodeOffset, TranscodeSource, TranscodeSpec};
 
 /// What the device takes, read once per request from its capability table.
 pub struct Device<'a> {
@@ -196,6 +196,22 @@ pub fn plan(mut m: Metadata, spec: &TranscodeSpec<'_>, dev: &Device<'_>) -> Opti
         decision: refusal.unwrap_or(MediaContainer { size: 1, total_size: 1, metadata: vec![m], ..Default::default() }),
         server_url: None,
     })
+}
+
+/// Does this device play `media` as it is: a container it pulls itself, a video codec in `video`
+/// inside the frame bound `max`, and a default audio track `audio_ok` takes (the checks the device
+/// profile sends the server)?
+/// Where it does not, the server converts the version and the stream it sends carries no
+/// subtitle ([`super::translate::key_extracted_subtitles`]).
+pub fn plays_as_is(media: &Media, video: &[&str], max: (i64, i64), audio_ok: &dyn Fn(&str, i64, i64) -> bool) -> bool {
+    let Some(part) = media.part.first() else { return false };
+    let track = part.stream.iter().find(|s| s.stream_type == 1);
+    let audio = part.stream.iter().find(|s| s.stream_type == 2 && s.selected != 0)
+        .or_else(|| part.stream.iter().find(|s| s.stream_type == 2));
+    super::playback_info::is_direct_container(&part.container)
+        && track.is_some_and(|v| video.contains(&v.codec.as_str()))
+        && (media.width <= max.0 && media.height <= max.1)
+        && audio.is_none_or(|a| audio_ok(&a.codec, a.channels, a.sampling_rate))
 }
 
 /// The server's own stream (`Verdict::url`) with its subtitle replaced by a burn of `burn_subtitle`,
@@ -420,6 +436,20 @@ mod tests {
         assert_eq!(server_stream("/v/stream.mkv?MediaSourceId=s", Some(2)),
                    "/v/stream.mkv?MediaSourceId=s&SubtitleStreamIndex=2&SubtitleMethod=Encode");
         assert_eq!(server_stream(url, None), "/v/stream.mkv?MediaSourceId=s&TranscodeReasons=VideoBitrateNotSupported");
+    }
+
+    #[test]
+    fn a_version_plays_as_it_is_only_with_a_container_video_and_audio_the_tv_takes() {
+        let d = device();
+        let plays = |m: Metadata| plays_as_is(&m.media[0], d.video_copy, (3840, 2160), d.audio_ok);
+        let mkv = |mut m: Metadata| { m.media[0].part[0].container = "mkv".into(); m };
+        assert!(plays(mkv(item("hevc", &[("aac", 6)]))), "6-channel AAC plays");
+        assert!(!plays(mkv(item("hevc", &[("aac", 8)]))), "8-channel AAC is converted (#49)");
+        assert!(!plays(mkv(item("vc1", &[("ac3", 6)]))), "a video the TV cannot decode");
+        assert!(!plays(item("hevc", &[("aac", 2)])), "an AVI is remuxed");
+        let mut big = mkv(item("hevc", &[("aac", 2)]));
+        big.media[0].width = 7680;
+        assert!(!plays(big), "a frame above the decoder's bound");
     }
 
     // The model spells DTS Plex's way ("dca"); the server matches a copy against "dts".

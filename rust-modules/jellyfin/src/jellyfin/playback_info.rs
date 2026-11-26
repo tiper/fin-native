@@ -20,6 +20,11 @@ const PROFILE_MAX_BPS: i64 = 200_000_000;
 /// Containers the demuxer plays as they are.
 const DIRECT_CONTAINERS: &str = "mkv,mp4,m4v,mov,ts,m2ts,mpegts";
 
+/// Does the device profile let the server send a file in `container` (the model's name) as it is?
+pub fn is_direct_container(container: &str) -> bool {
+    DIRECT_CONTAINERS.split(',').any(|c| c == container)
+}
+
 /// Text subtitle formats the player draws itself, embedded or as a sidecar. Image formats (PGS,
 /// VobSub, DVB) are left out on purpose, so the server burns them in.
 const TEXT_SUBTITLES: [&str; 7] = ["srt", "subrip", "ass", "ssa", "vtt", "webvtt", "mov_text"];

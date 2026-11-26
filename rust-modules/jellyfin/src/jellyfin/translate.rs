@@ -764,14 +764,35 @@ fn stream(item_id: &str, src: &MediaSourceInfo, m: &MediaStream) -> Option<Strea
     // muxed into the container are demuxed by the player, so they keep an empty key here too.
     if stream_type == 3 && m.is_external {
         let fmt = if s.codec == "ass" { "ass" } else { "srt" };
-        s.key = format!(
-            "/Videos/{}/{}/Subtitles/{}/0/Stream.{fmt}",
-            normalize(item_id),
-            plx_plex::plex::urlenc_str(&src.id),
-            m.index
-        );
+        s.key = subtitle_key(item_id, &plx_plex::plex::urlenc_str(&src.id), m.index, fmt);
     }
     Some(s)
+}
+
+/// The route the server serves subtitle `index` of a media source on, as a file (`source` already
+/// URL-encoded). For an embedded track the server extracts it from the file first.
+fn subtitle_key(item_id: &str, source: &str, index: i64, fmt: &str) -> String {
+    format!("/Videos/{}/{source}/Subtitles/{index}/0/Stream.{fmt}", normalize(item_id))
+}
+
+/// Key every embedded plain-text subtitle of a version this device does not play as it is
+/// (`plays` false) as the file the server extracts. The server converts such a version, and the
+/// stream it sends carries no subtitle, so the app draws the extracted file instead (#49). A version
+/// that plays as it is keeps reading its tracks from the file, which costs the server nothing (the
+/// extraction reads the whole file once). ASS stays in the container, where its fonts are; a
+/// picture subtitle has no text to extract.
+pub fn key_extracted_subtitles(m: &mut Metadata, plays: impl Fn(&Media) -> bool) {
+    let item = m.rating_key.clone();
+    for media in m.media.iter_mut().filter(|md| !plays(md)) {
+        for part in &mut media.part {
+            let Some(source) = super::transcode::media_source_of(&part.key).map(str::to_owned) else { continue };
+            for s in part.stream.iter_mut()
+                .filter(|s| s.stream_type == 3 && s.key.is_empty() && matches!(s.codec.as_str(), "srt" | "vtt" | "mov_text"))
+            {
+                s.key = subtitle_key(&item, &source, s.index, "srt");
+            }
+        }
+    }
 }
 
 // ---- the user's audio and subtitle preferences ----
@@ -917,6 +938,26 @@ mod tests {
 
     fn parse(json: &str) -> BaseItemDto {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn an_embedded_plain_text_subtitle_is_the_extracted_file_only_where_the_version_does_not_play() {
+        let json = MOVIE.replace(
+            r#"{"Type": "EmbeddedImage""#,
+            r#"{"Type": "Subtitle", "Index": 6, "Codec": "subrip"}, {"Type": "Subtitle", "Index": 7, "Codec": "ass"}, {"Type": "EmbeddedImage""#,
+        );
+        let read = || metadata(&parse(&json), &Ctx { sections: &SectionIds::default(), section_guid: None }).unwrap();
+        let key = |m: &Metadata, i: i64| m.media[0].part[0].stream.iter().find(|s| s.index == i).unwrap().key.clone();
+        let base = "/Videos/f137a2dd21bbc1b99aa5c0f6bf02a805/f137a2dd21bbc1b99aa5c0f6bf02a805/Subtitles";
+        let mut plays = read();
+        key_extracted_subtitles(&mut plays, |_| true);
+        assert_eq!(key(&plays, 6), "", "a direct play reads the embedded SRT from the file");
+        let mut converted = read();
+        key_extracted_subtitles(&mut converted, |_| false);
+        assert_eq!(key(&converted, 6), format!("{base}/6/0/Stream.srt"), "embedded SRT, extracted");
+        assert_eq!(key(&converted, 3), format!("{base}/3/0/Stream.srt"), "external SRT, as before");
+        assert_eq!(key(&converted, 7), "", "ASS stays in the container, with its fonts");
+        assert_eq!(key(&converted, 4), "", "PGS has no text to extract");
     }
 
     #[test]

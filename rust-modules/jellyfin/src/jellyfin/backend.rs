@@ -926,7 +926,14 @@ impl Backend for Shared {
         launch_item_key(raw)
     }
     fn metadata(&self, rating_key: &str) -> Option<Metadata> {
-        self.0.client()?.metadata(rating_key)
+        let mut m = self.0.client()?.metadata(rating_key)?;
+        // Which versions the server will convert, so their plain-text subtitles come as files.
+        let caps = plx_os::devcaps::caps();
+        let video = plx_plex::plex::direct_play_video_codecs(&caps);
+        let max = (i64::from(caps.hevc_max.0), i64::from(caps.hevc_max.1));
+        let audio_ok = |codec: &str, channels: i64, rate: i64| plx_plex::plex::is_dp_audio_track_with(&caps, codec, channels, rate);
+        translate::key_extracted_subtitles(&mut m, |md| transcode::plays_as_is(md, &video, max, &audio_ok));
+        Some(m)
     }
     fn metadata_many(&self, rating_keys: &[&str]) -> Option<MediaContainer> {
         self.0.client()?.items_by_id(rating_keys)
