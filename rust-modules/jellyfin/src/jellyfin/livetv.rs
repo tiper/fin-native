@@ -9,6 +9,7 @@
 use super::dto::BaseItemDto;
 use super::ids::normalize;
 use super::paths;
+use plx_plex::plex::urlenc_str as enc;
 use super::playback_info::Response;
 use super::time::iso_to_unix;
 use super::translate::primary_image;
@@ -59,9 +60,8 @@ pub fn airing_of(c: &BaseItemDto) -> Option<Metadata> {
 /// What a live play arrives as: H.264 and AAC stereo. The profile allows nothing else, so a
 /// source in other codecs is converted to them, and the route's declaration is these names rather
 /// than whatever the server's URL happens to list.
-pub const VIDEO_CODEC: &str = "h264";
-pub const AUDIO_CODEC: &str = "aac";
-const AUDIO_CHANNELS: i64 = 2;
+const VIDEO_CODEC: &str = "h264";
+const AUDIO_CODEC: &str = "aac";
 
 /// The device profile for a live play: HLS in [`VIDEO_CODEC`] and [`AUDIO_CODEC`], nothing the
 /// server could send as it is.
@@ -81,26 +81,47 @@ pub fn live_profile() -> Value {
     })
 }
 
-/// A tuned channel: the stream to close and the play the route reads.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Tuned {
-    pub session: LiveSession,
-    pub play: LivePlay,
+/// `GET`: the user's channels, each with the programme on now.
+pub fn channels_path(user_id: &str) -> String {
+    format!(
+        "/LiveTv/Channels?userId={}&addCurrentProgram=true&enableUserData=false&enableImages=true&enableImageTypes=Primary&imageTypeLimit=1",
+        enc(user_id)
+    )
 }
 
-/// The tune's answer: the first source with a playlist. The session key is the live stream id (what
-/// closes it) and its rating key the channel. The playlist is kept as a path with neither the
-/// server's token nor its play session: the route adds this client's own.
-pub fn tuned(channel_id: &str, r: &Response) -> Option<Tuned> {
+/// `POST`: tune a channel. The server opens its live stream with the play and answers the source
+/// with the stream's id and, for the profile's HLS target, the playlist.
+pub fn tune_path(user_id: &str, channel_id: &str) -> String {
+    format!(
+        "/Items/{}/PlaybackInfo?userId={}&isPlayback=true&autoOpenLiveStream=true",
+        enc(channel_id),
+        enc(user_id)
+    )
+}
+
+/// `POST`: release a live stream's tuner.
+pub fn close_path(live_stream_id: &str) -> String {
+    format!("/LiveStreams/Close?liveStreamId={}", enc(live_stream_id))
+}
+
+/// The tune's answer: the session (the live stream's id, which closes it, and the channel) and the
+/// first source's playlist, kept as a path with neither the server's credential nor its play
+/// session: the route adds this client's own. `None` when no source has a playlist or no stream
+/// was opened, which nothing could close.
+pub fn tuned(channel_id: &str, r: &Response) -> Option<(LiveSession, String)> {
     let source = r.media_sources.iter().find(|s| s.transcoding_url.as_deref().is_some_and(|u| !u.is_empty()))?;
-    let url = source.transcoding_url.as_deref()?;
-    // Jellyfin 10.10 signs the URL as `ApiKey`, older ones as `api_key`: either would be a second
+    let key = source.live_stream_id.clone().filter(|id| !id.is_empty())?;
+    // The server signs the URL as `ApiKey` (older ones `api_key`): either would be a second
     // credential beside this client's own.
-    let part = ["api_key", "ApiKey", "PlaySessionId"].iter().fold(url.to_owned(), |u, key| paths::without_param(&u, key));
-    Some(Tuned {
-        session: LiveSession { key: source.live_stream_id.clone().unwrap_or_default(), rating_key: channel_id.to_owned() },
-        play: LivePlay { part, vcodec: VIDEO_CODEC.into(), acodec: AUDIO_CODEC.into(), width: 0, height: 0, channels: AUDIO_CHANNELS },
-    })
+    let part = ["api_key", "ApiKey", "PlaySessionId"]
+        .iter()
+        .fold(source.transcoding_url.clone()?, |u, key| paths::without_param(&u, key));
+    Some((LiveSession { key, rating_key: channel_id.to_owned() }, part))
+}
+
+/// The play the route reads for a tuned playlist: always what the profile asked for.
+pub fn play_of(part: String) -> LivePlay {
+    LivePlay { part, vcodec: VIDEO_CODEC.into(), acodec: AUDIO_CODEC.into(), width: 0, height: 0, channels: 2 }
 }
 
 #[cfg(test)]
@@ -134,13 +155,16 @@ mod tests {
     #[test]
     fn a_tune_keeps_the_stream_to_close_and_the_playlist_without_the_servers_credentials() {
         let r: Response = serde_json::from_str(r#"{"MediaSources":[{"Id":"s","LiveStreamId":"ls9","TranscodingUrl":"/videos/ab12/master.m3u8?DeviceId=d&VideoCodec=h264&AudioCodec=ac3&PlaySessionId=srv&ApiKey=secret&api_key=old&LiveStreamId=ls9"}]}"#).unwrap();
-        let t = tuned("ab12", &r).unwrap();
-        assert_eq!((t.session.key.as_str(), t.session.rating_key.as_str()), ("ls9", "ab12"));
-        assert_eq!((t.play.vcodec.as_str(), t.play.acodec.as_str(), t.play.channels), ("h264", "aac", 2));
-        assert!(!t.play.part.contains("secret") && !t.play.part.contains("old") && !t.play.part.contains("srv"));
-        assert!(!t.play.part.to_ascii_lowercase().contains("apikey") && !t.play.part.contains("api_key"));
-        assert!(t.play.part.contains("LiveStreamId=ls9"));
+        let (session, part) = tuned("ab12", &r).unwrap();
+        assert_eq!((session.key.as_str(), session.rating_key.as_str()), ("ls9", "ab12"));
+        let play = play_of(part);
+        assert_eq!((play.vcodec.as_str(), play.acodec.as_str(), play.channels), ("h264", "aac", 2));
+        assert!(!play.part.contains("secret") && !play.part.contains("old") && !play.part.contains("srv"));
+        assert!(!play.part.to_ascii_lowercase().contains("apikey") && !play.part.contains("api_key"));
+        assert!(play.part.contains("LiveStreamId=ls9"));
         assert!(tuned("ab12", &Response::default()).is_none());
+        let unopened: Response = serde_json::from_str(r#"{"MediaSources":[{"Id":"s","TranscodingUrl":"/videos/ab12/master.m3u8"}]}"#).unwrap();
+        assert!(tuned("ab12", &unopened).is_none());
     }
 
     #[test]

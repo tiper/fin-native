@@ -1071,6 +1071,9 @@ impl Backend for Shared {
         Some(StreamUrl::parse(&c.direct_play_url(part_key, session)))
     }
     fn transcode_decision(&self, spec: &TranscodeSpec<'_>) -> Option<MediaContainer> {
+        if matches!(spec.source, plx_plex::plex::TranscodeSource::Live(_)) {
+            return Some(transcode::live_refusal());
+        }
         if transcode::is_hls(spec) {
             return Some(transcode::hls_refusal());
         }
