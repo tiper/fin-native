@@ -683,8 +683,10 @@ pub(crate) fn drain_uri_track_fallbacks(ps: &mut plx_media::route::PlaybackSessi
 /// policy is the route's and not this file's.
 ///
 /// **This is where a track pick is also REMEMBERED** (the `memo` the panel built from the picked
-/// row): the `*_pick` commits write the show's track memory when, and only when, the route
-/// accepted the pick, an episode is playing and the seat is the viewer's. A subtitle OK that
+/// row): the `*_pick` commits write the show's track memory for a pick the route applied
+/// natively or in place at once, and for one that rides a server rebuild when its claim is accepted
+/// (never when the server refuses it, #1522), and only while an episode is playing and the seat is
+/// the viewer's. A subtitle OK that
 /// changes nothing (the menu closed on the row already shown) commits without a memo and writes
 /// nothing; the same holds for an OK on the Forced only row that already holds the mode
 /// (`TrackCommit::SubtitleForcedOnly`'s `changed`), which recommits what is on screen. No other door writes it:

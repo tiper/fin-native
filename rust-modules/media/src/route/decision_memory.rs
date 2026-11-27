@@ -277,7 +277,9 @@ pub fn send_parked_write_back(ps: &mut PlaybackSession) {
         parked.audio.map_or_else(|| "-".to_string(), |a| a.to_string()),
         subtitle.map_or_else(|| "-".to_string(), |s| s.to_string()),
     ));
-    queue_selection(parked.sid, parked.part_id, parked.audio.unwrap_or(0), subtitle, true);
+    if queue_selection(parked.sid, parked.part_id, parked.audio.unwrap_or(0), subtitle, true) {
+        note_queued_selection(ps, ServerSelection::put(parked.part_id, parked.audio.unwrap_or(0), subtitle));
+    }
 }
 
 /// **Carry the parked write to a subtitle the first frame's re-match put on screen** (W6,
@@ -401,16 +403,35 @@ pub fn remember_accepted_source_subtitle(ps: &PlaybackSession, memo: SubtitleMem
 ///
 /// Automatic picks do NOT come through here: the start-of-play auto-pick, a retry, a rescue and
 /// Switch to Auto call [`commit_audio_selection`] or build a plan directly, and write no memory.
-/// A pick deferred behind a pending Original handoff was accepted, and so remembered, when the
-/// viewer made it; [`apply_deferred_original_effects`] only replays it and writes nothing.
+/// A pick that rides a server rebuild is remembered when its claim is ACCEPTED ([`PickMemos`],
+/// [`settle_claim_memos`]), a pick the route applies in place or natively at once, and a pick
+/// deferred behind a pending Original handoff when [`apply_deferred_original_effects`] replays it.
 pub fn commit_audio_pick(ps: &mut PlaybackSession, audio: CarriedAudio, memo: Option<AudioMemo>) -> bool {
-    let accepted = commit_audio_selection(ps, audio);
-    if accepted {
-        if let Some(memo) = memo {
-            remember_track_pick(ps, TrackPick::Audio(memo));
+    match commit_audio_selection_routed(ps, audio) {
+        PickRoute::Refused => return false,
+        // The server was not asked for a conversion: nothing can refuse the pick.
+        PickRoute::Applied => {
+            if let Some(memo) = memo {
+                supersede_pick_memos(true, false);
+                remember_track_pick(ps, TrackPick::Audio(memo));
+            }
         }
+        // A rebuild's memory rides its claim and is written when the server accepts it.
+        PickRoute::Rebuild => queue_pick_memos(PickMemos::audio(memo)),
+        PickRoute::Deferred => hold_deferred_audio_memo(memo),
     }
-    accepted
+    true
+}
+
+/// Write what the claim that just landed accepted carried ([`PickMemos`]): the one write of a pick that
+/// rode a server rebuild.
+pub(super) fn write_pick_memos(ps: &PlaybackSession, memos: PickMemos) {
+    if let Some(memo) = memos.audio {
+        remember_track_pick(ps, TrackPick::Audio(memo));
+    }
+    if let Some(memo) = memos.subtitle {
+        remember_track_pick(ps, TrackPick::Subtitle(memo));
+    }
 }
 
 /// A URI native selection is applied only after the common owner accepts its exact command's
@@ -424,7 +445,7 @@ pub fn confirm_uri_audio_pick(ps: &mut PlaybackSession, audio: CarriedAudio, mem
     }
     ps.selection_known = true;
     ps.cur_memory_note = false;
-    queue_put_selection(cur_sid(ps), cur_part_id(ps), cur_audio_sid(ps), cur_sub_sid(ps));
+    queue_session_selection(ps);
     if let Some(memo) = memo { remember_track_pick(ps, TrackPick::Audio(memo)); }
 }
 
@@ -447,7 +468,7 @@ pub fn confirm_uri_subtitle_pick(ps: &mut PlaybackSession, ordinal: i32, stream_
     // (`UriDriver::delivers_captions`) has the app draw the embedded track at `ordinal`.
     ps.cur_sub_client_drawable = app_draws && stream_id > 0 && ordinal >= 0;
     ps.cur_memory_note = false;
-    queue_put_selection(cur_sid(ps), cur_part_id(ps), cur_audio_sid(ps), cur_sub_sid(ps));
+    queue_session_subtitle(ps);
     if let Some(memo) = memo.filter(|_| changed) {
         remember_track_pick(ps, TrackPick::Subtitle(memo));
     }
@@ -478,8 +499,19 @@ pub fn commit_subtitle_pick(
     // only is a change even onto the stream it drew (the forced track's own row) or onto nothing
     // (Off while no forced track matched): same stream id, different state.
     let changed = subtitle_pick_changed(ps.cur_sub_sid, stream_id, ps.sub_mode == SubMode::ForcedOnly);
-    commit_subtitle_selection(ps, sub_idx, stream_id, client_renderable);
+    let rebuilds = commit_subtitle_selection_routed(ps, sub_idx, stream_id, client_renderable);
     if let Some(memo) = memo.filter(|_| changed) {
+        remember_subtitle_pick(ps, memo, rebuilds);
+    }
+}
+
+/// A subtitle pick's memo: written now when the pick applied in place, carried by the rebuild's claim
+/// when it burns ([`PickMemos`]).
+fn remember_subtitle_pick(ps: &PlaybackSession, memo: SubtitleMemo, rebuilds: bool) {
+    if rebuilds {
+        queue_pick_memos(PickMemos::subtitle(Some(memo)));
+    } else {
+        supersede_pick_memos(false, true);
         remember_track_pick(ps, TrackPick::Subtitle(memo));
     }
 }
@@ -499,13 +531,13 @@ pub fn commit_forced_only_pick(
     lang: &str,
     changed: bool,
 ) {
-    commit_subtitle_selection(ps, sub_idx, stream_id, client_renderable);
+    let rebuilds = commit_subtitle_selection_routed(ps, sub_idx, stream_id, client_renderable);
     ps.sub_mode = SubMode::ForcedOnly;
     if changed {
         if let Some(ctx) = ps.track_ctx.as_mut() {
             ctx.forced_lang = lang.to_string();
         }
-        remember_track_pick(ps, TrackPick::Subtitle(SubtitleMemo::ForcedOnly { lang: lang.to_string() }));
+        remember_subtitle_pick(ps, SubtitleMemo::ForcedOnly { lang: lang.to_string() }, rebuilds);
     }
 }
 

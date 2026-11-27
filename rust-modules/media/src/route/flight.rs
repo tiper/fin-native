@@ -80,6 +80,8 @@
 //! — or `OriginalTrial(Preparing(serial))` when the transaction is an Original trial's).
 
 use super::decision::*;
+use super::server_selection::{FlightSelection, PutTrail, ServerSelection};
+use plx_plex::plex::ServerId;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Who owns the flight that is outstanding.
@@ -229,6 +231,10 @@ pub(super) struct RetranscodeClaimLanding {
     pub(super) pending_seek: i64,
     pub(super) user_target: i64,
     pub(super) result: RetranscodeClaimResult,
+    /// What the worker's selection PUTs left the server holding, with what it held before: the
+    /// landing settles it ([`FlightSelection::settle`]) once it knows whether the claim was accepted.
+    /// `None` for a flight that cannot PUT (a rebuild) or one nothing was captured for.
+    pub(super) selection: Option<FlightSelection>,
 }
 
 pub(super) static RETRANSCODE_CLAIM_SLOT: std::sync::Mutex<Option<RetranscodeClaimLanding>> =
@@ -286,6 +292,7 @@ fn run_retranscode_claim_worker(
     inputs: Option<&RetranscodeClaimInputs>,
     work: ClaimWork,
     fallback: RetranscodeFallback,
+    puts: &mut PutTrail,
 ) -> RetranscodeClaimResult {
     // A rebuild carries everything it needs in its plan; the other kinds are built only by
     // `plan_claim_flight`, which captures the retranscode inputs whenever an encode may run.
@@ -298,7 +305,7 @@ fn run_retranscode_claim_worker(
     }
     // The automatic fallback carries its own inputs in its plan, like a rebuild.
     if let ClaimWork::AutoHls(plan) = work {
-        return match run_auto_hls(off, &plan) {
+        return match run_auto_hls(off, &plan, puts) {
             AutoHlsOutcome::Refused => RetranscodeClaimResult::Rejected(AUTO_HLS_REJECTED),
             outcome => RetranscodeClaimResult::AutoHls(Box::new(AutoHlsLanding { plan: *plan, outcome })),
         };
@@ -316,20 +323,20 @@ fn run_retranscode_claim_worker(
         ClaimWork::Rebase(_) | ClaimWork::AutoHls(_) => unreachable!("handled above"),
         ClaimWork::Encode(primary_contract) | ClaimWork::EncodeRecovery(primary_contract, _) => {
             let inputs = claim_inputs();
-            select_streams_for_encode(off, inputs);
+            puts.note(select_streams_for_encode(off, inputs));
             if let RetranscodeWorkerOutcome::Applied(mut applied) = try_retranscode(off, inputs, primary_contract) {
                 applied.recovery_offer = recovery_recipe;
                 return RetranscodeClaimResult::Retranscode(applied);
             }
         }
         ClaimWork::RecoverOriginal(plan) => {
-            if let Some(net) = run_original_recovery(off, &plan) {
+            if let Some(net) = run_original_recovery(off, &plan, puts) {
                 return RetranscodeClaimResult::OriginalRecovery(Box::new(OriginalRecoveryLanding { plan: *plan, net }));
             }
             // The recovery's own selection PUT named the candidate's track; a rebuild owed to a
             // displaced pick names the session's, so it sends its own, once, like any other claim.
             if matches!(fallback, RetranscodeFallback::Retranscode(_)) {
-                select_streams_for_encode(off, claim_inputs());
+                puts.note(select_streams_for_encode(off, claim_inputs()));
             }
         }
     }
@@ -421,7 +428,10 @@ fn spawn_flight_worker(
     if take_fault(Fault::SpawnRefusal) {
         return false;
     }
+    let selection_of = selection_context(inputs.as_ref(), &work);
     plx_base::task::spawn_off_frame("retransc-claim", move |off| {
+        // Outside the unwind guard: a worker that panics after its PUT still reports it.
+        let mut puts = PutTrail::default();
         // catch_unwind OUTSIDE the mailbox write, like the resolve worker: a panicking attempt must
         // still land (as a `Rejected`) or `ControlPhase::Applying` waits forever for a mailbox
         // entry that will now never arrive.
@@ -430,11 +440,27 @@ fn spawn_flight_worker(
             if take_fault(Fault::WorkerPanic) {
                 panic!("forced retranscode worker panic (test)");
             }
-            run_retranscode_claim_worker(off, inputs.as_ref(), work, fallback)
+            run_retranscode_claim_worker(off, inputs.as_ref(), work, fallback, &mut puts)
         }))
         .unwrap_or(RetranscodeClaimResult::Rejected(RETRANSCODE_WORKER_PANICKED));
-        post_claim_landing(RetranscodeClaimLanding { owner, pending_seek, user_target, result });
+        let selection = selection_of.map(|(sid, before)| FlightSelection { sid, before, sent: puts.sent() });
+        post_claim_landing(RetranscodeClaimLanding { owner, pending_seek, user_target, result, selection });
     })
+}
+
+/// The server a flight's selection PUTs go to and the selection that server held when the claim was
+/// made (captured on the main thread beside the claim's other inputs), or `None` for work that sends
+/// no PUT.
+fn selection_context(
+    inputs: Option<&RetranscodeClaimInputs>,
+    work: &ClaimWork,
+) -> Option<(ServerId, Option<ServerSelection>)> {
+    match work {
+        ClaimWork::RecoverOriginal(plan) => Some((plan.sid, plan.server_before)),
+        ClaimWork::AutoHls(plan) => plan.selection_context(),
+        ClaimWork::Rebase(_) => None,
+        ClaimWork::Encode(_) | ClaimWork::EncodeRecovery(..) => inputs.map(|i| (i.sid, i.server_before)),
+    }
 }
 
 /// Discard whatever landing is sitting in the mailbox without applying it, stopping the encoder
@@ -570,10 +596,10 @@ pub fn take_ready_flight(ps: &mut PlaybackSession, newer_seek_waiting: bool) -> 
         return None;
     }
     end_flight(serial);
-    let RetranscodeClaimLanding { owner, pending_seek, user_target, result } = landing;
+    let RetranscodeClaimLanding { owner, pending_seek, user_target, result, selection } = landing;
     match owner {
         FlightOwner::Claim(action) => {
-            let (action, tail) = install_claim_landing(ps, action, result);
+            let (action, tail) = install_claim_landing(ps, action, result, selection);
             Some(ReadyFlight::Claim { action, tail, pending_seek, user_target })
         }
         FlightOwner::Start(ticket) => {
@@ -650,7 +676,7 @@ pub fn take_ready_recovery_flight(ps: &mut PlaybackSession) -> Option<RecoveryLa
     }
     let resume = resume_flight_is(serial);
     end_flight(serial);
-    let RetranscodeClaimLanding { owner, user_target, result, .. } = landing;
+    let RetranscodeClaimLanding { owner, user_target, result, selection, .. } = landing;
     let FlightOwner::Recovery(ticket) = owner else {
         unreachable!("take_claim_landing_for(true) only takes a recovery's landing");
     };
@@ -658,7 +684,11 @@ pub fn take_ready_recovery_flight(ps: &mut PlaybackSession) -> Option<RecoveryLa
         RetranscodeClaimResult::Retranscode(applied) => Some(applied.lanes),
         _ => None,
     };
-    Some(RecoveryLanding { offset_ns: user_target, verdict: install_recovery_landing(ps, ticket, resume, result), lanes })
+    let verdict = install_recovery_landing(ps, ticket, resume, result);
+    if let Some(selection) = selection {
+        selection.settle(ps, verdict == RecoveryVerdict::Install);
+    }
+    Some(RecoveryLanding { offset_ns: user_target, verdict, lanes })
 }
 
 /// A recovery's landing, applied. Every way out leaves the reducer out of `Preparing(serial)`:
@@ -808,6 +838,7 @@ fn install_claim_landing(
     ps: &mut PlaybackSession,
     mut action: ClaimedRouteAction,
     result: RetranscodeClaimResult,
+    selection: Option<FlightSelection>,
 ) -> (ClaimedRouteAction, ClaimTail) {
     let tail = match result {
         RetranscodeClaimResult::Retranscode(applied) => {
@@ -837,7 +868,13 @@ fn install_claim_landing(
             // install refuses a landing the route moved past, and stops what it registered; the
             // rebuild a displaced pick would be owed is not tried against a route that has moved.
             match install_original_recovery(ps, plan, net) {
-                Some(reload) => ClaimTail::Original(reload),
+                Some(reload) => {
+                    // The server accepted the recovery, so the picks this claim carried stand: an
+                    // Original trial settles through its own `PendingOriginal`, never through
+                    // `finish_route_action`, which is where every other accepted claim writes them.
+                    settle_claim_memos(ps, action.serial(), true);
+                    ClaimTail::Original(reload)
+                }
                 None => ClaimTail::Rejected(ENHANCEMENT_REJECTED),
             }
         }
@@ -884,5 +921,10 @@ fn install_claim_landing(
         }
         RetranscodeClaimResult::Rejected(reason) => ClaimTail::Rejected(reason),
     };
+    // The PUTs the worker sent stand or are undone with the claim: the landing is this flight's
+    // current one (the drain checked), so nothing superseded it.
+    if let Some(selection) = selection {
+        selection.settle(ps, !matches!(tail, ClaimTail::Rejected(_)));
+    }
     (action, tail)
 }

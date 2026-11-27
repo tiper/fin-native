@@ -1092,6 +1092,14 @@ fn sign_in_and_seat(session: &session::TempSession, user: &str) {
     seed_memory_for_test::<TrackMemoryEntry>(&session::peek());
 }
 
+/// A pick the route applies without asking the server for a conversion (an E-AC3 track on a direct
+/// play the feed can carry), so [`commit_audio_pick`] writes the memory at the commit. A pick that
+/// rides a server rebuild is remembered when its claim is accepted; `decision_refused_pick_tests`
+/// grades that timing.
+fn playable_audio(sid: i64, ordinal: i32) -> CarriedAudio {
+    CarriedAudio { codec: "eac3".into(), channels: 6, ..CarriedAudio::named(sid, ordinal) }
+}
+
 /// Land a playback of `kind` / `show_rk` on a registered server (machine [`MACHINE`]). The plan names
 /// no Part, so a commit sends no selection PUT.
 fn land_playing(ps: &mut PlaybackSession, kind: &str, show_rk: &str) -> ServerId {
@@ -1122,7 +1130,7 @@ fn a_menu_pick_is_remembered_for_the_show_and_each_half_keeps_the_other() {
     land_playing(&mut ps, "episode", SHOW);
     assert_eq!(remembered(""), None, "setup: nothing is remembered yet");
 
-    assert!(commit_audio_pick(&mut ps, CarriedAudio::named(36015, 1), Some(japanese_eac3())));
+    assert!(commit_audio_pick(&mut ps, playable_audio(36015, 1), Some(japanese_eac3())));
     assert_eq!(remembered(""), Some(TrackMemoryEntry::new(MACHINE, SHOW, Some(japanese_eac3()), None)));
 
     commit_subtitle_pick(&mut ps, 0, 55001, true, Some(english_track()));
@@ -1133,7 +1141,7 @@ fn a_menu_pick_is_remembered_for_the_show_and_each_half_keeps_the_other() {
     );
 
     let spanish = AudioMemo { lang: "spa".into(), ..japanese_eac3() };
-    assert!(commit_audio_pick(&mut ps, CarriedAudio::named(36016, 2), Some(spanish.clone())));
+    assert!(commit_audio_pick(&mut ps, playable_audio(36016, 2), Some(spanish.clone())));
     assert_eq!(
         remembered(""),
         Some(TrackMemoryEntry::new(MACHINE, SHOW, Some(spanish), Some(english_track()))),
@@ -1151,7 +1159,7 @@ fn a_commit_that_carries_no_memo_remembers_nothing() {
     sign_in_and_seat(&session, "");
     land_playing(&mut ps, "episode", SHOW);
 
-    assert!(commit_audio_pick(&mut ps, CarriedAudio::named(36015, 1), None), "the route still took the pick");
+    assert!(commit_audio_pick(&mut ps, playable_audio(36015, 1), None), "the route still took the pick");
     commit_subtitle_pick(&mut ps, 0, 55001, true, None);
     assert_eq!(cur_audio_sid(&ps), 36015, "setup: the picks stood");
     assert_eq!(remembered_anything(""), Vec::<TrackMemoryEntry>::new());
@@ -1290,12 +1298,12 @@ fn only_an_episode_of_a_known_show_is_remembered() {
     sign_in_and_seat(&session, "");
     for (kind, show_rk) in [("movie", SHOW), ("episode", ""), ("track", SHOW), ("", SHOW)] {
         land_playing(&mut ps, kind, show_rk);
-        commit_audio_pick(&mut ps, CarriedAudio::named(36015, 1), Some(japanese_eac3()));
+        commit_audio_pick(&mut ps, playable_audio(36015, 1), Some(japanese_eac3()));
         commit_subtitle_pick(&mut ps, 0, 55001, true, Some(english_track()));
         assert_eq!(remembered_anything(""), Vec::<TrackMemoryEntry>::new(), "{kind:?}/{show_rk:?} wrote nothing");
     }
     land_playing(&mut ps, "episode", SHOW);
-    commit_audio_pick(&mut ps, CarriedAudio::named(36015, 1), Some(japanese_eac3()));
+    commit_audio_pick(&mut ps, playable_audio(36015, 1), Some(japanese_eac3()));
     assert_eq!(remembered_anything("").len(), 1, "control: an episode of a known show is remembered");
     tidy_write(&mut ps);
 }
@@ -1312,7 +1320,7 @@ fn a_pick_made_while_unseated_writes_nothing() {
     session.watching("");
     land_playing(&mut ps, "episode", SHOW);
 
-    assert!(commit_audio_pick(&mut ps, CarriedAudio::named(36015, 1), Some(japanese_eac3())), "the route took the pick");
+    assert!(commit_audio_pick(&mut ps, playable_audio(36015, 1), Some(japanese_eac3())), "the route took the pick");
     commit_subtitle_pick(&mut ps, 0, 55001, true, Some(english_track()));
     plx_base::storage_worker::drain_for_test();
     assert_eq!(filed(""), Vec::<TrackMemoryEntry>::new(), "the file got nothing");
@@ -1331,7 +1339,7 @@ fn a_second_profile_on_the_same_server_has_its_own_memory() {
     let session = session::TempSession::new("track-memory-profiles");
     sign_in_and_seat(&session, "");
     land_playing(&mut ps, "episode", SHOW);
-    commit_audio_pick(&mut ps, CarriedAudio::named(36015, 1), Some(japanese_eac3()));
+    commit_audio_pick(&mut ps, playable_audio(36015, 1), Some(japanese_eac3()));
     let owners = TrackMemoryEntry::new(MACHINE, SHOW, Some(japanese_eac3()), None);
     assert_eq!(remembered(""), Some(owners.clone()), "setup: the owner remembered a pick");
 
@@ -1340,7 +1348,7 @@ fn a_second_profile_on_the_same_server_has_its_own_memory() {
     assert_eq!(remembered_anything("kid"), Vec::<TrackMemoryEntry>::new());
 
     let spanish = AudioMemo { lang: "spa".into(), ..japanese_eac3() };
-    commit_audio_pick(&mut ps, CarriedAudio::named(36016, 2), Some(spanish.clone()));
+    commit_audio_pick(&mut ps, playable_audio(36016, 2), Some(spanish.clone()));
     assert_eq!(remembered("kid"), Some(TrackMemoryEntry::new(MACHINE, SHOW, Some(spanish), None)));
 
     seat(&session, "");
@@ -1361,7 +1369,7 @@ fn the_pick_reaches_the_file_only_through_the_guarded_door() {
     land_playing(&mut ps, "episode", SHOW);
 
     let parked = Parked::new();
-    commit_audio_pick(&mut ps, CarriedAudio::named(36015, 1), Some(japanese_eac3()));
+    commit_audio_pick(&mut ps, playable_audio(36015, 1), Some(japanese_eac3()));
     assert_eq!(filed(""), Vec::<TrackMemoryEntry>::new(), "setup: the write is queued behind the parked worker, not applied in line");
     parked.release();
     plx_base::storage_worker::drain_for_test();

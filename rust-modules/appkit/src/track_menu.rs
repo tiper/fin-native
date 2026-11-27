@@ -58,9 +58,9 @@
 //! pick in either tab commits its descriptor with the track ([`TrackCommit`]'s `memo`), which the
 //! app's `commit_track` hands to `route::commit_audio_pick`, and for the two subtitle arms to
 //! `route::commit_subtitle_and_sidecar` / `commit_forced_only_and_sidecar` (the pick commit plus its
-//! sidecar select or deselect); the `*_pick` commits write it to
-//! the show's track memory when the route accepted the pick, and the next episode's plan reads it
-//! back. When the memory chose a subtitle for this play and the route can show none of it (a copy
+//! sidecar select or deselect); the `*_pick` commits write a natively or in-place applied pick to
+//! the show's track memory at once, a pick that rides a server rebuild when its claim is accepted
+//! (and not when the server refuses it, #1522), and the next episode's plan reads it back. When the memory chose a subtitle for this play and the route can show none of it (a copy
 //! remux the app cannot draw), Off is on screen, so the first group closes with one inert
 //! reason ([`table_form`]'s `memory_note`, `route::cur_memory_note`), absent everywhere else.
 //!
@@ -676,7 +676,7 @@ pub struct TrackMenuState {
 /// (`route::memo_of_audio` / `memo_of_subtitle`, the matchers' own predicates), so the loop can
 /// write the show's track memory without ever seeing the item's streams. `None` is a commit that
 /// is not the viewer's choice (a harness setup, or a subtitle OK on the row already checked) and
-/// remembers nothing; the pick commits write only when the route accepted it.
+/// remembers nothing; a pick is written when the route applied it, or, for a rebuild, when the server accepted it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TrackCommit {
     /// The frozen `CarriedAudio` snapshot for the picked row (issue #266), built via

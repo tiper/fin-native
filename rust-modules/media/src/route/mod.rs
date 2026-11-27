@@ -19,6 +19,7 @@ pub use queue_navigation::{QueueContinuation, QueueStep, queue_neighbor, queue_n
 mod flight;
 mod plan;
 mod prefs;
+mod server_selection;
 mod track_memory;
 
 pub use decision::*;
