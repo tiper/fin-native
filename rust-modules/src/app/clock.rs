@@ -52,6 +52,8 @@ thread_local! {
     static OFFSET_AT: Cell<Option<(i64, Option<i32>)>> = const { Cell::new(None) };
     /// A wall-clock Unix sample and its monotonic frame tick; advanced between five-second refreshes.
     static UNIX: Cell<Option<(u32, Option<i64>)>> = const { Cell::new(None) };
+    /// Set while a controlled recording runs: the session has no wall clock, as its replay has none.
+    static NO_WALL: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The date every replay frame answers: a recording has no calendar of its own, and a fixed one keeps
@@ -69,6 +71,14 @@ pub(crate) fn now() -> u32 {
     unsafe { SDL_GetTicks() }
 }
 
+/// **A controlled recording has no wall clock**, exactly as its replay has none ([`unix_ms`]): the bar's clock face
+/// and every other word of the time of day would otherwise be measured into the recording at whatever minute it was
+/// taken (a recorded text measure of the face), which no replay could reproduce and no fixture could commit.
+pub(crate) fn hold_no_wall() {
+    NO_WALL.with(|c| c.set(true));
+    UNIX.with(|c| c.set(None));
+}
+
 /// The replay driver sets the frame's time before the frame reads it, and with it the date
 /// ([`REPLAY_DATE`]).
 pub(crate) fn set_replay(ms: u32) {
@@ -81,7 +91,7 @@ pub(crate) fn set_replay(ms: u32) {
 /// clock is sampled at most every five seconds and advanced with monotonic frame ticks between samples.
 pub(crate) fn unix_ms() -> Option<i64> {
     plx_base::step::assert_io_allowed("app::clock::unix_ms");
-    if REPLAY.with(|c| c.get().is_some()) {
+    if REPLAY.with(|c| c.get().is_some()) || NO_WALL.with(Cell::get) {
         UNIX.with(|c| c.set(None));
         return None;
     }

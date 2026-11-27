@@ -1083,6 +1083,7 @@ impl Recplay {
             super::bootstrap::Preflight::Record => {
                 let dir = plx_base::paths::runtime_dir().join("plxnative-recordings").join("latest");
                 let sink = DirSink::create(&dir).map_err(|_| "cannot create private recording")?;
+                super::clock::hold_no_wall();
                 Self::recording_with_sink(initial, Box::new(sink))
             }
             super::bootstrap::Preflight::Replay { recording, mode, .. } => {
@@ -2896,7 +2897,10 @@ mod tests {
         // half moves): previously 0xcb36_5b40_2b40_643f.
         // The hero menus' `…` menu hosts Select Version and Audio & Subtitles as pages (the item menu's
         // `Action::Pick`, its page depth): previously 0x705f_6115_6a7b_0b8c.
-        assert_eq!(state_fp(), 0x206d_ac83_c50c_4704, "current V13 producer census");
+        // The Live TV Guide's window start becomes the reader's own (`guide:Option<(page,window,ahead)>`) and joins the Live TV
+        // screen's canon (only the screen half moves): previously 0x206d_ac83_c50c_4704.
+        assert_eq!(state_fp(), 0xfe55_9a06_f7a0_5802, "current V13 producer census");
+        assert_ne!(state_fp(), 0x206d_ac83_c50c_4704, "the census before the Live TV Guide's scope, page and window");
         assert_ne!(state_fp(), 0x705f_6115_6a7b_0b8c, "the census before the hero menu's pages");
         assert_ne!(state_fp(), 0xcb36_5b40_2b40_643f, "the census before the live player's zap, art and banner phases");
         assert_ne!(state_fp(), 0xd80b_045a_c4aa_fc9b, "the census before the Library order page and the table's lift and glide springs");

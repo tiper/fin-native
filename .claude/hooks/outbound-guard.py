@@ -890,7 +890,7 @@ def load_alphabet(root):
 # Independent public boundary, not an import of the source-only mutator/check tool.
 # Only the producer-verified V13 profile gets typed slots; historical artifacts keep
 # the existing alphabet-only rule. Tests pin the exact producer anchor's raw hash.
-CURRENT_FP = 2336713463621764868  # Current V13 producer fingerprint.
+CURRENT_FP = 18326723613369063426  # Current V13 producer fingerprint.
 CURRENT_MANIFEST_SHAPE = '59120bd99cf7687b732343385c8623508aa21f86e3268fae175987a3f6a773fc'
 CURRENT_ENUMS = {
     'playback_quality': ('auto', 'original', '1080p_20_mbps', '1080p_8_mbps', '720p_4_mbps', '720p_2_mbps', '480p_720_kbps'),

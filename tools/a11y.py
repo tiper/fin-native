@@ -171,7 +171,7 @@ def valid_subject(text):
 # guid), so the guarded doors cannot press them at all (the library `press`, unguarded, still can): the safe side,
 # because they act on a catalog title. `home.hero.action` is not in the list: it has no title (the failure
 # read-out's retry, shown while there is no hero) and a bare press of it goes out.
-SUBJECT_BEARING = ("*.card.*", "detail.episodes.*", "detail.season.*", "filmography.row.*", "catalog.primary",
+SUBJECT_BEARING = ("*.card.*", "detail.episodes.*", "detail.season.*", "filmography.row.*", "livetv.guide.*", "catalog.primary",
                    "home.hero.play", "home.hero.info", "home.hero.watchlist",
                    "detail.hero.play", "detail.hero.restart", "detail.hero.trailer", "detail.hero.mark_watched",
                    "detail.hero.mark_unwatched", "detail.hero.watchlist", "itemmenu.*", "versions.row.*",

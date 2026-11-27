@@ -7,9 +7,9 @@
       "unit": "bytes",
       "mode": "fail",
       "limit": 21000000,
-      "measured": 20007056,
-      "measured_on": "2026-11-26",
-      "headroom": "4.7% (owner raised the limit to 21,000,000 on 2026-11-26 for #1571, the hero menus' morph and pages, from main's 20,017,152, itself raised for the TopBar clock on every screen; `measured` is this branch's own CI size before it merged main's clock, 20,007,056, which the next CI cross-build re-measures)"
+      "measured": 20084880,
+      "measured_on": "2026-11-27",
+      "headroom": "4.7% (owner raised the limit to 21,000,000 on 2026-11-26 for #1571, the hero menus' morph and pages, from main's 20,017,152, itself raised for the TopBar clock on every screen; `measured` is the CI cross-build of the Live TV Guide PR6 (#1578) head on top of #1571, #1579 and #1580: 20,084,880, for the Guide (TimeGrid board, scope row, scroll machine, the guide read's reach) and the hero menus; the owner's 21,000,000 limit is unchanged and holds)"
     },
     "packages_default": {
       "what": "Third-party (registry/git) packages the app crate compiles for armv7-unknown-linux-gnueabi with its DEFAULT features: normal + build dependencies, dev-dependencies excluded, workspace members excluded.",

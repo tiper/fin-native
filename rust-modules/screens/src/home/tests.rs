@@ -2496,6 +2496,7 @@ fn ok_on_a_live_tv_channel_tunes_it_and_holding_it_opens_no_item_menu() {
         now_summary: String::new(),
         begins_at: 0,
         ends_at: 0,
+        later: Vec::new(),
     };
     plx_data::pms::seed_for_test(&mut state, &adapter, 0, plx_data::pms::HubState::Ready);
     let snapshot = plx_data::pms::hubs_snapshot(&state);

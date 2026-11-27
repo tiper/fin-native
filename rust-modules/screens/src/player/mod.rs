@@ -3797,7 +3797,7 @@ pub(crate) mod step_ladder_tests {
         let channel = plx_data::livetv::Channel {
             sid: plx_plex::plex::ServerId::from_raw(0), dvr: "7".into(), channel: "C101.242.ersatztv.org".into(),
             vcn: "101".into(), name: "Family Channel".into(), thumb: String::new(), now: "Family Show".into(),
-            now_thumb: String::new(), now_summary: String::new(), begins_at: BEGIN, ends_at: BEGIN + 3_600,
+            now_thumb: String::new(), now_summary: String::new(), begins_at: BEGIN, ends_at: BEGIN + 3_600, later: Vec::new(),
         };
         let mut ps = plx_media::route::PlaybackSession::IDLE;
         plx_media::route::mark_live_channel_for_test(&mut ps, channel);

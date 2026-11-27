@@ -1400,6 +1400,17 @@ pub const TAB_PLATE_SELECTED: [f32; 4] = with_a(WHITE, 0.20);
 pub const TAB_PLATE_SELECTED_OVER: [f32; 4] = with_a(WHITE, 0.13);
 /// An unselected plated segment — present, but only just: it says "this is a control" and nothing more.
 pub const TAB_PLATE_IDLE: [f32; 4] = with_a(WHITE, 0.08);
+/// **The Guide's focused programme cell** (the Live TV handoff's `SPEC-3` item 7): white at .92, over the
+/// plate it replaces, with [`GUIDE_CELL_FOCUS_INK`] on it and the card shadow at its focused ceiling.
+pub const GUIDE_CELL_FOCUS: [f32; 4] = with_a(WHITE, 0.92);
+/// The ink on [`GUIDE_CELL_FOCUS`] and on the now chip: the cool 900 stop (`--color-cool-900`).
+pub const GUIDE_CELL_FOCUS_INK: [f32; 4] = COOL_900;
+/// A focused cell's time line, one step back from [`GUIDE_CELL_FOCUS_INK`].
+pub const GUIDE_CELL_FOCUS_INK_QUIET: [f32; 4] = with_a(COOL_900, 0.72);
+/// The Guide's now line and now chip (`SPEC-3` item 4): white at .95.
+pub const GUIDE_NOW: [f32; 4] = with_a(WHITE, 0.95);
+/// Time already aired, over the cells of every row (`SPEC-3` item 4): black at .22.
+pub const GUIDE_AIRED_SHADE: [f32; 4] = with_a(BLACK, 0.22);
 /// Softer selection panel — the lightest weight on the overlay ramp, and deliberately NOT
 /// [`TAB_PLATE_IDLE`]'s .08 one step up. The design project briefly resolved this role to that .08
 /// stop while its own specimen card and readme both said .07; holding the product at .07 was the

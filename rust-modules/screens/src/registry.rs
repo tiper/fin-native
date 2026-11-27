@@ -1653,6 +1653,13 @@ pub trait LiveTvLike: AppLike<Memory = PageMemory> + Sized {
     fn wall(_cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> {
         None
     }
+    /// **The Unix second of this frame's clock**, with or without a zone: what a page that only needs WHEN (the
+    /// Guide's board is laid out against the guide's UTC schedule) reads, so a zone the platform cannot read
+    /// costs it its clock words and not its content. By default the wall's second; `AppHost` answers the
+    /// publication's own, which has the instant where the wall has none.
+    fn instant(cx: &Cx<'_, Self>) -> Option<i64> {
+        Self::wall(cx).map(|wall| wall.unix_s())
+    }
 }
 
 /// A host that publishes this frame's playback session (spec §2.3). The player's owned screens
@@ -3304,7 +3311,10 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // Previous pin: 0xeb60_634f_6b5f_c9ac.
 // Select Version and Audio & Subtitles then became pages of the hero `…` menu: the item menu's `Action` gains
 // `Pick(PickRow)` (canon tag 15) and its screen shape `depth:u32` (the page stack's depth). Previous pin: 0x62a1_9fdc_6c66_d317.
-const SCREEN_SHAPES_PIN: u64 = 0x1990_0160_ac8b_0137;
+// The Live TV Guide (PR6) joins the Live TV screen's canon: the scope and the board's page, window start and whether the
+// reader holds the window ahead (`scope`, `guide:Option<(page,window,ahead)>`). Previous pin: 0x1990_0160_ac8b_0137.
+// Re-record incompatible replay anchors.
+const SCREEN_SHAPES_PIN: u64 = 0xd1ed_8cb4_ad5b_5093;
 
 #[cfg(test)]
 mod arg_tests {

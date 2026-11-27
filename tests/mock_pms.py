@@ -106,8 +106,9 @@ missing) and an air date (some missing). Without it every answer is byte-identic
 
 `--livetv-fixture` (default off) serves the Live TV surface `docs/pms-api.md` §10 describes, so an app can run
 with no tuner: one DVR (key 7) on a device of two tuners, sixteen channels (the first five in an unsorted lineup), a
-guide that airs the half hour `now` falls in on four of the first five and airings that began at different times on the
-other eleven, a tune that answers with a live session at `/livetv/sessions/<uuid>` and holds a tuner until that session's timeline says `stopped`, the direct-play and the
+deterministic guide (back-to-back programmes of 15 to 120 minutes, six hours past the half hour `now` is in, on every
+channel but 103, which has no guide data, with a gap on 112; the grid honours `beginsAt` and `endsAt`; a programme's art is
+an opaque image under `/photo/:/transcode` for `{ORIGIN}/art/` urls), a tune that answers with a live session at `/livetv/sessions/<uuid>` and holds a tuner until that session's timeline says `stopped`, the direct-play and the
 transcode decision of each channel's own codecs, and live playlists that grow and carry no `#EXT-X-ENDLIST`. The
 mock models the protocol, not video: a live segment answers 404 unless `--livetv-segment` (below) names a file.
 `--livetv-busy` is the same with no tuners, so every tune answers 503. With these off, every other answer is
@@ -3000,16 +3001,20 @@ class DiscoverFixture:
 # ---------------------------------------------------------------- `--livetv-fixture` ----------
 
 LIVETV_ORIGIN = "http://192.0.2.10:8409"  # the Live TV device and its art (TEST-NET-1: no real host)
+LIVETV_LENGTHS = (60, 30, 45, 90, 15, 30, 45, 60, 30)  # minutes: what channels 106-116 draw on (101-105 use 15 to 120)
 
 
 class LiveTvFixture:
     """Live TV on the mock PMS (`--livetv-fixture`; `docs/pms-api.md` §10, `rust-modules/plex/src/plex/livetv.rs`).
 
     One DVR (key 7) on one device of two tuners, and sixteen channels in a lineup whose first five are UNSORTED
-    (the app sorts them by number). The guide airs every channel but one: the first five for the half hour `now`
-    falls in, the other eleven for airings that began at different times (the What's on page orders by that). A tune mints
-    a live session at `/livetv/sessions/<uuid>` and holds one tuner until that session's timeline reports
-    `stopped`. `MockPms.livetv_handle` answers the routes; this class holds the data and the sessions.
+    (the app sorts them by number). The guide is a real one: every channel but one (103, no guide data) has a
+    deterministic schedule of back-to-back programmes of 15 to 120 minutes that runs six hours past the half hour
+    a read falls in (`HORIZON`), so Now and Next, a programme cut by the window's edge, scrolling a half hour ahead
+    and the end of the guide data are all there to see; 112 has a gap in its schedule. The grid honours both of its
+    bounds (`grid`). A tune mints a live session at `/livetv/sessions/<uuid>` and holds one tuner until that
+    session's timeline reports `stopped`. `MockPms.livetv_handle` answers the routes; this class holds the data and
+    the sessions. A programme's still is `/art/<vcn>.jpg` on the Live TV device, served by `/photo/:/transcode`.
 
     The device's `status` is deliberately `dead`: §10 says discovery status is a historical result, not a
     health check, and the app must still list these channels. A tune with no free tuner answers 503, which
@@ -3025,39 +3030,51 @@ class LiveTvFixture:
     LINEUP = "lineup://tv.plex.providers.epg.xmltv/mock#Mock"
     ORIGIN = LIVETV_ORIGIN
 
-    # The lineup, UNSORTED. `airing` is what the guide airs at `now` (None: nothing airs); an episode
-    # names its show as `grandparentTitle`.
+    # The lineup, UNSORTED. `shows` is the channel's schedule: `(title, minutes)` programmes that follow one
+    # another back to back and repeat (a `("", minutes)` entry is a GAP: nothing airs for that long), `None` is a
+    # channel with no guide data at all. `phase` (minutes) shifts where the schedule starts, so the channels do not
+    # all change programme on the same half hour. An episode names its show as `grandparentTitle`.
     CHANNELS = (
         {"id": "C102.243.mock.tv", "vcn": "102", "title": "102 Cartoons", "thumb": f"{ORIGIN}/logos/102.png",
-         "video": "h264", "audio": "aac", "airing": {"type": "movie", "title": "Cartoon Hour"}},
+         "video": "h264", "audio": "aac", "type": "movie", "phase": 10,
+         "shows": (("Cartoon Hour", 60), ("Toon Shorts", 15), ("Space Pups", 30), ("Cartoon Classics", 45),
+                   ("Mighty Moles", 30), ("Saturday Morning Mix", 120))},
         {"id": "C101.242.mock.tv", "vcn": "101", "title": "101 Family Channel", "thumb": f"{ORIGIN}/logos/101.png",
-         "video": "h264", "audio": "aac",
-         "airing": {"type": "episode", "title": "Family - S03E23", "grandparentTitle": "Family Show"}},
+         "video": "h264", "audio": "aac", "type": "episode", "grandparentTitle": "Family Show", "phase": 0,
+         "shows": (("Family - S03E23", 30), ("Family - S03E24", 30), ("Family - S03E25", 45), ("Family - S03E26", 15),
+                   ("Family Weekend Special", 90), ("Family - S03E27", 30))},
         {"id": "C105.246.mock.tv", "vcn": "105", "title": "105 Sports AC-4", "thumb": f"{ORIGIN}/logos/105.png",
-         "video": "h264", "audio": "ac4", "airing": {"type": "movie", "title": "Match Day"}},
+         "video": "h264", "audio": "ac4", "type": "movie", "phase": 20,
+         "shows": (("Match Day", 120), ("Highlights", 30), ("Pre-Game Show", 45), ("Cup Final", 120),
+                   ("Post-Game Analysis", 60))},
         {"id": "C103.244.mock.tv", "vcn": "103", "title": "Anime Movies", "thumb": "",
-         "video": "h264", "audio": "aac", "airing": None},
+         "video": "h264", "audio": "aac", "type": "movie", "phase": 0, "shows": None},
         {"id": "C104.245.mock.tv", "vcn": "104", "title": "104 News MPEG-2", "thumb": f"{ORIGIN}/logos/104.png",
-         "video": "mpeg2video", "audio": "ac3", "airing": {"type": "movie", "title": "Evening News"}},
-        # Eleven more, so the lineup is a row's worth and then some. Each airing began `ago` minutes before
-        # `now` and runs `mins` minutes, so the guide holds airings that began at all sorts of times (the
-        # first five air the half hour `now` falls in, which is one start time for all of them).
+         "video": "mpeg2video", "audio": "ac3", "type": "movie", "phase": 5,
+         "shows": (("Evening News", 30), ("Weather Now", 15), ("World Report", 45), ("Late Edition", 60),
+                   ("Market Close", 15), ("Night Desk", 90))},
+        # Eleven more, so the lineup is a row's worth and then some. Their schedules are the same lengths in a
+        # different order (rotated by the channel), so the programmes begin and end at all sorts of times. 112 has a
+        # GAP: its guide has a hole in it, where nothing airs.
         *(
             {"id": f"C{vcn}.{int(vcn) + 141}.mock.tv", "vcn": vcn, "title": f"{vcn} {name}",
-             "thumb": f"{LIVETV_ORIGIN}/logos/{vcn}.png", "video": "h264", "audio": "aac",
-             "airing": {"type": kind, "title": title, "ago": ago, "mins": mins}}
-            for vcn, name, kind, title, ago, mins in (
-                ("106", "Nature World", "movie", "Wild Coasts", 5, 60),
-                ("107", "Documentary Plus", "movie", "Deep Time", 20, 90),
-                ("108", "Kids Zone", "movie", "Puddle Patrol", 12, 30),
-                ("109", "Movie Classics", "movie", "The Long Reel", 47, 120),
-                ("110", "Cooking Hour", "movie", "Quick Suppers", 3, 30),
-                ("111", "Music Mix", "movie", "Live Sessions", 25, 60),
-                ("112", "Drama Series", "movie", "Harbour Lights", 38, 60),
-                ("113", "Science Today", "movie", "Small Worlds", 1, 60),
-                ("114", "Travel Log", "movie", "Rail Journeys", 55, 90),
-                ("115", "Weather Now", "movie", "The Week Ahead", 8, 30),
-                ("116", "Late Show", "movie", "After Hours", 30, 90),
+             "thumb": f"{LIVETV_ORIGIN}/logos/{vcn}.png", "video": "h264", "audio": "aac", "type": "movie",
+             "phase": (int(vcn) * 5) % 20,
+             "shows": tuple((title, LIVETV_LENGTHS[(i + int(vcn)) % len(LIVETV_LENGTHS)])
+                            if title else ("", 30)
+                            for i, title in enumerate(titles))}
+            for vcn, name, titles in (
+                ("106", "Nature World", ("Wild Coasts", "Deep Forest", "Savanna Diary", "River Giants", "Polar Nights")),
+                ("107", "Documentary Plus", ("Deep Time", "Lost Cities", "The Long Road", "Engines of War", "Ice Core")),
+                ("108", "Kids Zone", ("Puddle Patrol", "Rocket Rabbit", "Bubble School", "Tiny Chefs", "Dino Dance")),
+                ("109", "Movie Classics", ("The Long Reel", "Night Train", "Silver Screen", "The Last Reel", "Matinee")),
+                ("110", "Cooking Hour", ("Quick Suppers", "Bake Off Basics", "Street Food", "Sunday Roast", "Soup Season")),
+                ("111", "Music Mix", ("Live Sessions", "Top Twenty", "Unplugged", "Back Catalogue", "New Wave Hour")),
+                ("112", "Drama Series", ("Harbour Lights", "", "Harbour Lights II", "Winter Court", "Old Money")),
+                ("113", "Science Today", ("Small Worlds", "Space Notes", "How It Works", "Lab Report", "Deep Blue")),
+                ("114", "Travel Log", ("Rail Journeys", "Island Hopping", "City Breaks", "Mountain Passes", "Night Markets")),
+                ("115", "Weather Now", ("The Week Ahead", "Storm Watch", "Coast Forecast", "Sky Report", "Snow Desk")),
+                ("116", "Late Show", ("After Hours", "Comedy Cellar", "Talk of the Town", "Midnight Special", "Last Call")),
             )
         ),
     )
@@ -3068,7 +3085,6 @@ class LiveTvFixture:
         self.transcodes = {}  # a transcode session id (the start's `session=`) -> the uuid it serves
         self.segment = None  # `--livetv-segment`: a pathlib.Path, the MPEG-TS file every live segment answers
         self.segment_bytes = None  # that file's bytes, read on the first segment it answers
-        self.anchor = None  # the first "now" the guide was read at: the "ago" airings are measured from it
 
     def channel(self, cid):
         return next((c for c in self.CHANNELS if c["id"] == cid), None)
@@ -3087,36 +3103,56 @@ class LiveTvFixture:
         return [{"id": c["id"], "gridKey": c["id"], "vcn": c["vcn"], "thumb": c["thumb"],
                  "title": c["title"], "callSign": c["title"]} for c in self.CHANNELS]
 
-    def grid(self, now):
-        """The `Metadata` rows of `GET /{epgIdentifier}/grid` at `now`: one airing per channel that has one,
-        on the half hour `now` falls in (`beginsAt` is that half hour, `endsAt` the next one)."""
-        half = now - now % 1800
+    # How far past the half hour `now` falls in the guide has programmes: one that BEGINS at or after this is not in
+    # the guide, so a Guide scrolled that far ahead meets the end of the data. Relative to the request, so a session
+    # that runs for hours never runs out of guide.
+    HORIZON = 6 * 3600
+
+    def horizon(self, now):
+        """The first instant the guide holds no programme from, for a read at `now`."""
+        return now - now % 1800 + self.HORIZON
+
+    @staticmethod
+    def programmes(channel, first, last):
+        """The channel's programmes that end at or after `first` and begin by `last` (Unix seconds), earliest first, as
+        `(index, title, begins, ends)`: the schedule is a pure function of the clock, so every read agrees with the
+        last. A gap is not a programme. A channel with no guide data has none."""
+        shows = channel["shows"]
+        if not shows:
+            return
+        cycle = sum(mins for _, mins in shows) * 60
+        origin = channel["phase"] * 60
+        n = (first - origin) // cycle - 1
+        while origin + n * cycle <= last:
+            begins = origin + n * cycle
+            for i, (title, mins) in enumerate(shows):
+                ends = begins + mins * 60
+                if title and ends >= first and begins <= last:
+                    yield n * len(shows) + i, title, begins, ends
+                begins = ends
+            n += 1
+
+    def grid(self, now, until=None):
+        """The `Metadata` rows of `GET /{epgIdentifier}/grid?beginsAt<=until&endsAt>=now`: every programme of every
+        channel with guide data that has not ended by `now` and begins by `until` (and before the guide's end,
+        `horizon`), one row each, earliest first per channel. `until` defaults to `now`, the instant read: the
+        programme on now alone (none on a channel whose schedule has a gap there)."""
+        until = now if until is None else until
+        end = self.horizon(now)
         rows = []
         for c in self.CHANNELS:
-            airing = c["airing"]
-            if airing is None:
-                continue
-            # An airing that names `ago` and `mins` began that many minutes before the FIRST `now` this fixture
-            # was asked about and runs `mins` minutes, then the next programme of the same length follows, so a
-            # long session sees programmes end and move on as a real guide does; the rest air the half hour.
-            if "ago" in airing:
-                if self.anchor is None:
-                    self.anchor = now
-                length = airing["mins"] * 60
-                begins = self.anchor - airing["ago"] * 60
-                begins += max(0, (now - begins) // length) * length
-                ends = begins + length
-            else:
-                begins = half
-                ends = begins + 1800
             thumb = f"{self.ORIGIN}/art/{c['vcn']}.jpg"
-            row = {"ratingKey": f"mock-airing-{c['vcn']}-{begins}", "type": airing["type"],
-                   "title": airing["title"], "thumb": thumb, "onAir": True,
-                   "Media": [{"channelVcn": c["vcn"], "channelIdentifier": c["id"], "protocol": "livetv",
-                              "beginsAt": begins, "endsAt": ends, "onAir": True}]}
-            if "grandparentTitle" in airing:
-                row.update(grandparentTitle=airing["grandparentTitle"], grandparentThumb=thumb)
-            rows.append(row)
+            for index, title, begins, ends in self.programmes(c, now, until):
+                if begins >= end:
+                    break
+                on_air = begins <= now
+                row = {"ratingKey": f"mock-airing-{c['vcn']}-{begins}", "type": c["type"],
+                       "title": title, "thumb": thumb, "onAir": on_air,
+                       "Media": [{"channelVcn": c["vcn"], "channelIdentifier": c["id"], "protocol": "livetv",
+                                  "beginsAt": begins, "endsAt": ends, "onAir": on_air}]}
+                if "grandparentTitle" in c:
+                    row.update(grandparentTitle=c["grandparentTitle"], grandparentThumb=thumb)
+                rows.append(row)
         return rows
 
 
@@ -3605,11 +3641,19 @@ class MockPms:
         if reads and segs == [lv.EPG_ID, "lineups", "dvr", "channels"]:
             rows = lv.lineup()
             return j(self.container(size=len(rows), Channel=rows))
+        if reads and p == "/photo/:/transcode" and q.get("url", "").startswith(f"{lv.ORIGIN}/art/"):
+            # A programme's still (`LiveTvFixture.grid`): an opaque PNG in the colour its path hashes to, at the
+            # size asked. Answered here, before the catalog branch, which has no such image and would 404.
+            url = q["url"]
+            return (200, "image/png", flat_png(q.get("width", 400), q.get("height", 225), colour_for(url)))
         if reads and segs == [lv.EPG_ID, "grid"]:
-            # The client sends `beginsAt%3C=N`, which `parse_qs` decodes to the key `beginsAt<`; a literal
-            # `beginsAt<=N` parses to the same key. Without a number, the clock.
-            now = q.get("beginsAt<", "")
-            return j(self.container(Metadata=lv.grid(int(now) if now.isdigit() else int(time.time()))))
+            # The client sends `beginsAt%3C=U&endsAt%3E=N`, which `parse_qs` decodes to the keys `beginsAt<` and
+            # `endsAt>`; a literal `beginsAt<=U` parses to the same key. Both bounds are honoured: the airings that
+            # have not ended by N and begin by U (the instant read has U == N). A missing bound falls back to the other,
+            # and without either, to the clock.
+            until, now = q.get("beginsAt<", ""), q.get("endsAt>", "")
+            at = int(now) if now.isdigit() else int(until) if until.isdigit() else int(time.time())
+            return j(self.container(Metadata=lv.grid(at, int(until) if until.isdigit() else at)))
         if (method == "POST" and len(segs) == 6 and segs[:2] == ["livetv", "dvrs"]
                 and segs[3] == "channels" and segs[5] == "tune"):
             sid = q.get("X-Plex-Session-Identifier") or headers.get("X-Plex-Session-Identifier")

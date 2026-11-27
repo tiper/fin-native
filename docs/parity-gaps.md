@@ -5,7 +5,7 @@ home, show/episode detail, movie detail, library grid, card context menu) and **
 HUD, Quality picker, queue overlay, Settings tree). Branch `home-ui-polish`, working tree included.
 
 **Scope: movies and TV shows, plus watching the server's Live TV channels.** Music, photos, DVR
-recording, the Live TV guide grid and podcasts are out of scope and are not counted as gaps. Plex Discover / "Movies & Shows on Plex" is movie/show content but is an
+recording and podcasts are out of scope (the Live TV guide grid is in: the Guide page, `LiveTvScreen`'s second scope) and are not counted as gaps. Plex Discover / "Movies & Shows on Plex" is movie/show content but is an
 *adjacent catalog* (plex.tv, not the user's server) and is tagged as such throughout. The Watchlist
 began as one of those entries and has since shipped (`docs/watchlist.md`); the entries that still say
 "Watchlist" below record what it closed.

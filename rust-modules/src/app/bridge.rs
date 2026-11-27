@@ -210,6 +210,9 @@ pub(crate) struct AppViews<'a> {
     /// are derived from, so no screen reads a clock. `None` before the first publication, under a
     /// replay and where the platform cannot say.
     pub(crate) wall: Option<plx_ui::fmt::Wall>,
+    /// **The Unix second of this frame's clock reading**, published with `wall` but present without the zone
+    /// offset `wall` needs (the guide's schedule is UTC: what Live TV lays a board against). `None` where there is no reading.
+    pub(crate) instant: Option<i64>,
     /// **The kind of page beneath the page these views are read for** on the navigation stack,
     /// folded in by the dispatcher per page ([`Host::views_over`]); `None` for a root, and for
     /// every context that is not a page's own. What a page that names where BACK goes reads
@@ -232,7 +235,7 @@ impl Bridge<'_> {
             search: self.retained.search.view(), metadata: self.stores.metadata_view(),
             person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session,
             transport_paused: self.retained.transport_paused,
-            today: self.retained.today, wall: self.retained.wall(), beneath: None }
+            today: self.retained.today, wall: self.retained.wall(), instant: self.retained.instant(), beneath: None }
     }
 }
 
@@ -301,6 +304,7 @@ impl plx_screens::registry::LiveTvLike for AppHost {
         cx.views.livetv
     }
     fn wall(cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> { cx.views.wall }
+    fn instant(cx: &Cx<'_, Self>) -> Option<i64> { cx.views.instant }
 }
 
 impl plx_screens::registry::CollectionLike for AppHost {
@@ -828,6 +832,11 @@ impl BridgeRetained {
         self.clock.and_then(super::clock::Reading::wall)
     }
 
+    /// The Unix second of this frame's clock reading, with or without the zone ([`super::clock::Reading::unix_s`]).
+    fn instant(&self) -> Option<i64> {
+        self.clock.map(super::clock::Reading::unix_s)
+    }
+
     /// **The Live TV store's captured input for this step**: the clients, the second of the frame's clock
     /// reading (`None` where the loop published none, which is not the epoch; present without the zone) and
     /// the seat the seat trigger last restored for, with the Recent list the memory door holds for it,
@@ -865,7 +874,7 @@ impl BridgeRetained {
             section_hubs: self.section_hubs.view(), search: self.search.view(),
             metadata: stores.metadata_view(), person: stores.person_view(), collection: stores.collection_view(),
             subtitle_search: stores.subtitle_search_view(), livetv: stores.livetv_view(), session: &self.playback,
-            transport_paused: self.transport_paused, today: self.today, wall: self.wall(), beneath: None }
+            transport_paused: self.transport_paused, today: self.today, wall: self.wall(), instant: self.instant(), beneath: None }
     }
 
     /// A Bridge booted from a controlled Home. It always runs the `Live` store runner, whatever
@@ -3106,7 +3115,7 @@ impl Bridge<'_> {
                 hubs: self.retained.hubs.view(), listing: self.retained.listing.view(), directory: self.retained.directory.view(),
                 section_hubs: self.retained.section_hubs.view(), search: self.retained.search.view(), metadata: self.stores.metadata_view(), person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session: &self.retained.playback,
                 transport_paused: self.retained.transport_paused,
-                today: self.retained.today, wall: self.retained.wall(), beneath: None,
+                today: self.retained.today, wall: self.retained.wall(), instant: self.retained.instant(), beneath: None,
             }, &self.retained.measure);
             let handled = self.session.step(event, &cx, fx);
             // #132: the owner logs nothing, and the Profiles screen cannot see a read-out that
@@ -3503,7 +3512,7 @@ impl Rig<AppHost> for Bridge<'_> {
                 directory: self.retained.directory.view(),
                 section_hubs: self.retained.section_hubs.view(), search: self.retained.search.view(), metadata: self.stores.metadata_view(), person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session: &self.retained.playback,
                 transport_paused: self.retained.transport_paused,
-                today: self.retained.today, wall: self.retained.wall(), beneath: None,
+                today: self.retained.today, wall: self.retained.wall(), instant: self.retained.instant(), beneath: None,
             },
             measure: &self.retained.measure,
         }

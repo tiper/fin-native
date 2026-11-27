@@ -1516,7 +1516,7 @@ a11y_subject_ok() {  # $1 = a ratingKey / subject
 # so `press` cannot name them and refuses them (a Watchlist title no server holds: the safe side).
 a11y_subject_bearing() {  # $1 = a full accessibility id
   case "$1" in
-    *.card.*|detail.episodes.*|detail.season.*|filmography.row.*|catalog.primary|home.hero.play|home.hero.info|home.hero.watchlist|detail.hero.play|detail.hero.restart|detail.hero.trailer|detail.hero.mark_watched|detail.hero.mark_unwatched|detail.hero.watchlist|itemmenu.*|versions.row.*|player.control.previous|player.control.next|player.control.next_episode|player.control.from_beginning|player.control.skip|player.control.[0-9]*|player.section.*|player.failure.try_again|player.failure.play_automatically|more.fold.previous|more.fold.next|more.fold.from_beginning|more.rung.*|menu.audio.*|menu.sub.*|menu.off|menu.forced|menu.hit.*) return 0 ;;
+    *.card.*|detail.episodes.*|detail.season.*|filmography.row.*|livetv.guide.*|catalog.primary|home.hero.play|home.hero.info|home.hero.watchlist|detail.hero.play|detail.hero.restart|detail.hero.trailer|detail.hero.mark_watched|detail.hero.mark_unwatched|detail.hero.watchlist|itemmenu.*|versions.row.*|player.control.previous|player.control.next|player.control.next_episode|player.control.from_beginning|player.control.skip|player.control.[0-9]*|player.section.*|player.failure.try_again|player.failure.play_automatically|more.fold.previous|more.fold.next|more.fold.from_beginning|more.rung.*|menu.audio.*|menu.sub.*|menu.off|menu.forced|menu.hit.*) return 0 ;;
   esac
   return 1
 }

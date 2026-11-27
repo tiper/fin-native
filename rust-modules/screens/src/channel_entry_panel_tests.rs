@@ -67,6 +67,7 @@ fn channel(vcn: &str) -> Channel {
         now_summary: String::new(),
         begins_at: 0,
         ends_at: 0,
+        later: Vec::new(),
     }
 }
 
