@@ -115,6 +115,9 @@ pub trait DemuxClock {
     fn pause_event(&mut self, lane: PauseLane) -> PauseEvent;
     fn seeking(&self) -> bool;
     fn take_seek_ns(&self) -> Option<i64>;
+    /// A seek should land on an HEVC IDR if one is within reach: the play declares Dolby Vision to a
+    /// splitter that takes only an IDR first (`DvLandingPlan::idr_first`).
+    fn dv_idr_snap(&self) -> bool;
     fn user_sequence(&self) -> u64;
     fn desired_audio_idx(&self) -> i32;
     fn applied_rate_permille(&self) -> i32;

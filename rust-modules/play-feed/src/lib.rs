@@ -4,6 +4,7 @@
 pub mod aq;
 pub mod control;
 pub mod dv_start;
+pub mod idr_snap;
 pub mod era_callbacks;
 pub mod demux_clock;
 pub mod feed_driver;

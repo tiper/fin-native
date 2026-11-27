@@ -621,6 +621,7 @@ pub fn dv_landing_due(feed: &mut FeedResources, now: u32, route_flight: bool) ->
 /// The route refused the withdrawal [`dv_landing_due`] handed over: the guard stands down and the
 /// held landing feeds.
 pub fn dv_stand_down(feed: &mut FeedResources) {
+    FEED_SHARED.dv_idr_snap.store(false, Relaxed);
     if let Some(eng) = feed.engine() {
         eng.dv_start.stand_down();
     }

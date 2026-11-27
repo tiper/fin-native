@@ -1498,3 +1498,29 @@ fn an_unspecified_container_transfer_is_taken_from_the_sps() {
     let au = packet_with_rpu(&rpu_fixture_nal(P81));
     assert_eq!(RpuOnlyScan::new(2).packet(&au, 4), Some(RpuFinding::Refused { profile: 8, trc: 2 }));
 }
+
+/// The seek probe classifies a length-prefixed HEVC access unit by its first IRAP NAL, skipping the
+/// parameter sets and SEI ahead of it.
+#[test]
+fn the_seek_probe_reads_an_access_units_picture_class() {
+    let nal = |t: u8| vec![0, 0, 0, 3, t << 1, 1, 0xaa];
+    let au = |types: &[u8]| types.iter().flat_map(|&t| nal(t)).collect::<Vec<u8>>();
+    assert_eq!(hevc_au_class(&au(&[32, 33, 34, 39, 19]), 4), Keyframe::Clean);
+    assert_eq!(hevc_au_class(&au(&[32, 33, 34, 20]), 4), Keyframe::Clean);
+    assert_eq!(hevc_au_class(&au(&[32, 33, 34, 21]), 4), Keyframe::HevcIrapNotIdr(21));
+    assert_eq!(hevc_au_class(&au(&[1]), 4), Keyframe::No);
+    assert_eq!(hevc_au_class(&[0, 0, 0, 9, 38], 4), Keyframe::No, "a NAL longer than the packet is not read");
+}
+
+/// A CRA's leading pictures (RASL, NAL 8 and 9) are what the priming drops; the CRA itself, a trailing
+/// picture and a RADL picture (NAL 6, 7) are not.
+#[test]
+fn the_seek_probe_names_rasl_pictures() {
+    let nal = |t: u8| vec![0, 0, 0, 3, t << 1, 1, 0xaa];
+    let au = |types: &[u8]| types.iter().flat_map(|&t| nal(t)).collect::<Vec<u8>>();
+    assert!(hevc_au_is_rasl(&au(&[39, 8]), 4));
+    assert!(hevc_au_is_rasl(&au(&[9]), 4));
+    assert!(!hevc_au_is_rasl(&au(&[21]), 4));
+    assert!(!hevc_au_is_rasl(&au(&[1]), 4));
+    assert!(!hevc_au_is_rasl(&au(&[7]), 4));
+}

@@ -237,6 +237,7 @@ impl DemuxClock for FeedDemuxClock {
             (ns >= 0).then_some(ns)
         }).flatten()
     }
+    fn dv_idr_snap(&self) -> bool { FEED_SHARED.dv_idr_snap.load(Ordering::Relaxed) }
     fn user_sequence(&self) -> u64 { FEED_SHARED.hls_user_sequence() }
     fn desired_audio_idx(&self) -> i32 { FEED_SHARED.desired_audio_idx.load(Ordering::Relaxed) }
     fn applied_rate_permille(&self) -> i32 {
