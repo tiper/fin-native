@@ -18,7 +18,10 @@
 //! exceeds [`DEBT_STALE_GAP_MS`], or whose video queue holds more than the gate, resets `S` and the
 //! debt since the reset to zero: a clock that went silent is the dead-link arm's job (the silence
 //! observation, `play-feed`'s `native_clock_stopped`), and a queue that still holds media is not
-//! starved, so the debt is only ever counted while the queue is empty.
+//! starved, so the debt is only ever counted while the queue is empty. After an ineligible sample,
+//! or a reset to [`ClockDebt::Ineligible`], the clock is not judged again until its position has
+//! moved [`DEBT_SETTLE_NS`] past where it restarted: a clock starting runs behind the wall while the
+//! pipeline spins up, and that is not starvation.
 //!
 //! Integer microseconds throughout (`k` in per mille), so a step is exact and a table test can assert
 //! it to the microsecond.
@@ -27,8 +30,15 @@
 /// motion: the step restarts from the new sample.
 pub const DEBT_STALE_GAP_MS: u32 = 1_000;
 
-/// A position at or under this is a stream still starting: nothing is judged.
-pub const DEBT_MIN_POS_NS: i64 = 2_000_000_000;
+/// How far the position must move past the first eligible sample before the clock is judged.
+///
+/// Every start of the clock (the first Play, a seek's or a hold's Play, a Resume) is preceded by
+/// ineligible samples, and the native clock then runs well behind the wall for a few callbacks
+/// while the pipeline spins up. On the TV an in-place seek to 2583 s was held 124 ms past its
+/// keyframe with 275 ms of debt over a video queue that was filling. A fresh start was already
+/// spared by an absolute two seconds; counting them from where the clock restarted spares a seek
+/// deep in the film the same way.
+pub const DEBT_SETTLE_NS: i64 = 2_000_000_000;
 
 /// The constants of the step: the drift `k`, the threshold `h` and the queue-empty gate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,9 +74,12 @@ pub struct DebtSample {
 /// The state between two samples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ClockDebt {
-    /// No usable previous sample: the next eligible one only starts the watch.
+    /// No usable previous sample: the next eligible one starts the settle.
     #[default]
     Ineligible,
+    /// The clock restarted at `origin_ns` and has not yet moved [`DEBT_SETTLE_NS`] past it: nothing
+    /// is judged.
+    Settling { origin_ns: i64 },
     /// Watching: the previous sample, the CUSUM `S` and the debt since the last reset, microseconds.
     Watching { wall_ms: u32, pos_ns: i64, s_us: i64, debt_since_reset_us: i64 },
     /// `S` reached the threshold. Latched until the step resets (an ineligible sample or a queue
@@ -77,15 +90,18 @@ pub enum ClockDebt {
 impl ClockDebt {
     /// The next state after one sample.
     pub fn step(self, p: &DebtParams, s: DebtSample) -> ClockDebt {
-        if !s.eligible || s.pos_ns <= DEBT_MIN_POS_NS {
+        if !s.eligible {
             return ClockDebt::Ineligible;
         }
         let start = ClockDebt::Watching { wall_ms: s.wall_ms, pos_ns: s.pos_ns, s_us: 0, debt_since_reset_us: 0 };
-        if s.video_queue_bytes > p.gate_bytes {
-            return start;
-        }
         match self {
-            ClockDebt::Ineligible => start,
+            ClockDebt::Ineligible => ClockDebt::Settling { origin_ns: s.pos_ns },
+            // A position behind the restart restarts the settle from there.
+            ClockDebt::Settling { origin_ns } if s.pos_ns - origin_ns < DEBT_SETTLE_NS => {
+                ClockDebt::Settling { origin_ns: origin_ns.min(s.pos_ns) }
+            }
+            ClockDebt::Settling { .. } => start,
+            _ if s.video_queue_bytes > p.gate_bytes => start,
             ClockDebt::Fired { .. } => self,
             ClockDebt::Watching { wall_ms, pos_ns, s_us, debt_since_reset_us } => {
                 let dt_ms = s.wall_ms.wrapping_sub(wall_ms) as i32;
@@ -116,7 +132,7 @@ impl ClockDebt {
     /// `S` in microseconds (0 when not watching).
     pub const fn s_us(self) -> i64 {
         match self {
-            ClockDebt::Ineligible => 0,
+            ClockDebt::Ineligible | ClockDebt::Settling { .. } => 0,
             ClockDebt::Watching { s_us, .. } | ClockDebt::Fired { s_us, .. } => s_us,
         }
     }
@@ -124,7 +140,7 @@ impl ClockDebt {
     /// The debt since the gate (or an ineligible sample) last reset, microseconds.
     pub const fn debt_since_reset_us(self) -> i64 {
         match self {
-            ClockDebt::Ineligible => 0,
+            ClockDebt::Ineligible | ClockDebt::Settling { .. } => 0,
             ClockDebt::Watching { debt_since_reset_us, .. } | ClockDebt::Fired { debt_since_reset_us, .. } => {
                 debt_since_reset_us
             }
@@ -140,6 +156,8 @@ mod tests {
     const S10: i64 = 10_000_000_000;
     /// More than the gate: a queue that still holds media.
     const OVER_GATE: usize = (1 << 20) + 1;
+    /// A clock that restarted two seconds before `S10`: its first sample there starts the watch.
+    const SETTLED: ClockDebt = ClockDebt::Settling { origin_ns: S10 - DEBT_SETTLE_NS };
 
     fn at(wall_ms: u32, pos_ns: i64) -> DebtSample {
         DebtSample { wall_ms, pos_ns, video_queue_bytes: 0, eligible: true }
@@ -163,7 +181,7 @@ mod tests {
 
     #[test]
     fn a_clock_at_unity_never_accrues_and_never_fires() {
-        let d = run(ClockDebt::Ineligible, 1000, 500);
+        let d = run(SETTLED, 1000, 500);
         assert!(!d.fired());
         assert_eq!(d.s_us(), 0);
         assert_eq!(d.debt_since_reset_us(), 0);
@@ -174,8 +192,8 @@ mod tests {
         // rate 0.5: each 200 ms step owes 100 ms and forgives 10 ms, so S grows 90 ms a step. The
         // first sample only starts the watch; the second leaves S at 90 ms (under h = 100 ms), the
         // third at 180 ms: fired, with 200 ms of debt owed.
-        assert_eq!(run(ClockDebt::Ineligible, 500, 2), ClockDebt::Fired { s_us: 180_000, debt_since_reset_us: 200_000 });
-        let short = run(ClockDebt::Ineligible, 500, 1);
+        assert_eq!(run(SETTLED, 500, 2), ClockDebt::Fired { s_us: 180_000, debt_since_reset_us: 200_000 });
+        let short = run(SETTLED, 500, 1);
         assert_eq!(short, ClockDebt::Watching { wall_ms: 1_200, pos_ns: S10 + 100_000_000, s_us: 90_000, debt_since_reset_us: 100_000 });
         assert!(!short.fired());
     }
@@ -184,10 +202,10 @@ mod tests {
     #[test]
     fn the_threshold_is_inclusive() {
         // 200 ms of wall with 90 ms of position owes 110 ms; 10 ms forgiven: S = 100 ms = h.
-        let exactly = run(ClockDebt::Ineligible, 450, 1);
+        let exactly = run(SETTLED, 450, 1);
         assert_eq!(exactly, ClockDebt::Fired { s_us: 100_000, debt_since_reset_us: 110_000 });
         // 91 ms of position owes 109 ms: S = 99 ms.
-        let under = run(ClockDebt::Ineligible, 455, 1);
+        let under = run(SETTLED, 455, 1);
         assert_eq!(under.s_us(), 99_000);
         assert!(!under.fired());
     }
@@ -195,7 +213,7 @@ mod tests {
     #[test]
     fn drift_forgives_a_clock_a_little_slow() {
         // rate 0.96: owes 8 ms a step, forgives 10 ms: S stays 0 while the debt accumulates.
-        let d = run(ClockDebt::Ineligible, 960, 400);
+        let d = run(SETTLED, 960, 400);
         assert_eq!(d.s_us(), 0);
         assert!(!d.fired());
         assert_eq!(d.debt_since_reset_us(), 400 * 8_000);
@@ -203,7 +221,7 @@ mod tests {
 
     #[test]
     fn a_fired_debt_stays_fired_until_something_resets_it() {
-        let fired = run(ClockDebt::Ineligible, 500, 2);
+        let fired = run(SETTLED, 500, 2);
         assert!(fired.fired());
         // more samples, slow or not, do not change it
         assert_eq!(fired.step(&P, at(1_600, S10 + 2_000_000_000)), fired);
@@ -218,7 +236,7 @@ mod tests {
 
     #[test]
     fn a_queue_over_the_gate_resets_s_and_the_debt_each_sample() {
-        let mut d = run(ClockDebt::Ineligible, 500, 1);
+        let mut d = run(SETTLED, 500, 1);
         assert_eq!(d.s_us(), 90_000);
         d = d.step(&P, DebtSample { video_queue_bytes: OVER_GATE, ..at(1_400, S10 + 300_000_000) });
         assert_eq!((d.s_us(), d.debt_since_reset_us()), (0, 0));
@@ -228,19 +246,50 @@ mod tests {
     }
 
     #[test]
-    fn ineligible_samples_and_early_positions_judge_nothing() {
-        let w = run(ClockDebt::Ineligible, 500, 1);
+    fn an_ineligible_sample_judges_nothing() {
+        let w = run(SETTLED, 500, 1);
         assert_eq!(w.step(&P, DebtSample { eligible: false, ..at(1_400, S10) }), ClockDebt::Ineligible);
-        assert_eq!(w.step(&P, at(1_400, DEBT_MIN_POS_NS)), ClockDebt::Ineligible, "a stream still starting");
-        assert!(matches!(
-            ClockDebt::Ineligible.step(&P, at(1_400, DEBT_MIN_POS_NS + 1)),
-            ClockDebt::Watching { s_us: 0, .. }
-        ));
+    }
+
+    /// A clock that restarts (a seek's Play, at a position deep in the film) and runs at a third of
+    /// the wall while it spins up is not judged until it has moved two seconds past its restart, and
+    /// a clock that then runs slow is judged from there.
+    #[test]
+    fn a_restarted_clock_is_judged_only_two_seconds_past_where_it_restarted() {
+        let origin = 2_583 * 1_000_000_000;
+        let mut d = ClockDebt::Ineligible.step(&P, at(1_000, origin));
+        assert_eq!(d, ClockDebt::Settling { origin_ns: origin });
+        // 1.9 s of position at a third of the wall: owed far past h, nothing judged
+        for i in 1..=29 {
+            d = d.step(&P, at(1_000 + i * 200, origin + i64::from(i) * 66_000_000));
+            assert!(!d.fired() && d.s_us() == 0, "judged at sample {i}: {d:?}");
+        }
+        assert_eq!(d, ClockDebt::Settling { origin_ns: origin }, "still settling under two seconds");
+        // the sample at exactly two seconds past the restart only starts the watch
+        d = d.step(&P, at(7_000, origin + DEBT_SETTLE_NS));
+        assert!(matches!(d, ClockDebt::Watching { s_us: 0, debt_since_reset_us: 0, .. }), "{d:?}");
+        // from there a clock at half the wall fires on its second step, as from any start
+        d = d.step(&P, at(7_200, origin + DEBT_SETTLE_NS + 100_000_000));
+        d = d.step(&P, at(7_400, origin + DEBT_SETTLE_NS + 200_000_000));
+        assert_eq!(d, ClockDebt::Fired { s_us: 180_000, debt_since_reset_us: 200_000 });
+    }
+
+    /// The settle counts position, not samples: a clock that has not moved does not settle, and one
+    /// reported behind its restart restarts the settle from there. A full queue does not skip it.
+    #[test]
+    fn the_settle_counts_position_from_the_lowest_restart() {
+        let d = ClockDebt::Ineligible.step(&P, at(1_000, S10));
+        let parked = (1..50).fold(d, |d, i| d.step(&P, at(1_000 + i * 200, S10)));
+        assert_eq!(parked, ClockDebt::Settling { origin_ns: S10 }, "a parked clock never settles");
+        let back = parked.step(&P, at(11_000, S10 - 500_000_000));
+        assert_eq!(back, ClockDebt::Settling { origin_ns: S10 - 500_000_000 });
+        let full = back.step(&P, DebtSample { video_queue_bytes: OVER_GATE, ..at(11_200, S10) });
+        assert_eq!(full, back, "a queue over the gate does not end the settle");
     }
 
     #[test]
     fn a_gap_over_a_second_or_a_clock_going_backwards_restarts_the_watch() {
-        let w = run(ClockDebt::Ineligible, 500, 1);
+        let w = run(SETTLED, 500, 1);
         let ClockDebt::Watching { wall_ms, .. } = w else { panic!("{w:?}") };
         let gap = w.step(&P, at(wall_ms + DEBT_STALE_GAP_MS + 1, S10 + 5_000_000_000));
         assert!(matches!(gap, ClockDebt::Watching { s_us: 0, debt_since_reset_us: 0, .. }));
@@ -254,14 +303,14 @@ mod tests {
 
     #[test]
     fn the_wall_clock_wrapping_is_just_a_step() {
-        let a = ClockDebt::Ineligible.step(&P, at(u32::MAX - 99, S10));
+        let a = SETTLED.step(&P, at(u32::MAX - 99, S10));
         let b = a.step(&P, at(100, S10 + 100_000_000));
         assert_eq!(b.s_us(), 90_000, "200 ms of wall across the wrap, 100 ms of position, 10 ms forgiven: {b:?}");
     }
 
     #[test]
     fn a_catch_up_pays_the_debt_back_but_s_never_goes_below_zero() {
-        let slow = run(ClockDebt::Ineligible, 500, 1);
+        let slow = run(SETTLED, 500, 1);
         let ClockDebt::Watching { wall_ms, pos_ns, s_us, .. } = slow else { panic!("{slow:?}") };
         // position jumps 2 s in one step: a big negative debt
         let caught = slow.step(&P, at(wall_ms + 200, pos_ns + 2_000_000_000));

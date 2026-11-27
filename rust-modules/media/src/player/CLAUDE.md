@@ -471,6 +471,11 @@ something.
   the demuxer is done and while a video or audio queue is at its byte cap (the hold's own release is
   already true: it would Pause and Play in one tick); a non-1x rate disarms only the clock-debt arm (the position then
   advances at the rate, not at the wall), because a stopped clock is a stopped clock at any rate.
+  After any of these the debt arm judges nothing until the position has moved 2 s past where the
+  clock restarted (`clock_debt::DEBT_SETTLE_NS`): a first Play, a seek's, a hold's or a Resume's
+  Play runs behind the wall for a few callbacks while the pipeline spins up, and an in-place seek
+  deep in a film was held 124 ms past its keyframe for exactly that
+  (`a_clock_spinning_up_after_an_in_place_seek_is_not_held`).
   It releases on the first of the end of the stream
   (`reason=eof`; `pushEOS` follows once the video lane drains) or a video OR audio queue at its byte
   cap (`reason=full`: the capped queue is the reserve the stream played with when healthy, and the

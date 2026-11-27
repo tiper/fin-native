@@ -139,12 +139,23 @@ fn a_starved_progressive_stream_pauses_the_sink_and_reads_buffering() {
 /// cut the first stretch (`from_ns` is where the last delivery ended: a running cursor makes the
 /// ranges contiguous, whatever their size).
 fn deliver(rig: &mut Rig, from_ns: i64, to_ns: i64) {
+    push_both_lanes(rig, from_ns, to_ns, false);
+}
+
+/// The demuxer's first output after a seek: [`deliver`] whose first video access unit is a keyframe.
+fn deliver_from_key(rig: &mut Rig, from_ns: i64, to_ns: i64) {
+    push_both_lanes(rig, from_ns, to_ns, true);
+}
+
+fn push_both_lanes(rig: &mut Rig, from_ns: i64, to_ns: i64, key_first: bool) {
     let au = [0u8; 64];
     let mut guard = rig.eng();
     let eng = &mut *guard;
     let qv = &mut **eng.aq_video.as_mut().unwrap() as *mut plx_play_feed::aq::AuQueue;
-    for i in from_ns / V_STEP_NS..to_ns / V_STEP_NS {
-        plx_play_feed::aq::aq_push(qv, au.as_ptr(), au.len() as std::os::raw::c_int, i * V_STEP_NS, 0, 1);
+    let first = from_ns / V_STEP_NS;
+    for i in first..to_ns / V_STEP_NS {
+        let key = std::os::raw::c_int::from(key_first && i == first);
+        plx_play_feed::aq::aq_push(qv, au.as_ptr(), au.len() as std::os::raw::c_int, i * V_STEP_NS, key, 1);
     }
     let qa = &mut **eng.aq_audio.as_mut().unwrap() as *mut plx_play_feed::aq::AuQueue;
     for i in from_ns / A_STEP_NS..to_ns / A_STEP_NS {
@@ -460,6 +471,112 @@ fn a_user_pause_and_resume_inside_a_hold_stay_held_until_the_hold_releases() {
     assert!(!FEED_TX.paused.load(Relaxed), "the viewer asked for Play");
 }
 
+/// A direct-play stream that has played 3 s, sought in place to `target_ns` and landed both lanes
+/// from there to `land_to_ns` (the demuxer's keyframe first), played until the seek's Play, with
+/// the Pause probe reset so only the pump's own holds count from here. The seek takes the native
+/// seek mode and a ready object, which the guard puts back.
+fn seek_in_place(target_ns: i64, land_to_ns: i64) -> (Rig, SeekGuard) {
+    let guard = SeekGuard(plx_play_feed::seek::seek_mode());
+    plx_play_feed::seek::set_seek_mode(plx_playback_contract::feed::SeekMode::NativeSeek);
+    let mut rig = Rig::with_media(20 * S, 20 * S).with_virtual_wall();
+    ffi_host::force_object_ready_for_test(true);
+    FEED_SHARED.file_size.store(50_000_000_000, Relaxed);
+    for _ in 0..15 {
+        rig.step();
+    }
+    assert!(
+        FEED_SHARED.pres_fed.load(Relaxed) > 2 * S,
+        "PRECONDITION FAILED, not the defect: the clock never played past the start: {}",
+        rig.facts()
+    );
+    crate::player::request_seek(&mut rig.ps, &mut rig.pa, target_ns);
+    assert!(
+        rig.run_until(|r| r.eng().flushed),
+        "PRECONDITION FAILED, not the defect: the seek never armed: {}",
+        rig.facts()
+    );
+    FEED_SHARED.seek_to_ns.store(-1, Relaxed); // the demux thread took the av_seek mailbox
+    deliver_from_key(&mut rig, target_ns, land_to_ns);
+    assert!(
+        rig.run_until(|r| !r.eng().prime_play
+            && !FEED_SHARED.seeking.load(Relaxed)
+            && FEED_SHARED.pres_fed.load(Relaxed) != PRES_NONE),
+        "PRECONDITION FAILED, not the defect: the seek never played: {}",
+        rig.facts()
+    );
+    ffi_host::reset_volume_probe_for_test(); // the seek's own verbs are not the hold's
+    (rig, guard)
+}
+
+/// Puts back the seek mode and the object readiness [`seek_in_place`] took, pass or fail.
+struct SeekGuard(plx_playback_contract::feed::SeekMode);
+
+impl Drop for SeekGuard {
+    fn drop(&mut self) {
+        plx_play_feed::seek::set_seek_mode(self.0);
+        ffi_host::force_object_ready_for_test(false);
+    }
+}
+
+/// **A clock that starts slowly after an in-place seek is not a starvation.** On the TV a seek's
+/// Play is followed by a few position callbacks in which the clock runs well behind the wall while
+/// the pipeline spins up (a seek to 2583 s was held at 124 ms past its keyframe with 275 ms of debt,
+/// then Buffering for 2.4 s over a video queue that was filling; another never released before the
+/// viewer gave up). A fresh start was spared that by the two seconds the debt did not judge; a seek
+/// landing deep in the film must be spared the same way, counted from where its clock started.
+///
+/// The rig plays 3 s, seeks in place to 30 s, lands six seconds of both lanes there and primes;
+/// then the clock runs 60 ms per 200 ms period for two periods (360 ms owed against the 100 ms
+/// threshold), and plays at full rate after. Nothing may hold.
+#[test]
+fn a_clock_spinning_up_after_an_in_place_seek_is_not_held() {
+    let _serial = plx_base::testlock::serial();
+    let ((), text) = logged(|| {
+        const TARGET: i64 = 30 * S;
+        let (mut rig, _guard) = seek_in_place(TARGET, TARGET + 6 * S);
+        let landed_at = FEED_SHARED.pres_fed.load(Relaxed);
+        assert!(
+            landed_at >= TARGET - S,
+            "PRECONDITION FAILED, not the defect: the clock is not at the seek ({}ms): {}",
+            landed_at / 1_000_000,
+            rig.facts()
+        );
+        for _ in 0..2 {
+            rig.step_clock(60);
+        }
+        for _ in 0..10 {
+            rig.step();
+        }
+        assert_eq!(pauses(), 0, "a clock spinning up after a seek was held: {}", rig.facts());
+        assert!(
+            FEED_SHARED.pres_fed.load(Relaxed) > landed_at + S,
+            "PRECONDITION FAILED, not the defect: the clock did not play on after the seek: {}",
+            rig.facts()
+        );
+        assert!(!FEED_SHARED.hls_rebuffering.load(Relaxed), "Buffering is up after a seek over a full stream");
+    });
+    assert!(!text.contains("progressive rebuffer hold"), "a hold line was written: {text}");
+}
+
+/// **A starved link after a seek is still held**, once its clock has played its first seconds: the
+/// settle spares a clock starting, not one that runs dry. The seek lands two and a half seconds and
+/// nothing more arrives; the clock plays them out and parks at the tail.
+#[test]
+fn a_link_that_runs_dry_after_a_seek_is_still_held() {
+    let _serial = plx_base::testlock::serial();
+    let ((), text) = logged(|| {
+        const TARGET: i64 = 30 * S;
+        let (mut rig, _guard) = seek_in_place(TARGET, TARGET + 2 * S + S / 2);
+        assert!(
+            rig.run_until(|_| FEED_SHARED.hls_rebuffering.load(Relaxed)),
+            "a stream that ran dry after a seek was never held: {}",
+            rig.facts()
+        );
+        assert_eq!(pauses(), 1, "exactly one hold");
+    });
+    assert!(text.contains("progressive rebuffer hold n=1"), "no hold line: {text}");
+}
+
 /// **What never holds.** Each is a stream whose clock is stopped on purpose, still starting, or not
 /// a stream a link can starve (or one Quality=Auto's own supervisor watches): zero Pauses of the
 /// pump's own.
@@ -476,9 +593,9 @@ mod never_held {
 
     /// **A start is not judged, through the pump.** 800 ms is just enough for the first Play (the
     /// decoder prime wants 700 ms accepted) and the clock then plays it out: its position never
-    /// passes the two seconds below which the clock debt judges nothing, so the start is a start and
-    /// not a starvation, and running dry at its tail is left to the existing handling, as before the
-    /// hold existed.
+    /// moves the two seconds past its start before which the clock debt judges nothing, so the
+    /// start is a start and not a starvation, and running dry at its tail is left to the existing
+    /// handling, as before the hold existed.
     #[test]
     fn a_play_that_never_passes_the_starting_position_is_not_held() {
         let _serial = plx_base::testlock::serial();

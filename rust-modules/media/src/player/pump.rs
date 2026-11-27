@@ -6557,7 +6557,13 @@ mod end_of_film_tests {
 
         /// One pipeline period: the clock runs 200 ms, the sink takes its tick, the frame runs.
         pub(super) fn step(&mut self) {
-            ffi_host::advance_clock_for_test(TICK_MS);
+            self.step_clock(TICK_MS);
+        }
+
+        /// [`Self::step`] in which the sink clock runs only `clock_ms` of the period the wall does:
+        /// a clock still spinning up after a Play.
+        pub(super) fn step_clock(&mut self, clock_ms: i64) {
+            ffi_host::advance_clock_for_test(clock_ms);
             ffi_host::tick_for_test();
             if let Some(wall) = self.wall_ms.as_mut() {
                 *wall += TICK_MS as u32;
