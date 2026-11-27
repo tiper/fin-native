@@ -5,7 +5,9 @@
 //! other codec PMS can carry in a direct-playable container (TrueHD, FLAC, ALAC, Opus, Vorbis,
 //! PCM) is a server transcode by default — the whole file re-muxed or re-encoded so its audio
 //! arrives as one of those four. With Settings > Playback > Convert audio on the TV the profile
-//! offers those codecs for direct play instead (`devcaps::converted_on_tv`), the Load declares AC3,
+//! offers those codecs for direct play instead (`devcaps::converted_on_tv`). DTS (and Opus) are
+//! also converted when the set's own table does not take the track (`devcaps::converted_with`);
+//! DTS is decoded core-only. The Load declares AC3,
 //! and the demuxer hands each packet of the selected track to an [`AudioConverter`]: the bundled
 //! libavcodec decodes it, libswresample converts it to planar float at an AC3 rate and folds it to
 //! the AC3 layout, and the bundled `ac3` encoder produces the frames the audio lane carries.

@@ -353,8 +353,9 @@ pub fn app_decode_mixes_down(channels: i64) -> bool {
 
 /// **"Convert audio: on the TV"** (Settings > Playback): the audio codecs the app decodes itself
 /// and re-encodes to AC3 (`plx_media`'s `ff_audio.rs`) when the viewer picked that, spelled as PMS's
-/// profile and `Stream.codec` spell them. None is in [`DP_AUDIO_CODECS`]: they are exactly what the
-/// pipeline cannot take, so by default the server converts the file.
+/// profile and `Stream.codec` spell them. Opus and DTS are in [`DP_AUDIO_CODECS`] too: the set takes
+/// them itself and the app converts only a track the set does not take ([`converted_with`]). The
+/// others are exactly what the pipeline cannot take, so by default the server converts the file.
 pub const TV_CONVERTED_AUDIO_CODECS: &str = "truehd,flac,alac,opus,vorbis,pcm,dts";
 
 /// The FFmpeg the app ships can convert: `ff::boot` found the `ac3` encoder and the decoders.

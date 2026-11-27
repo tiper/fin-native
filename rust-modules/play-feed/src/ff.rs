@@ -24,12 +24,13 @@ pub use audio::set_convert_audio;
 
 fn audio_declaration_mismatch(declared: u8, actual: u8) -> bool {
     // PCM describes decoded output; the container still carries the compressed input. So does the
-    // AC3 the app encodes ("Convert audio: On the TV"): the converter takes whatever the track is.
-    declared != 0
-        && declared != 5
-        && declared != plx_playback_contract::feed::DG_LOAD_A_CONVERTED_AC3
-        && actual != 0
-        && declared != actual
+    // AC3 the app encodes ("Convert audio: On the TV") over a track the converter takes: DTS, an AC3
+    // already, or a codec outside the Load's code space. E-AC3 and AAC pass through the converter
+    // untouched, so under that declaration they are still a mismatch.
+    if declared == plx_playback_contract::feed::DG_LOAD_A_CONVERTED_AC3 {
+        return matches!(actual, 2 | 3);
+    }
+    declared != 0 && declared != 5 && actual != 0 && declared != actual
 }
 
 #[test]
@@ -44,14 +45,22 @@ fn pcm_output_does_not_mismatch_the_compressed_source() {
 }
 
 /// "Convert audio: On the TV": a Load that declared the AC3 the app encodes
-/// (`DG_LOAD_A_CONVERTED_AC3`) is honoured whatever the source is: DTS, TrueHD or any other track
-/// the converter decodes. Refusing it as a stale declaration sent a converted DTS film into a
+/// (`DG_LOAD_A_CONVERTED_AC3`) is honoured over DTS, TrueHD or any other track the converter
+/// decodes, but not over E-AC3 or AAC, which it passes through. Refusing it as a stale declaration sent a converted DTS film into a
 /// reload loop that ended on the error screen.
 #[test]
-fn a_converted_ac3_declaration_matches_any_source() {
+fn a_converted_ac3_declaration_matches_what_the_converter_takes() {
     let converted = plx_playback_contract::feed::DG_LOAD_A_CONVERTED_AC3;
-    for actual in [0, 1, 2, 3, 4] {
+    // DTS (4) and the codecs outside the Load's code space (0: TrueHD, FLAC, Opus, ...) are the
+    // converter's; an AC3 track (1) is already what the Load declared.
+    for actual in [0, 1, 4] {
         assert!(!audio_declaration_mismatch(converted, actual), "source code {actual}");
+    }
+    // Stale metadata (TrueHD or DTS) over a file that really carries E-AC3 or AAC: the converter
+    // passes those through untouched, so feeding them under an AC3 declaration stalls the audio.
+    // They stay mismatches, and the one-shot retry reloads with the codec the file carries.
+    for actual in [2, 3] {
+        assert!(audio_declaration_mismatch(converted, actual), "source code {actual}");
     }
 }
 
