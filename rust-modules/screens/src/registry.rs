@@ -335,12 +335,13 @@ pub enum PlayerReq {
     CancelAutoSkip(plx_appkit::skip_policy::OfferId),
     /// Accepted only after the owned player confirmation. Never emitted by boot or Play.
     RepairSandbox,
-    /// The failure read-out's *Try again*: resolve the failed item again, unchanged, at the
-    /// position the viewer was at (`app::playback::retry_failed_playback`).
-    RetryPlayback,
-    /// The failure read-out's fix for Force Direct Play: set the Direct Play preference to Auto —
-    /// the same persisted value Settings writes — and resolve the failed item again under it.
-    PlayAutomatically,
+    /// **The failure read-out's recovery**, as the viewer chose it: *Try again* (resolve the failed item again,
+    /// unchanged, at the position the viewer was at) or *Play automatically* (the fix for Force or Disabled Direct
+    /// Play: set the Direct Play preference to Auto, the same persisted value Settings writes, and resolve again
+    /// under it). The app performs it through the one door (`app::playback::perform_recovery`), which refuses one the
+    /// failure does not offer. A rung and a track pick are recoveries too, and arrive through the pickers that
+    /// choose them (`More(SetQuality)`, `ContentReq::CommitPreplayPick`).
+    Recover(plx_media::player::Recovery),
     /// A transport key FELL THROUGH the panel (§ `overlay_transport_key_tests`): a viewer holding
     /// the track menu, the Info card or the Chapters strip open still expects PAUSE/PLAY to work,
     /// and the panel stays up. `true` = the key was PLAY, `false` = PAUSE; a PLAYPAUSE toggle is

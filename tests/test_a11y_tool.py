@@ -479,7 +479,7 @@ class SubjectBearing(unittest.TestCase):
     ITEM_MENU_ALIAS = re.compile(r"ItemMenuAction as (\w+)")
     TITLE_ACTING = re.compile(
         r"\b(ContentReq::Play\b|HomeReq::Play\b|LibraryReq::Play\b|AppMsg::PlayVersion|"
-        r"PlayerReq::(?:Command|StandIn|RetryPlayback|PlayAutomatically|More|CommitTrack)\b|SubSearchCmd::Download\b|"
+        r"PlayerReq::(?:Command|StandIn|Recover|More|CommitTrack)\b|SubSearchCmd::Download\b|"
         r"Write::(?:Watched|Unwatched|RemoveFromDeck)\b|"
         r"ItemMenuAction::" + ITEM_MENU_ACTIONS + r"\b|"
         r"WatchlistAdd\b|WatchlistRemove\b|AppFx::Catalog\b|PlayIntent::\w+)")

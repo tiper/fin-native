@@ -1367,7 +1367,7 @@ player, transport and tracks auditors, and is counted once in the themes above.
 
 - **A failed manual/fixed direct play is not automatically converted** — `major` / `medium`
   Plex clients can retry with a transcode (or a lower quality) when direct play fails. We surface the diagnosed failure and let the viewer press OK to retry the current policy or choose a lower rung; we do not silently choose a different manual/fixed policy for them.
-  *Where:* Any future automatic policy belongs before the terminal Error publication in `player/pump.rs`; the explicit recovery already goes through `app::retry_failed_playback` and a fresh `route::retry_current_play` resolve.
+  *Where:* Any future automatic policy belongs before the terminal Error publication in `player/pump.rs`; the explicit recovery already goes through `app::perform_recovery` (the one door, `route::begin_recovery`) and a fresh `route::retry_current_play` resolve.
   *Device:* Medium: the retry must be latched per item or it becomes an infinite reload loop against a server that is also failing, and each attempt costs a full teardown (thread joins + Starfish destruct, player/engine.rs:529+). It must also distinguish a producer failure (`demux_failed`, ff.rs:1343/1684 — retryable, the server can transcode it) from a transport failure like a dead PMS (not retryable the same way). The one thing that makes this cheap here is that `retranscode` already forces the hevc/ac3 output and rebuilds the Load payload from the decision (route.rs:887-893), so the retry lands on the known-good transcode path.
   *Verified:* PARTIALLY RESOLVED 2026-08-31. The failure gates still terminate the failed Engine, but the Error read-out now offers OK quality/retry and BACK; the retry re-resolves the same Plex item at the retained position with the retained audio/subtitle selection. Cold Auto Original additionally retries its retained HLS bootstrap without user input, and a runtime HLS→Original experiment rolls back to its held HLS route. What remains is the narrower policy gap in the heading: a manual/fixed direct failure is not automatically converted before asking the viewer.
 
@@ -1706,7 +1706,7 @@ player, transport and tracks auditors, and is counted once in the themes above.
 
 - **Server loss or a pipeline error mid-playback was a silent freeze** — `blocker` / `medium`
   The failure signals now enter a cause-aware Error read-out after playback too. The read-out offers OK quality/retry and BACK; retry performs a real stop plus fresh resolve from the retained position rather than attempting to keep driving the dead Engine.
-  *Where:* `player/pump.rs` owns terminal producer/Load failures, `player::observe_failure` captures the concrete cause as the session's `PlaybackFailure`, `ui/player_hud.rs::draw_failed_readout` renders it, and `app::retry_failed_playback` owns the main-thread restart.
+  *Where:* `player/pump.rs` owns terminal producer/Load failures, `player::observe_failure` captures the concrete cause as the session's `PlaybackFailure`, `ui/player_hud.rs::draw_failed_readout` renders it, and `app::perform_recovery` owns the main-thread restart (every button that starts a new attempt is one `player::Recovery`).
   *Verified:* RESOLVED in the current tree; automatic retry policy remains intentionally narrower than detection and explicit recovery.
 
 - **~~No Playback Information / stats overlay exists at all~~ — RESOLVED 2026-08-31**

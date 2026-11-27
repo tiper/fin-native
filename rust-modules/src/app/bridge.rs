@@ -5924,6 +5924,10 @@ mod session_stored_home_tests;
 #[path = "restore_characterisation_tests.rs"]
 mod restore_characterisation_tests;
 
+#[cfg(all(test, feature = "sim"))]
+#[path = "failure_recovery_tests.rs"]
+mod failure_recovery_tests;
+
 #[cfg(test)]
 #[path = "bridge_test_support.rs"]
 pub(crate) mod test_support;

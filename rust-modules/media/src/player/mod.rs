@@ -309,6 +309,8 @@ pub use pump::{
 };
 pub use attempt_view::PlaybackState;
 pub use failure::{live_offers, observe_failure, FailureSettings, FailureTrigger, FrozenOffers, LiveOffers, PlaybackFailure};
+pub use failure::{Recovery, Refused, RetryOverrides};
+pub(crate) use failure::recovery_offered;
 #[cfg(any(test, feature = "test-support"))]
 pub use failure::{error_for_test, failure_for_test, failure_under_for_test};
 

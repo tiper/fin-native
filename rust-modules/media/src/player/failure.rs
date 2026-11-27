@@ -19,6 +19,12 @@
 //!   The derivation it replaces let that note win over every cause but the jail, the tuners and a refused
 //!   preview, so the value does too.
 //!
+//! * **What the viewer does about it** ([`Recovery`]): a closed set of typed events, each of which starts a new attempt
+//!   of the failed request. [`crate::route::begin_recovery`] is their ONE door: it asks the row's own table
+//!   ([`failure_actions`](super::failure_actions)) whether the failure offers the recovery, refuses one it does not
+//!   (logged, never defaulted), and answers the [`RetryOverrides`] the retry applies. The app performs it
+//!   (`app::playback::perform_recovery`): the preference writes a recovery makes, the stop and the resolve.
+//!
 //! **One field, one writer** (`docs/sans-io-guide.md`, checklist item 9): the value lives in
 //! [`crate::route::PlaybackSession`], and [`observe_failure`] is the only writer that records or refines it
 //! (through the route's doors), and it clears it on leaving Error; the three route resets (`clear_play_verdict`,
@@ -255,6 +261,82 @@ pub fn live_offers(ps: &crate::route::PlaybackSession, meta: plx_data::metadata:
     }
 }
 
+/// **What the viewer chose to do about a failure**, as a typed event. Each one repeats the failed request as a new
+/// attempt; they differ in what they change about it. Every one has exactly one control on the read-out's row
+/// ([`action`](Self::action)), and [`crate::route::begin_recovery`] accepts it only while the failure's row still
+/// offers that control.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Recovery {
+    /// *Try again*: the same request, unchanged.
+    RetrySame,
+    /// *Play automatically*: the same request resolved under Direct Play **Auto**, which is also written as the
+    /// viewer's preference (the app's write: the Force or Disabled that made the play fail would fail the next one).
+    PlayAutomatically,
+    /// A rung of *Change quality*: the same request at this rung, which is also the viewer's saved ceiling (the
+    /// app's write, ahead of the retry: the resolve reads it).
+    PickQuality(crate::route::Quality),
+    /// A pick of *Audio & Subtitles*: the same request playing this pair, which the session holds until a landing
+    /// consumes it ([`crate::route::hold_pick_for_retry`]), so a refused or cancelled retry still keeps it for
+    /// *Try again*.
+    PickTracks(plx_data::metadata::PreplayPick),
+}
+
+impl Recovery {
+    /// The control of the read-out's row this recovery answers.
+    pub fn action(&self) -> super::FailureAction {
+        use super::FailureAction as A;
+        match self {
+            Self::RetrySame => A::TryAgain,
+            Self::PlayAutomatically => A::PlayAutomatically,
+            Self::PickQuality(_) => A::ChangeQuality,
+            Self::PickTracks(_) => A::ChangeTracks,
+        }
+    }
+
+    /// What this recovery changes about the retry it starts.
+    pub(crate) fn overrides(&self) -> RetryOverrides {
+        use super::report::AttemptOrigin as O;
+        let (direct_play, origin) = match self {
+            Self::RetrySame => (None, O::UserRetry),
+            Self::PlayAutomatically => (Some(DirectPlayMode::Auto), O::UserRetry),
+            Self::PickQuality(_) => (None, O::QualityChange),
+            Self::PickTracks(_) => (None, O::ViewerReconfigure),
+        };
+        RetryOverrides { direct_play, origin }
+    }
+}
+
+/// What a recovery changes about the retry it starts ([`crate::route::retry_current_play`] applies it): the Direct
+/// Play mode the new attempt resolves under (`None` keeps the failed attempt's own: a retry is the SAME request),
+/// and why the viewer asked, which rides to the report of the attempt it starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetryOverrides {
+    pub direct_play: Option<DirectPlayMode>,
+    pub origin: super::report::AttemptOrigin,
+}
+
+/// Why [`crate::route::begin_recovery`] declined.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refused {
+    /// No failure stands: nothing was captured yet (a request raced the frame) or it was cleared.
+    NoFailure,
+    /// The failure's row does not offer this control (now).
+    NotOffered(super::FailureAction),
+}
+
+/// Does `failure`'s row, with `live`, offer `recovery`? The ONE answer is the row's own table, so a recovery is
+/// accepted exactly while its control is drawn.
+///
+/// A track pick is judged with the item's tracks read as available: it was made on the picker those tracks fed, which
+/// is the evidence that they exist, and asking the metadata again at the commit would only race the panel.
+pub(crate) fn recovery_offered(failure: &PlaybackFailure, live: LiveOffers, recovery: &Recovery) -> bool {
+    let live = match recovery {
+        Recovery::PickTracks(_) => LiveOffers { tracks_available: true, ..live },
+        _ => live,
+    };
+    super::failure_actions(failure, live).contains(&recovery.action())
+}
+
 /// Test-only: the failure `ps` stands for right now, derived without a frame (no dev trigger, attempt 0).
 #[cfg(any(test, feature = "test-support"))]
 pub fn failure_for_test(ps: &crate::route::PlaybackSession) -> PlaybackFailure {
@@ -382,6 +464,112 @@ mod tests {
             before,
             "nothing else about the row moved"
         );
+    }
+
+    fn standing(failure: PlaybackFailure) -> PlaybackSession {
+        let mut ps = PlaybackSession::IDLE;
+        crate::route::seed_request_for_test(&mut ps, "m1");
+        crate::route::record_failure(&mut ps, failure);
+        ps
+    }
+
+    fn pick() -> plx_data::metadata::PreplayPick {
+        plx_data::metadata::PreplayPick { part_id: 9001, audio_sid: 21, sub: plx_data::metadata::SubPick::Off }
+    }
+
+    const LIVE: LiveOffers = LiveOffers { repair_idle: true, tracks_available: false };
+    const OFFERS: FrozenOffers = FrozenOffers { can_retry: true, quality_carriable: true };
+
+    /// **The door answers the overrides each recovery's performer used before there was one**: the Direct Play mode
+    /// (Auto only for *Play automatically*) and the attempt's origin.
+    #[test]
+    fn the_door_answers_each_recoveries_overrides() {
+        use crate::player::report::AttemptOrigin as O;
+        let _g = plx_base::testlock::serial();
+        // Force offers *Play automatically* and *Try again* for a transient cause
+        let mut forced = standing(PlaybackFailure::for_test(FailureKind::MediaSource, DirectPlayMode::Forced, OFFERS));
+        let door = |ps: &mut PlaybackSession, r: Recovery| crate::route::begin_recovery(ps, LIVE, &r);
+        assert_eq!(door(&mut forced, Recovery::PlayAutomatically),
+            Ok(RetryOverrides { direct_play: Some(DirectPlayMode::Auto), origin: O::UserRetry }));
+        assert_eq!(door(&mut forced, Recovery::RetrySame), Ok(RetryOverrides { direct_play: None, origin: O::UserRetry }));
+        // an ordinary transient failure offers the rung and the pair
+        let mut auto = standing(PlaybackFailure::for_test(FailureKind::PlaybackInterrupted, DirectPlayMode::Auto, OFFERS));
+        assert_eq!(door(&mut auto, Recovery::PickQuality(crate::route::Quality::P720)),
+            Ok(RetryOverrides { direct_play: None, origin: O::QualityChange }));
+        assert_eq!(door(&mut auto, Recovery::PickTracks(pick())),
+            Ok(RetryOverrides { direct_play: None, origin: O::ViewerReconfigure }));
+    }
+
+    /// **A track pick is held by the door, before the retry, and only when it is accepted.**
+    #[test]
+    fn a_track_pick_is_held_when_accepted_and_not_when_refused() {
+        let _g = plx_base::testlock::serial();
+        let mut ps = standing(PlaybackFailure::for_test(FailureKind::PlaybackInterrupted, DirectPlayMode::Auto, OFFERS));
+        assert_eq!(crate::route::failed_pick(&ps), None, "rig");
+        assert!(crate::route::begin_recovery(&mut ps, LIVE, &Recovery::PickTracks(pick())).is_ok());
+        assert_eq!(crate::route::failed_pick(&ps), Some(pick()), "held ahead of the retry the caller starts");
+
+        // a failure that offers no pair (the file has no picture) holds nothing
+        let mut ps = standing(PlaybackFailure::for_test(FailureKind::NoVideoTrack, DirectPlayMode::Auto, OFFERS));
+        assert_eq!(crate::route::begin_recovery(&mut ps, LIVE, &Recovery::PickTracks(pick())),
+            Err(Refused::NotOffered(super::super::FailureAction::ChangeTracks)));
+        assert_eq!(crate::route::failed_pick(&ps), None, "a refused pick is not held");
+    }
+
+    /// **A recovery the failure does not offer is refused**, with the control it asked for, and nothing about the
+    /// session moves (checklist item 7: assert plus log, never a default).
+    #[test]
+    fn a_recovery_the_failure_does_not_offer_is_refused() {
+        use super::super::FailureAction as A;
+        let _g = plx_base::testlock::serial();
+        // no rung can be carried on this composition: *Change quality* is not on the row
+        let no_rung = FrozenOffers { can_retry: true, quality_carriable: false };
+        let mut ps = standing(PlaybackFailure::for_test(FailureKind::PlaybackInterrupted, DirectPlayMode::Auto, no_rung));
+        let before = crate::route::failure(&ps).cloned();
+        assert_eq!(crate::route::begin_recovery(&mut ps, LIVE, &Recovery::PickQuality(crate::route::Quality::P720)),
+            Err(Refused::NotOffered(A::ChangeQuality)));
+        // not under Force or Disabled: the fix for those is not offered
+        assert_eq!(crate::route::begin_recovery(&mut ps, LIVE, &Recovery::PlayAutomatically),
+            Err(Refused::NotOffered(A::PlayAutomatically)));
+        // and a deterministic refusal gets no *Try again*
+        let mut refused = standing(PlaybackFailure::for_test(FailureKind::DecisionRefused, DirectPlayMode::Auto, OFFERS));
+        assert_eq!(crate::route::begin_recovery(&mut refused, LIVE, &Recovery::RetrySame), Err(Refused::NotOffered(A::TryAgain)));
+        assert_eq!(crate::route::failure(&ps).cloned(), before, "the failure stands, untouched");
+        // nothing captured: nothing to offer
+        let mut none = PlaybackSession::IDLE;
+        assert_eq!(crate::route::begin_recovery(&mut none, LIVE, &Recovery::RetrySame), Err(Refused::NoFailure));
+    }
+
+    /// **Every control of the row that starts a new attempt answers exactly one recovery, and the door accepts the
+    /// recovery exactly while the table offers the control.** Across the whole enumerated table (every kind, mode,
+    /// offer and live input), so a control cannot be drawn that the door would refuse, nor accepted that is not drawn.
+    #[test]
+    fn every_offered_action_maps_to_one_recovery() {
+        use super::super::FailureAction as A;
+        let _g = plx_base::testlock::serial();
+        let recoveries = [Recovery::RetrySame, Recovery::PlayAutomatically,
+            Recovery::PickQuality(crate::route::Quality::P720), Recovery::PickTracks(pick())];
+        for action in [A::TryAgain, A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks] {
+            assert_eq!(recoveries.iter().filter(|r| r.action() == action).count(), 1, "{action:?} has exactly one recovery");
+        }
+        for recovery in &recoveries {
+            assert!(!matches!(recovery.action(), A::Repair | A::Back), "{recovery:?}: Repair and Back start no attempt");
+        }
+        for (failure, live, row) in super::super::every_failure_row() {
+            for recovery in &recoveries {
+                // a pick is made on the picker the tracks fed: judged with them available
+                let drawn = match recovery {
+                    Recovery::PickTracks(_) => super::super::failure_actions(&failure, LiveOffers { tracks_available: true, ..live }),
+                    _ => row.clone(),
+                };
+                assert_eq!(recovery_offered(&failure, live, recovery), drawn.contains(&recovery.action()),
+                    "{:?} {recovery:?} {live:?}", failure.kind());
+                // and the DOOR itself, on a session standing on that failure, answers the same
+                let mut ps = standing(failure.clone());
+                assert_eq!(crate::route::begin_recovery(&mut ps, live, recovery).is_ok(), drawn.contains(&recovery.action()),
+                    "door: {:?} {recovery:?} {live:?}", failure.kind());
+            }
+        }
     }
 
     /// **Every runtime cause reads the same through the capture as through the derivation it replaced.**

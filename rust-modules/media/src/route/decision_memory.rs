@@ -772,6 +772,38 @@ pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::
     ps.held_pick = Some(super::HeldPick { item, selection });
 }
 
+/// **The ONE door of the failure read-out's recoveries** (`player::Recovery`): the viewer chose to do something about
+/// the failure that stands, and this decides whether it may be done and what it changes about the retry.
+///
+/// * No failure stands, or its row does not offer the recovery's control (`player::failure_actions`, the table the row
+///   is drawn from, with `live` its two live inputs): refused, logged, nothing touched. A recovery is never defaulted
+///   into a retry the row never offered.
+/// * A track pick is held on the session BEFORE the retry starts ([`hold_pick_for_retry`]): the retry consumes it, a
+///   retry that is refused or cancelled leaves it held for *Try again*, and the panel keeps reading it.
+/// * Otherwise the overrides the retry applies ([`retry_current_play`]): the Direct Play mode and the attempt's origin.
+///
+/// The app performs everything else a recovery means: the preference it writes, the stop of the failed attempt and the
+/// resolve (`app::playback::perform_recovery`).
+pub fn begin_recovery(
+    ps: &mut PlaybackSession,
+    live: crate::player::LiveOffers,
+    recovery: &crate::player::Recovery,
+) -> Result<crate::player::RetryOverrides, crate::player::Refused> {
+    use crate::player::Refused;
+    let refused = match ps.failure.as_ref() {
+        None => Refused::NoFailure,
+        Some(failure) if !crate::player::recovery_offered(failure, live, recovery) => Refused::NotOffered(recovery.action()),
+        Some(_) => {
+            if let crate::player::Recovery::PickTracks(pick) = recovery {
+                hold_pick_for_retry(ps, pick);
+            }
+            return Ok(recovery.overrides());
+        }
+    };
+    crate::player::log(&format!("recovery refused: {recovery:?}: {refused:?}"));
+    Err(refused)
+}
+
 /// **What the failure screen's picker starts from**: the held pick, else the attempt's standing
 /// selection ([`standing_selection`]), as the same [`plx_data::metadata::PreplayPick`] a pre-play pick
 /// is, so the panel reads one shape from either source. A `0` subtitle reads as Off.

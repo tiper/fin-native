@@ -14,7 +14,7 @@
 //! * `bridge::follow_auth_landing`, at every credentials handoff (`Ready`), which a profile switch
 //!   ends in;
 //! * the doors that pick a value (`route::select_subtitle_size`, `route::set_direct_play_mode`,
-//!   `playback::play_automatically`), which wrote the record's top-level key.
+//!   `playback::perform_recovery(Recovery::PlayAutomatically)`), which wrote the record's top-level key.
 //!
 //! Now the cells hold the SEATED profile's values: boot restores `Unseated` (the fallback), the
 //! seat trigger (`bridge::SeatWatch`) restores at every seat change and nowhere else, and the doors
@@ -520,8 +520,11 @@ fn profile_picks_are_each_profiles_own_and_play_automatically_on_b_leaves_a_alon
     let mut adapter = plx_media::player::adapter::PlayerAdapter::new(unsafe {
         plx_base::task::MainThread::assume()
     });
-    assert!(!crate::app::playback::play_automatically(&mut player.session, &mut adapter, rig.metadata_mut()),
-        "there is no reusable Plex request to retry, so only the preference moves");
+    failed_under_force(&mut player);
+    assert_eq!(crate::app::playback::perform_recovery(&mut player.session, &mut adapter, rig.metadata_mut(),
+        plx_media::player::Recovery::PlayAutomatically),
+        crate::app::playback::Recovered::Started, "the failed request is resolved again under Auto");
+    plx_media::route::cancel_play(&mut player.session);
     assert_eq!(plx_media::route::direct_play_mode(), DirectPlayMode::Auto, "B's live cell moved at once");
     plx_base::storage_worker::drain_for_test();
     assert_eq!(stored_value::<DirectPlayModePref>("profile-b"), Some(DirectPlayMode::Auto), "...and B's record");
@@ -563,11 +566,26 @@ fn play_automatically_publishes_direct_play_auto_once() {
         plx_base::task::MainThread::assume()
     });
     let before = publishes_for_test::<DirectPlayModePref>();
-    crate::app::playback::play_automatically(&mut player.session, &mut adapter, rig.metadata_mut());
+    failed_under_force(&mut player);
+    crate::app::playback::perform_recovery(&mut player.session, &mut adapter, rig.metadata_mut(),
+        plx_media::player::Recovery::PlayAutomatically);
+    plx_media::route::cancel_play(&mut player.session);
     plx_base::storage_worker::drain_for_test();
     assert_eq!(publishes_for_test::<DirectPlayModePref>() - before, 1, "published exactly once");
     assert_eq!(plx_media::route::direct_play_mode(), DirectPlayMode::Auto);
     assert_eq!(stored_value::<DirectPlayModePref>("profile-a"), Some(DirectPlayMode::Auto), "and persisted behind it");
+}
+
+/// A playback that asked for item `m1` and FAILED under Force Direct Play (the dev trigger's `policy` arm, captured
+/// the way a frame captures it), so the read-out's row offers *Play automatically*. The recovery needs a failure that
+/// offers it and a request to repeat; neither says anything about the profile the tests below are about.
+fn failed_under_force(player: &mut plx_media::player::machine::Player) {
+    plx_media::route::seed_request_for_test(&mut player.session, "m1");
+    plx_media::player::observe_failure(
+        &mut player.session,
+        plx_media::player::FailureTrigger { arm: Some("policy"), armed: false },
+        plx_media::player::report::attempt_id(),
+    );
 }
 
 // ---- the seat trigger: what each way of arriving at a seat restores -----------------------------
@@ -956,7 +974,10 @@ fn play_automatically_resets_the_active_profiles_direct_play_only() {
     let mut adapter = plx_media::player::adapter::PlayerAdapter::new(unsafe {
         plx_base::task::MainThread::assume()
     });
-    crate::app::playback::play_automatically(&mut player.session, &mut adapter, rig.metadata_mut());
+    failed_under_force(&mut player);
+    crate::app::playback::perform_recovery(&mut player.session, &mut adapter, rig.metadata_mut(),
+        plx_media::player::Recovery::PlayAutomatically);
+    plx_media::route::cancel_play(&mut player.session);
     plx_base::storage_worker::drain_for_test();
     assert_eq!(plx_media::route::direct_play_mode(), DirectPlayMode::Auto);
     assert_eq!(stored_value::<DirectPlayModePref>("profile-a"), Some(DirectPlayMode::Auto), "A's record moved");

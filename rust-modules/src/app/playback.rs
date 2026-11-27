@@ -20,7 +20,6 @@
 //! through a `PlayerReq`.
 
 use super::*;
-use plx_media::player::report::AttemptOrigin;
 mod queue_transport;
 // The list is what the LOOP still spells, and phase 12 (PX-PLAYER) is why it is short: the scrub
 // gesture's constants and its two pure policies (`scrub_press`, `failed_key_action`) are read by
@@ -155,16 +154,85 @@ pub(super) fn apply_quality(
     // refusal has no Engine at all.  Persist the pick first, then make a fresh playback
     // request at the same user-visible position.  Selecting the already-active rung is
     // therefore the promised plain Retry.
+    //
+    // The discriminator is the STATE, not "a failure is recorded": the dev trigger records one over a playing session,
+    // whose rung is the live ladder's.
     let failed = matches!(plx_media::player::state(ps), plx_media::player::PlaybackState::Error);
     if failed {
-        plx_media::route::set_quality_for_retry(quality);
-        if retry_failed_playback(ps, pa, bridge.metadata_mut(), None, AttemptOrigin::QualityChange) {
-            present.note_in_scope(plx_machine::present::Scope::Page, plx_machine::present::PresentEvent::Damage(plx_machine::present::Provenance::Input));
+        // A rung on a failure is a recovery, through the one door: the viewer's choice is taken (`true`) whether or
+        // not the retry could start, and refused (`false`) only where the failure does not offer a rung.
+        match perform_recovery(ps, pa, bridge.metadata_mut(), plx_media::player::Recovery::PickQuality(quality)) {
+            Recovered::Started => present.note_in_scope(plx_machine::present::Scope::Page, plx_machine::present::PresentEvent::Damage(plx_machine::present::Provenance::Input)),
+            Recovered::Kept => {}
+            Recovered::Refused => return false,
         }
     } else {
         return plx_media::route::set_quality(ps, quality);
     }
     true
+}
+
+/// How a recovery ended ([`perform_recovery`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Recovered {
+    /// The failed attempt was replaced: a new resolve of the request is in flight.
+    Started,
+    /// The recovery was taken and what it writes was written, but the retry could not start (nothing to resolve
+    /// again, or the failed attempt could not be stopped). A track pick stays held for *Try again*.
+    Kept,
+    /// Nothing was done: a server's stop ended the playback, or the failure does not offer the recovery.
+    Refused,
+}
+
+/// **Perform one of the failure read-out's recoveries** (`player::Recovery`): the ONE performer of *Try again*,
+/// *Play automatically*, a rung picked on the failure and a track pick made on the failure screen. The same steps in
+/// the same order whichever it is:
+///
+/// 1. a server's stop ended the playback: nothing is written or retried ([`Recovered::Refused`]);
+/// 2. [`plx_media::route::begin_recovery`] (the door) refuses what the failure's row does not offer, holds a track
+///    pick on the session and answers the retry's overrides;
+/// 3. the recovery's preference write, ahead of the retry because the resolve reads it: Auto for *Play automatically*
+///    (the one write door, `route::choose`, `How::Optimistic`: the live cell published ONCE and the seated profile's
+///    record saved behind it, which a failed save only logs) or the rung for a quality pick;
+/// 4. the retry itself ([`retry_failed_playback`]).
+pub(crate) fn perform_recovery(
+    ps: &mut plx_media::route::PlaybackSession,
+    pa: &mut plx_media::player::adapter::PlayerAdapter,
+    meta: &mut plx_data::stores::metadata::MetadataStore,
+    recovery: plx_media::player::Recovery,
+) -> Recovered {
+    perform_recovery_with(ps, pa, meta, recovery, || {})
+}
+
+/// [`perform_recovery`] with `accepted`: the caller's own writes for a recovery, run only once the door has accepted
+/// it and ahead of the retry (after step 3). A server stop or a refusal runs none of it, so a refused recovery writes
+/// nothing. The failure screen's track pick queues its selection PUT here.
+pub(crate) fn perform_recovery_with(
+    ps: &mut plx_media::route::PlaybackSession,
+    pa: &mut plx_media::player::adapter::PlayerAdapter,
+    meta: &mut plx_data::stores::metadata::MetadataStore,
+    recovery: plx_media::player::Recovery,
+    accepted: impl FnOnce(),
+) -> Recovered {
+    use plx_media::player::Recovery;
+    if plx_media::player::server_stop_applies(ps) {
+        return Recovered::Refused;
+    }
+    let live = plx_media::player::live_offers(ps, meta.view());
+    let Ok(overrides) = plx_media::route::begin_recovery(ps, live, &recovery) else {
+        return Recovered::Refused;
+    };
+    if let Some(mode) = overrides.direct_play {
+        // PERSISTENT, deliberately, not a one-shot: Force (or Disabled) is what made the play fail, and it would make
+        // the next unsupported file fail the same way. A pick of the SEATED profile: it resets that profile's mode and
+        // no other's, and with nobody seated the door refuses the save and the pick stands live only.
+        plx_media::route::choose::<plx_plex::plex::session::DirectPlayModePref>(mode, plx_media::route::How::Optimistic(None));
+    }
+    if let Recovery::PickQuality(quality) = recovery {
+        plx_media::route::set_quality_for_retry(quality);
+    }
+    accepted();
+    if retry_failed_playback(ps, pa, meta, overrides) { Recovered::Started } else { Recovered::Kept }
 }
 
 /// Replace a terminal attempt with a new resolve of the same Plex item.
@@ -174,16 +242,16 @@ pub(super) fn apply_quality(
 /// and gives telemetry two honest attempts.  The descriptor lives in `route`; the app owns only
 /// the current playhead and the Engine lifecycle.
 ///
-/// `direct_play` overrides the Direct Play mode the retry resolves under; `None` keeps the failed
-/// attempt's own (a retry is the SAME request). `origin` is why the viewer asked — a Retry press
-/// or a quality pick on the failure screen — and rides to the error report of the attempt this
-/// starts, which is the next open of the same session.
-pub(crate) fn retry_failed_playback(
+/// `overrides` is what the viewer's recovery changes about the retry ([`plx_media::route::begin_recovery`] answers it):
+/// the Direct Play mode it resolves under (`None` keeps the failed attempt's own: a retry is the SAME request) and
+/// why the viewer asked (`AttemptOrigin`: a Retry press, a quality pick, a track pick), which rides to the error
+/// report of the attempt this starts, the next open of the same session. Private: a retry is only ever a
+/// recovery, performed by [`perform_recovery`].
+fn retry_failed_playback(
     ps: &mut plx_media::route::PlaybackSession,
     pa: &mut plx_media::player::adapter::PlayerAdapter,
     meta: &mut plx_data::stores::metadata::MetadataStore,
-    direct_play: Option<plx_plex::plex::session::DirectPlayMode>,
-    origin: AttemptOrigin,
+    overrides: plx_media::player::RetryOverrides,
 ) -> bool {
     // URL/dev-trigger playback has no Plex descriptor.  Check BEFORE teardown: extinguishing its
     // Error Engine and only then discovering it cannot be rebuilt would replace an actionable
@@ -205,36 +273,12 @@ pub(crate) fn retry_failed_playback(
     if !plx_media::player::stop_for_replacement(ps, pa) {
         return false;
     }
-    if plx_media::route::retry_current_play(ps, meta, resume_ns, direct_play, origin) {
+    if plx_media::route::retry_current_play(ps, meta, resume_ns, overrides) {
         true
     } else {
         log("playback retry: current source cannot be resolved again");
         false
     }
-}
-
-/// **The failure read-out's fix for Force or Disabled Direct Play** — `FailureAction::PlayAutomatically`.
-///
-/// A PERSISTENT switch, deliberately, not a one-shot: Force (or Disabled) is what made this play
-/// fail, and it would make the next unsupported file fail the same way. The preference moves to Auto now (the
-/// in-memory value every later resolve reads) and is saved on the storage worker behind it, both
-/// by the one write door (`route::choose`, `How::Optimistic`), as the SEATED profile's own pick: it
-/// resets that profile's Direct Play mode and no other's, and with nobody seated the door refuses
-/// the save and the pick stands live only. The frame may not block on storage,
-/// the cell is published ONCE, and a failed save is logged by the door while the pick stands for
-/// this session. The retry resolves under Auto explicitly rather than inheriting the failed
-/// attempt's Force or Disabled, which a plain retry keeps on purpose.
-pub(crate) fn play_automatically(
-    ps: &mut plx_media::route::PlaybackSession,
-    pa: &mut plx_media::player::adapter::PlayerAdapter,
-    meta: &mut plx_data::stores::metadata::MetadataStore,
-) -> bool {
-    use plx_plex::plex::session::{DirectPlayMode, DirectPlayModePref};
-    if plx_media::player::server_stop_applies(ps) {
-        return false;
-    }
-    plx_media::route::choose::<DirectPlayModePref>(DirectPlayMode::Auto, plx_media::route::How::Optimistic(None));
-    retry_failed_playback(ps, pa, meta, Some(DirectPlayMode::Auto), AttemptOrigin::UserRetry)
 }
 
 /// **Where a session that is STARTING returns to** — the whole of what `app::nav::Origin` was,
@@ -890,13 +934,8 @@ pub(crate) fn player_requests(
                     plx_machine::machine::Delivery::Screen(plx_ui::screen::ScreenEvent::App(
                         plx_screens::registry::AppMsg::AutoSkipResolved { id, outcome }))));
             }
-            PlayerReq::RetryPlayback => {
-                if retry_failed_playback(&mut player.session, pa, bridge.metadata_mut(), None, AttemptOrigin::UserRetry) {
-                    pages.present.note_in_scope(plx_machine::present::Scope::Page, plx_machine::present::PresentEvent::Damage(plx_machine::present::Provenance::Input));
-                }
-            }
-            PlayerReq::PlayAutomatically => {
-                if play_automatically(&mut player.session, pa, bridge.metadata_mut()) {
+            PlayerReq::Recover(recovery) => {
+                if perform_recovery(&mut player.session, pa, bridge.metadata_mut(), recovery) == Recovered::Started {
                     pages.present.note_in_scope(plx_machine::present::Scope::Page, plx_machine::present::PresentEvent::Damage(plx_machine::present::Provenance::Input));
                 }
             }

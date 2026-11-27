@@ -1964,7 +1964,7 @@ fn a_retry_through_the_replacement_stop_carries_the_held_pick() {
     let held = |sel: Option<HeldSelection>| sel.map(|s| (s.part_id, s.audio_sid, s.sub_sid));
     assert_eq!(held(current_retry_context(&ps, 0).selection), Some((9001, 11, 21)), "and the retry would carry it");
 
-    let _ = retry_current_play(&mut ps, &mut meta, 0, None, crate::player::report::AttemptOrigin::UserRetry);
+    let _ = retry_current_play(&mut ps, &mut meta, 0, crate::player::Recovery::RetrySame.overrides());
     assert_eq!(held(ps.carried_selection), Some((9001, 11, 21)), "the retry's request carries the pick");
     assert_eq!(memory::failed_pick(&ps), Some(pick), "and the failure panel still reads it");
     cancel_playback_request(&mut ps, true);
@@ -1994,8 +1994,8 @@ fn a_live_retry_tunes_again_and_starts_at_the_edge_not_at_the_failed_position() 
     settle_plan_start_in_unit_test(&mut ps, first.route_start);
 
     // The channel failed 30 seconds into its picture; the retry is handed that playhead.
-    assert!(retry_current_play(&mut ps, &mut meta, 30_000_000_000, None,
-        crate::player::report::AttemptOrigin::UserRetry), "a tuned channel can be tuned again");
+    assert!(retry_current_play(&mut ps, &mut meta, 30_000_000_000, crate::player::Recovery::RetrySame.overrides()),
+        "a tuned channel can be tuned again");
     assert_eq!(unpresented_resume_ns(&ps), 0, "the retry carries no position to return to");
     assert!(PLAY_RESUME.lock().unwrap_or_else(|e| e.into_inner()).is_none(), "and no resume is pending");
     assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));

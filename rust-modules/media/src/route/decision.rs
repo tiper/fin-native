@@ -32,7 +32,7 @@ use super::track_memory::{SubMode, TrackContext};
 // says what is remembered about it; every public name keeps its `route::` path.
 #[path = "decision_memory.rs"]
 mod memory;
-pub use memory::{commit_preplay_pick, failed_pick, hold_pick_for_retry, PreplayItem};
+pub use memory::{begin_recovery, commit_preplay_pick, failed_pick, hold_pick_for_retry, PreplayItem};
 pub use memory::{
     commit_audio_pick,commit_forced_only_and_sidecar, commit_forced_only_pick, commit_subtitle_and_sidecar, commit_subtitle_pick,
     on_decoded_frame, persist_subtitle_offset, rematch_subtitle_with_names, repoint_parked_subtitle, send_parked_write_back,
@@ -12227,17 +12227,18 @@ fn apply_retry_enhancement(env: &mut ResolveEnv, retry: RetryContext) {
     }
 }
 
-/// `direct_play` replaces the failed attempt's Direct Play mode for this resolve (the failure
-/// read-out's *Switch to Auto and play*); `None` keeps it. `origin` is why the viewer asked: a
-/// Retry press is `user_retry`, a quality pick on the failure screen is `quality_change`. The new
-/// attempt is the NEXT open of the same session, so its ordinal continues the failed one's.
+/// `overrides` is what the viewer's recovery changes about this retry ([`begin_recovery`] answers it): its
+/// `direct_play` replaces the failed attempt's Direct Play mode for this resolve (the failure read-out's *Play
+/// automatically*; `None` keeps it), and its `origin` is why the viewer asked: a Retry press is `user_retry`, a quality
+/// pick on the failure screen is `quality_change`. The new attempt is the NEXT open of the same session, so its
+/// ordinal continues the failed one's.
 pub fn retry_current_play(
     ps: &mut PlaybackSession,
     meta: &mut plx_data::stores::metadata::MetadataStore,
     resume_ns: i64,
-    direct_play: Option<DirectPlayMode>,
-    origin: crate::player::report::AttemptOrigin,
+    overrides: crate::player::RetryOverrides,
 ) -> bool {
+    let crate::player::RetryOverrides { direct_play, origin } = overrides;
     let Some(request) = ps.request.clone() else {
         crate::player::log("playback retry: no Plex request descriptor");
         return false;
