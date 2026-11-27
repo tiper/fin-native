@@ -31,6 +31,7 @@ extern "C" {
     pub(crate) fn SDL_GL_SetSwapInterval(interval: c_int) -> c_int;
     pub(crate) fn SDL_Delay(ms: u32);
     pub(crate) fn SDL_PollEvent(event: *mut c_void) -> c_int;
+    pub(crate) fn SDL_PumpEvents();
     pub(crate) fn SDL_PushEvent(event: *const c_void) -> c_int;
     pub(crate) fn SDL_GL_SwapWindow(win: *mut c_void);
     pub(crate) fn SDL_Quit();

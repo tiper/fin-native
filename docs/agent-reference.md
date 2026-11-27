@@ -2711,7 +2711,7 @@ path. Never run only this one before a release. `tests/README.md` has the tier t
   as `homeosc`; `libosc` shares the cadence and reverses at its document's ends instead, above). The
   oscillator does NOT reach the screen on its own: pair it with `plxnative-search`, and with a query
   the library actually matches, or `fps:search-type` has no shelves to sweep. Design, and the
-  on-screen-keyboard research behind the field (three traps, two dead ends): **`docs/search.md`**.
+  on-screen-keyboard research behind the field (four traps, two dead ends): **`docs/search.md`**.
   Plus
   `/tmp/plxnative-navosc[=<ratingKey>]` (bounce the ROUTE every 1400 ms through the real press path —
   the only scenes that change route, and so the only ones that sample the whole-screen page

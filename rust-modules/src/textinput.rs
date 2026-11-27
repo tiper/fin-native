@@ -8,7 +8,7 @@
 //!
 //! [`available`], [`start`] and [`stop`] reach the panel through the platform's `Shell`
 //! (`keyboard_available`, `show_keyboard`, `hide_keyboard`). An SDL shell takes the trait's defaults,
-//! which are the SDL calls this note describes, so the television and a desktop are unchanged. Tizen
+//! which are the SDL calls this note describes (webOS pumps first, trap 4). Tizen
 //! states its own: Ecore IMF on the host's main thread (`plx_platform_tizen`'s `ime`), whose commits
 //! arrive through `EventSink::text` like an SDL `SDL_TEXTINPUT`, and whose panel says when the viewer
 //! closed it (`EventSink::keyboard_dismissed`, the keyboard drop a background edge also asks for).
@@ -30,7 +30,7 @@
 //! about whether the PANEL rises, though — those are stock public API in every SDL2 build — so
 //! [`available`] probes at runtime rather than assuming.
 //!
-//! ## Three traps, all of them silent
+//! ## Four traps, all of them silent
 //!
 //! 1. **The event is shifted.** webOS inserts a `Uint32 inputSource` at `+12`, so the UTF-8 text
 //!    starts at **+16**, not the `+12` that stock SDL 2.0.4's `SDL_events.h` declares. That
@@ -51,6 +51,8 @@
 //!    reproduced on webOS 7.4). The community fix is in webosbrew's bundled SDL fork; we call the
 //!    TV's own, so we get the bug with no patch. `SDL_SetTextInputRect` is a no-op here too —
 //!    open and close, no positioning.
+//! 4. **The first raise can crash inside LG's SDL** unless the Wayland connection is drained: the
+//!    webOS shell's `show_keyboard` pumps first (`docs/search.md`, trap 4).
 //!
 //! Everything above was re-verified before it was written, against artefacts rather than memory:
 //! `tools/fwcompat.py --lib libSDL2-2.0.so.0 --grep TextInput` (the family, on all 14 images),

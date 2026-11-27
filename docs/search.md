@@ -293,7 +293,7 @@ That symbol table says nothing about whether the **panel actually rises**, thoug
 public API in every SDL2 build ever made. `textinput::available()` therefore probes at runtime rather
 than assuming.
 
-### Three traps
+### Four traps
 
 **1. The event is SHIFTED, and the vendored header lies about it.**
 
@@ -332,6 +332,30 @@ positioning.
 
 This is a real constraint on the interaction design, not a footnote: the screen must not treat
 "dismiss and raise again" as a normal gesture, because on some firmwares it is a one-way door.
+
+**4. The first raise can crash inside LG's SDL unless the Wayland connection is idle.**
+
+Intermittent, LG's bug, and reachable from any first `SDL_StartTextInput` of a process. The webOS shell's
+`show_keyboard` (`platform-webos/src/port.rs`) pumps SDL's events twice before raising, so the raise finds
+the queue and the socket empty; that leaves only an event landing in the sub-millisecond before the
+compositor's reply. Read from the 05.40.97 firmware (webOS 4.10.2-29, goldilocks2-grampians;
+`libSDL2-2.0.so.0.4.1` sha256 `d4eca29ba904…`, `libwayland-client.so.0.3.0` `bc80826dc897…`), at file
+offsets:
+
+- The crash's pc is `libwayland-client` `0x3878`, the `ldr r2, [r0]` (the proxy's interface) at the top
+  of `wl_proxy_marshal_constructor`. Its lr returns after the `blx r9` at `0x723d8` in
+  `WebOSShowScreenKeyboard`, whose `r0` is the keyboard record's +12, the text-model factory.
+- On the first raise the record is `malloc(32)`, with only +0 and +16 stored. The registry listener
+  (`0x722a8`) is the only writer of +12 (`text_model_factory`) and +8 (`wl_seat`).
+- Every raise calls `wl_display_get_registry`, adds that listener, then `wl_display_dispatch` and
+  `wl_display_flush`, with no round trip, and reads +12 straight after.
+- That libwayland's `wl_display_dispatch_queue` only dispatches what is queued when the queue is not
+  empty, before the request is even flushed; otherwise it flushes, polls and reads one batch.
+- `SDL_PumpEvents` (`Wayland_PumpEvents`, `0x71d78`) polls the fd with a zero timeout, then
+  `wl_display_dispatch` when it is readable, else `wl_display_flush` + `wl_display_dispatch_pending`.
+  One pump can stop at the same early return, hence two.
+- The one crash seen had `r0 = "art "`, bytes 12..16 of the `keyboard: start …` event-log line freed
+  just before the call. A zero at +12 would fault one call later, on `text_model_activate(NULL)`.
 
 ### On the simulator, which is a different keyboard stack entirely
 
