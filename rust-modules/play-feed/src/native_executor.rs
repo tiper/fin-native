@@ -991,9 +991,10 @@ pub const STALE_BACKJUMP_NS: i64 = 2_000_000_000;
 pub const SEEK_STALE_AHEAD_NS: i64 = 6_000_000_000;
 pub const SEEK_STALE_BEHIND_NS: i64 = 30_000_000_000;
 pub const MAX_REBASE_DROPS: i32 = 240;
-/// How far a conversion's first keyframe may land from the offset it was asked at and still be read
-/// as carrying film time ([`anchored_disp_base`]): up to about one GOP below, never far above.
-const FILM_TIME_KEYFRAME_BEHIND_NS: i64 = 10_000_000_000;
+/// How far above the offset it was asked at a conversion's first keyframe may land and still be read
+/// as carrying film time ([`anchored_disp_base`]). Below, the bound is the seek guard's own
+/// [`SEEK_STALE_BEHIND_NS`], which already tolerates sparse keyframes (an x264 default GOP at
+/// 23.976 fps is 10.4 s).
 const FILM_TIME_KEYFRAME_AHEAD_NS: i64 = 1_000_000_000;
 
 /// The display base for a conversion restarted at `offset_ns` whose first keyframe carries `pts`,
@@ -1004,11 +1005,11 @@ const FILM_TIME_KEYFRAME_AHEAD_NS: i64 = 1_000_000_000;
 /// with the offset, so the playhead led the picture by the snap (0.6 s to 5 s measured) and a
 /// subtitle in file time showed early. A keyframe in film time is its own position (base 0). A
 /// keyframe at 0 (a server that restarted its timestamps) keeps the offset reading, `offset +
-/// fed`. Below [`FILM_TIME_KEYFRAME_BEHIND_NS`] the two readings differ by less than that window,
+/// fed`. Below [`SEEK_STALE_BEHIND_NS`] the two readings differ by less than that window,
 /// and film time is what the anchored request asked for. Armed per Load by `FeedCommand::Rebase`'s
 /// `anchor` (`Shared::anchor_rebase`).
 pub fn anchored_disp_base(pts: i64, offset_ns: i64) -> i64 {
-    let film_time = pts >= offset_ns.saturating_sub(FILM_TIME_KEYFRAME_BEHIND_NS)
+    let film_time = pts >= offset_ns.saturating_sub(SEEK_STALE_BEHIND_NS)
         && pts <= offset_ns.saturating_add(FILM_TIME_KEYFRAME_AHEAD_NS);
     if film_time { 0 } else { offset_ns.saturating_sub(pts) }
 }
@@ -2643,7 +2644,9 @@ mod anchored_disp_base_tests {
             (47_900_000_000, 50 * S, 0, "a resume at 50 s lands on the keyframe at 47.9 s, which it reads"),
             (290 * S, 300 * S, 0, "one GOP below the offset is still film time"),
             (301 * S, 300 * S, 0, "a second above it too"),
-            (289 * S, 300 * S, 11 * S, "further below is not film time"),
+            (289_570_000_000, 300 * S, 0, "a long 10.43 s GOP below it too"),
+            (270 * S, 300 * S, 0, "up to the seek guard's 30 s"),
+            (269 * S, 300 * S, 31 * S, "further below is not film time"),
             (302 * S, 300 * S, -2 * S, "nor further above"),
             (0, 600 * S, 600 * S, "a server that restarted at 0 reads offset + fed"),
             (40_000_000, 600 * S, 600 * S - 40_000_000, "from a keyframe near 0 too"),
