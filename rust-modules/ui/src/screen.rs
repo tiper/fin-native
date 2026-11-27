@@ -1375,6 +1375,9 @@ pub struct Clip {
 pub struct ClipScope {
     prev: Option<Clip>,
     active: bool,
+    /// A recording painter's rounded scope, noted in the draw census (and popped there on drop).
+    #[cfg(any(test, feature = "test-support"))]
+    noted: bool,
 }
 
 thread_local! {
@@ -1409,6 +1412,11 @@ impl ClipScope {
     /// the scissor still intersects.
     pub fn open_rounded_in(p: Painter, r: Rect, radius: f32) -> Self {
         if !crate::frame::backdrop::discovering() && p.is_recording() {
+            #[cfg(any(test, feature = "test-support"))]
+            if p.px(radius) >= 0.5 {
+                crate::draw_census::open_round(p.place(r), p.px(radius));
+                return Self { prev: None, active: false, noted: true };
+            }
             return Self::inert();
         }
         let radius = p.px(radius);
@@ -1426,11 +1434,11 @@ impl ClipScope {
         let clip = Clip { scissor, round: round.or(prev.and_then(|c| c.round)) };
         CLIP_STACK.with(|c| c.set(Some(clip)));
         apply_scissor(Some(clip));
-        Self { prev, active: true }
+        Self { prev, active: true, #[cfg(any(test, feature = "test-support"))] noted: false }
     }
 
     fn inert() -> Self {
-        Self { prev: None, active: false }
+        Self { prev: None, active: false, #[cfg(any(test, feature = "test-support"))] noted: false }
     }
 
     /// The scissor in force (the innermost open scope), for tests and instruments.
@@ -1446,6 +1454,10 @@ impl ClipScope {
 
 impl Drop for ClipScope {
     fn drop(&mut self) {
+        #[cfg(any(test, feature = "test-support"))]
+        if self.noted {
+            crate::draw_census::close_round();
+        }
         if !self.active {
             return;
         }

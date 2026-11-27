@@ -394,6 +394,50 @@ pub mod draw_census {
     }
 
     thread_local! {
+        static RRECTS: RefCell<Option<Vec<RRectFill>>> = const { RefCell::new(None) };
+        static ROUND: RefCell<Vec<(Rect, f32)>> = const { RefCell::new(Vec::new()) };
+    }
+    /// One rounded-rect fill a recording painter was handed ([`Painter::rrect`]): its screen rect, left and right
+    /// radius, effective colour, and the ROUNDED CLIP in force while it was drawn, as `(rect, radius)`.
+    /// [`note_ink`] carries the rect and the alpha and nothing else, and a fill that must follow a card's corners
+    /// (the Guide's aired shade) needs the radii and the clip: the outline a fill leaves is its own corners cut by
+    /// the clip.
+    #[derive(Clone, Copy, Debug)]
+    pub struct RRectFill {
+        pub rect: Rect,
+        pub rl: f32,
+        pub rr: f32,
+        pub col: [f32; 4],
+        pub round: Option<(Rect, f32)>,
+    }
+    pub fn note_rrect(rect: Rect, rl: f32, rr: f32, col: [f32; 4]) {
+        let round = ROUND.with(|r| r.borrow().last().copied());
+        RRECTS.with(|l| {
+            if let Some(v) = l.borrow_mut().as_mut() {
+                v.push(RRectFill { rect, rl, rr, col, round });
+            }
+        });
+    }
+    /// A recording painter opened a rounded clip scope ([`crate::screen::ClipScope::open_rounded_in`]), which for a
+    /// recording painter changes no GL state and is otherwise invisible: `rect` is as placed, `radius` under the zoom.
+    pub fn open_round(rect: Rect, radius: f32) {
+        ROUND.with(|r| r.borrow_mut().push((rect, radius)));
+    }
+    /// That scope closed.
+    pub fn close_round() {
+        ROUND.with(|r| {
+            r.borrow_mut().pop();
+        });
+    }
+    /// Every rounded-rect fill a recording painter is handed while `f` runs, in draw order. A separate log, so the
+    /// census [`capture`] returns (and the hashes frozen from it) is unchanged.
+    pub fn capture_rrects(f: impl FnOnce()) -> Vec<RRectFill> {
+        RRECTS.with(|l| *l.borrow_mut() = Some(Vec::new()));
+        f();
+        RRECTS.with(|l| l.borrow_mut().take()).unwrap_or_default()
+    }
+
+    thread_local! {
         static RINGS: RefCell<Option<Vec<(Rect, f32)>>> = const { RefCell::new(None) };
     }
     /// A recording painter was handed a hollow ring ([`Painter::rring`]) of corner radius `rad` in `r`:
@@ -1190,7 +1234,10 @@ impl Painter {
     }
     pub fn rrect(self, r: Rect, rl: f32, rr: f32, col: [f32; 4]) {
         #[cfg(any(test, feature = "test-support"))]
-        if self.records() { draw_census::note_ink(2, self.place(r), self.c(col)[3]); }
+        if self.records() {
+            draw_census::note_ink(2, self.place(r), self.c(col)[3]);
+            draw_census::note_rrect(self.place(r), self.px(rl), self.px(rr), self.c(col));
+        }
         if self.declare(r, 2, |data| {
             use frame::backdrop::Value;
             rl.record(data);

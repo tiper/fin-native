@@ -320,15 +320,167 @@ fn the_now_line_stands_at_the_wall_time_on_the_axis() {
     assert!(near(moved.1.x - line.1.x, 1_392.0 / 90.0), "15.47 px a minute");
 }
 
+use crate::draw_census::RRectFill;
+
+/// Every aired-time shade of a frame in draw order: the fills of exactly the shade's colour (nothing else on the
+/// board is that translucent black), with the rounded clip each was drawn under.
+fn shades(g: &TimeGrid, now: i64) -> Vec<RRectFill> {
+    let fills = crate::draw_census::capture_rrects(|| g.draw(Painter::recording(), &Fixed, now, Some(0), WORDS, &Faces, None));
+    fills.into_iter().filter(|f| f.col.iter().zip(theme::GUIDE_AIRED_SHADE).all(|(a, b)| near(*a, b))).collect()
+}
+
+/// A rect inside another, to a hair.
+fn within(inner: Rect, outer: Rect) -> bool {
+    inner.x >= outer.x - 0.01 && inner.y >= outer.y - 0.01
+        && inner.x + inner.w <= outer.x + outer.w + 0.01 && inner.y + inner.h <= outer.y + outer.h + 0.01
+}
+
+/// Every cell of the page showing, as the board places it.
+fn page_cells(g: &TimeGrid) -> Vec<Rect> {
+    g.shown().flat_map(|row| (0..g.cells(row)).map(move |index| g.rect(cell(row, index)))).collect()
+}
+
+/// A rounded rect's coverage at a point, as the rect program's SDF takes it (`fs_src.frag`: the radius is the right one
+/// on the right of the middle and the left one on the left, held to the half extents).
+fn own_cover(r: Rect, rl: f32, rr: f32, x: f32, y: f32) -> f32 {
+    let rad = (if x > r.cx() { rr } else { rl }).min(r.w * 0.5).min(r.h * 0.5).max(0.0);
+    let q = ((x - r.cx()).abs() - (r.w * 0.5 - rad), (y - r.cy()).abs() - (r.h * 0.5 - rad));
+    let d = (q.0.max(0.0).powi(2) + q.1.max(0.0).powi(2)).sqrt() + q.0.max(q.1).min(0.0) - rad;
+    (0.5 - d).clamp(0.0, 1.0)
+}
+
+/// What a fill leaves on a point: its own corners, times the rounded clip it was drawn under (the shared
+/// `rclip_cover` mask, the one the GPU's masked rect program is graded against).
+fn cover(f: &RRectFill, x: f32, y: f32) -> f32 {
+    // a fill with no radius at either side is a plain quad (`draw_rrect`'s flat path): no antialiased edge of its own
+    let own = if f.rl < 0.5 && f.rr < 0.5 { 1.0 } else { own_cover(f.rect, f.rl, f.rr, x, y) };
+    let clip = f.round.map_or(1.0, |(r, radius)| {
+        plx_gfx::gfx::rclip_cover([x, y], plx_gfx::gfx::RClip { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h, radius })
+    });
+    // the fill is a rect: nothing outside it, whatever the clip says
+    let inside = x >= f.rect.x && x <= f.rect.x + f.rect.w && y >= f.rect.y && y <= f.rect.y + f.rect.h;
+    if inside { own * clip } else { 0.0 }
+}
+
 #[test]
-fn time_already_aired_is_shaded_from_the_axis_edge_to_the_now_line() {
+fn the_aired_shade_stays_inside_the_cells_and_never_touches_a_gap() {
+    let g = board();
+    let cells = page_cells(&g);
+    for minutes in [10, 30, 50, 90, 120] {
+        let shades = shades(&g, START + minutes * MIN);
+        assert!(!shades.is_empty(), "{minutes} min in: something has aired");
+        for shade in &shades {
+            // inside one cell: so not in the 8 px between two rows, not between two cells, and not left of the first
+            assert!(cells.iter().any(|c| within(shade.rect, *c)), "{minutes} min in: the shade {:?} stands outside every cell", shade.rect);
+            assert!(near(shade.rect.h, 100.0), "{minutes} min in: a shade is a cell tall, not a board tall");
+        }
+    }
+}
+
+#[test]
+fn a_cell_the_now_line_cuts_is_shaded_flat_to_the_line_under_the_cells_own_rounded_clip() {
     let g = board();
     let now = START + 30 * MIN;
-    let (_, inks) = paint(&g, now, None);
-    let shade = inks.iter().find(|(tag, _, a)| *tag == 2 && near(*a, 0.22)).expect("the shade");
-    assert!(near(shade.1.x, 432.0));
-    assert!(near(shade.1.x + shade.1.w, AXIS.x_of(now)));
-    assert!(near(shade.1.y, 292.0));
+    let shades = shades(&g, now);
+    // row 0's first programme runs 0..45 min: aired up to minute 30
+    let cut = g.rect(cell(0, 0));
+    let shade = shades.iter().find(|f| near(f.rect.y, cut.y) && near(f.rect.x, cut.x)).expect("the cut cell's shade");
+    assert!(near(shade.rect.x + shade.rect.w, AXIS.x_of(now)), "it ends exactly at the now line");
+    assert!(near(shade.rect.h, cut.h));
+    assert!(near(shade.rl, 0.0) && near(shade.rr, 0.0), "no radius is chosen for the shade: it is flat");
+    let (round, radius) = shade.round.expect("under the rounded clip");
+    assert!(near(round.x, cut.x) && near(round.y, cut.y) && near(round.w, cut.w) && near(round.h, cut.h), "the clip is the cell's rect, whole");
+    assert!(near(radius, 10.0), "and the cell's radius");
+    // a cell that began before the window and runs on past now is cut the same way, from the axis' left edge
+    let long = g.rect(cell(1, 0));
+    let shade = shades.iter().find(|f| near(f.rect.y, long.y)).expect("row 1's shade");
+    assert!(near(shade.rect.x, 432.0) && near(shade.rect.x + shade.rect.w, AXIS.x_of(now)));
+    assert_eq!(shade.round.map(|(r, radius)| (r.x, r.w, radius)), Some((long.x, long.w, 10.0)));
+    // the programme that begins at the line has nothing aired
+    let next = g.rect(cell(0, 1));
+    assert!(!shades.iter().any(|f| near(f.rect.y, next.y) && f.rect.x >= next.x - 0.01), "no shade on a cell the line has not reached");
+}
+
+#[test]
+fn a_cell_wholly_aired_is_the_cells_own_rounded_rect() {
+    let g = board();
+    // rows 3..: a programme 0..30 min, then 30..90; at minute 40 the first is over
+    let shades = shades(&g, START + 40 * MIN);
+    let aired = g.rect(cell(3, 0));
+    let shade = shades.iter().find(|f| near(f.rect.y, aired.y) && near(f.rect.x, aired.x)).expect("the aired cell's shade");
+    assert!(near(shade.rect.w, aired.w) && near(shade.rect.h, aired.h), "the shade is the cell");
+    assert!(near(shade.rl, 10.0) && near(shade.rr, 10.0), "round on both sides, as the cell is");
+    assert!(shade.round.is_none(), "no clip: the cell's own outline is the shade's");
+    // and the one the line cuts, in the same row, is the clipped flat kind
+    let cut = g.rect(cell(3, 1));
+    let shade = shades.iter().find(|f| near(f.rect.y, cut.y) && near(f.rect.x, cut.x)).expect("the cut cell's shade");
+    assert!(shade.round.is_some() && near(shade.rl, 0.0) && near(shade.rr, 0.0));
+}
+
+/// **The outline the shade actually leaves**, for a now line `inset` px inside each edge of a programme: wherever the
+/// cell is drawn, the shade is drawn left of the line and nowhere else, so it never leaves the cell's corners and
+/// never misses its own. Graded point by point against the cell's own rounded rect.
+fn assert_the_shade_is_the_cell_left_of_the_line(shades: &[RRectFill], cell_rect: Rect, now_x: f32, what: &str) {
+    let mine: Vec<&RRectFill> = shades.iter().filter(|f| near(f.rect.y, cell_rect.y) && f.rect.x >= cell_rect.x - 0.01 && f.rect.x + f.rect.w <= cell_rect.x + cell_rect.w + 0.01).collect();
+    let mut x = cell_rect.x - 2.0;
+    while x <= cell_rect.x + cell_rect.w + 2.0 {
+        let mut y = cell_rect.y - 2.0;
+        while y <= cell_rect.y + cell_rect.h + 2.0 {
+            // a point within a pixel of the line is its own antialiasing's business
+            if (x - now_x).abs() > 1.0 {
+                let want = if x < now_x { own_cover(cell_rect, 10.0, 10.0, x, y) } else { 0.0 };
+                let got = mine.iter().map(|f| cover(f, x, y)).fold(0.0f32, f32::max);
+                assert!((want - got).abs() < 0.02, "{what}: at ({x}, {y}) the cell leaves {want} of the shade and it leaves {got}");
+            }
+            y += 1.0;
+        }
+        x += 1.0;
+    }
+}
+
+/// The line `inset` px inside a cell's edge, for 1..=9 px, for programmes that begin and end in the window and one that
+/// begins before it: `edge` says which side of the cell the line is `inset` px inside of.
+fn grade_the_line_near(edge: fn(Rect, f32) -> f32) {
+    let g = board();
+    for (row, index) in [(0usize, 0usize), (0, 1), (1, 0), (3, 0), (3, 1)] {
+        let rect = g.rect(cell(row, index));
+        for inset in 1..=9 {
+            let want_x = edge(rect, inset as f32);
+            let now = START + ((want_x - AXIS_X0) * 5_400.0 / 1_392.0).round() as i64;
+            let at = AXIS.x_of(now);
+            assert_the_shade_is_the_cell_left_of_the_line(&shades(&g, now), rect, at, &format!("row {row} cell {index}, line at {at}, {inset} px in"));
+        }
+    }
+}
+
+#[test]
+fn a_line_within_ten_px_of_a_cells_start_shades_the_cells_own_corners_not_a_sliver_with_its_own() {
+    grade_the_line_near(|rect, inset| rect.x + inset);
+}
+
+#[test]
+fn a_line_within_ten_px_of_a_cells_end_leaves_the_cells_rounded_right_corners_alone() {
+    grade_the_line_near(|rect, inset| rect.x + rect.w - inset);
+}
+
+#[test]
+fn a_window_wholly_aired_shades_every_cell_whole() {
+    let g = board();
+    let shades = shades(&g, START + 200 * MIN);
+    let cells: Vec<Rect> = page_cells(&g).into_iter().filter(|c| c.w > 0.0).collect();
+    assert_eq!(shades.len(), cells.len(), "one shade a cell");
+    for cell in cells {
+        let shade = shades.iter().find(|f| near(f.rect.x, cell.x) && near(f.rect.y, cell.y)).expect("a shade for the cell");
+        assert!(near(shade.rect.w, cell.w) && near(shade.rl, 10.0) && near(shade.rr, 10.0) && shade.round.is_none());
+    }
+}
+
+#[test]
+fn nothing_is_shaded_while_the_window_is_wholly_ahead_of_now() {
+    let g = TimeGrid::new(Axis::new(START + 1_800, 5_400, 1_800), vec![vec![span(30, 90)], vec![]], 0);
+    assert!(shades(&g, START + 10 * MIN).is_empty());
+    // not even at the instant the window opens
+    assert!(shades(&g, START + 30 * MIN).is_empty());
 }
 
 #[test]
