@@ -3321,10 +3321,7 @@ fn adts_freq_index(rate: c_int) -> Option<u8> {
 /// it decode each frame as 1024 plain-LC samples into a 2048-sample slot, an audible gap/crackle
 /// every frame (Maxton Hall, HE-AAC 5.1). Falls back to codecpar for ASC-less streams.
 unsafe fn adts_params(acp: *const AVCodecParameters) -> Option<(u8, u8)> {
-    let chan_fallback = {
-        let ch = (*acp).ch_layout.nb_channels;
-        if (1..=7).contains(&ch) { ch as u8 } else { 2 }
-    };
+    let width = (*acp).ch_layout.nb_channels;
     // AudioSpecificConfig: aot(5) freqIdx(4) [+24-bit rate if idx==15] chanCfg(4) …
     let (ed, n) = ((*acp).extradata, (*acp).extradata_size);
     if !ed.is_null() && n >= 2 {
@@ -3332,17 +3329,26 @@ unsafe fn adts_params(acp: *const AVCodecParameters) -> Option<(u8, u8)> {
         let aot = (b0 >> 3) & 0x1F;
         let freq_idx = (((b0 & 0x07) << 1) | (b1 >> 7)) as u8;
         if aot != 31 && freq_idx <= 12 {
-            let chan = ((b1 >> 3) & 0x0F) as u8;
-            let ch = if (1..=7).contains(&chan) {
-                chan
-            } else {
-                chan_fallback
-            };
-            return Some((freq_idx, ch));
+            return Some((freq_idx, adts_chan_cfg(((b1 >> 3) & 0x0F) as u8, width)));
         }
         // escape-coded AOT / explicit 24-bit rate — exotic; fall through to codecpar
     }
-    adts_freq_index((*acp).sample_rate).map(|fi| (fi, chan_fallback))
+    adts_freq_index((*acp).sample_rate).map(|fi| (fi, adts_chan_cfg(0, width)))
+}
+
+/// The ADTS channel configuration (3 bits, 1 to 7) for a track whose AudioSpecificConfig states
+/// `asc_chan` (0 when there is none) and whose layout is `width` channels wide. A configuration ADTS
+/// cannot carry falls back to the width, and an eight-channel track to 7: configuration 12 (7.1 with
+/// rear surrounds, what FFmpeg's encoder writes) and a PCE-described 7.1 have config 7's elements
+/// (SCE, three CPEs, LFE), so the decoder takes all eight (the rear pair lands on config 7's front-wide
+/// positions). Anything else unknown is stereo.
+pub(crate) fn adts_chan_cfg(asc_chan: u8, width: i32) -> u8 {
+    match (asc_chan, width) {
+        (1..=7, _) => asc_chan,
+        (_, 1..=7) => width as u8,
+        (_, 8) => 7,
+        _ => 2,
+    }
 }
 
 /// 7-byte ADTS header for a raw AAC frame of `payload_len` bytes. LG's Starfish decodes
