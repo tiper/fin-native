@@ -524,8 +524,6 @@ struct Page {
     header_swap: std::cell::RefCell<plx_ui::page_header::HeaderSwap>,
     /// The elements of Browse's cards ([`Idents`]).
     idents: Idents,
-    /// The page's own ground: the page's backdrop and the colour the tucked chrome's top fade lays over it.
-    ground: PageGround,
 }
 
 impl Page {
@@ -1183,6 +1181,8 @@ impl<H: LiveTvLike> StackPage<H> for Page {
 pub struct LiveTvScreen {
     page: Page,
     stack: Stack<Sec>,
+    /// The page's own ground: the page's backdrop and the colour the tucked chrome's top fade lays over it.
+    ground: PageGround,
     ground_seeded: bool,
     /// The page's own arrival seat while nobody has chosen another (the Watchlist's rule): `None`
     /// once the reader acts or the page is restored.
@@ -1234,9 +1234,9 @@ impl LiveTvScreen {
                 header_rows: SharedRow::new(),
                 header_swap: std::cell::RefCell::new(plx_ui::page_header::HeaderSwap::new()),
                 idents: Idents::default(),
-                ground: PageGround::new(),
             },
             stack: Stack::new(entry).home_when_unfocused(true),
+            ground: PageGround::new(),
             ground_seeded: false,
             seat: None,
             own_enters: 0,
@@ -1281,6 +1281,8 @@ impl LiveTvScreen {
         if elem == FILTER_ELEM && self.page.browsing() {
             if let Some(filter) = self.page.scope.filter() {
                 if let Some(pill) = self.page.filter_pill(cx.measure) {
+                    // the control as it is drawn now; the menu is handed where it is drawn on every frame after
+                    // (`Screen::opener_rect`), so the page moving under it moves the glass with it
                     let anchor = [pill.x, pill.y - self.stack.scroll(), pill.w, pill.h].map(f32::to_bits);
                     let panel = ContentPanel::LiveTvFilter { chosen: filter, anchor, opener: (self.page.entry, FILTER_ELEM) };
                     fx.push(Fx::App(AppFx::Content(ContentReq::Panel(panel))));
@@ -1397,9 +1399,9 @@ impl LiveTvScreen {
         // The page's own haze, fixed: it does not follow the focused tile.
         let haze = AmbientWash::target(theme::WASH_LIVE_TV, [theme::WASH_LIVE_TV_W; 4]);
         if self.ground_seeded {
-            self.page.ground.key_target(haze, t.dt());
+            self.ground.key_target(haze, t.dt());
         } else {
-            self.page.ground.jump_target(haze);
+            self.ground.jump_target(haze);
             self.ground_seeded = true;
         }
         // A programme's words and bar move with the minute, with no event to say so.
@@ -1525,9 +1527,10 @@ impl LiveTvScreen {
     }
 
     /// **The filter control, lit above its menu's scrim** (the opener lift): painted as the focused control at its place on the row (which
-    /// rides the page), at the morph's alpha, since the row's pass leaves it out while the menu is up.
+    /// rides the page), at the morph's alpha and the head's own handoff alpha (the Watchlist's), since the row's pass leaves it out
+    /// while the menu is up.
     fn redraw_opener<H: LiveTvLike>(&self, f: &mut DrawFrame<'_, '_, H>) {
-        let p = f.painter.alpha(f.page_alpha);
+        let p = f.painter.alpha(f.page_alpha).alpha(self.page.handoff.head_alpha(-self.stack.scroll()));
         self.page.header_row(f.measure).draw_opener_with(p, self.stack.scroll(), self.page.header_pop.scale_with(0, f.press), FILTER_ELEM, &self.page.header_swap.borrow());
     }
 
@@ -1537,7 +1540,7 @@ impl LiveTvScreen {
         if tuck <= 0.0 {
             return;
         }
-        let ground = self.page.ground.sample(Rect::FULL, SCR_W * 0.5, 0.0);
+        let ground = self.ground.sample(Rect::FULL, SCR_W * 0.5, 0.0);
         plx_ui::scroll_capsule::draw_top_fade(f.painter.alpha(f.page_alpha), SCR_W, ground, tuck, None);
     }
 }
@@ -1758,7 +1761,7 @@ impl<H: LiveTvLike> Screen<H> for LiveTvScreen {
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
         plx_gfx::gfx::frame_clear(theme::CLEAR_RGB.0, theme::CLEAR_RGB.1, theme::CLEAR_RGB.2);
         let p = f.painter.alpha(f.page_alpha);
-        self.page.ground.draw(p, Rect::FULL);
+        self.ground.draw(p, Rect::FULL);
         self.stack.view(&self.page).paint(f);
         self.draw_chrome(f);
     }

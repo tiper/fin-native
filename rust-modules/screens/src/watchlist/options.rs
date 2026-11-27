@@ -6,7 +6,7 @@ pub use plx_data::watchlist::order::SortKey;
 use plx_data::watchlist::order::{sorted_filtered, FilterSpec, Show, SortSpec};
 use plx_os::i18n::msg;
 use plx_ui::form::{Form, FormId, FormSection, RowKey, RowKind};
-use plx_ui::menu::Menu;
+use plx_ui::menu::{GrowWidth, Menu};
 use plx_ui::table::Row;
 use plx_ui::Rect;
 use std::convert::Infallible;
@@ -273,7 +273,7 @@ pub type OptionsMenu = Menu<Infallible, OptionsRow, OptionsRow>;
 
 /// The menu for a header pill at `pill`.
 pub fn options_menu(pill: Rect) -> OptionsMenu {
-    Menu::from_header_pill(pill, crate::registry::BAND)
+    Menu::from_header_pill(pill, crate::registry::BAND, GrowWidth::Catch)
 }
 
 #[cfg(test)]

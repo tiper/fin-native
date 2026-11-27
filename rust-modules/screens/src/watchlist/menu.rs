@@ -57,6 +57,12 @@ impl WatchlistMenuScreen {
             .collect()
     }
 
+    /// The rect the glass is morphing from (the pill as last handed in).
+    #[cfg(test)]
+    pub(crate) fn glass_opener(&self) -> Option<Rect> {
+        self.menu.glass().and_then(plx_ui::popover::Popover::opener)
+    }
+
     pub fn new(entry: EntryId, arg: WatchlistMenuArg) -> Self {
         let mut menu = options_menu(anchor_rect(&arg));
         menu.step(Event::ReplaceRoot { slide: None }, &mut root(arg.options));
@@ -152,6 +158,11 @@ impl<H: ContentLike> Screen<H> for WatchlistMenuScreen {
     /// droplet drains into it). Left on the page it sat dimmed under the scrim.
     fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
         Some((self.arg.host, Some(FocusKey { entry: self.arg.host, elem: super::page::PILL_ELEM })))
+    }
+    /// The control's DRAWN plate, every frame (the page that carries it moves: focus on the pill brings the page home, a wheel
+    /// scrolls it): the glass grows out of, and drains back into, the pill where it stands (`Menu::track_opener`).
+    fn opener_rect(&mut self, drawn: plx_ui::Rect) {
+        self.menu.track_opener(plx_ui::widgets::focus_pill(drawn));
     }
     // The menu's own (`plx_ui::menu_screen_methods!`): the opener is CONSUMED by the morph (the lift paints it at
     // the morph's `opener_alpha`: out as the glass detaches, back in as it merges into it), the droplet's

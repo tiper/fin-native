@@ -293,10 +293,12 @@ pub trait Screen<H: Host>: Machine<H, Ev = ScreenEvent<H>> + Focusable<H> {
     fn bar_opener(&self) -> Option<H::Elem> {
         None
     }
-    /// **Where the bar member this surface hangs from is DRAWN this frame** (its rest rect through
-    /// the host page's tuck, the same rect the lift draws at), handed to the surface before every
-    /// draw so its morph starts and ends on the live opener, not on a rect measured once at mount.
-    /// Called only for a surface that answers [`bar_opener`](Self::bar_opener).
+    /// **Where the opener this surface hangs from is DRAWN this frame**, handed to the surface before every
+    /// draw so its morph starts and ends on the live opener, not on a rect measured once at mount: a bar
+    /// member's rect through the host page's tuck (the same rect the lift draws at), or, for a page element
+    /// ([`opener`](Self::opener)), the host page's `Focusable::place` of it at `At::Drawn` (the control's plate:
+    /// a header pill that rides its page moves under its menu). Called only for a surface that answers one of
+    /// the two.
     fn opener_rect(&mut self, _drawn: crate::Rect) {}
     /// **How much of the opener this surface leaves**, 1.0 (whole, the default) .. 0.0 (consumed):
     /// the lift pass (`Z::OPENER`) paints the opener it lifts at this alpha. A MORPHING menu answers

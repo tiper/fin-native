@@ -602,14 +602,15 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
     /// **The menu a page header's choice control opens** (the Watchlist's Sort & Filter, Live TV Browse's filter): an
     /// [`Class::Action`] menu of compact one-word choices whose glass grows out of the control's pill at `pill` and covers it
     /// top edge to top edge, the close's blob whitening toward the pill's own focused fill. It draws no pill: the control is the
-    /// host page's, painted by its opener lift.
-    pub fn from_header_pill(pill: Rect, band: u32) -> Self {
+    /// host page's, painted by its opener lift. `width` is the panel's width rule: [`GrowWidth::Catch`] for rows of OUR
+    /// words, [`GrowWidth::Names`] for rows of user-named text (the Library's "+N" list of libraries).
+    pub fn from_header_pill(pill: Rect, band: u32, width: GrowWidth) -> Self {
         let host = Host::Grows {
             pill,
             clear_y: None,
             fill: Some(crate::page_header::OPENER_FILL),
             morph: Morph::FromPill,
-            width: GrowWidth::Catch,
+            width,
         };
         Self::new(host, Class::Action, band)
     }

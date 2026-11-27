@@ -206,6 +206,8 @@ pub struct FixtureRow {
     /// elsewhere while its picture lags, as Home's does across the hero/grid door). It reads the
     /// context's focus, so a resolution handed a stale focus does not see it.
     pub unloaded_while_focused: bool,
+    /// How far the row is drawn from where it rests, vertically (a page that scrolls): added to a `Drawn` placement only.
+    pub drawn_dy: f32,
 }
 
 impl Focusable<FixtureHost> for FixtureRow {
@@ -238,11 +240,12 @@ impl Focusable<FixtureHost> for FixtureRow {
             _ => Step::Edge,
         }
     }
-    fn place(&self, key: &u32, _cx: &Cx<'_, FixtureHost>, _at: At) -> Option<Placed> {
+    fn place(&self, key: &u32, _cx: &Cx<'_, FixtureHost>, at: At) -> Option<Placed> {
         if (*key as usize) < self.len {
             let r = Rect::new(*key as f32 * 200.0, 100.0, 180.0, 180.0);
+            let drawn = Rect { y: r.y + self.drawn_dy, ..r };
             Some(Placed {
-                rect: r,
+                rect: if at == At::Drawn { drawn } else { r },
                 rest_rect: r,
                 clip: Rect::FULL,
                 index: Some(*key),
@@ -406,6 +409,10 @@ impl FixtureScreen {
     /// The row's element count, as a store landing would set it (a row longer than the canvas).
     pub(crate) fn set_row_len(&mut self, len: usize) {
         self.row.len = len;
+    }
+    /// The row is drawn `dy` px from where it rests (the page scrolls).
+    pub(crate) fn set_drawn_dy(&mut self, dy: f32) {
+        self.row.drawn_dy = dy;
     }
     /// The row's first element whose data has not landed (an unloaded paged slot).
     pub(crate) fn set_unloaded_from(&mut self, from: usize) {
@@ -795,6 +802,7 @@ impl FixtureModal {
                                     kind: ElemKind::Card,
                                     unloaded_from: usize::MAX,
                                     unloaded_while_focused: false,
+                drawn_dy: 0.0,
                                 },
                                 draw_at: 0,
                                 recorded_draws: 0, recorded_at: 0, speculative_draws: 0, lifted: None,
@@ -1138,6 +1146,7 @@ impl Mounter<FixtureHost> for FixtureMounter {
                 kind,
                 unloaded_from: usize::MAX,
                 unloaded_while_focused: false,
+                drawn_dy: 0.0,
             },
             draw_at: 0,
             recorded_draws: 0, recorded_at: 0, speculative_draws: 0, lifted: None,
@@ -1901,7 +1910,7 @@ fn the_fixture_focusables_conform_to_the_accessibility_id_contract() {
         hold_hint: Default::default(),
     };
     for (kind, role) in [(ElemKind::Card, Role::Card), (ElemKind::Bare, Role::Row), (ElemKind::Control, Role::Button)] {
-        let row = FixtureRow { len: 5, group: GroupId(1), entry: EntryId(1), prepared: 0, drawn: 0, kind, unloaded_from: 3, unloaded_while_focused: false };
+        let row = FixtureRow { len: 5, group: GroupId(1), entry: EntryId(1), prepared: 0, drawn: 0, kind, unloaded_from: 3, unloaded_while_focused: false, drawn_dy: 0.0 };
         super::a11y::conformance(&row, &cx);
         let third = row.a11y(&2, &cx).unwrap();
         assert_eq!(third.role, role);

@@ -160,11 +160,14 @@ impl Guide {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Work { Discover, Grid(Guide) }
 impl Work {
-    /// How far this read asks: the reach when it is the first read or the far span is owed ([`Guide::far_due`]), else the live
-    /// window alone (`0`), so a scheduled refresh of what is on now does not read the span to the reach again.
+    /// How far this read asks: the reach when it is the first read, the far span is owed ([`Guide::far_due`]) or the reach
+    /// ends inside the live window, else the live window alone (`0`), so a scheduled refresh of what is on now does not read
+    /// the span to the reach again. A reach inside the live window has no far span and so no far read to hold apart
+    /// ([`far_at`] is `0`): the read carries the reach itself and the guide stays read to it, where `0` would let
+    /// [`merge_far`] drop what it was read to and owe a second read straight after.
     fn until(&self, now: i64, reach: i64) -> i64 {
         match self {
-            Work::Grid(guide) if !guide.far_due(now, reach) => 0,
+            Work::Grid(guide) if !guide.far_due(now, reach) && reach > livetv::window_end(now) => 0,
             _ => reach,
         }
     }
@@ -200,9 +203,9 @@ fn merge_far(fresh: &mut Guide, held: &Guide, now: i64) {
 #[derive(Debug, PartialEq, Eq)]
 pub struct LiveTvReq {
     sid: ServerId, key: ClientKey, now: i64, work: Work,
-    /// The far end this read asks: the store's reach for the first read or when the far span is owed
-    /// ([`Guide::far_due`]), else `0`, the live window alone (the read widens it to the window's own end), so a
-    /// scheduled refresh does not read the far span again.
+    /// The far end this read asks: the store's reach for the first read, when the far span is owed
+    /// ([`Guide::far_due`]) or when the reach ends inside the live window ([`Work::until`]), else `0`, the live window
+    /// alone (the read widens it to the window's own end), so a scheduled refresh does not read the far span again.
     until: i64,
 }
 impl LiveTvReq {
@@ -525,8 +528,10 @@ fn read(client: &impl LiveTvIo, req: &LiveTvReq) -> Option<ReadResult> {
                 if let Some(airings) = airings.as_deref() { livetv::update_airings(&mut channels, airings, req.now); }
                 let refresh_at = if airings.is_some() { Guide::next_refresh(&channels, req.now) }
                     else { result.retry = true; req.now };
+                // A grid that was not read holds no far programmes: the far span stays owed, as an empty lineup's does.
+                let (until, far) = if airings.is_some() { (req.until, far_at(req.now, req.until)) } else { (0, 0) };
                 result.guides.push(Guide { dvr: dvr.key.clone(), provider: dvr.epg_identifier.clone(), channels, refresh_at, retry_cd: if airings.is_some() { 0 } else { RETRY_FRAMES }, strikes: 0,
-                    until: req.until, far_at: far_at(req.now, req.until) });
+                    until, far_at: far });
             }
             Some(result)
         }

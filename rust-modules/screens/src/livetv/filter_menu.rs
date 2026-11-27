@@ -14,7 +14,7 @@ use std::convert::Infallible;
 use plx_machine::machine::{Canon, Cx, Delivery, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InstanceId, LogicalState, Machine, MachineId, NavOp};
 use plx_ui::a11y::{A11y, A11yPath, Role};
 use plx_ui::form::{Form, FormId, FormSection, RowKey, RowKind};
-use plx_ui::menu::{Event, Menu, Out, Page};
+use plx_ui::menu::{Event, GrowWidth, Menu, Out, Page};
 use plx_ui::screen::{At, Dir, Focusable, GroupSpec, Placed, RenderStrategy, Screen, ScreenEvent, Step};
 use plx_ui::table::Row;
 use plx_ui::Rect;
@@ -101,7 +101,7 @@ pub struct LiveTvFilterScreen {
 /// The menu for `arg`, opened on the filter chosen.
 pub fn new(entry: EntryId, arg: LiveTvFilterArg) -> LiveTvFilterScreen {
     let [x, y, w, h] = arg.anchor.map(f32::from_bits);
-    let mut menu = Menu::from_header_pill(Rect::new(x, y, w, h), crate::registry::BAND);
+    let mut menu = Menu::from_header_pill(Rect::new(x, y, w, h), crate::registry::BAND, GrowWidth::Catch);
     menu.step(Event::ReplaceRoot { slide: None }, &mut root(arg.chosen));
     LiveTvFilterScreen { entry, arg, chosen: arg.chosen, menu, opened: false }
 }
@@ -218,6 +218,11 @@ impl<H: AppLike<Memory = PageMemory>> Screen<H> for LiveTvFilterScreen {
     fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
         let (entry, elem) = self.arg.opener;
         Some((entry, Some(FocusKey { entry, elem })))
+    }
+    /// The control's DRAWN plate, every frame (the page that carries it moves: focus on the pill brings the page home, a wheel
+    /// scrolls it): the glass grows out of, and drains back into, the pill where it stands (`Menu::track_opener`).
+    fn opener_rect(&mut self, drawn: plx_ui::Rect) {
+        self.menu.track_opener(plx_ui::widgets::focus_pill(drawn));
     }
     // The menu's own (`plx_ui::menu_screen_methods!`): the opener is consumed by the morph, the droplet's hand-back, the compact
     // dim, the prewarm, the pointer hold, and the draw with its focus stops.

@@ -606,4 +606,29 @@ fn a_reach_inside_the_live_window_does_not_loop() {
     execute(&mut stores, &io); pump(&mut stores, &keys, 100);
     pump(&mut stores, &keys, 101);
     assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty(), "read to the reach already, and no step of its own to wait out");
+    // past the first scheduled refresh: the airing ended, one read answers it and the guide is not owed another
+    pump(&mut stores, &keys, 151);
+    let (job, port) = take(&mut stores);
+    assert_eq!(job.req.until, 5_000, "the reach ends inside the live window: the read carries it, it is not dropped for 0");
+    finish_with(&port, job.addr, job.req, |req| read(&io, req));
+    pump(&mut stores, &keys, 151);
+    assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty(), "one grid read per refresh, not two");
+}
+
+/// A grid read that fails when the lineup is first read holds no far programmes: with the reach held, the far span is read
+/// again by the retry, not left for a window step because the failed read recorded the reach as read.
+#[test]
+fn a_failed_first_grid_read_under_a_reach_leaves_the_far_read_due() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_far();
+    io.fail_grid.set(true);
+    run(&mut stores, LiveTvCmd::Reach(20_000), &keys, 100);
+    execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    io.fail_grid.set(false);
+    for _ in 0..RETRY_FRAMES { pump(&mut stores, &keys, 101); }
+    let (job, port) = take(&mut stores);
+    assert!(matches!(&job.req.work, Work::Grid(_)), "the grid alone, the lineup is held");
+    assert_eq!(job.req.until, 20_000, "the far span is owed: the retry reads to the reach, not the live window");
+    finish_with(&port, job.addr, job.req, |req| read(&io, req));
+    pump(&mut stores, &keys, 101);
+    assert_eq!(later_titles(&stores), ["Next", "Far"]);
 }

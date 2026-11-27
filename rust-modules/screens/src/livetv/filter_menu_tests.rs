@@ -171,3 +171,17 @@ fn up_and_down_walk_the_rows_and_stop_at_the_ends() {
     assert!(matches!(Focusable::<HostFixture>::neighbour(&m, key(0), Dir::Down, &cx), Step::Move(k) if k == key(1)));
     assert!(matches!(Focusable::<HostFixture>::neighbour(&m, key(3), Dir::Down, &cx), Step::Edge));
 }
+
+/// **The filter menu follows its control**: the control rides the page, and a page that glides home under the open menu (the
+/// control takes focus, or the wheel moved it) moves it, so the menu takes the control's drawn plate from the dispatcher each frame
+/// (`Screen::opener_rect` -> `Menu::track_opener`), whatever the anchor it was opened with. Red while the menu held that anchor.
+#[test]
+fn the_menu_follows_its_control_as_the_page_moves() {
+    let mut m = menu(Filter::OnNow);
+    let plate = Rect::new(1600.0, 96.0, 188.0, 50.0);
+    Screen::<HostFixture>::opener_rect(&mut m, plate);
+    assert_eq!(m.menu.glass().and_then(plx_ui::popover::Popover::opener), Some(plx_ui::widgets::focus_pill(plate)));
+    let moved = Rect { y: 140.0, ..plate };
+    Screen::<HostFixture>::opener_rect(&mut m, moved);
+    assert_eq!(m.menu.glass().and_then(plx_ui::popover::Popover::opener), Some(plx_ui::widgets::focus_pill(moved)), "and again as it moves on");
+}

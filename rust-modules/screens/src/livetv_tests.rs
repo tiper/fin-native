@@ -1811,8 +1811,8 @@ fn browse_fourteen() -> (LiveTvStore, LiveTvScreen) {
 }
 
 /// **Browse's header row rides the page as the Library's does** (owner decision 2026-11-27): scrolled to the second row the row has
-/// left with the page and the top bar has tucked through the one `Handoff`, as on What's on. Red while the row stood on a mask and
-/// the bar stayed.
+/// left with the page and the top bar has tucked through the one `Handoff`, as on What's on. Red while the row stayed put at the
+/// top of the screen and the bar stayed shown.
 #[test]
 fn the_header_row_scrolls_away_with_browses_grid_and_the_top_bar_tucks_with_it() {
     let _guards = browse_guards();
@@ -1879,4 +1879,96 @@ fn a_programme_caption_is_one_composition_on_browse_and_on_now() {
     let context = cx(view, None);
     let now = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Now).unwrap();
     assert_eq!(words(&CardSource::<TestHost>::label(&now, 0)), on_browse, "the same words as On now's");
+}
+
+/// Browse scrolled to its second row, focus sent up to the filter control, and `frames` frames of the page's glide home run:
+/// the page is on its way, its scroll still short of its target.
+fn returning_home(screen: &mut LiveTvScreen, view: LiveTvView<'_>, frames: u32) {
+    scrolled_to_second_row(screen, view);
+    step(screen, view, Some(FILTER_ELEM), &ScreenEvent::FocusMoved { from: None, to: FocusKey { entry: ENTRY, elem: FILTER_ELEM }, by: By::Dir });
+    for frame in 1..=frames {
+        step(screen, view, Some(FILTER_ELEM), &ScreenEvent::Tick(Tick { ms: 3000 + frame * 16, dt_us: 16_667 }));
+    }
+    assert!(screen.stack.scroll() > 20.0 && screen.stack.target() < 1.0, "the page is mid-flight home: {} -> {}", screen.stack.scroll(), screen.stack.target());
+}
+
+/// **The filter menu opens on the control as it is drawn**, mid-glide or not (the menu then follows the control: `Screen::opener_rect`,
+/// graded in `filter_menu_tests`): a click after the page was wheeled hands the menu the pill where the reader sees it, not
+/// where the scroll was headed (the target) nor where it stood at the top. Red while the anchor was taken at the scroll's target.
+#[test]
+fn the_filter_menu_opens_on_the_control_where_it_is_drawn_mid_glide() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_fourteen();
+    let view = store.view();
+    returning_home(&mut screen, view, 3);
+    let drawn = Focusable::<TestHost>::place(&screen, &FILTER_ELEM, &cx(view, Some(FILTER_ELEM)), At::Drawn).expect("placed").rect;
+    assert!(drawn.y < screen.page.header_row(&FixtureMeasure).plate(FILTER_ELEM).unwrap().y - 10.0, "premise: the page has not got home");
+    let out = step(&mut screen, view, Some(FILTER_ELEM), &ScreenEvent::PressCommit(PressId(3)));
+    let anchor = out.iter().find_map(|s| match &s.fx {
+        Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::LiveTvFilter { anchor, .. }))) => Some(anchor.map(f32::from_bits)),
+        _ => None,
+    }).expect("the press asks for the menu");
+    let want = plx_ui::widgets::focus_pill(drawn);
+    assert_eq!(anchor, [want.x, want.y, want.w, want.h], "the control where it is drawn");
+}
+
+/// The text runs the lift pass paints for the filter control, as `(alpha, y)`.
+fn lift_runs(screen: &LiveTvScreen, view: LiveTvView<'_>) -> Vec<(f32, f32)> {
+    let c = cx(view, Some(FILTER_ELEM));
+    let mut f = DrawFrame::new(&c, plx_ui::Painter::recording());
+    plx_ui::draw_census::capture_runs(|| Screen::<TestHost>::redraw_focused(screen, &mut f, Some(FocusKey { entry: ENTRY, elem: FILTER_ELEM })))
+        .iter().map(|run| (run.ink[3], run.at.y)).collect()
+}
+
+/// **The opener lift wears the head's handoff alpha**, as the Watchlist's does: while the page glides home the control the menu grew
+/// out of fades in with the top bar's own clock, and where the bar has tucked it is not drawn at full ink.
+#[test]
+fn the_filter_control_lifted_above_its_menu_wears_the_heads_handoff_alpha() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_fourteen();
+    let view = store.view();
+    let at_rest = lift_runs(&screen, view);
+    assert!(!at_rest.is_empty(), "the lift paints the control's words");
+    assert!(at_rest.iter().all(|(alpha, _)| (*alpha - 1.0).abs() < 1e-3), "at the top the head is whole: {at_rest:?}");
+    returning_home(&mut screen, view, 3);
+    // run the glide until the bar is part-way back: the head is neither gone nor whole
+    let mut frame = 3;
+    while !(0.05..0.95).contains(&screen.page.handoff.head_alpha(-screen.stack.scroll())) && frame < 240 {
+        frame += 1;
+        step(&mut screen, view, Some(FILTER_ELEM), &ScreenEvent::Tick(Tick { ms: 3000 + frame * 16, dt_us: 16_667 }));
+    }
+    let want = screen.page.handoff.head_alpha(-screen.stack.scroll());
+    assert!((0.05..0.95).contains(&want), "the head is part-way back at some frame of the glide: {want}");
+    let mid = lift_runs(&screen, view);
+    assert!(!mid.is_empty());
+    assert!(mid.iter().all(|(alpha, _)| (*alpha - want).abs() < 1e-3), "the lift wears the head's alpha {want}: {mid:?}");
+}
+
+/// **The header row is drawn where `place(At::Drawn)` says it is**: at a scroll the control's words stand as far from where they
+/// stood at the top as the control's drawn place has moved. Red while the Head drew the row the wrong way (the sign of the
+/// section's `y`), which a page at the top does not show.
+#[test]
+fn the_header_row_is_drawn_where_its_control_is_placed_at_a_scroll() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_fourteen();
+    let view = store.view();
+    let runs_at = |screen: &LiveTvScreen| {
+        let c = cx(view, None);
+        let plate = screen.page.header_row(&FixtureMeasure).plate(FILTER_ELEM).expect("the control's plate");
+        let placed = Focusable::<TestHost>::place(screen, &FILTER_ELEM, &c, At::Drawn).expect("placed").rect;
+        // the section's own top: where the row is drawn
+        let section = Rect::new(0.0, placed.y - plate.y, SCR_W, plate.h);
+        let mut f = DrawFrame::new(&c, plx_ui::Painter::recording());
+        let runs = plx_ui::draw_census::capture_runs(|| StackPage::<TestHost>::custom_draw(&screen.page, Sec::Head, &mut f, section, 0.0));
+        (placed.y, runs.into_iter().map(|run| (run.text, run.at.y)).collect::<Vec<_>>())
+    };
+    let (placed_top, runs_top) = runs_at(&screen);
+    assert!(!runs_top.is_empty(), "the row paints words");
+    returning_home(&mut screen, view, 3);
+    let (placed_now, runs_now) = runs_at(&screen);
+    assert!(placed_now < placed_top - 20.0, "the control's place moved up with the page: {placed_now} from {placed_top}");
+    assert_eq!(runs_now.len(), runs_top.len());
+    for ((text, y_top), (_, y_now)) in runs_top.iter().zip(&runs_now) {
+        assert!((y_now - y_top - (placed_now - placed_top)).abs() < 0.5, "{text:?} is drawn {} from where it stood, the control is placed {}", y_now - y_top, placed_now - placed_top);
+    }
 }

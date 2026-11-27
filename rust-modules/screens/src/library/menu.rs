@@ -15,7 +15,7 @@ use plx_machine::machine::{
     LogicalState, Machine, MachineId, NavOp,
 };
 use plx_ui::a11y::{A11y, A11yPath};
-use plx_ui::menu::{Class, Event, GrowWidth, Host, Menu, Morph, Out, Page};
+use plx_ui::menu::{Event, GrowWidth, Menu, Out, Page};
 use plx_ui::screen::{At, Dir, Focusable, GroupSpec, Placed, RenderStrategy, Screen, ScreenEvent, Step};
 use plx_ui::form::{Binding, Form, FormSection, FormTable, RowKey, RowKind};
 use plx_appkit::source_list::{self, SrcTarget, Tail};
@@ -579,8 +579,7 @@ impl LibraryMenu {
             LibraryMenuKind::Sources => GrowWidth::Names { ceiling: plx_ui::page_header::TEXT_X1 - 96.0 },
             _ => GrowWidth::Catch,
         };
-        let host = Host::Grows { pill: pill_of(&arg), clear_y: None, fill: Some(plx_ui::page_header::OPENER_FILL), morph: Morph::FromPill, width };
-        let menu = Menu::new(host, Class::Action, crate::registry::BAND);
+        let menu = Menu::from_header_pill(pill_of(&arg), crate::registry::BAND, width);
         Self {
             entry,
             arg,
@@ -876,6 +875,11 @@ impl<H: LibraryLike> Screen<H> for LibraryMenu {
     /// gone while the menu stands, back as the droplet drains into it.
     fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
         self.arg.opener.map(|(entry, control)| (entry, Some(FocusKey { entry, elem: control })))
+    }
+    /// The control's DRAWN plate, every frame (the page that carries it moves: focus on the pill brings the page home, a wheel
+    /// scrolls it): the glass grows out of, and drains back into, the pill where it stands (`Menu::track_opener`).
+    fn opener_rect(&mut self, drawn: plx_ui::Rect) {
+        self.menu.track_opener(plx_ui::widgets::focus_pill(drawn));
     }
     fn name(&self) -> &'static str {
         "library_menu"
@@ -1649,6 +1653,30 @@ impl LibraryLike for HostFixture {
         assert!(matches!(draft.rows[2].1, Action::Favourites));
         assert_eq!(draft.rows.len(), 3);
 
+    }
+
+    /// **A header menu follows its control**: the pill rides the page, so a page that glides under the open menu moves it, and the
+    /// menu takes the control's drawn plate from the dispatcher each frame (`Screen::opener_rect` -> `Menu::track_opener`): the
+    /// glass and the panel laid over it stand where the pill is, not where it was when the menu opened. Red while the anchor froze.
+    #[test]
+    fn the_menu_follows_its_pill_as_the_page_moves() {
+        let _guard = plx_base::testlock::serial();
+        let arg = LibraryMenuArg {
+            host: plx_machine::machine::InstanceId(8),
+            target: SectionAddress { epoch: 11, sid: ServerId::from_raw(1), section: 7 },
+            kind: LibraryMenuKind::SortFilter,
+            anchor: [1640.0f32.to_bits(), 148.0f32.to_bits(), 150.0f32.to_bits(), 56.0f32.to_bits()],
+            folded: Vec::new(),
+            opener: Some((EntryId(3), 5)),
+        };
+        let mut menu = LibraryMenu::new(EntryId(7), arg);
+        menu.apply_draft(filter_draft(false, None, true));
+        let before = menu.frame(&FixtureMeasure);
+        let plate = Rect::new(1640.0, 108.0, 150.0, 56.0);
+        <LibraryMenu as Screen<HostFixture>>::opener_rect(&mut menu, plate);
+        assert_eq!(menu.menu.glass().and_then(plx_ui::popover::Popover::opener), Some(plx_ui::widgets::focus_pill(plate)));
+        let after = menu.frame(&FixtureMeasure);
+        assert!((before.y - after.y - 40.0).abs() < 0.5, "the panel laid over the pill moved with it: {} -> {}", before.y, after.y);
     }
 
     #[test]
