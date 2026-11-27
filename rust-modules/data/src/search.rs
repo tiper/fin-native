@@ -1104,6 +1104,30 @@ fn set_query(state: &mut SearchState, adapter: &Arc<SearchAdapter>, q: &str) {
     set_query_with_directory(state, adapter, q, None);
 }
 
+/// Run the current query again after it FAILED (every source had its say and none answered).
+/// [`set_query`] cannot: it is idempotent on an unchanged string. This is what a keystroke's
+/// restart does without the keystroke: the old answer is invalidated, the shelves dropped, the
+/// state back to `Searching` and the debounce restarted, so the next pump asks every source again
+/// (a source's own retry backoff dies with the supersede). Answers whether anything changed.
+fn retry_query(
+    state: &mut SearchState,
+    adapter: &Arc<SearchAdapter>,
+    directory: Option<crate::stores::browse::DirectoryView<'_>>,
+) -> bool {
+    if state.state != State::Failed || terms(state.query()).is_none() {
+        return false;
+    }
+    match directory {
+        Some(directory) => supersede_from_directory(state, adapter, directory),
+        None => supersede(state, adapter),
+    }
+    state.shelves = None;
+    state.state = State::Searching;
+    state.settle_us = 0;
+    state.armed = true;
+    true
+}
+
 fn set_query_from_directory(
     state: &mut SearchState,
     adapter: &Arc<SearchAdapter>,
@@ -2153,6 +2177,7 @@ fn run_with_optional_directory(
             }
             true
         }
+        SearchCmd::Retry => retry_query(state, adapter, directory),
         SearchCmd::SetQueryScoped { profile_generation, query } => {
             if profile_generation != input.recents.profile_generation { return false; }
             match directory {

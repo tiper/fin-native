@@ -189,9 +189,12 @@ class TextParsers(unittest.TestCase):
     def test_header_functions_are_the_declarations_only(self):
         self.assertEqual(checker.header_functions(HEADER), ["plx_host_start", "plx_host_post", "plx_host_stop"])
 
-    def test_the_real_header_has_three_functions_and_two_tables(self):
+    def test_the_real_header_has_four_functions_and_three_structs(self):
         real = (HERE.parent / "rust-modules/platform-tizen/include/plx_host.h").read_text()
-        self.assertEqual(checker.header_functions(real), ["plx_host_start", "plx_host_post", "plx_host_stop"])
+        self.assertEqual(checker.header_functions(real), ["plx_host_start", "plx_host_post", "plx_host_post_cue", "plx_host_stop"])
+        self.assertEqual(checker.header_struct_names(real), ["PlxHostApi", "PlxHostEvent", "PlxHostCue"])
+        self.assertEqual([n for _, n in checker.header_struct(real, "PlxHostCue")],
+                         ["size", "epoch", "position_ms", "duration_ms", "text", "len", "reserved"])
         self.assertEqual([n for _, n in checker.header_struct(real, "PlxHostApi")],
                          ["size", "abi_version", "flags", "reserved", "on_stopped", "run_on_host", "player_open", "player_verb"])
         self.assertEqual(checker.header_defines(real)["PLX_HOST_E_FULL"], -6)
@@ -216,6 +219,15 @@ class TextParsers(unittest.TestCase):
 
     def test_abi_agrees(self):
         self.assertEqual(checker.check_abi(HEADER, CSHARP), [])
+
+    def test_a_cue_struct_that_drifts_from_the_header_is_named(self):
+        """The cue (plx_host_post_cue) is marshalled by value like the event: a field the host lays out differently fails the check."""
+        real = (HERE.parent / "rust-modules/platform-tizen/include/plx_host.h").read_text()
+        host = (HERE.parent / "tizen/host/PlxHost/Program.cs").read_text()
+        drifted = host.replace("public uint Len;", "public int Len;")
+        self.assertNotEqual(drifted, host)
+        problems = checker.check_abi(real, drifted)
+        self.assertTrue(any("PlxHostCue" in p for p in problems), problems)
 
     def test_abi_names_a_changed_signature(self):
         problems = checker.check_abi(HEADER.replace("void plx_host_stop(void);", "void plx_host_stop(int code);"), CSHARP)
@@ -388,6 +400,152 @@ class VerifyRules(unittest.TestCase):
         self.assertEqual(verify(readelf_syms=at), [])
         over = READELF_SYMS + "     8: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND memfd_create@GLIBC_2.41 (5)\n"
         self.assertTrue(any("GLIBC_2.41 exceeds" in p for p in verify(readelf_syms=over)))
+
+
+
+# The renderer (`verify --ass`): libass-plx, the plx_ass_* facade over a static font stack (ci/build-libass.py).
+ASS_HEADER = """
+#define PLX_ASS_ABI_VERSION 5
+/* plx_ass_commented(...) in a comment is not a declaration */
+typedef struct PlxAss PlxAss;
+unsigned plx_ass_abi_version(void);
+PlxAss *plx_ass_create(const char *default_font);
+int plx_ass_text_bidi(const uint32_t *chars, int n, uint8_t *levels, int32_t *visual,
+                      uint32_t *mirrored);
+"""
+
+ASS_READELF_D = """
+Dynamic section at offset 0x1000 contains 20 entries:
+  Tag        Type                         Name/Value
+ 0x0000000000000001 (NEEDED)             Shared library: [librt.so.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x000000000000000e (SONAME)             Library soname: [libass-plx-host.so.0]
+"""
+
+ASS_READELF_SYMS = """
+Symbol table '.dynsym' contains 8 entries:
+   Num:    Value          Size Type    Bind   Vis      Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND
+     1: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND memcpy@GLIBC_2.14 (2)
+     2: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND clock_gettime@GLIBC_2.17 (3)
+     3: 0000000000000000     0 NOTYPE  WEAK   DEFAULT  UND __gmon_start__
+     4: 0000000000000000     0 FUNC    WEAK   DEFAULT  UND __cxa_finalize@GLIBC_2.2.5 (4)
+     5: 0000000000001000    40 FUNC    GLOBAL DEFAULT   12 plx_ass_abi_version
+     6: 0000000000001100    40 FUNC    GLOBAL DEFAULT   12 plx_ass_create
+     7: 0000000000001200    40 FUNC    GLOBAL DEFAULT   12 plx_ass_text_bidi
+"""
+
+ARM_HEADER = "  Class: ELF32\n  Machine: ARM\n  Flags: 0x5000200, Version5 EABI, soft-float ABI\n"
+
+
+def verify_ass(**overrides):
+    args = dict(readelf_d=ASS_READELF_D, readelf_syms=ASS_READELF_SYMS, header_text=ASS_HEADER, max_version=checker.DEFAULT_MAX_GLIBC)
+    args.update(overrides)
+    return checker.verify_ass_object(**args)
+
+
+def arm_ass(**overrides):
+    args = dict(arch="armv7", readelf_h=ARM_HEADER, max_version="2.30",
+                readelf_d=ASS_READELF_D.replace("libass-plx-host.so.0", "libass-plx.so.0")
+                + " 0x00000001 (NEEDED)             Shared library: [ld-linux.so.3]\n")
+    args.update(overrides)
+    return verify_ass(**args)
+
+
+class RendererRules(unittest.TestCase):
+    """The package's second native library: self-contained, exporting only its facade, under the same glibc ceiling."""
+
+    def test_a_self_contained_renderer_passes_on_both_architectures(self):
+        self.assertEqual(verify_ass(), [])
+        self.assertEqual(arm_ass(), [])
+
+    def test_the_header_parser_reads_declarations_not_comments(self):
+        self.assertEqual(checker.ass_header_functions(ASS_HEADER), ["plx_ass_abi_version", "plx_ass_create", "plx_ass_text_bidi"])
+
+    def test_the_real_header_declares_the_facade_the_rust_loaders_bind(self):
+        declared = set(checker.ass_header_functions((HERE.parent / "include/ass.h").read_text(encoding="utf-8")))
+        bound = set()
+        for path in ("rust-modules/media/src/player/ass.rs", "rust-modules/gfx/src/rtl.rs"):
+            text = (HERE.parent / path).read_text(encoding="utf-8")
+            block = text[text.index("plx_base::dynlib! {"):]
+            block = block[:block.index("\n}\n")]
+            bound |= set(re.findall(r"\bfn (plx_ass_[a-z0-9_]+)\s*\(", block))
+        self.assertIn("plx_ass_text_bidi", bound)
+        self.assertEqual(sorted(bound - declared), [], "a function the application binds is not in include/ass.h")
+
+    def test_a_firmware_font_library_in_dt_needed_is_refused(self):
+        for lib in ("libfreetype.so.6", "libharfbuzz.so.0", "libfribidi.so.0", "libass.so.9", "libGLESv2.so.2", "libstdc++.so.6"):
+            extra = ASS_READELF_D + f" 0x0000000000000001 (NEEDED)             Shared library: [{lib}]\n"
+            problems = verify_ass(readelf_d=extra)
+            self.assertTrue(any(lib in p and "DT_NEEDED" in p for p in problems), (lib, problems))
+
+    def test_the_soname_must_be_the_one_the_application_opens_on_that_architecture(self):
+        swapped = ASS_READELF_D.replace("libass-plx-host.so.0", "libass-plx.so.0")
+        self.assertTrue(any("SONAME" in p and "libass-plx-host.so.0" in p for p in verify_ass(readelf_d=swapped)))
+        self.assertTrue(any("SONAME" in p and "libass-plx.so.0" in p
+                            for p in arm_ass(readelf_d=ASS_READELF_D + " 0x00000001 (NEEDED)             Shared library: [ld-linux.so.3]\n")))
+
+    def test_a_leaked_stack_symbol_or_a_missing_facade_function_is_named(self):
+        leaked = ASS_READELF_SYMS + "     8: 0000000000001300    40 FUNC    GLOBAL DEFAULT   12 FT_Init_FreeType\n"
+        self.assertTrue(any("FT_Init_FreeType" in p for p in verify_ass(readelf_syms=leaked)))
+        weak = ASS_READELF_SYMS + "     8: 0000000000001300    40 FUNC    WEAK   DEFAULT   12 hb_shape\n"
+        self.assertTrue(any("hb_shape" in p for p in verify_ass(readelf_syms=weak)))
+        absent = ASS_READELF_SYMS.replace("plx_ass_text_bidi", "plx_ass_text_bidx")
+        problems = verify_ass(readelf_syms=absent)
+        self.assertTrue(any("plx_ass_text_bidi" in p and "plx_ass_text_bidx" in p for p in problems), problems)
+        self.assertTrue(any("declares no" in p for p in verify_ass(header_text="/* nothing */")))
+
+    def test_an_undefined_symbol_outside_the_c_runtime_is_refused(self):
+        for row in ("FT_New_Face", "glClear", "__libc_enable_secure@GLIBC_PRIVATE (6)"):
+            syms = ASS_READELF_SYMS + f"     8: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND {row}\n"
+            problems = verify_ass(readelf_syms=syms)
+            self.assertTrue(any(row.split(" ")[0] in p and "undefined" in p for p in problems), (row, problems))
+
+    def test_the_glibc_ceiling_and_the_arm_abi_apply_to_the_renderer_too(self):
+        over = ASS_READELF_SYMS + "     8: 0000000000000000     0 FUNC    GLOBAL DEFAULT  UND memfd_create@GLIBC_2.41 (5)\n"
+        self.assertTrue(any("GLIBC_2.41 exceeds" in p for p in verify_ass(readelf_syms=over)))
+        self.assertEqual(verify_ass(readelf_syms=over, allow_new_glibc=True), [])
+        self.assertTrue(any("GLIBC_2.31" in p for p in arm_ass(readelf_syms=ASS_READELF_SYMS.replace("2.17", "2.31"))))
+        self.assertTrue(any("soft-float" in p for p in arm_ass(readelf_h=ARM_HEADER.replace("soft-float", "hard-float"))))
+        self.assertTrue(any("ELF32" in p for p in arm_ass(readelf_h=ARM_HEADER.replace("ELF32", "ELF64"))))
+
+    def test_text_relocations_and_static_tls_are_refused(self):
+        problems = verify_ass(text_relocations=True, static_tls=True)
+        self.assertTrue(any("text relocations" in p for p in problems) and any("static TLS" in p for p in problems), problems)
+
+    def test_the_arm_renderer_is_held_to_the_tizen60_inventory(self):
+        reference = {"libraries": {"libc.so.6": {"symbols": ["memcpy@GLIBC_2.14", "__cxa_finalize@GLIBC_2.2.5"]},
+                                  "libm.so.6": {"symbols": []}, "librt.so.1": {"symbols": ["clock_gettime@GLIBC_2.17"]},
+                                  "ld-linux.so.3": {"symbols": []}}}
+        needed, _ = checker.needed_and_soname(ASS_READELF_D)
+        self.assertEqual(checker.verify_inventory(needed, checker.dynsyms(ASS_READELF_SYMS), reference), [])
+        del reference["libraries"]["librt.so.1"]
+        problems = checker.verify_inventory(needed, checker.dynsyms(ASS_READELF_SYMS), reference)
+        self.assertTrue(any("librt.so.1" in p for p in problems) and any("clock_gettime@GLIBC_2.17" in p for p in problems), problems)
+
+    def test_the_command_line_takes_the_renderer_with_its_header_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            header, cs, so = Path(tmp) / "h", Path(tmp) / "c", Path(tmp) / "s"
+            header.write_text(HEADER)
+            cs.write_text(CSHARP)
+            so.write_bytes(b"")
+            code = checker.main(["verify", str(so), "--header", str(header), "--host-cs", str(cs), "--ass", str(so)])
+            self.assertEqual(code, 1)
+
+    def test_the_makefile_verifies_and_stages_the_renderer(self):
+        mk = (HERE.parent / "mk/platform-tizen.mk").read_text(encoding="utf-8")
+        verify_line = mk[mk.index("TIZEN_VERIFY ="):mk.index("\ntizen-verify:\n")]
+        self.assertIn("--ass $(TIZEN_ASS) --ass-header $(TIZEN_ASS_HEADER)", verify_line)
+        self.assertIn("TIZEN_ASS_HEADER   = include/ass.h", mk)
+        for arch, name in (("armv7", "libass-plx.so.0"), ("x86_64", "libass-plx-host.so.0")):
+            self.assertEqual(checker.ASS_SONAMES[arch], name)
+        self.assertEqual(mk.count("TIZEN_ASS_NAME     = libass-plx.so.0"), 1)
+        self.assertEqual(mk.count("TIZEN_ASS_NAME     = libass-plx-host.so.0"), 1)
+        self.assertIn("tizen-so: tizen-sdl tizen-libass", mk)
+        for goal in ("package.py stage --so $(TIZEN_SO) --ass $(TIZEN_ASS)", "package.py tpk --so $(TIZEN_SO) --ass $(TIZEN_ASS)",
+                     "--ass tizen/out/nightly/$(TIZEN_ARCH)/$(TIZEN_ASS_NAME)"):
+            self.assertIn(goal, mk)
 
 
 if __name__ == "__main__":

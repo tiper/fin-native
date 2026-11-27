@@ -22,14 +22,18 @@ pub fn title() -> &'static str {
 /// it answer no press) and the reason is the note under the rows (`FormSection::note`, the shared
 /// line for a reason that belongs to the rows above it: it wraps, where a per-row value would not
 /// fit beside a version's label and detail).
+///
+/// `header` is the section heading: [`title()`] for a list that stands alone, `""` under a page header that
+/// already names it (the menu's pushed page: the back-mark header says "Select Version" once).
 pub fn section<Id: FormId, A, D>(
+    header: &str,
     versions: &[MediaVersion],
     id: impl Fn(u16) -> Id,
     act: impl Fn(&MediaVersion) -> A,
     checked: Option<plx_plex::plex::MediaId>,
     unavailable: Option<&str>,
 ) -> FormSection<Id, A, D> {
-    let mut sec = FormSection::new(title());
+    let mut sec = FormSection::new(header);
     for (n, (v, (label, detail))) in versions.iter().zip(labels(versions)).enumerate() {
         let mut row = Row::new(label).checked(checked == Some(v.id));
         if !detail.is_empty() {
@@ -149,7 +153,7 @@ mod tests {
             for unavailable in [None, Some(plx_os::i18n::msg::browse_detail_no_playback())] {
                 let mut form: FormTable<Pos, plx_plex::plex::MediaId, Infallible> = FormTable::new(plx_ui::table_screen::BAND_BASE);
                 // The check mark takes the leading column, so the list is fitted with one shown.
-                form.set(Form::new().section(section(&sample(), Pos, |v| v.id, Some(sample()[1].id), unavailable)), None);
+                form.set(Form::new().section(section(title(), &sample(), Pos, |v| v.id, Some(sample()[1].id), unavailable)), None);
                 form.table.compact = false;
                 let tag = format!("{} versions{}", language.tag(), if unavailable.is_some() { " (no playback)" } else { "" });
                 out.extend(form.table.menu_cap_failure(&measure, &tag));
@@ -168,7 +172,7 @@ mod tests {
         let why = plx_os::i18n::msg::browse_detail_no_playback();
         for (unavailable, disabled) in [(None, false), (Some(why), true)] {
             let mut form: FormTable<Pos, plx_plex::plex::MediaId, Infallible> = FormTable::new(plx_ui::table_screen::BAND_BASE);
-            form.set(Form::new().section(section(&sample(), Pos, |v| v.id, None, unavailable)), None);
+            form.set(Form::new().section(section(title(), &sample(), Pos, |v| v.id, None, unavailable)), None);
             let rows: Vec<_> = form.table.sections.iter().flat_map(|s| s.rows.iter()).collect();
             let versions: Vec<_> = rows.iter().filter(|row| !row.is_note()).collect();
             let notes: Vec<_> = rows.iter().filter(|row| row.is_note()).collect();

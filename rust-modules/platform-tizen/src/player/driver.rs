@@ -11,7 +11,7 @@ use super::machine::{Fx, Machine};
 use super::port::HostPlayer;
 use plx_base::eventlog::log;
 use plx_base::task::MainThread;
-use plx_playback_contract::uri::{DisplayEvidence, UriDriver, UriNotReady, UriSource};
+use plx_playback_contract::uri::{DisplayEvidence, UriCaption, UriDriver, UriNotReady, UriSource};
 use plx_playback_contract::{AttemptId, BackendEvent, BackendKind, Capabilities, CommandId, DispatchResult, DriverSet,
     ExitDisposition, Failure, Operation, SourceKey, TrackKind, TrackSelection};
 
@@ -25,11 +25,15 @@ pub struct TizenUriDriver<P: HostPlayer> {
     machine: Machine,
     /// The host's events of one poll, kept to reuse its allocation.
     inbox: Vec<crate::host_abi::PlayerEvent>,
+    /// The host's cues of one poll, kept to reuse its allocation.
+    cue_inbox: Vec<crate::host_abi::HostCue>,
+    /// The captions the polls produced that the app has not drained yet.
+    captions: Vec<UriCaption>,
 }
 
 impl<P: HostPlayer> TizenUriDriver<P> {
     pub fn new(port: P, timing: Timing) -> Self {
-        Self { port, machine: Machine::new(timing), inbox: Vec::new() }
+        Self { port, machine: Machine::new(timing), inbox: Vec::new(), cue_inbox: Vec::new(), captions: Vec::new() }
     }
 
     /// How many host events were dropped because their epoch was not the active one.
@@ -87,7 +91,7 @@ impl<P: HostPlayer> DriverSet for TizenUriDriver<P> {
             Operation::SelectTrack { kind: TrackKind::Audio, choice } =>
                 self.machine.select_audio(now, attempt, command, choice, &mut fx),
             Operation::SelectTrack { kind: TrackKind::Subtitle, choice } =>
-                self.machine.select_subtitle(attempt, command, choice),
+                self.machine.select_subtitle(now, attempt, command, choice, &mut fx),
             Operation::Stop(reason) => self.machine.stop(now, attempt, reason, &mut fx),
         };
         self.perform(result, fx)
@@ -99,6 +103,22 @@ impl<P: HostPlayer> DriverSet for TizenUriDriver<P> {
         inbox.clear();
         let drained = self.port.drain(&mut inbox);
         let mut fx = Vec::new();
+        // The cues BEFORE the events: cues have a queue of their own, so a cue drained beside the PLAYER_TRACK that
+        // settles a subtitle switch has no order against it, and is judged under the switch still unanswered (dropped,
+        // never labelled with a track it may not belong to).
+        let mut cues = std::mem::take(&mut self.cue_inbox);
+        cues.clear();
+        let dropped = self.port.drain_cues(&mut cues);
+        if dropped > 0 {
+            fx.push(Fx::Log(format!("tizen-uri: {dropped} subtitle cue(s) were dropped: the cue queue was full")));
+        }
+        // A bound on what an app that never drains can make the driver hold: the oldest go first.
+        self.machine.cues(&cues, &mut self.captions);
+        if self.captions.len() > CAPTIONS_HELD {
+            let excess = self.captions.len() - CAPTIONS_HELD;
+            self.captions.drain(..excess);
+        }
+        self.cue_inbox = cues;
         let events = self.machine.poll(now, &inbox, drained.overflowed, &mut fx);
         self.inbox = inbox;
         self.perform(DispatchResult::Queued, fx);
@@ -137,7 +157,7 @@ impl<P: HostPlayer> UriDriver for TizenUriDriver<P> {
         self.machine.plane_owned()
     }
 
-    /// An audio stream the active source's track map names (see [`CAPS`]).
+    /// An audio or subtitle stream the active source's track map names (see [`CAPS`]).
     fn maps_track(&self, selection: TrackSelection) -> bool {
         self.machine.maps_track(selection)
     }
@@ -145,7 +165,19 @@ impl<P: HostPlayer> UriDriver for TizenUriDriver<P> {
     fn ready_to_start(&mut self, _: &MainThread) -> Result<(), UriNotReady> {
         self.port.offered().map_err(|_| UriNotReady::Driver("the host has no media player"))
     }
+
+    /// The host player draws no subtitle: the app draws the selected one from these cues (see [`CAPS`]).
+    fn delivers_captions(&self) -> bool {
+        true
+    }
+
+    fn drain_captions(&mut self, out: &mut Vec<UriCaption>) {
+        out.append(&mut self.captions);
+    }
 }
+
+/// How many undrained captions the driver holds. The adapter drains after every poll, so this is only a bound.
+const CAPTIONS_HELD: usize = 64;
 
 /// The requirements a plain progressive play states (a helper for the tests).
 #[cfg(test)]

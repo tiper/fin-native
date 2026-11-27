@@ -131,7 +131,7 @@ Menus and popovers
   below the control when there is room, else `(a.y - PANEL_GAP - h).max(PANEL_EDGE)`, which can put a
   tall panel over its opener; x from the control's left edge clamped to `PANEL_EDGE_X`) and `hang_x(pill,
   w, keep)` (`:303-312`: the near edge is the opener's outer edge by screen half, clamped into `keep`).
-  Callers: `screens/src/alt_sources.rs:410`, `screens/src/versions_panel.rs:95` (`under_or_above`),
+  `under_or_above` has no production caller now. Callers of `under_or_above_fit` (the same placement with `ClampToRoom`: a tall list is cut to the roomier side and never covers its opener): `ui/src/menu.rs` (`Mount::Sheet`, which Also available and Select Version without an opener share; `Mount::Video` places the failure screen's picker by the same rule, `Placement::UNDER_OR_ABOVE_FIT`, flat over the player). Callers of `hang_x`:
   `screens/src/watchlist/options.rs:317`, `screens/src/library/menu.rs:470` (`hang_x`); pinned by
   `screens/src/alt_sources_tests.rs:674-736` and `ui/src/popover_host_tests.rs:254-258`. `PANEL_GAP =
   space::MD` (`:276`), `PANEL_EDGE = space::XL`, `PANEL_EDGE_X = MARGIN_X` (`:280-281`). Open styles
@@ -992,8 +992,9 @@ opener, through ONE shared placer.
   `Hang`: `hang_x`'s half rule), its OVERFLOW rule (`ClampTop`: `under_or_above`'s `.max(PANEL_EDGE)`, which may cover a
   tall list's opener; `ClampToRoom`: never over it) and its `keep` rect. `under_or_above` becomes a call of it with
   `[Below, Above]`, `Leading`, `ClampTop` and its `PANEL_EDGE`/`PANEL_EDGE_X` frame, keeping its width and height clamps
-  (`popover.rs:283-301`), so Also available and Play Version (`alt_sources.rs:410`, `versions_panel.rs:95`) get the SAME
-  rects, pinned by `alt_sources_tests.rs:674-736` (`r.x == btn.x` at `:681`, the tall case at `:700-701`); `hang_x` stays
+  (`popover.rs:283-301`), so every caller of `under_or_above` gets the SAME
+  rects (Also available and Select Version without an opener have since moved to `under_or_above_fit`, `ClampToRoom`, on
+  `ui/src/menu.rs`'s `Mount::Sheet`; `under_or_above` itself is now pinned by the tests rather than called), pinned by `alt_sources_tests.rs:674-736` (`r.x == btn.x` at `:681`, the tall case at `:700-701`); `hang_x` stays
   the function its two callers (`watchlist/options.rs:317`, `library/menu.rs:470`) call, untouched. No existing caller's
   result changes and none of the four files is edited. The player's menus pass `Facing`, `Hang`, `ClampToRoom` and
   `keep = SAFE`. `Facing`: the vertical side facing `keep`'s centre (Above for an opener in the lower half), the other

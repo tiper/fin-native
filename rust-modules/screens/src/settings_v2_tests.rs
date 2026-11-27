@@ -200,7 +200,7 @@ fn the_diagnostics_buttons_are_effects_and_the_answered_status_drives_the_switch
 /// last and alone in its section, so the table's hairline stands before it.
 #[test]
 fn diagnostics_keeps_the_consequence_sub_line_and_delete_last() {
-    let form = diagnostics::diagnostics_form(Status::Off);
+    let form = diagnostics::diagnostics_form(Status::Off, plx_os::tv::packet_probe::Status::Unavailable);
     let mut table = FormTable::new(super::super::registry::BAND);
     table.set(form, None);
     let rows: Vec<&plx_ui::table::Row> = table.table.sections.iter().flat_map(|s| s.rows.iter()).collect();
@@ -287,4 +287,52 @@ fn the_root_and_diagnostics_rows_name_themselves_with_distinct_ids() {
         assert_eq!(set.len(), before, "two rows of one page share a name");
     }
     assert_eq!(RootId::Plaintext(ServerMachineId("machine".into())).a11y(), None);
+}
+
+/// **The packet-player probe row is the runner's to show**: a page on a platform without the probe (the runner answers
+/// `Unavailable`) keeps its three rows; an answer of `Idle` adds the row above Delete; pressing it asks for a Start,
+/// and while the probe runs the row is disabled, the tick asks for its status and a press asks nothing.
+#[test]
+fn the_packet_probe_row_appears_only_where_the_runner_offers_it_and_starts_the_probe() {
+    use plx_os::tv::packet_probe::{Command as Probe, Status as ProbeStatus};
+    use super::super::registry::AppMsg;
+    let _serial = plx_base::testlock::serial();
+    let mut page = diagnostics::DiagnosticsPage::new(EntryId(0));
+    let mut present = plx_machine::present::Present::new();
+    // Step the page through `events`; the probe commands it pushed.
+    let mut step = |page: &mut diagnostics::DiagnosticsPage, events: &[ScreenEvent<InnerHost>]| -> Vec<Probe> {
+        let mut out = Vec::new();
+        {
+            let mut fx = Effects::new(&mut out, MachineId::Instance(InstanceId(0)), &mut present);
+            for ev in events {
+                page.step(ev, &cx(None), &mut fx);
+            }
+        }
+        out.iter().filter_map(|s| match s.fx { Fx::App(AppFx::PacketProbe(c)) => Some(c), _ => None }).collect()
+    };
+
+    assert_eq!(step(&mut page, &[ScreenEvent::Mount]), [Probe::Status], "the page asks on mount");
+    assert_eq!(page.form.table.n_rows(), 3, "no row before the runner answers");
+
+    step(&mut page, &[ScreenEvent::App(AppMsg::PacketProbe(ProbeStatus::Unavailable))]);
+    assert_eq!(page.form.table.n_rows(), 3, "a platform without the probe");
+
+    step(&mut page, &[ScreenEvent::App(AppMsg::PacketProbe(ProbeStatus::Idle))]);
+    assert_eq!(page.form.table.n_rows(), 4);
+    assert_eq!(page.form.table.sections.len(), 3, "the probe stands in a section of its own");
+    assert_eq!(page.form.id_at(2).map(|id| id.key().0), Some(4), "above Delete");
+    assert_eq!(page.form.id_at(3).map(|id| id.key().0), Some(3), "Delete is still last");
+
+    assert_eq!(step(&mut page, &[ScreenEvent::Activate(4)]), [Probe::Start]);
+
+    assert!(!page.form.table.sections[1].rows[0].disabled);
+    step(&mut page, &[ScreenEvent::App(AppMsg::PacketProbe(ProbeStatus::Running))]);
+    assert!(page.form.table.sections[1].rows[0].disabled, "the row is dimmed while the probe runs");
+    assert_eq!(step(&mut page, &[ScreenEvent::Activate(4)]), [], "no second start while running");
+    assert_eq!(step(&mut page, &[ScreenEvent::Tick(Tick::default())]), [Probe::Status], "the tick polls while it runs");
+
+    step(&mut page, &[ScreenEvent::App(AppMsg::PacketProbe(ProbeStatus::Done { pass: 57, fail: 6 }))]);
+    assert_eq!(page.form.table.sections[1].rows[0].value.as_deref(), Some("57 passed, 6 failed"));
+    assert!(!page.form.table.sections[1].rows[0].disabled, "and live again when it is done");
+    assert_eq!(step(&mut page, &[ScreenEvent::Tick(Tick::default())]), [], "and stops polling when it is done");
 }

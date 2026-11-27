@@ -3,15 +3,15 @@
 
     python3 ci/check-tizen-so.py abi    --header H --host-cs CS
     python3 ci/check-tizen-so.py map    --header H --out FILE
-    python3 ci/check-tizen-so.py verify SO --header H --host-cs CS
+    python3 ci/check-tizen-so.py verify SO --header H --host-cs CS [--ass ASS --ass-header include/ass.h]
 
 THE CONTRACT has three sides that cannot see one another, in three languages: the C header the Rust crate implements
 (rust-modules/platform-tizen/include/plx_host.h), the C# the host loads it with (tizen/host/PlxHost/Program.cs), and the shared
 object the linker made. `abi` compares the first two as text and runs ANYWHERE (it is a step of `make check`'s Python gates and of
 the CI job): the `plx_host_*` functions the header declares are exactly the ones the host P/Invokes, and the host's mirror of the callback
 table (`PlxHostApi`) lists the same fields in the same order, which is the only thing that keeps the struct's layout equal on both sides.
-`map` writes the linker's version script from the header: the three names global, everything else local, so SDL, FreeType and every
-Rust symbol stay out of the dynamic table (`--exclude-libs ALL` would hide the three exports too). `verify` reads the linked library
+`map` writes the linker's version script from the header: the header's `plx_host_*` names global, everything else local, so SDL,
+FreeType and every Rust symbol stay out of the dynamic table (`--exclude-libs ALL` would hide those exports too). `verify` reads the linked library
 with the build host's binutils (`readelf`, `nm`) and needs Linux:
 
   * DT_NEEDED is an allowlist, not a deny-list: the C runtime, libgcc_s, and libGLESv2.so.2 (which must be there: the renderer's GL imports
@@ -27,6 +27,13 @@ with the build host's binutils (`readelf`, `nm`) and needs Linux:
   * the highest `GLIBC_x.y` symbol version needed is at most PLX_MAX_GLIBC (default 2.40, the emulator image's glibc, the newest
     target we know; the CI runner's is 2.39, so a library linked there is below the ceiling with room to spare and the ceiling only
     catches a host newer than the image). PLX_ALLOW_NEW_GLIBC=1 reports instead of failing.
+
+`--ass` verifies the package's SECOND native library the same way: `libass-plx`, the subtitle renderer and right-to-left shaper that
+the application opens by name from `res/` (ci/build-libass.py, the webOS recipe). Its rules are its own: DT_NEEDED is the C runtime
+only (ASS_NEEDED_ALLOWED; no libGLESv2, no firmware FreeType/FriBidi/HarfBuzz), its SONAME is the one the build gives this
+architecture (ASS_SONAMES, a name `dynlib!` tries), no text relocation or static TLS, every undefined symbol a versioned glibc/libgcc
+one, its exports exactly the `plx_ass_*` functions `--ass-header` declares (so no FT_/hb_/fribidi_/ass_ name of the static stack
+leaks), the same glibc ceiling and, with `--against`, the same Tizen 6.0 inventory.
 
 Standard library only; Python 3.10 or newer.
 """
@@ -90,6 +97,11 @@ ARMV7_WEAK_OK = {
 # The entry points of the text path that must be inside the object: SDL_ttf, its FreeType, SDL's surface.
 INSIDE_OBJECT = ("TTF_Init", "TTF_OpenFont", "TTF_RenderUTF8_Blended", "FT_Init_FreeType", "SDL_FreeSurface")
 STATIC_PREFIXES = ("SDL_", "TTF_", "FT_")
+# The renderer (`--ass`): what its build names it on each architecture (ci/build-libass.py: the ARM cross build and the Linux host build,
+# both in the candidate list of rust-modules/media/src/player/ass.rs and gfx/src/rtl.rs), and the C runtime it may link.
+ASS_PREFIX = "plx_ass_"
+ASS_SONAMES = {"x86_64": "libass-plx-host.so.0", "armv7": "libass-plx.so.0"}
+ASS_NEEDED_ALLOWED = ("libc.so.6", "libm.so.6", "libpthread.so.0", "librt.so.1", "libgcc_s.so.1")
 TIZEN60_ARCHIVE_ID = "tizen60-abi-reference"
 ROOTSTRAP_PREFIX = "data/platforms/tizen-6.0/mobile/rootstraps/mobile-6.0-device.core/"
 ROOTSTRAP_ELFS = (
@@ -200,6 +212,11 @@ def header_struct(text: str, name: str) -> list[tuple[str, str]]:
     return fields
 
 
+def header_struct_names(text: str) -> list[str]:
+    """The names of every `typedef struct NAME { ... } NAME;` of the header, in order."""
+    return [name for name, alias in re.findall(r"typedef\s+struct\s+(\w+)\s*\{.*?\}\s*(\w+)\s*;", strip_c_comments(text), re.S) if name == alias]
+
+
 def csharp_struct(text: str, name: str) -> list[tuple[str, str]]:
     """(type, name) of the public fields of `struct NAME { ... }`, in order."""
     text = strip_c_comments(text)
@@ -277,7 +294,8 @@ def check_abi(header_text: str, cs_text: str) -> list[str]:
     for name in sorted(set(theirs) & set(ours)):
         if theirs[name] != ours[name]:
             problems.append(f"{name}: the header says (returns {theirs[name][0]}, {theirs[name][1]} parameter(s)), the host's DllImport says (returns {ours[name][0]}, {ours[name][1]} parameter(s))")
-    for struct in ("PlxHostApi", "PlxHostEvent"):
+    # Every struct the header types (the table, the event, the cue) is marshalled by value by the host, so each is mirrored field for field.
+    for struct in header_struct_names(header_text):
         c_fields, cs_fields = header_struct(header_text, struct), csharp_struct(cs_text, struct)
         want = [(_cs_type_of(t), _norm(n)) for t, n in c_fields]
         have = [(t, _norm(n)) for t, n in cs_fields]
@@ -419,6 +437,71 @@ def verify_object(*, readelf_d: str, readelf_syms: str, nm_local: str, header_te
     return problems
 
 
+def ass_header_functions(text: str) -> list[str]:
+    """The `plx_ass_*` functions include/ass.h declares, sorted (comments and preprocessor lines are not declarations)."""
+    text = re.sub(r"(?m)^[ \t]*#[^\n]*(?:\\\n[^\n]*)*", "", strip_c_comments(text))
+    return sorted(set(re.findall(r"(?<!\w)(" + ASS_PREFIX + r"[a-z0-9_]+)\s*\(", text)))
+
+
+def verify_ass_object(*, readelf_d: str, readelf_syms: str, header_text: str, max_version: str, allow_new_glibc: bool = False,
+                      text_relocations: bool = False, static_tls: bool = False, arch: str = "x86_64",
+                      readelf_h: str | None = None) -> list[str]:
+    """Every rule `verify --ass` states for the renderer, over already-captured tool output."""
+    problems: list[str] = []
+    needed, soname = needed_and_soname(readelf_d)
+    elf_class, machine, loader, _ = ARCHITECTURES[arch]
+    if readelf_h is not None:
+        fields = dict(re.findall(r"^\s*(Class|Machine|Flags):\s*([^\n]+)", readelf_h, re.MULTILINE))
+        if (fields.get("Class"), fields.get("Machine")) != (elf_class, machine):
+            problems.append(f"renderer: expected {elf_class} {machine} for {arch}")
+        flags = fields.get("Flags", "")
+        if arch == "armv7" and ("Version5 EABI" not in flags or "soft-float ABI" not in flags or "hard-float ABI" in flags):
+            problems.append(f"renderer: expected ARM EABI5 soft-float flags, found {flags!r}")
+    allowed = (*ASS_NEEDED_ALLOWED, loader)
+    bad = [name for name in needed if name not in allowed]
+    if bad:
+        problems.append(f"renderer: DT_NEEDED outside the allowlist: {' '.join(bad)} (allowed: {' '.join(allowed)}; the font stack is static)")
+    if "libc.so.6" not in needed:
+        problems.append("renderer: DT_NEEDED lacks libc.so.6")
+    if soname != ASS_SONAMES[arch]:
+        problems.append(f"renderer: SONAME is {soname!r}, not {ASS_SONAMES[arch]!r} (the name the application opens on {arch})")
+    if text_relocations:
+        problems.append("renderer: the library has text relocations (a non-PIC object was linked in)")
+    if static_tls:
+        problems.append("renderer: the library asks for static TLS (DF_STATIC_TLS), which a dlopen'ed library cannot be given")
+    symbols = dynsyms(readelf_syms)
+    weak_allowed = UNDEFINED_WEAK_OK | (ARMV7_WEAK_OK if arch == "armv7" else set())
+    outside = []
+    for row in symbols:
+        if row["ndx"] != "UND" or not row["name"]:
+            continue
+        if row["version"] == "GLIBC_PRIVATE":
+            outside.append(row["name"] + "@GLIBC_PRIVATE")
+        elif row["version"].startswith(("GLIBC_", "GCC_")):
+            continue
+        elif not (row["bind"] == "WEAK" and not row["version"] and row["name"] in weak_allowed):
+            outside.append(row["name"] + (f"@{row['version']}" if row["version"] else ""))
+    if outside:
+        problems.append(f"renderer: undefined symbols outside the C runtime: {' '.join(sorted(set(outside)))}")
+    exported = sorted({row["name"] for row in symbols if row["ndx"] not in ("UND", "ABS") and row["bind"] in ("GLOBAL", "WEAK") and row["name"]})
+    functions = ass_header_functions(header_text)
+    if not functions:
+        problems.append(f"renderer: the header declares no {ASS_PREFIX}* function")
+    elif exported != functions:
+        leaked = sorted(set(exported) - set(functions))
+        absent = sorted(set(functions) - set(exported))
+        problems.append(f"renderer: exports are not the header's {ASS_PREFIX}* functions: exported but not declared {leaked[:8]}, "
+                        f"declared but not exported {absent}")
+    top = max_glibc(symbols)
+    if top is not None and version_key(top) > version_key(max_version):
+        message = (f"renderer: GLIBC_{top} exceeds the allowed GLIBC_{max_version} (PLX_MAX_GLIBC / PLX_ALLOW_NEW_GLIBC, as for the library)")
+        if allow_new_glibc:
+            print("WARNING: " + message, file=sys.stderr)
+        else:
+            problems.append(message)
+    return problems
+
+
 def run(command: list[str]) -> str:
     try:
         result = subprocess.run(command, capture_output=True, text=True)
@@ -485,7 +568,31 @@ def verify_inventory(needed: list[str], symbols: list[dict[str, str]], reference
     return problems
 
 
-def verify_file(so: Path, header_text: str, cs_text: str, arch: str, readelf: str, nm: str, against: Path | None) -> list[str]:
+def verify_ass_file(ass: Path, header_text: str, arch: str, readelf: str, max_version: str, reference: dict | None) -> list[str]:
+    readelf_d = run([readelf, "-d", str(ass)])
+    readelf_syms = run([readelf, "--dyn-syms", "-W", str(ass)])
+    problems = verify_ass_object(readelf_d=readelf_d, readelf_syms=readelf_syms, header_text=header_text, max_version=max_version,
+                                 allow_new_glibc=arch == "x86_64" and os.environ.get("PLX_ALLOW_NEW_GLIBC") == "1",
+                                 text_relocations="TEXTREL" in readelf_d, static_tls="STATIC_TLS" in readelf_d,
+                                 arch=arch, readelf_h=run([readelf, "-h", str(ass)]))
+    needed, _ = needed_and_soname(readelf_d)
+    symbols = dynsyms(readelf_syms)
+    if reference is not None:
+        sdk_problems = ["renderer: " + problem for problem in verify_inventory(needed, symbols, reference)]
+        problems.extend(sdk_problems)
+        if not sdk_problems:
+            print("Tizen 6.0 ARM SDK: all of the renderer's imports and SONAMEs found")
+    print(f"{ass}: {ass.stat().st_size} bytes")
+    print("renderer DT_NEEDED: " + " ".join(needed))
+    print(f"renderer exports: {len({row['name'] for row in symbols if row['ndx'] not in ('UND', 'ABS') and row['bind'] in ('GLOBAL', 'WEAK')})} "
+          f"{ASS_PREFIX}* functions")
+    top = max_glibc(symbols)
+    print(f"renderer highest glibc symbol version: {'GLIBC_' + top if top else 'none'} (ceiling GLIBC_{max_version})")
+    return problems
+
+
+def verify_file(so: Path, header_text: str, cs_text: str, arch: str, readelf: str, nm: str, against: Path | None,
+                ass: Path | None = None, ass_header_text: str | None = None) -> list[str]:
     readelf_h = run([readelf, "-h", str(so)])
     readelf_d = run([readelf, "-d", str(so)])
     readelf_syms = run([readelf, "--dyn-syms", "-W", str(so)])
@@ -511,6 +618,9 @@ def verify_file(so: Path, header_text: str, cs_text: str, arch: str, readelf: st
     print("exports: " + " ".join(sorted({row["name"] for row in dynsyms(readelf_syms) if row["ndx"] not in ("UND", "ABS") and row["bind"] in ("GLOBAL", "WEAK")})))
     top = max_glibc(dynsyms(readelf_syms))
     print(f"highest glibc symbol version: {'GLIBC_' + top if top else 'none'} (ceiling GLIBC_{max_version})")
+    if ass is not None:
+        problems.extend(verify_ass_file(ass, ass_header_text or "", arch, readelf, max_version,
+                                        json.loads(against.read_text()) if against is not None else None))
     return problems
 
 
@@ -531,6 +641,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--against", type=Path, help="check the ARM link against the Tizen 6.0 SDK inventory")
     p.add_argument("--header", required=True, type=Path)
     p.add_argument("--host-cs", required=True, type=Path)
+    p.add_argument("--ass", type=Path, help="also verify the subtitle renderer the package carries (libass-plx)")
+    p.add_argument("--ass-header", type=Path, help="include/ass.h: the renderer's exports must be exactly its plx_ass_* functions")
     p = sub.add_parser("inventory")
     p.add_argument("--rootstrap", required=True, type=Path)
     p.add_argument("--gcc", required=True, type=Path)
@@ -550,15 +662,19 @@ def main(argv: list[str]) -> int:
             write_map(functions, args.out)
             return 0
         cs_text = args.host_cs.read_text()
+        if args.command == "verify" and (args.ass is None) != (args.ass_header is None):
+            raise CheckError("--ass and --ass-header go together: the renderer's exports are checked against the header")
         problems = (check_abi(header_text, cs_text) if args.command == "abi"
-                    else verify_file(args.so, header_text, cs_text, args.arch, args.readelf, args.nm, args.against))
+                    else verify_file(args.so, header_text, cs_text, args.arch, args.readelf, args.nm, args.against,
+                                     args.ass, args.ass_header.read_text() if args.ass_header else None))
     except (CheckError, OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
         print(f"check-tizen-so: {error}", file=sys.stderr)
         return 1
     for problem in problems:
         print(f"check-tizen-so: {problem}", file=sys.stderr)
     if not problems:
-        print("check-tizen-so: " + ("the header and the host agree" if args.command == "abi" else "the library is as the host expects"))
+        print("check-tizen-so: " + ("the header and the host agree" if args.command == "abi" else
+                                    "the library is as the host expects" + (", and the renderer is self-contained" if args.ass else "")))
     return 1 if problems else 0
 
 

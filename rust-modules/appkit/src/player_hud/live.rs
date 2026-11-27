@@ -221,6 +221,7 @@ mod tests {
             now_summary: String::new(),
             begins_at: NINE + begin_min * MIN,
             ends_at: NINE + end_min * MIN,
+            later: Vec::new(),
         }
     }
 

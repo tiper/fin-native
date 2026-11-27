@@ -33,9 +33,9 @@
 //! ~375 KB buffer: **unmeasured**, estimated at a few hundred microseconds on the television's
 //! ARMv7 (the strided reads miss the cache more than the arithmetic costs), once per image.
 //!
-//! **A request asks for the copy** ([`BackdropSpec`], carried by the request that names the art:
+//! **A request asks for the copy** ([`Derive::Copy`], carried by the request that names the art:
 //! [`crate::tex::Source::probe`]), so only art whose request declares a copy pays for one: a poster
-//! under a fit that contains ([`ArtFit::copy_request`]) and the Live TV art ground's programme still
+//! under a fit that contains ([`ArtFit::derive_request`]) and the Live TV art ground's programme still
 //! ([`crate::art_ground::SPEC`], a full-screen copy it draws as one quad). Never a logo or a headshot on a row, a
 //! backdrop, or a Cover row's poster. The copy rides in
 //! [`crate::tex::Decoded::backdrop`], is uploaded with the image and lives and dies in the same
@@ -45,8 +45,17 @@
 //! four times that x 4 bytes (1 KiB for a square, 1.75 KiB for 16:9, 4 KiB at the most) beside the
 //! picture's own ~375 KB. The size is the request's, so another surface (a full-screen blurred
 //! ground) asks for the copy size that suits it.
+//!
+//! **A request can also ask for the picture's INK BOX** ([`Derive::Ink`], [`Ink`]): the bounding
+//! box of the texels that are not clear. A logo is often delivered on a canvas much larger than its mark (a
+//! resizer's `fit=contain` pads it to the box asked for, a studio's own file keeps a margin), and a
+//! size rule that reads the canvas sizes the margin, not the mark ([`crate::hero_logo::fit_ink`]). It is
+//! found by one pass over the alpha channel, in [`attach_derived`] beside the copy, once per image, and
+//! rides in [`crate::tex::Decoded::ink`] like the copy does. Only a Live TV channel plate's logo asks. A picture with no
+//! visible texel answers [`Ink::Clear`], which is not the same as not having asked.
 use crate::tex::Decoded;
 use crate::{theme, Crop, Rect};
+use plx_gfx::gfx::UV_FULL;
 
 /// How far a picture's aspect may sit from its tile's and still be COVERED rather than contained:
 /// the picture's aspect over the tile's lies in `1 +/- 0.08`. A 2:3 tile takes 0.61 - 0.72 as its own,
@@ -84,23 +93,49 @@ pub enum ArtFit {
 }
 
 impl ArtFit {
-    /// The blurred copy a request for art drawn under this fit asks for: none under
-    /// [`Cover`](Self::Cover), a poster's under [`ContainOnBlur`](Self::ContainOnBlur) (the only
+    /// What a request for art drawn under this fit asks for: nothing under
+    /// [`Cover`](Self::Cover), a poster's blurred copy under [`ContainOnBlur`](Self::ContainOnBlur) (the only
     /// tile that contains is a poster tile).
-    pub const fn copy_request(self) -> Option<BackdropSpec> {
+    pub const fn derive_request(self) -> Option<Derive> {
         match self {
             Self::Cover => None,
-            Self::ContainOnBlur => Some(BackdropSpec::POSTER),
+            Self::ContainOnBlur => Some(Derive::POSTER),
         }
     }
 }
 
-/// The blurred copy a request for a picture asks the source to make of it. The request declares
-/// it ([`crate::tex::Source::probe`]), so the producer never guesses from a size which consumers
-/// will draw it; it is part of the art's identity in the source (the same art asked for with and
-/// without a copy is two entries), and `Copy`/`Eq` so it can be.
+/// **What a request for a picture asks the source to derive from it**: a blurred copy ([`CopySpec`]) or its ink
+/// box ([`Ink`]). The request declares it ([`crate::tex::Source::probe`]), so the producer never guesses from a
+/// size which consumers will draw it; it is part of the art's identity in the source (the same art asked for with
+/// and without is two entries), and `Copy`/`Eq` so it can be. A request that asks for nothing carries `None`
+/// instead of a `Derive`: there is no value of this type that asks for nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct BackdropSpec {
+pub enum Derive {
+    /// A blurred copy of the picture, or a flat ground for one with transparency.
+    Copy(CopySpec),
+    /// The picture's [`Ink`] box ([`ink_of`]), carried in [`crate::tex::Decoded::ink`]: a Live TV channel plate's
+    /// logo, which the plate sizes by its mark and not by the canvas it came on ([`crate::hero_logo::fit_ink`]).
+    Ink,
+}
+
+impl Derive {
+    /// A poster tile's copy ([`CopySpec::POSTER`]).
+    pub const POSTER: Self = Self::Copy(CopySpec::POSTER);
+    /// A channel plate's logo asks for the ink box ([`Derive::Ink`]).
+    pub const INK: Self = Self::Ink;
+
+    /// The copy this asks for, if it asks for one.
+    pub const fn copy(self) -> Option<CopySpec> {
+        match self {
+            Self::Copy(spec) => Some(spec),
+            Self::Ink => None,
+        }
+    }
+}
+
+/// The blurred copy ([`Derive::Copy`]) a request asks the source to make of a picture.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CopySpec {
     /// Texels on the copy's short side; the long side keeps the picture's aspect, at most
     /// [`LONG_SIDE_RATIO`] times as long.
     pub short_side: u8,
@@ -119,12 +154,12 @@ pub struct BackdropSpec {
     pub dim: u8,
 }
 
-/// `fraction` (0 to 1) as a whole percent, for [`BackdropSpec::dim`].
+/// `fraction` (0 to 1) as a whole percent, for [`CopySpec::dim`].
 pub const fn percent(fraction: f32) -> u8 {
     (fraction * 100.0 + 0.5) as u8
 }
 
-impl BackdropSpec {
+impl CopySpec {
     /// A poster tile's: [`POSTER_BACKDROP_SIDE`] texels, none for a picture within the tolerance of
     /// 2:3 (a poster-tile fit covers it, and so does [`place`] for any 2:3 tile), and for a picture
     /// with transparency the Recent channel plates' own ground ([`theme::CHANNEL_PLATE_RGB8`]).
@@ -213,23 +248,88 @@ pub fn is_see_through(d: &Decoded) -> bool {
     clear * 100 >= nx * ny * SEE_THROUGH_PERCENT
 }
 
-/// The one-texel copy that is a flat `ground`: what a picture with transparency is contained on.
-fn ground_copy(ground: [u8; 3]) -> Decoded {
-    Decoded { w: 1, h: 1, rgba: Box::new([ground[0], ground[1], ground[2], 255]), backdrop: None }
+/// An alpha above this is ink: a texel a viewer can see. A resizer's anti-aliased fringe and a faint
+/// glow on a clear canvas stay below it, so they do not stretch the box.
+const INK_ALPHA: u8 = 16;
+
+/// **The bounding box of a picture's ink**, in texels: the smallest rectangle holding every texel whose
+/// alpha is above [`INK_ALPHA`] ([`ink_of`]). A fully opaque picture's is the whole picture.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InkBox {
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
 }
 
-/// `picture` with the copy `spec` asks for, when the picture gets one ([`BackdropSpec::wanted_for`]):
-/// the blurred copy of an opaque picture ([`backdrop_of`]), and for one with transparency
-/// ([`is_see_through`]) the spec's flat [`ground`](BackdropSpec::ground), or nothing if it has none.
-/// The producer's one call.
-pub fn attach_backdrop(mut picture: Decoded, spec: BackdropSpec) -> Decoded {
-    if spec.wanted_for(picture.w, picture.h) {
-        picture.backdrop = if is_see_through(&picture) {
-            spec.ground.map(ground_copy)
-        } else {
-            backdrop_of(&picture, spec.short_side as usize, spec.dim)
+/// **What a request for the ink box found** ([`Derive::Ink`], [`crate::tex::Decoded::ink`]; `None` there means the
+/// request did not ask, or the buffer was unreadable). A picture with nothing in it is its own answer, not a box of
+/// zero: a plate draws the channel's name for it, where a missing answer draws the whole texture.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Ink {
+    /// The bounding box of the visible texels (a fully opaque picture's is the whole picture).
+    Box(InkBox),
+    /// No texel is visible: the picture is entirely clear.
+    Clear,
+}
+
+impl InkBox {
+    /// The texture window (`u`, `v`, `w`, `h`, each 0 to 1; [`crate::Painter::tex_uv`]'s) of this box in a
+    /// `tw` x `th` texture. The whole texture for an empty one.
+    pub fn uv(self, tw: f32, th: f32) -> [f32; 4] {
+        if tw <= 0.0 || th <= 0.0 {
+            return UV_FULL;
         }
-        .map(Box::new);
+        [self.x as f32 / tw, self.y as f32 / th, self.w as f32 / tw, self.h as f32 / th]
+    }
+}
+
+/// The [`Ink`] of `d`: its box, or [`Ink::Clear`] for a picture with no visible texel; `None` for no size or a short buffer. One
+/// pass over the alpha channel, so it costs the picture's texel count in byte reads, once per
+/// picture: 40-75 us for a 436 x 654 PNG on an Apple M4 at `-O` (a standalone copy of the loop, 2026-11-26);
+/// **unmeasured on the television**, where an ARMv7 core is likely 10x slower, so under a millisecond. The
+/// poster adapter runs it where it makes the copy ([`attach_derived`]).
+pub fn ink_of(d: &Decoded) -> Option<Ink> {
+    let (w, h) = (d.w as usize, d.h as usize);
+    if w == 0 || h == 0 || d.rgba.len() < w * h * 4 {
+        return None;
+    }
+    let (mut x0, mut x1, mut y0, mut y1) = (usize::MAX, 0, usize::MAX, 0);
+    for (y, row) in d.rgba[..w * h * 4].chunks_exact(w * 4).enumerate() {
+        let mut ink = row.chunks_exact(4).enumerate().filter(|(_, p)| p[3] > INK_ALPHA).map(|(x, _)| x);
+        let Some(first) = ink.next() else { continue };
+        let last = ink.last().unwrap_or(first);
+        (x0, x1) = (x0.min(first), x1.max(last));
+        (y0, y1) = (y0.min(y), y1.max(y));
+    }
+    Some(if x0 == usize::MAX {
+        Ink::Clear
+    } else {
+        Ink::Box(InkBox { x: x0 as u16, y: y0 as u16, w: (x1 - x0 + 1) as u16, h: (y1 - y0 + 1) as u16 })
+    })
+}
+
+/// The one-texel copy that is a flat `ground`: what a picture with transparency is contained on.
+fn ground_copy(ground: [u8; 3]) -> Decoded {
+    Decoded { w: 1, h: 1, rgba: Box::new([ground[0], ground[1], ground[2], 255]), backdrop: None, ink: None }
+}
+
+/// `picture` with what `derive` asks for. A copy ([`Derive::Copy`]), when the picture gets one
+/// ([`CopySpec::wanted_for`]): the blurred copy of an opaque picture ([`backdrop_of`]), and for one with transparency
+/// ([`is_see_through`]) the spec's flat [`ground`](CopySpec::ground), or nothing if it has none. Or the [`Ink`]
+/// ([`Derive::Ink`]). The producer's one call.
+pub fn attach_derived(mut picture: Decoded, derive: Derive) -> Decoded {
+    match derive {
+        Derive::Ink => picture.ink = ink_of(&picture),
+        Derive::Copy(spec) if spec.wanted_for(picture.w, picture.h) => {
+            picture.backdrop = if is_see_through(&picture) {
+                spec.ground.map(ground_copy)
+            } else {
+                backdrop_of(&picture, spec.short_side as usize, spec.dim)
+            }
+            .map(Box::new);
+        }
+        Derive::Copy(_) => {}
     }
     picture
 }
@@ -242,8 +342,8 @@ pub fn attach_backdrop(mut picture: Decoded, spec: BackdropSpec) -> Decoded {
 /// it (not `card_art::resample`'s full-area box mean, which would read every texel of a ~375 KB
 /// picture on the main thread, and would need the buffer copied into its `Rgba`), and one 3 x 3 box
 /// pass (edges clamped) smooths the result. The picture is taken as OPAQUE: alpha is ignored, because
-/// a picture with transparency is never blurred ([`attach_backdrop`] gives it a flat ground instead).
-/// The copy is dimmed to `dim` percent ([`BackdropSpec::dim`]: so the tile draws it with no tint), opaque, and
+/// a picture with transparency is never blurred ([`attach_derived`] gives it a flat ground instead).
+/// The copy is dimmed to `dim` percent ([`CopySpec::dim`]: so the tile draws it with no tint), opaque, and
 /// keeps the picture's aspect, so the tile's cover window ([`Placement::Contained::backdrop_uv`])
 /// addresses it as it addresses the picture.
 pub fn backdrop_of(d: &Decoded, short: usize, dim: u8) -> Option<Decoded> {
@@ -290,7 +390,7 @@ pub fn backdrop_of(d: &Decoded, short: usize, dim: u8) -> Option<Decoded> {
             rgba.push(255);
         }
     }
-    Some(Decoded { w: bw as u16, h: bh as u16, rgba: rgba.into_boxed_slice(), backdrop: None })
+    Some(Decoded { w: bw as u16, h: bh as u16, rgba: rgba.into_boxed_slice(), backdrop: None, ink: None })
 }
 
 #[cfg(test)]
@@ -298,7 +398,7 @@ mod tests {
     use super::*;
     use plx_gfx::gfx::UV_FULL;
 
-    const POSTER_DIM: u8 = BackdropSpec::POSTER.dim;
+    const POSTER_DIM: u8 = CopySpec::POSTER.dim;
     const TILE: Rect = Rect { x: 100.0, y: 200.0, w: 250.0, h: 375.0 };
 
     fn near(a: f32, b: f32) -> bool { (a - b).abs() < 1e-3 }
@@ -307,7 +407,7 @@ mod tests {
     fn px(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Decoded {
         let mut v = Vec::with_capacity((w * h * 4) as usize);
         for y in 0..h { for x in 0..w { v.extend_from_slice(&f(x, y)); } }
-        Decoded { w: w as u16, h: h as u16, rgba: v.into_boxed_slice(), backdrop: None }
+        Decoded { w: w as u16, h: h as u16, rgba: v.into_boxed_slice(), backdrop: None, ink: None }
     }
 
     #[test]
@@ -353,17 +453,17 @@ mod tests {
         assert_eq!(POSTER_FIT_TOLERANCE, 0.08);
     }
 
-    /// The producer's own judgement (`BackdropSpec::POSTER`'s `skip_shape`, 2:3) is the same edge.
+    /// The producer's own judgement (`CopySpec::POSTER`'s `skip_shape`, 2:3) is the same edge.
     #[test]
     fn a_poster_spec_skips_exactly_what_a_poster_tile_covers() {
-        let spec = BackdropSpec::POSTER;
+        let spec = CopySpec::POSTER;
         assert!(!spec.wanted_for(72, 100) && spec.wanted_for(73, 100), "wide edge");
         assert!(!spec.wanted_for(920, 1500) && spec.wanted_for(919, 1500), "narrow edge");
         assert!(!spec.wanted_for(250, 375) && spec.wanted_for(375, 375) && spec.wanted_for(667, 375));
-        let any = BackdropSpec { short_side: 16, skip_shape: None, ground: None, dim: POSTER_DIM };
+        let any = CopySpec { short_side: 16, skip_shape: None, ground: None, dim: POSTER_DIM };
         assert!(any.wanted_for(250, 375), "a spec with no shape to skip wants every picture");
-        assert_eq!(ArtFit::Cover.copy_request(), None);
-        assert_eq!(ArtFit::ContainOnBlur.copy_request(), Some(BackdropSpec::POSTER));
+        assert_eq!(ArtFit::Cover.derive_request(), None);
+        assert_eq!(ArtFit::ContainOnBlur.derive_request(), Some(Derive::POSTER));
     }
 
     #[test]
@@ -421,16 +521,16 @@ mod tests {
         assert_eq!((pano.w, pano.h), (32, 8), "the long side is at most 4x the short");
     }
 
-    /// `attach_backdrop` applies the spec's own skip: a 2:3 poster is handed back untouched, a square
+    /// `attach_derived` applies the spec's own skip: a 2:3 poster is handed back untouched, a square
     /// gets its copy, and a spec without a shape to skip copies the poster shape too.
     #[test]
-    fn attach_backdrop_makes_the_copy_only_for_a_picture_the_spec_wants_one_for() {
-        let poster = attach_backdrop(px(250, 375, |_, _| [1, 2, 3, 255]), BackdropSpec::POSTER);
+    fn attach_derived_makes_the_copy_only_for_a_picture_the_spec_wants_one_for() {
+        let poster = attach_derived(px(250, 375, |_, _| [1, 2, 3, 255]), Derive::POSTER);
         assert!(poster.backdrop.is_none(), "a poster-shaped picture is covered, never contained");
-        let square = attach_backdrop(px(375, 375, |_, _| [1, 2, 3, 255]), BackdropSpec::POSTER);
+        let square = attach_derived(px(375, 375, |_, _| [1, 2, 3, 255]), Derive::POSTER);
         let copy = square.backdrop.as_deref().expect("a square gets a copy");
         assert_eq!((copy.w, copy.h), (16, 16));
-        let any = attach_backdrop(px(250, 375, |_, _| [1, 2, 3, 255]), BackdropSpec { short_side: 16, skip_shape: None, ground: None, dim: POSTER_DIM });
+        let any = attach_derived(px(250, 375, |_, _| [1, 2, 3, 255]), Derive::Copy(CopySpec { short_side: 16, skip_shape: None, ground: None, dim: POSTER_DIM }));
         assert!(any.backdrop.is_some());
     }
 
@@ -441,29 +541,29 @@ mod tests {
     fn a_picture_with_transparency_gets_the_plate_ground_not_a_blur() {
         let logo = px(300, 300, |x, y| if (100..200).contains(&x) && (100..200).contains(&y) { [250, 200, 0, 255] } else { [0, 0, 0, 0] });
         assert!(is_see_through(&logo));
-        let got = attach_backdrop(logo, BackdropSpec::POSTER);
+        let got = attach_derived(logo, Derive::POSTER);
         let copy = got.backdrop.as_deref().expect("a ground");
         assert_eq!((copy.w, copy.h), (1, 1), "a flat ground, not a blur");
         assert_eq!(&copy.rgba[..], &[0x22, 0x27, 0x2d, 255], "the Recent plates' own colour, undimmed");
         assert_eq!(theme::CHANNEL_PLATE_RGB8, [0x22, 0x27, 0x2d]);
         assert_eq!(plx_gfx::gfx::tokens::rgb8(0x22, 0x27, 0x2d), theme::CHANNEL_PLATE, "the bytes ARE the plate");
-        assert_eq!(BackdropSpec::POSTER.ground, Some(theme::CHANNEL_PLATE_RGB8));
+        assert_eq!(CopySpec::POSTER.ground, Some(theme::CHANNEL_PLATE_RGB8));
     }
 
     /// An opaque off-shape picture keeps the blurred copy, dimmed; a spec with no ground gives a
     /// picture with transparency nothing at all (it is covered, as without a spec).
     #[test]
     fn an_opaque_picture_keeps_its_blur_and_a_spec_without_a_ground_gives_transparency_none() {
-        let opaque = attach_backdrop(px(375, 375, |_, _| [200, 100, 50, 255]), BackdropSpec::POSTER);
+        let opaque = attach_derived(px(375, 375, |_, _| [200, 100, 50, 255]), Derive::POSTER);
         let copy = opaque.backdrop.as_deref().expect("a blur");
         assert_eq!((copy.w, copy.h), (16, 16));
         let k = theme::ART_BACKDROP_DIM;
         assert!(copy.rgba.chunks(4).all(|p| p == [(200.0 * k).round() as u8, (100.0 * k).round() as u8, (50.0 * k).round() as u8, 255]),
             "its own colours at the dim: {:?}", &copy.rgba[..4]);
         let clear = || px(300, 300, |_, _| [250, 200, 0, 0]);
-        let none = attach_backdrop(clear(), BackdropSpec { ground: None, ..BackdropSpec::POSTER });
+        let none = attach_derived(clear(), Derive::Copy(CopySpec { ground: None, ..CopySpec::POSTER }));
         assert!(none.backdrop.is_none());
-        assert!(attach_backdrop(clear(), BackdropSpec::POSTER).backdrop.is_some(), "the poster spec's ground");
+        assert!(attach_derived(clear(), Derive::POSTER).backdrop.is_some(), "the poster spec's ground");
     }
 
     /// The edge of "has transparency": a few anti-aliased texels on an opaque picture are not a clear
@@ -480,6 +580,51 @@ mod tests {
         let mut short = px(64, 64, |_, _| [0; 4]);
         short.rgba = vec![0; 16].into_boxed_slice();
         assert!(!is_see_through(&short) && !is_see_through(&px(0, 0, |_, _| [0; 4])), "a short or empty buffer");
+    }
+
+    /// A mark on a much larger clear canvas: the box is the mark's, not the canvas's. A fully opaque
+    /// picture's is the whole picture, and a picture with no ink is `Clear`.
+    #[test]
+    fn the_ink_box_is_the_mark_on_its_canvas_and_the_whole_of_an_opaque_picture() {
+        let mark = px(400, 400, |x, y| if (100..300).contains(&x) && (175..225).contains(&y) { [250, 200, 0, 255] } else { [0, 0, 0, 0] });
+        assert_eq!(ink_of(&mark), Some(Ink::Box(InkBox { x: 100, y: 175, w: 200, h: 50 })));
+        assert_eq!(ink_of(&px(300, 200, |_, _| [9, 9, 9, 255])), Some(Ink::Box(InkBox { x: 0, y: 0, w: 300, h: 200 })), "opaque: the whole picture");
+        assert_eq!(ink_of(&px(64, 64, |_, _| [9, 9, 9, 0])), Some(Ink::Clear), "nothing to see is an answer, not a box of zero");
+        // a single texel is a box of one; the corners are reachable
+        assert_eq!(ink_of(&px(8, 8, |x, y| if (x, y) == (7, 0) { [1, 1, 1, 255] } else { [0; 4] })), Some(Ink::Box(InkBox { x: 7, y: 0, w: 1, h: 1 })));
+        let mut short = px(64, 64, |_, _| [9, 9, 9, 255]);
+        short.rgba = vec![255; 16].into_boxed_slice();
+        assert!(ink_of(&short).is_none() && ink_of(&px(0, 0, |_, _| [0; 4])).is_none(), "a short or empty buffer");
+    }
+
+    /// The fringe of a resizer and a faint glow are not the mark: alpha at the threshold is clear, one above is ink.
+    #[test]
+    fn a_faint_fringe_does_not_stretch_the_ink_box() {
+        let with_edge = |a: u8| px(100, 100, move |x, y| match (x, y) {
+            (40..=59, 40..=59) => [255, 255, 255, 255],
+            (30, 30) => [255, 255, 255, a],
+            _ => [0; 4],
+        });
+        assert_eq!(ink_of(&with_edge(INK_ALPHA)), Some(Ink::Box(InkBox { x: 40, y: 40, w: 20, h: 20 })), "a faint texel is clear");
+        assert_eq!(ink_of(&with_edge(INK_ALPHA + 1)), Some(Ink::Box(InkBox { x: 30, y: 30, w: 30, h: 30 })), "a visible one is ink");
+    }
+
+    /// The box is the request's: only [`Derive::Ink`] gets one, and it makes no copy (not even the plate
+    /// ground); the poster's copy comes with no box. A picture with nothing visible answers `Clear`.
+    #[test]
+    fn attach_derived_finds_the_ink_box_only_when_the_request_asks_for_it() {
+        let mark = || px(400, 400, |x, y| if (100..300).contains(&x) && (175..225).contains(&y) { [250, 200, 0, 255] } else { [0, 0, 0, 0] });
+        let got = attach_derived(mark(), Derive::INK);
+        assert_eq!(got.ink, Some(Ink::Box(InkBox { x: 100, y: 175, w: 200, h: 50 })));
+        assert!(got.backdrop.is_none(), "the ink request makes no copy, not even the plate ground");
+        let opaque = attach_derived(px(375, 375, |_, _| [200, 100, 50, 255]), Derive::INK);
+        assert_eq!((opaque.ink, opaque.backdrop.is_none()), (Some(Ink::Box(InkBox { x: 0, y: 0, w: 375, h: 375 })), true), "opaque: the whole picture, no copy");
+        let clear = attach_derived(px(64, 64, |_, _| [9, 9, 9, 0]), Derive::INK);
+        assert_eq!((clear.ink, clear.backdrop.is_none()), (Some(Ink::Clear), true), "a clear picture is Clear, not 'not asked'");
+        let poster = attach_derived(mark(), Derive::POSTER);
+        assert!(poster.ink.is_none() && poster.backdrop.is_some(), "a request that did not ask pays nothing for a box");
+        assert_eq!(InkBox { x: 100, y: 175, w: 200, h: 50 }.uv(400.0, 400.0), [0.25, 0.4375, 0.5, 0.125]);
+        assert_eq!(InkBox { x: 1, y: 1, w: 1, h: 1 }.uv(0.0, 0.0), UV_FULL, "an undecoded texture answers the whole window");
     }
 
     #[test]

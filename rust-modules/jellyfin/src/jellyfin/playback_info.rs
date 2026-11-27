@@ -20,6 +20,16 @@ const PROFILE_MAX_BPS: i64 = 200_000_000;
 /// Containers the demuxer plays as they are.
 const DIRECT_CONTAINERS: &str = "mkv,mp4,m4v,mov,ts,m2ts,mpegts";
 
+/// A conversion keeps the file's timestamps, so its first keyframe carries film time and a
+/// subtitle in file time lines up with the picture. The profile, the built transcode URL
+/// (`paths::transcode`) and `Backend::conversion_keeps_file_time` all read this one value.
+pub const COPY_TIMESTAMPS: bool = true;
+
+/// Does the device profile let the server send a file in `container` (the model's name) as it is?
+pub fn is_direct_container(container: &str) -> bool {
+    DIRECT_CONTAINERS.split(',').any(|c| c == container)
+}
+
 /// Text subtitle formats the player draws itself, embedded or as a sidecar. Image formats (PGS,
 /// VobSub, DVB) are left out on purpose, so the server burns them in.
 const TEXT_SUBTITLES: [&str; 7] = ["srt", "subrip", "ass", "ssa", "vtt", "webvtt", "mov_text"];
@@ -51,7 +61,9 @@ pub struct Device<'a> {
 }
 
 /// What "Convert audio: on the TV" converts (`devcaps::TV_CONVERTED_AUDIO_CODECS`), as Jellyfin
-/// names it: it spells PCM by sample layout, and its direct-play match is by exact name.
+/// names it: it spells PCM by sample layout, and its direct-play match is by exact name. DTS is
+/// left out: the set's own list already offers it, and the app converts a DTS track only after the
+/// set refuses it, which this profile cannot express.
 pub const CONVERTED_AUDIO: &str = "truehd,flac,alac,opus,vorbis,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,pcm_s32be,pcm_f32le,pcm_bluray,pcm_dvd";
 
 /// The audio codecs a server may be asked to encode to.
@@ -86,7 +98,7 @@ pub fn device_profile(d: &Device<'_>) -> Value {
         ],
         "TranscodingProfiles": [
             {"Type": "Video", "Container": "mkv", "Protocol": "http", "Context": "Streaming",
-             "VideoCodec": video, "AudioCodec": audio_targets.join(","), "CopyTimestamps": false,
+             "VideoCodec": video, "AudioCodec": audio_targets.join(","), "CopyTimestamps": COPY_TIMESTAMPS,
              "EnableSubtitlesInManifest": false}
         ],
         "CodecProfiles": codec_profiles(d),
@@ -264,6 +276,7 @@ mod tests {
         let t = &p["TranscodingProfiles"][0];
         assert_eq!((t["Container"].as_str(), t["Protocol"].as_str()), (Some("mkv"), Some("http")));
         assert_eq!(t["AudioCodec"], "aac,ac3,eac3");
+        assert_eq!(t["CopyTimestamps"], COPY_TIMESTAMPS);
         assert_eq!(p["CodecProfiles"][0]["Conditions"][0]["Value"], "3840");
         let subs: Vec<&str> = p["SubtitleProfiles"].as_array().unwrap().iter().filter_map(|s| s["Format"].as_str()).collect();
         assert!(subs.contains(&"srt") && subs.contains(&"ass"));

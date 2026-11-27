@@ -7559,6 +7559,13 @@ pub fn set_subtitle(ps: &mut PlaybackSession, sid: i64) {
 pub fn cur_sub_sid(ps: &PlaybackSession) -> i64 {
     ps.cur_sub_sid
 }
+/// **The embedded subtitle the app draws, as `(stream id, render ordinal)`**: the selected stream when the session
+/// says the app's own renderer draws it from an embedded track (`metadata::sub_render_ordinal`'s ordinal, never a
+/// sidecar). A URI driver's captions are kept only for this stream, and drawn at this ordinal.
+pub fn embedded_subtitle_drawn_by_app(ps: &PlaybackSession) -> Option<(i64, i32)> {
+    (ps.cur_sub_sid > 0 && ps.cur_sub_client_drawable && !ps.cur_sub_sidecar && ps.cur_sub_ordinal >= 0)
+        .then_some((ps.cur_sub_sid, ps.cur_sub_ordinal))
+}
 /// The subtitle-language preference this play resolved under (show pref, else account pref), as
 /// a BCP-47 code — `metadata::sub_layout::sub_sections`'s "yours" grouping reads this, never a Plex
 /// account type.
@@ -9858,6 +9865,11 @@ pub fn available_quality_ladder() -> &'static [Quality] {
 
 pub fn forced_direct_play(ps: &PlaybackSession) -> bool {
     ps.direct_play_mode == DirectPlayMode::Forced
+}
+
+/// Direct Play is set to **Disabled** for this session: every rung asks the server to convert.
+pub fn direct_play_disabled(ps: &PlaybackSession) -> bool {
+    ps.direct_play_mode == DirectPlayMode::Disabled
 }
 
 pub fn audio_track_direct_plays(ps: &PlaybackSession, codec: &str, channels: i64, sample_rate: i64) -> bool {
@@ -12685,6 +12697,9 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             plan.sub_sid
         ));
         crate::player::request_subtitle(ord);
+        if let Some(why) = side_reader_refusal(ps) {
+            crate::player::log(&format!("subside: reader not admitted ({why})"));
+        }
     }
     // A retry or a remembered per-item correction carried its subtitle offset through the reset
     // (`reset_track_selection`); hold it to the range of the subtitle that actually landed, so an
@@ -12995,11 +13010,18 @@ fn plain_rebuild_is_remux(ps: &PlaybackSession) -> bool {
 /// copyable. [`plain_rebuild_is_remux`] adds the subtitle term; [`side_subs_allowed`] adds who
 /// draws it.
 fn original_remux_shape(ps: &PlaybackSession) -> bool {
-    enhancement_quality()
-        && ps.auto_original.is_some()
-        && ps.cur_contract.ceiling.is_none()
-        && cur_delivery(ps) == plx_plex::plex::TranscodeDelivery::ProgressiveMkv
-        && !is_no_video_copy(ps)
+    original_remux_refusal(ps).is_none()
+}
+
+/// The first term [`original_remux_shape`] fails, `None` when it holds (the reason is for
+/// [`side_reader_refusal`]'s log).
+fn original_remux_refusal(ps: &PlaybackSession) -> Option<&'static str> {
+    if !enhancement_quality() { return Some("quality"); }
+    if ps.auto_original.is_none() { return Some("no original candidate"); }
+    if ps.cur_contract.ceiling.is_some() { return Some("ceiling"); }
+    if cur_delivery(ps) != plx_plex::plex::TranscodeDelivery::ProgressiveMkv { return Some("delivery"); }
+    if is_no_video_copy(ps) { return Some("video re-encoded"); }
+    None
 }
 
 /// The largest Part (whole-file bitrate, kbps) the app reads a second time beside a remux. The
@@ -13014,7 +13036,12 @@ const SIDE_MAX_PART_KBPS: i64 = 30_000;
 /// and burns by design. A sidecar needs none of this to be DRAWN (the app fetches it on its own);
 /// this gate decides only whether the reader also runs clock-only to place it on the remux's clock.
 fn side_reader_admitted(ps: &PlaybackSession) -> bool {
-    side_reader_inputs_admit(
+    side_reader_admission_refusal(ps).is_none()
+}
+
+/// The first term [`side_reader_admitted`] fails, `None` when the reader is admitted.
+fn side_reader_admission_refusal(ps: &PlaybackSession) -> Option<&'static str> {
+    side_reader_inputs_refusal(
         cur_client(ps).is_some_and(|c| c.link() == Some(plx_plex::plex::probe::Location::Local)),
         ps.auto_original.as_ref().map_or("", |c| c.probe_part.as_str()),
         ps.cur_transport_kbps,
@@ -13024,23 +13051,50 @@ fn side_reader_admitted(ps: &PlaybackSession) -> bool {
 /// The facts [`side_reader_admitted`] reads, as plain values, so the cold start (which has no
 /// session yet) asks the same question.
 pub(super) fn side_reader_inputs_admit(local_link: bool, part: &str, part_kbps: i64) -> bool {
-    local_link && part.starts_with('/') && (1..=SIDE_MAX_PART_KBPS).contains(&part_kbps)
+    side_reader_inputs_refusal(local_link, part, part_kbps).is_none()
+}
+
+fn side_reader_inputs_refusal(local_link: bool, part: &str, part_kbps: i64) -> Option<&'static str> {
+    if !local_link { return Some("link not local"); }
+    if !part.starts_with('/') { return Some("no server part"); }
+    if !(1..=SIDE_MAX_PART_KBPS).contains(&part_kbps) { return Some("part bitrate"); }
+    None
 }
 
 /// [`side_subs_allowed`] for a prospective pick: a subtitle is chosen, the app can draw it, no
 /// failure has retired the app's drawing for this playback, the route is the Original remux's
 /// shape, and nothing but the app has to read the track (a sidecar, or an admitted reader).
 fn side_subs_allowed_for(ps: &PlaybackSession, sid: i64, drawable: bool, sidecar: bool) -> bool {
-    sid != 0
-        && drawable
-        && !ps.side_subs_refused
-        && original_remux_shape(ps)
-        && (sidecar || side_reader_admitted(ps))
+    side_subs_refusal_for(ps, sid, drawable, sidecar).is_none()
+}
+
+/// The first term [`side_subs_allowed_for`] fails, `None` when the app may draw the pick.
+fn side_subs_refusal_for(ps: &PlaybackSession, sid: i64, drawable: bool, sidecar: bool) -> Option<&'static str> {
+    if sid == 0 { return Some("no subtitle"); }
+    if !drawable { return Some("not drawable"); }
+    if ps.side_subs_refused { return Some("refused earlier"); }
+    original_remux_refusal(ps).or_else(|| if sidecar { None } else { side_reader_admission_refusal(ps) })
 }
 
 /// **May the app draw the selected subtitle over a remux** instead of the server burning it?
 fn side_subs_allowed(ps: &PlaybackSession) -> bool {
     side_subs_allowed_for(ps, ps.cur_sub_sid, ps.cur_sub_client_drawable, ps.cur_sub_sidecar)
+}
+
+/// The first term that keeps the side reader from reading the selected embedded track over a
+/// remux, or `None` when it may (or when nothing asks it to): the gate's own reason
+/// ([`side_subs_refusal_for`]), then what [`side_reader_target`] adds. For the log only.
+fn side_reader_refusal(ps: &PlaybackSession) -> Option<&'static str> {
+    if ps.cur_sub_sid == 0 || ps.cur_sub_sidecar || !is_transcoding(ps) {
+        return None;
+    }
+    side_subs_refusal_for(ps, ps.cur_sub_sid, ps.cur_sub_client_drawable, false).or_else(|| {
+        if !ps.cur_contract.remux { return Some("not a remux"); }
+        if ps.cur_sub_ordinal < 0 { return Some("no ordinal"); }
+        if ps.tsession.is_empty() { return Some("no session"); }
+        if ps.request.as_ref().is_none_or(|r| r.part.is_empty()) { return Some("no request part"); }
+        None
+    })
 }
 
 /// Log the harness-readable pair every enhancement-graded decision produces, shared by

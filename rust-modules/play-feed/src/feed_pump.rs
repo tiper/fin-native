@@ -1556,8 +1556,8 @@ pub fn arm_open(target_ns: i64, disp_base: i64, playpos_ns: i64) {
 }
 
 /// A transcode restarted at a content offset (`FeedCommand::Rebase`).
-pub fn rebase(playpos_ns: i64, disp_base: i64) {
-    FEED_SHARED.rebase(playpos_ns, disp_base);
+pub fn rebase(playpos_ns: i64, disp_base: i64, anchor: bool) {
+    FEED_SHARED.rebase(playpos_ns, disp_base, anchor);
 }
 
 /// The player's audio choice (`FeedCommand::SelectAudio`): what the demuxer feeds from its next open.
@@ -1798,12 +1798,14 @@ mod tests {
         FEED_SHARED.reset_session();
         assert_eq!(native_attempt_facts().position_ns, None, "a fresh session has no position yet");
 
-        rebase(120_000_000_000, 120_000_000_000);
+        rebase(120_000_000_000, 120_000_000_000, true);
         assert_eq!(native_attempt_facts().position_ns, Some(120_000_000_000),
             "a transcode restarted at 120 s reads 120 s until its first frame");
+        assert!(FEED_SHARED.anchor_rebase.load(Relaxed), "an anchored restart arms the next Engine");
 
         FEED_SHARED.reset_session_for_reload();
         assert_eq!(native_attempt_facts().position_ns, None, "a reload forgets the old seed");
+        assert!(!FEED_SHARED.anchor_rebase.load(Relaxed), "and the anchor it armed");
         arm_open(90_000_000_000, 0, 90_000_000_000);
         assert_eq!(native_attempt_facts().position_ns, Some(90_000_000_000),
             "a reload armed at 90 s reads 90 s until its first frame");

@@ -19,6 +19,12 @@ pub enum SearchCmd {
     SetQuery(String),
     /// An owned draft cannot submit into a replacement profile's Search store.
     SetQueryScoped { profile_generation: u32, query: String },
+    /// Run the query the field holds AGAIN after its answer was a failure ([`State::Failed`](crate::search::State)):
+    /// a new generation, every source asked afresh, the debounce restarted. `SetQuery` of the same
+    /// string is a no-op by design (a caller may hand it every frame), so it cannot say this. A
+    /// store that is not `Failed`, or a query below the search threshold, refuses it: there is no
+    /// failure to retry.
+    Retry,
     /// A submitted search, not each keystroke; history is scoped to the active profile.
     RememberRecent { profile_generation: u32, term: String },
     ClearRecents { profile_generation: u32 },

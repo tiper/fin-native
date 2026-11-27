@@ -306,11 +306,11 @@ impl<Id, A, Dest> Form<Id, A, Dest> {
             })
             .collect()
     }
-    /// Re-type every focusable row: `f` gets each binding and answers its replacement, or `None` to
+    /// Re-type every focusable row (identity, action and the drill-in destination's type): `f` gets each binding and answers its replacement, or `None` to
     /// demote the row to an inert slot — still DRAWN exactly as declared, but never focusable.
     /// Sections, headers, accessories and every row's presentation pass through untouched, so a
     /// shared builder (`appkit::source_list::form`) serves a surface that has its own row identities.
-    pub fn map<Id2, A2>(self, mut f: impl FnMut(Binding<Id, A, Dest>) -> Option<Binding<Id2, A2, Dest>>) -> Form<Id2, A2, Dest> {
+    pub fn map<Id2, A2, Dest2>(self, mut f: impl FnMut(Binding<Id, A, Dest>) -> Option<Binding<Id2, A2, Dest2>>) -> Form<Id2, A2, Dest2> {
         Form {
             sections: self
                 .sections

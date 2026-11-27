@@ -261,20 +261,19 @@ impl JfBackend {
         let encoders = held.as_ref().map_or(playback_info::Encoders::ALL, |v| v.encoders);
         let server = held.filter(|v| !v.direct_play && spec.contract.ceiling.is_none());
         let video_copy = plx_plex::plex::direct_play_video_codecs(spec.caps);
+        // A server session's copy may reach the TV's own player whole: judged as a session, never
+        // by the direct-play ask, which admits a DTS-HD wider than the row for its core (#1537).
+        let audio_ok = |codec: &str, channels: i64, rate: i64| plx_plex::plex::is_session_audio_track_with(spec.caps, codec, channels, rate);
         let dev = transcode::Device {
-            video_copy: &video_copy,
-            audio_target: audio_encode_target(spec.caps),
-            // A server session's copy may reach the TV's own player whole: judged as a session, never
-            // by the direct-play ask, which admits a DTS-HD wider than the row for its core (#1537).
-            audio_ok: &|codec: &str, channels: i64, rate: i64| plx_plex::plex::is_session_audio_track_with(spec.caps, codec, channels, rate),
             force_video_encode: server.as_ref().is_some_and(|v| v.video_encode),
             force_audio_encode: server.as_ref().is_some_and(|v| v.audio_encode),
             encoders,
+            ..copy_device(spec.caps, &video_copy, &audio_ok)
         };
         let mut p = transcode::plan(m, spec, &dev)?;
         if let Some(v) = server {
             if p.copy_video == !v.video_encode && p.copy_audio == !v.audio_encode {
-                p.server_url = v.url;
+                p.server_url = v.url.map(|u| transcode::server_stream(&u, p.burn_subtitle));
             }
         }
         Some((c, p))
@@ -450,6 +449,25 @@ fn prove_grant(
             Err(MintRefusal::Stale) if std::mem::take(&mut again) => {}
             other => return other.map_err(Unproved::Refused),
         }
+    }
+}
+
+/// The player's direct-play audio check over `caps`, as [`transcode::Device::audio_ok`] reads it.
+fn dp_audio(caps: &plx_os::devcaps::Caps) -> impl Fn(&str, i64, i64) -> bool + '_ {
+    move |codec, channels, rate| plx_plex::plex::is_dp_audio_track_with(caps, codec, channels, rate)
+}
+
+/// This device as [`transcode`] reads it: what it copies and decodes, the codec a server encodes
+/// its audio to, nothing forced and every encode allowed.
+fn copy_device<'a>(caps: &plx_os::devcaps::Caps, video_copy: &'a [&'a str],
+    audio_ok: &'a dyn Fn(&str, i64, i64) -> bool) -> transcode::Device<'a> {
+    transcode::Device {
+        video_copy,
+        audio_target: audio_encode_target(caps),
+        audio_ok,
+        force_video_encode: false,
+        force_audio_encode: false,
+        encoders: playback_info::Encoders::ALL,
     }
 }
 
@@ -937,7 +955,13 @@ impl Backend for Shared {
         launch_item_key(raw)
     }
     fn metadata(&self, rating_key: &str) -> Option<Metadata> {
-        self.0.client()?.metadata(rating_key)
+        let mut m = self.0.client()?.metadata(rating_key)?;
+        // Which versions the server will convert, so their plain-text subtitles come as files.
+        let caps = plx_os::devcaps::caps();
+        let (video_copy, audio_ok) = (plx_plex::plex::direct_play_video_codecs(&caps), dp_audio(&caps));
+        let dev = copy_device(&caps, &video_copy, &audio_ok);
+        translate::key_extracted_subtitles(&mut m, |md| transcode::plays_as_is(md, &dev, &|c| caps.raster_bound(c)));
+        Some(m)
     }
     fn metadata_many(&self, rating_keys: &[&str]) -> Option<MediaContainer> {
         self.0.client()?.items_by_id(rating_keys)
@@ -1047,8 +1071,14 @@ impl Backend for Shared {
         let Some(channels) = self.0.live_channels_of(epg) else { return (None, None) };
         (Some(200), Some(channels.iter().filter_map(livetv::channel_of).collect()))
     }
-    fn epg_on_now(&self, epg: &str, _now: i64) -> Option<Vec<Metadata>> {
-        Some(self.0.live_channels_of(epg)?.iter().filter_map(livetv::airing_of).collect())
+    fn epg_guide(&self, epg: &str, now: i64, until: i64) -> Option<Vec<Metadata>> {
+        let channels = self.0.live_channels_of(epg)?;
+        let until = until.max(plx_plex::plex::livetv::window_end(now));
+        // A server that cannot answer the guide still says what is on now, as the lineup carries it.
+        match self.0.client().and_then(|c| c.live_programs(now, until)) {
+            Some(programs) => Some(livetv::programs_of(&programs, &channels)),
+            None => Some(channels.iter().filter_map(livetv::airing_of).collect()),
+        }
     }
     fn tune(&self, _off: &plx_base::task::OffFrame, _dvr: &str, channel: &str, playback: &str) -> plx_plex::plex::livetv::TuneOutcome {
         use plx_plex::plex::livetv::TuneOutcome;
@@ -1080,6 +1110,9 @@ impl Backend for Shared {
             return Some(transcode::hls_refusal());
         }
         self.0.transcode_plan(spec).map(|(_, p)| p.decision)
+    }
+    fn conversion_keeps_file_time(&self) -> bool {
+        playback_info::COPY_TIMESTAMPS
     }
     fn transcode_start_url(&self, spec: &TranscodeSpec<'_>) -> Option<StreamUrl> {
         let (c, p) = self.0.transcode_plan(spec)?;

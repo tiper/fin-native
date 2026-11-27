@@ -56,6 +56,8 @@ pub enum AppFx {
     Preferences(PreferenceCmd),
     /// Local firmware logging; the runner answers this surface through an addressed event.
     PlaybackTrace(plx_os::playback_trace::Command),
+    /// The platform's packet-player probe; answered like the trace, by an addressed event.
+    PacketProbe(plx_os::tv::packet_probe::Command),
     /// A store command, executed as a `Deliver` to the store machine in the same drain.
     Store(StoreId, StoreCmd),
     /// Poll only the store work this visible route owns, after its read-only step returns.
@@ -88,6 +90,7 @@ pub enum AppFx {
 pub enum InlineAppFx {
     Session(plx_session::auth::SessionCmd),
     PlaybackTrace(plx_os::playback_trace::Command),
+    PacketProbe(plx_os::tv::packet_probe::Command),
     Store(StoreId, StoreCmd),
     StoreWork(StoreWork),
     Consent(ConsentCmd),
@@ -137,6 +140,7 @@ impl plx_machine::machine::AppEffect for AppFx {
         match self {
             Self::Session(v) => Inline(InlineAppFx::Session(v)),
             Self::PlaybackTrace(v) => Inline(InlineAppFx::PlaybackTrace(v)),
+            Self::PacketProbe(v) => Inline(InlineAppFx::PacketProbe(v)),
             Self::Store(id, v) => Inline(InlineAppFx::Store(id, v)),
             Self::StoreWork(v) => Inline(InlineAppFx::StoreWork(v)),
             Self::Consent(v) => Inline(InlineAppFx::Consent(v)),
@@ -258,7 +262,11 @@ pub(crate) use crate::library::{names_preview, visit_slot};
 #[cfg(test)]
 pub(crate) use crate::{about_panel::AboutPanelScreen, tracks_panel::audio_rows as tracks_panel_audio_rows};
 #[cfg(test)]
-pub(crate) use crate::preplay_panel::{PreplayArg, Source as PreplaySource};
+pub(crate) use crate::preplay_panel::PreplayArg;
+/// The tracks' source a menu page commits with (`item_menu` may not name the panel's module).
+pub(crate) use crate::preplay_panel::Source as PreplaySource;
+/// A pick of Audio & Subtitles as effects: the one pair of every surface that lists the tracks.
+pub(crate) use crate::preplay_panel::commit_pick;
 
 /// **What the item context menu asks of the loop**, once its own `step` has resolved the pressed
 /// row to an [`crate::item_menu::Action`].
@@ -640,8 +648,11 @@ pub enum ItemMenuKind {
     /// argument is the item Play acts on ([`plx_data::metadata::Detail::play_rk`]). `opener` is the Detail
     /// page's instance: a row is the round button it replaces, so the menu hands that [`HeroCtl`] back to
     /// the page (`AppMsg::HeroCtl`), whose `activate_hero` is the one path a hero action takes. The row's
-    /// icon and label are the button's, from the one table ([`hero_face`]).
-    HeroOverflow { rows: Vec<HeroCtl>, opener: plx_machine::machine::InstanceId },
+    /// icon and label are the button's, from the one table ([`hero_face`]). `page` is the Detail page's
+    /// OWN rating key (`Detail::rk`): the pages the menu hosts (Select Version, Audio & Subtitles) are
+    /// read off that page, as the standalone panels' `(sid, rk)` is, while `rk` on the argument is the
+    /// item Play acts on, which on a show page is its on-deck episode and so names no loaded page.
+    HeroOverflow { rows: Vec<HeroCtl>, opener: plx_machine::machine::InstanceId, page: String },
 }
 
 pub use crate::detail::{hero_face, HeroCtl};
@@ -850,7 +861,54 @@ fn versions_page<'a>(
     meta: plx_data::metadata::MetadataView<'a>,
     arg: &crate::versions_panel::VersionsArg,
 ) -> Option<&'a plx_data::metadata::Detail> {
-    meta.current().filter(|d| plx_plex::plex::same_item((d.sid, d.rk.as_str()), (arg.sid, arg.rk.as_str())))
+    loaded_page(meta, arg.sid, &arg.rk)
+}
+
+/// The loaded Detail when it is the item `(sid, rk)`: the page the hero's panels belong to.
+fn loaded_page<'a>(
+    meta: plx_data::metadata::MetadataView<'a>,
+    sid: plx_plex::plex::ServerId,
+    rk: &str,
+) -> Option<&'a plx_data::metadata::Detail> {
+    meta.current().filter(|d| plx_plex::plex::same_item((d.sid, d.rk.as_str()), (sid, rk)))
+}
+
+/// **The versions the hero's Select Version lists, and the one Play takes now** (the check mark), of the
+/// page that is `(sid, rk)`: what the standalone panel's mount reads, for the hero's `…` menu to host the
+/// same list as a page (`item_menu`, which may not name the page's module).
+pub(crate) fn hero_page_versions(
+    meta: plx_data::metadata::MetadataView<'_>,
+    sid: plx_plex::plex::ServerId,
+    rk: &str,
+) -> (Vec<plx_data::pms::MediaVersion>, Option<plx_plex::plex::MediaId>) {
+    let page = loaded_page(meta, sid, rk);
+    (page.map_or_else(Vec::new, |d| crate::detail::hero_versions(d).to_vec()), page.and_then(crate::detail::taken_version))
+}
+
+/// **The tracks the hero's Audio & Subtitles offers** for the page that is `(sid, rk)` ([`preplay_tracks_of`]'s
+/// `Source::Page`): the ones of the item its hero plays, an empty set when the page cannot say.
+pub(crate) fn page_preplay_tracks(
+    meta: plx_data::metadata::MetadataView<'_>,
+    sid: plx_plex::plex::ServerId,
+    rk: &str,
+) -> plx_data::metadata::PreplayTracks {
+    loaded_page(meta, sid, rk)
+        .and_then(|d| meta.preplay_tracks(sid, d.play_rk(), crate::detail::taken_version(d)))
+        .unwrap_or_else(|| empty_tracks(sid, rk))
+}
+
+/// A page that cannot say what it offers: nothing to pick, rather than another item's tracks.
+pub(crate) fn empty_tracks(sid: plx_plex::plex::ServerId, rk: &str) -> plx_data::metadata::PreplayTracks {
+    plx_data::metadata::PreplayTracks {
+        sid,
+        rk: rk.to_string(),
+        kind: String::new(),
+        show_rk: String::new(),
+        part: String::new(),
+        audio: Vec::new(),
+        subs: Vec::new(),
+        pick: None,
+    }
 }
 
 /// **The ratingKey a Select Version row selects for**, the subject of its accessibility id: the page's Play pill's own
@@ -870,25 +928,11 @@ pub(crate) fn versions_subject<H: MetadataLike>(cx: &Cx<'_, H>, arg: &crate::ver
 /// with nothing to pick rather than naming another item's tracks.
 pub(crate) fn preplay_tracks_of(meta: plx_data::metadata::MetadataView<'_>, arg: &crate::preplay_panel::PreplayArg) -> plx_data::metadata::PreplayTracks {
     use crate::preplay_panel::Source;
-    let empty = |sid, rk: &str| plx_data::metadata::PreplayTracks {
-        sid,
-        rk: rk.to_string(),
-        kind: String::new(),
-        show_rk: String::new(),
-        part: String::new(),
-        audio: Vec::new(),
-        subs: Vec::new(),
-        pick: None,
-    };
     match arg.source {
-        Source::Page => meta
-            .current()
-            .filter(|d| plx_plex::plex::same_item((d.sid, d.rk.as_str()), (arg.sid, arg.rk.as_str())))
-            .and_then(|d| meta.preplay_tracks(arg.sid, d.play_rk(), crate::detail::taken_version(d)))
-            .unwrap_or_else(|| empty(arg.sid, &arg.rk)),
+        Source::Page => page_preplay_tracks(meta, arg.sid, &arg.rk),
         Source::Failed { part_id, pick } => meta
             .failed_tracks(arg.sid, &arg.rk, part_id, pick)
-            .unwrap_or_else(|| empty(arg.sid, &arg.rk)),
+            .unwrap_or_else(|| empty_tracks(arg.sid, &arg.rk)),
     }
 }
 
@@ -1394,13 +1438,16 @@ pub enum ContentPanel {
     AltSources { anchor: [u32; 4] },
     /// *Select Version* (`screens::versions_panel`), anchored to the drawn rect of the disc that
     /// opened it, as [`Self::AltSources`] is to its pill.
-    Versions { anchor: [u32; 4] },
+    /// `opener` is the page's entry and the hero control the panel grows out of (the `…` button when
+    /// the menu handed the row over, else the disc itself): the page leaves it out of its own pass and
+    /// the opener lift draws it at the morph's alpha (`Screen::opener`).
+    Versions { anchor: [u32; 4], opener: (plx_machine::machine::EntryId, u32) },
     /// *Audio & Subtitles* before playback (`screens::preplay_panel`, #1532), anchored to the drawn
-    /// rect of what opened it (the hero's disc, or its `…` menu's row). **The entry point for any
+    /// rect of what opened it (the hero's disc; the `…` menu hosts the same pages inside itself). **The entry point for any
     /// host**: send `ContentReq::Panel(ContentPanel::PreplayTracks { anchor })` from the Detail
     /// page; the subject is the page's `(sid, rk)` and the panel reads the tracks of the item the
     /// hero PLAYS (`Detail::play_rk`: a show page's hero episode, never the show).
-    PreplayTracks { anchor: [u32; 4] },
+    PreplayTracks { anchor: [u32; 4], opener: (plx_machine::machine::EntryId, u32) },
     /// *Track information* (`screens::tracks_panel`), opened at 1-based `page`. Every interactive
     /// opening passes 1; `/tmp/plxnative-tracks=<n>` is the only caller that does not, and it is
     /// what makes a headless capture of page 2 possible at all.
@@ -1456,7 +1503,7 @@ impl ContentPanel {
                     }),
                 )
             }
-            Self::Versions { anchor } => {
+            Self::Versions { anchor, opener } => {
                 let (sid, rk) = subject?;
                 (
                     Style::Compact,
@@ -1465,10 +1512,11 @@ impl ContentPanel {
                         sid,
                         rk: rk.to_string(),
                         anchor,
+                        opener: Some(opener),
                     }),
                 )
             }
-            Self::PreplayTracks { anchor } => {
+            Self::PreplayTracks { anchor, opener } => {
                 let (sid, rk) = subject?;
                 (
                     Style::Compact,
@@ -1477,6 +1525,7 @@ impl ContentPanel {
                         sid,
                         rk: rk.to_string(),
                         anchor,
+                        opener: Some(opener),
                         source: crate::preplay_panel::Source::Page,
                     }),
                 )
@@ -1608,6 +1657,13 @@ pub trait LiveTvLike: AppLike<Memory = PageMemory> + Sized {
     fn wall(_cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> {
         None
     }
+    /// **The Unix second of this frame's clock**, with or without a zone: what a page that only needs WHEN (the
+    /// Guide's board is laid out against the guide's UTC schedule) reads, so a zone the platform cannot read
+    /// costs it its clock words and not its content. By default the wall's second; `AppHost` answers the
+    /// publication's own, which has the instant where the wall has none.
+    fn instant(cx: &Cx<'_, Self>) -> Option<i64> {
+        Self::wall(cx).map(|wall| wall.unix_s())
+    }
 }
 
 /// A host that publishes this frame's playback session (spec §2.3). The player's owned screens
@@ -1733,6 +1789,7 @@ pub enum AppMsg {
     PlayerPresented { watch: Option<plx_appkit::skip_policy::OfferId>, paired: bool },
     AutoSkipResolved { id: plx_appkit::skip_policy::OfferId, outcome: plx_appkit::skip_policy::OfferOutcome },
     PlaybackTrace(plx_os::playback_trace::Status),
+    PacketProbe(plx_os::tv::packet_probe::Status),
     Session(plx_session::auth::owner::SessionEvent),
     Consent(ConsentCmd),
     /// A command of the player-HUD package store, delivered to [`MachineId::Huds`].
@@ -2401,8 +2458,8 @@ impl AppArg {
 pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,LibraryCollections{section:u32},LibraryRecommended{section:u32},Search,Watchlist,LiveTv,Player,Content:{Detail{sid:u32,rk:str},Person{sid:u32,key:str,guid:str,name:str,thumb:str},Filmography{sid:u32,key:str},Collection{sid:u32,rk:str,sec:i64,tag:i64,name:str},Catalog{hex:str}},Settings:SettingsPage{Root,Playback,AudioSubtitles,Favourites,LibraryFavourites,Privacy,Legal,About,Document(u8),Preview(u8),ConsentStage(u8),Language,Contribute},FirstRunConsent(u8),LibraryMenu{host:u32,target:{epoch:u32,sid:u32,section:u64},kind:u32,anchor:[u32;4]},\
      PlayerOverlay{Tracks(tab:i32),Info,Chapters,More(page:u8)},\
      AltSources{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
-     VersionsPanel{host:u32,sid:u32,rk:str,anchor:[u32;4]},\
-     PreplayPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],source:{Page,Failed{part_id:u64}}},\
+     VersionsPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],opener:Option<{entry:u32,elem:u32}>},\
+     PreplayPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],opener:Option<{entry:u32,elem:u32}>,source:{Page,Failed{part_id:u64}}},\
      ChannelEntry{host:u32,digits:str,playing:Option<{sid:u32,dvr:str,channel:str}>},\
      TracksPanel{page:i32},AboutPanel,PersonBio,CollectionAbout,AccountMenu,\
      ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32},Catalog{state:u32},WatchlistAdd{hex:str},HeroOverflow{rows:len}},\
@@ -2906,12 +2963,14 @@ pub fn every_surface_arg() -> Vec<AppArg> {
             sid: plx_plex::plex::ServerId::UNSET,
             rk: "1".into(),
             anchor: [0; 4],
+            opener: None,
         }),
         AppArg::PreplayPanel(crate::preplay_panel::PreplayArg {
             host: plx_machine::machine::InstanceId(1),
             sid: plx_plex::plex::ServerId::UNSET,
             rk: "1".into(),
             anchor: [0; 4],
+            opener: None,
             source: crate::preplay_panel::Source::Page,
         }),
         AppArg::ChannelEntry(crate::channel_entry_panel::ChannelEntryArg {
@@ -3215,8 +3274,12 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // row count), which the Detail hero's overflow already presented. The hero row (#1553) then moved it again:
 // `item_menu::SHAPE`'s `Action` gains `ctl:u32(Hero only)` (`Action::Hero(HeroCtl)`, canon tag 14). The
 // replay fixtures v13-owned-input-content and 13-by-id-filmography were re-recorded against the shape
-// (the app census, 0xb0b8_437b_410f_aab3, is pinned in `app/recorder.rs`); this screen-half pin only
-// asserts the inventory, it is not a recorded value.
+// (the app census is pinned in `app/recorder.rs`); this screen-half pin only
+// asserts the inventory, it is not a recorded value. The hero menus' morph then added `opener` to
+// `VersionsPanel` and `PreplayPanel` (`opener:Option<{entry:u32,elem:u32}>`): the control each grows out of.
+// Select Version and Audio & Subtitles then became pages of the hero `…` menu: the item menu's `Action` gains
+// `Pick(PickRow)` (canon tag 15) and its screen shape `depth:u32` (the page stack's depth). Previous pin:
+// 0x8e9e_7e81_3543_b640.
 // Immediate jump state adds SeekBurst target/time and the pending FF/REW tap flag.
 // The independent settings also update the Preferences and Picker state versions.
 // Previous pin: 0x3cf2_5b06_5ed9_8faa. Re-record the incompatible anchors through plxnative-rec.
@@ -3251,7 +3314,12 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // `banner`, and the page's `left` channel). Previous pin: 0x86ab_da53_b2fd_6524. Re-record incompatible replay anchors.
 // Number entry (Live TV PR5) joins as `AppArg::ChannelEntry` (canon tag 16) with the panel's `channel_entry_panel::SHAPE`.
 // Previous pin: 0xeb60_634f_6b5f_c9ac.
-const SCREEN_SHAPES_PIN: u64 = 0x62a1_9fdc_6c66_d317;
+// Select Version and Audio & Subtitles then became pages of the hero `…` menu: the item menu's `Action` gains
+// `Pick(PickRow)` (canon tag 15) and its screen shape `depth:u32` (the page stack's depth). Previous pin: 0x62a1_9fdc_6c66_d317.
+// The Live TV Guide (PR6) joins the Live TV screen's canon: the scope and the board's page, window start and whether the
+// reader holds the window ahead (`scope`, `guide:Option<(page,window,ahead)>`). Previous pin: 0x1990_0160_ac8b_0137.
+// Re-record incompatible replay anchors.
+const SCREEN_SHAPES_PIN: u64 = 0xd1ed_8cb4_ad5b_5093;
 
 #[cfg(test)]
 mod arg_tests {

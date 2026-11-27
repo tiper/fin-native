@@ -194,6 +194,11 @@ pub trait Backend: Send + Sync {
     fn transcode_start_url(&self, spec: &TranscodeSpec<'_>) -> Option<StreamUrl> {
         None
     }
+    /// Whether a conversion started at an offset keeps the file's timestamps (its first keyframe
+    /// carries film time) rather than restarting them at 0 as Plex's does.
+    fn conversion_keeps_file_time(&self) -> bool {
+        false
+    }
     /// Stop the encoder for `session` (`Client::transcode_stop` and `transcode_stop_physical`).
     fn transcode_stop(&self, session: &str) -> bool {
         false
@@ -214,8 +219,9 @@ pub trait Backend: Send + Sync {
     fn epg_channels(&self, epg: &str) -> (Option<i32>, Option<Vec<crate::plex::EpgChannel>>) {
         (None, None)
     }
-    /// `Client::epg_on_now`: the airings on at `now` (Unix seconds), one per channel.
-    fn epg_on_now(&self, epg: &str, now: i64) -> Option<Vec<Metadata>> {
+    /// `Client::epg_guide`: per channel the airing on at `now` (Unix seconds) and the ones that
+    /// follow up to `until`.
+    fn epg_guide(&self, epg: &str, now: i64, until: i64) -> Option<Vec<Metadata>> {
         None
     }
     /// `Client::tune`: start a channel. `playback` is the session id this client reports under.

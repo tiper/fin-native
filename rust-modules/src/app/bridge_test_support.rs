@@ -474,7 +474,7 @@ impl World {
 
     /// [`Self::detail_page`] for the page `arg` names: the argument is the identity the page mounts
     /// under, `detail` is what the store holds for it.
-    fn detail_page_at(name: &str, arg: AppArg, detail: plx_data::metadata::Detail) -> World {
+    pub(super) fn detail_page_at(name: &str, arg: AppArg, detail: plx_data::metadata::Detail) -> World {
         let mut w = Self::scripted(name);
         super::show_page(&mut w.d, AppArg::Home);
         w.frames(20);

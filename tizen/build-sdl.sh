@@ -12,7 +12,7 @@
 #
 # WHY IT BUILDS ITS OWN SDL. A Tizen television ships no SDL at all, and the application's text path (SDL2_ttf over
 # SDL surfaces, `plx_gfx`) is SDL's. The library therefore carries both, linked in, and exports neither (the version script
-# the makefile generates keeps only the three `plx_host_*` names). The window, the EGL context and the keys stay Tizen's own
+# the makefile generates keeps only the header's `plx_host_*` names). The window, the EGL context and the keys stay Tizen's own
 # (Ecore_Wl2): SDL never opens a window and its video subsystem is never initialised.
 #
 # THE PINS ARE NOT HERE. The two upstream archives are entries `sdl2` and `sdl2-ttf` of ci/dependencies.json, read and

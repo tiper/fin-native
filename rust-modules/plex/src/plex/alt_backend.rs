@@ -51,6 +51,17 @@ pub fn rows_resolve_by_key() -> bool {
     alt_installed()
 }
 
+/// Whether a conversion started at an offset keeps the file's timestamps, so its first keyframe
+/// carries film time ([`backend::Backend::conversion_keeps_file_time`]); a Plex transcode restarts
+/// them at 0. Cheap: no request.
+pub fn conversion_keeps_file_time() -> bool {
+    #[cfg(feature = "alt-backend")]
+    if let Some(b) = backend::active() {
+        return b.conversion_keeps_file_time();
+    }
+    false
+}
+
 /// The signed-in user's name and avatar path from an alternative backend, for the account chip
 /// when no Plex Home profile is active; `None` on Plex. Cheap: no request.
 pub fn signed_in_user() -> Option<(String, String)> {

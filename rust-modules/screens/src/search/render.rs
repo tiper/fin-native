@@ -319,7 +319,25 @@ fn recents<H: SearchLike>(screen: &SearchScreen, f: &mut DrawFrame<'_, '_, H>, p
     stop(screen, CLEAR, ElemKind::Control, f, p);
 }
 
-fn empty<H: SearchLike>(screen: &SearchScreen, f: &DrawFrame<'_, '_, H>, p: Painter) {
+/// **The failed search's read-out**: the failure's headline and reason, and under them the one
+/// control that can change it, *Try again* (the store re-runs the query: [`SearchCmd::Retry`]).
+/// One table for the draw and for [`fault_retry_rect`], so the pill drawn is the pill focus and the
+/// pointer land on.
+fn fault_overlay(band: Rect, focused: bool) -> StatusOverlay<'static> {
+    StatusOverlay::new(band, plx_os::i18n::msg::browse_search_failed_c(), StatusKind::Failed)
+        .reason(plx_os::i18n::msg::browse_search_failed_detail_c())
+        .row(&[plx_os::i18n::msg::browse_action_retry_c()])
+        .focus(focused.then_some(0))
+}
+
+/// *Try again*'s rect through the draw's own geometry, `scroll` the page's scroll offset.
+pub(super) fn fault_retry_rect(editing: bool, scroll: f32, measure: &dyn plx_machine::machine::Measure) -> Rect {
+    let mut band = layout::empty_band(editing);
+    band.y -= scroll;
+    fault_overlay(band, false).row_frames_measured(measure)[0].unwrap_or(Rect::new(band.x, band.y, 0.0, 0.0))
+}
+
+fn empty<H: SearchLike>(screen: &SearchScreen, f: &mut DrawFrame<'_, '_, H>, p: Painter) {
     let state = H::search(f.cx).state();
     if screen.draft.pending() {
         return;
@@ -330,9 +348,9 @@ fn empty<H: SearchLike>(screen: &SearchScreen, f: &DrawFrame<'_, '_, H>, p: Pain
     let mut rect = layout::empty_band(screen.editing);
     rect.y -= screen.stack.scroll();
     if empty == EmptyState::Fault {
-        StatusOverlay::new(rect, plx_os::i18n::msg::browse_search_failed_c(), StatusKind::Failed)
-            .reason(plx_os::i18n::msg::browse_search_failed_detail_c())
-            .draw(&Env::inert(), p);
+        let focused = f.cx.focus.current == Some(screen.key(RETRY));
+        fault_overlay(rect, focused).draw_measured(&Env::inert(), p, f.cx.measure);
+        stop(screen, RETRY, ElemKind::Control, f, p);
         return;
     }
     let header = header_of(empty);

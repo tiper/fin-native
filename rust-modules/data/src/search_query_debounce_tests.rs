@@ -298,6 +298,39 @@ fn an_empty_roster_settles_instead_of_spinning_forever() {
     assert!(!owner.pump(0.016), "…and it is not news a second time");
 }
 
+/// A failed search is retried by a command of its own: `SetQuery` of the string the field already
+/// holds is a no-op by design, so the *Try again* on the failure read-out has nothing else to say.
+/// The retry supersedes the failed generation, goes back to `Searching` and restarts the debounce,
+/// so the next pump asks every source again; with nothing failed (or nothing worth asking) it is
+/// refused and changes nothing.
+#[test]
+fn retry_runs_a_failed_query_again_and_refuses_one_that_has_not_failed() {
+    let _g = fresh();
+    let mut owner = Owner::default();
+    let retry = |owner: &mut Owner| owner.state.run(&owner.adapter, crate::stores::search::SearchCmd::Retry);
+
+    assert!(!retry(&mut owner), "no query: nothing failed");
+    owner.set_query("wallace");
+    assert!(!retry(&mut owner), "a query still being asked has not failed");
+    assert_eq!(owner.state.state(), State::Searching);
+
+    assert!(owner.pump(SETTLE_S * 2.0));
+    assert_eq!(owner.state.state(), State::Failed, "an empty roster can never answer");
+    let before = owner.state.gen;
+    owner.set_query("wallace");
+    assert_eq!(owner.state.state(), State::Failed, "the same string is not a new query");
+    assert_eq!(owner.state.gen, before);
+
+    assert!(retry(&mut owner), "a failure is retried");
+    assert_eq!(owner.state.state(), State::Searching, "the read-out gives way to the working state");
+    assert_ne!(owner.state.gen, before, "the failed generation is superseded");
+    assert!(owner.state.settling(), "the debounce restarts with it");
+    assert_eq!(owner.state.query(), "wallace", "the field's text is untouched");
+
+    assert!(owner.pump(SETTLE_S * 2.0), "the retry is asked: the verdict arrives again");
+    assert_eq!(owner.state.state(), State::Failed);
+}
+
 /// `reset` (an account switch) and `supersede` (a keystroke) both drop the mailboxes — and a
 /// single-flight claim is cleared ONLY by a take, so they must clear every one themselves or
 /// the next query never fetches. The `browse.rs` latch, once per source.

@@ -29,6 +29,7 @@ fn ch(n: u32) -> Channel {
         now_summary: String::new(),
         begins_at: 0,
         ends_at: 3_600,
+        later: Vec::new(),
     }
 }
 

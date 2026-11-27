@@ -5,7 +5,7 @@ home, show/episode detail, movie detail, library grid, card context menu) and **
 HUD, Quality picker, queue overlay, Settings tree). Branch `home-ui-polish`, working tree included.
 
 **Scope: movies and TV shows, plus watching the server's Live TV channels.** Music, photos, DVR
-recording, the Live TV guide grid and podcasts are out of scope and are not counted as gaps. Plex Discover / "Movies & Shows on Plex" is movie/show content but is an
+recording and podcasts are out of scope (the Live TV guide grid is in: the Guide page, `LiveTvScreen`'s second scope) and are not counted as gaps. Plex Discover / "Movies & Shows on Plex" is movie/show content but is an
 *adjacent catalog* (plex.tv, not the user's server) and is tagged as such throughout. The Watchlist
 began as one of those entries and has since shipped (`docs/watchlist.md`); the entries that still say
 "Watchlist" below record what it closed.
@@ -584,6 +584,7 @@ player, transport and tracks auditors, and is counted once in the themes above.
 
 - **No live clock** — `polish` / `small`
   The official home shows the current time top-right ('6:39 PM'). Our top chrome carries only the profile chip and the tab track; the FPS counter occupies that corner instead.
+  **Fixed:** the shared top bar ends in a wall-clock face on its right margin (`widgets::draw_top_bar_clock`, worded by `ChromeSnapshot::set_clock`). It is left out when no zone offset is readable or under a replay, and `stillclock` holds it at a fixed instant; the strip's viewport yields to the widest face (`widgets::TAB_CLOCK_CLEAR`). The dev fps counter steps left of it.
   *Where:* rust-modules/src/ui/fmt.rs (a time-of-day formatter over libc localtime_r) + rust-modules/src/ui/home.rs home_draw (and ui/library.rs for parity). No endpoint.
   *Verified:* Confirmed: home_draw (home.rs:818-830) is Backdrop/Hero/Grid + draw_chip + draw_tab_row and nothing else on the top band; library.rs:894 draws the same row. fmt.rs:40 clock(ms) is the PLAYBACK clock ('1:23:45'/'3:45'), used by chapters_panel.rs:151 and player_hud.rs:29. No wall-clock read exists anywhere in rust-modules/src: no localtime/strftime/gmtime/SystemTime/UNIX_EPOCH hits; the only time reads are monotonic Instant (capture.rs, task.rs:150, player/threads.rs:58) and SDL_GetTicks. Confirming the auditor's corner note: app.rs:2462-2463 draws the dev FPS number at SCR_W-70, y=64 on every n
 
@@ -689,7 +690,7 @@ player, transport and tracks auditors, and is counted once in the themes above.
   *Verified:* CONFIRMED, with a useful partial: half the plumbing is already there. card_row::draw_tile (ui/card_row.rs:204) and draw_focused (226) both take `resume: Option<f32>` and call the shared resume_bar (ui/card_row.rs:313) — detail's draw_strip just hard-codes None at ui/detail.rs:1034 and 1045. So the in-progress bar is one argument away once the data exists. The unwatched ANGLE really is Poster-only (ui/widgets.rs:49-62, inside the Art::Poster arm), and Related passes Art::Thumb (ui/detail.rs:1075) because Related has no PmsMovie behind it. Related (metadata.rs:86-90) is rk/title/thumb and fetch_
 
 - **No time-of-day clock** — `polish` / `small`
-  The reference shows a clock in the top-right of the detail page. The app renders no wall-clock anywhere — `fmt::clock` is a playback-position formatter, not a time of day.
+  The reference shows a clock in the top-right of the detail page. **Partly fixed:** the shared top bar now draws a wall-clock face (`widgets::draw_top_bar_clock`, `fmt::clock_face`) on every page that wears it; the detail page wears no bar and so still shows none, which is the whole of what stays open here. (`fmt::clock` remains a playback-position formatter.)
   *Where:* ui/fmt.rs (a `time_of_day()` formatter) + ui/detail.rs `draw()` top-right (and, for consistency, the other screens' chrome).
   *Verified:* CONFIRMED. fmt::clock (ui/fmt.rs:40) formats a playback position (h:mm:ss from ms), nothing more. Grepped localtime|strftime|SystemTime|UNIX_EPOCH|clock_gettime|gettimeofday|chrono|tm_hour across rust-modules/src — no wall-clock source is read anywhere in the app; the only time reads are SDL_GetTicks (monotonic) and Instant. ui/detail.rs draws nothing in the top-right band (the only pinned chrome is the centred compact title, ui/detail.rs:870-884). polish/small confirmed. NB `docs/agent-reference.md` records that this TV's wall clock is ~3h skewed in pmlog — worth checking the app's own view of local
 

@@ -71,20 +71,37 @@ impl Answer {
 /// included, is `Some`.
 pub trait Transport: Send + Sync {
     fn send(&self, url: &str, verb: Verb, headers: &[String], body: Option<&[u8]>) -> Option<Answer>;
+    /// A `GET` for a file the server may have to build before it answers (a subtitle it extracts
+    /// from the film), which may wait [`FILE_WAIT`] rather than an ordinary request's limit.
+    fn send_file(&self, url: &str, headers: &[String]) -> Option<Answer> {
+        self.send(url, Verb::Get, headers, None)
+    }
 }
+
+/// How long a file request ([`Transport::send_file`]) waits for its answer: 90 s. Jellyfin extracts
+/// an embedded subtitle on its first request by reading through the film, which a slow server with
+/// a large file takes longer than the 25 s an ordinary request allows (#49).
+const FILE_WAIT: plx_net::net::Timeouts = plx_net::net::Timeouts { total_s: 90, ..plx_net::net::API };
 
 /// The real transport: libcurl through `plx_net::net`.
 pub struct CurlTransport;
 
 impl Transport for CurlTransport {
     fn send(&self, url: &str, verb: Verb, headers: &[String], body: Option<&[u8]>) -> Option<Answer> {
-        if carries_credential(url, headers, body.is_some()) && !credential_may_go(url) {
-            // Refused like a request nothing answered.
-            return None;
-        }
-        let r = plx_net::net::request(url, headers, verb.as_str(), body, plx_net::net::API, false, None, None)?;
-        Some(Answer { status: r.status, body: r.body })
+        curl(url, verb, headers, body, plx_net::net::API)
     }
+    fn send_file(&self, url: &str, headers: &[String]) -> Option<Answer> {
+        curl(url, Verb::Get, headers, None, FILE_WAIT)
+    }
+}
+
+fn curl(url: &str, verb: Verb, headers: &[String], body: Option<&[u8]>, wait: plx_net::net::Timeouts) -> Option<Answer> {
+    if carries_credential(url, headers, body.is_some()) && !credential_may_go(url) {
+        // Refused like a request nothing answered.
+        return None;
+    }
+    let r = plx_net::net::request(url, headers, verb.as_str(), body, wait, false, None, None)?;
+    Some(Answer { status: r.status, body: r.body })
 }
 
 /// Does this request carry a credential: the token in the `Authorization` header or the URL, or a
@@ -341,14 +358,20 @@ impl JfClient {
     }
 
     fn send(&self, verb: Verb, path: &str, body: Option<&str>) -> Option<Answer> {
-        let mut headers = vec![
-            format!("Authorization: {}", self.identity.header(self.token())),
-            "Accept: application/json".to_string(),
-        ];
+        let mut headers = self.headers();
         if body.is_some() {
             headers.push("Content-Type: application/json".to_string());
         }
         self.transport.send(&format!("{}{path}", self.base), verb, &headers, body.map(str::as_bytes))
+    }
+
+    /// [`Self::send`] for a file the server may build first ([`Transport::send_file`]).
+    fn send_file(&self, path: &str) -> Option<Answer> {
+        self.transport.send_file(&format!("{}{path}", self.base), &self.headers())
+    }
+
+    fn headers(&self) -> Vec<String> {
+        vec![format!("Authorization: {}", self.identity.header(self.token())), "Accept: application/json".to_string()]
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Option<T> {

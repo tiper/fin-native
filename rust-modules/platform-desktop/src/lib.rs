@@ -69,6 +69,7 @@ static SERVICES: Services = Services {
         probe_device: IdentityHooks::NONE.probe_device,
         start_capability_probe,
         repair_native_video: IdentityHooks::NONE.repair_native_video,
+        packet_probe: IdentityHooks::NONE.packet_probe,
         device_files: IdentityHooks::NONE.device_files,
         system_locale: IdentityHooks::NONE.system_locale,
         sound_output: IdentityHooks::NONE.sound_output,

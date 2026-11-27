@@ -50,7 +50,7 @@ fn number(path: &str) -> usize {
 
 struct Spy;
 impl Source for Spy {
-    fn probe(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::BackdropSpec>) -> Option<PosterKey> {
+    fn probe(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> Option<PosterKey> {
         let n = number(path);
         LOG.with(|l| {
             let mut l = l.borrow_mut();
@@ -64,10 +64,10 @@ impl Source for Spy {
         });
         None
     }
-    fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::BackdropSpec>) -> Warm {
+    fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> Warm {
         Warm::Known
     }
-    fn warm_ahead(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::BackdropSpec>) -> Warm {
+    fn warm_ahead(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> Warm {
         let n = number(path);
         LOG.with(|l| {
             let mut l = l.borrow_mut();

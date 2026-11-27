@@ -296,5 +296,8 @@
   "browse.livetv.channel": "Kanal {number} · {name}",
   "browse.livetv.recent_on_now": "Sada: {programme}",
   "browse.livetv.loading": "Učitavanje kanala…",
-  "browse.livetv.empty": "Nema dostupnih kanala"
+  "browse.livetv.empty": "Nema dostupnih kanala",
+  "browse.livetv.guide": "Vodič",
+  "browse.livetv.guide_range": "Kanali {from}–{to} od {total}",
+  "browse.livetv.no_guide": "Nema podataka o programu"
 }

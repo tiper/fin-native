@@ -4,6 +4,7 @@ use crate::stores::fanout::{Fanout, Standing};
 use plx_machine::job::{Job, Port};
 use plx_machine::machine::{Addr, MachineId, RequestId};
 use plx_plex::plex::livetv::{self, LiveChannel};
+pub use plx_plex::plex::livetv::LiveAiring;
 use plx_plex::plex::{Client, ClientKey, ClientKeys, ServerId};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
@@ -37,13 +38,18 @@ pub struct Channel {
     pub now_summary: String,
     pub begins_at: i64,
     pub ends_at: i64,
+    /// The programmes after the current one that begin by the end the guide was last read to (the Guide's
+    /// window, or further while it is scrolled ahead: [`LiveTvCmd::Reach`]), earliest first (empty: the guide
+    /// has none, or no data at all).
+    pub later: Vec<LiveAiring>,
 }
 
 impl Channel {
     fn of(sid: ServerId, ch: &LiveChannel) -> Self {
         Self { sid, dvr: ch.dvr.clone(), channel: ch.channel.clone(), vcn: ch.vcn.clone(),
             name: ch.name.clone(), thumb: ch.thumb.clone(), now: ch.now.clone(),
-            now_thumb: ch.now_thumb.clone(), now_summary: ch.now_summary.clone(), begins_at: ch.begins_at, ends_at: ch.ends_at }
+            now_thumb: ch.now_thumb.clone(), now_summary: ch.now_summary.clone(), begins_at: ch.begins_at, ends_at: ch.ends_at,
+            later: ch.later.clone() }
     }
 }
 
@@ -92,7 +98,16 @@ impl<'a> LiveTvView<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LiveTvCmd { Reset, Retry }
+pub enum LiveTvCmd {
+    Reset,
+    Retry,
+    /// **How far ahead the Guide shows**: the Unix second the guide must be read to (the far end of the window the
+    /// Guide is on, a step more so the next shift has its programmes), or `0` when nothing shows beyond the live
+    /// window. It is the screen's to set and to release; the store holds it, reads a guide that was read to less
+    /// again by the one re-read rule ([`Guide::due`]) and asks every read it makes for at least this much. Setting
+    /// what it already holds, or less than a guide has been read to, reads nothing.
+    Reach(i64),
+}
 
 /// **What the app captured for one step of the store**: the clients, the time and the seat. The step
 /// reads no registry, no clock and no preference of its own; the same input to the same state is the
@@ -111,7 +126,9 @@ pub struct LiveTvInput<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Guide { dvr: String, provider: String, channels: Vec<LiveChannel>, refresh_at: i64, retry_cd: u32,
     /// Consecutive failed grid reads, which set the next wait ([`Guide::backoff`]).
-    strikes: u32 }
+    strikes: u32,
+    /// The far end the last read asked for ([`LiveTvReq::until`]): the guide is due again while the reach is past it.
+    until: i64 }
 impl Guide {
     /// A grid that keeps failing is asked again at the lineup's doubling interval
     /// ([`RETRY_DOUBLINGS`]), not every [`RETRY_FRAMES`] for as long as the server is down.
@@ -119,10 +136,15 @@ impl Guide {
         self.retry_cd = RETRY_FRAMES << self.strikes.min(RETRY_DOUBLINGS);
         self.strikes = self.strikes.saturating_add(1);
     }
-    fn due(&self, now: i64) -> bool { self.retry_cd == 0 && now >= self.refresh_at }
+    /// Due when its time has come, or when the Guide reaches further than it was read to (`reach`).
+    fn due(&self, now: i64, reach: i64) -> bool { self.retry_cd == 0 && (now >= self.refresh_at || self.until < reach) }
+    /// When the guide is next read: when the soonest airing on now ends, or when the Guide's window next
+    /// moves (every half hour, [`livetv::window_start`]) if that comes first, so a programme that enters the
+    /// window's far end is asked for the half hour it does and not only when some airing happens to end.
     fn next_refresh(channels: &[LiveChannel], now: i64) -> i64 {
+        let roll = livetv::window_start(now).saturating_add(livetv::WINDOW_STEP_SECONDS);
         channels.iter().filter_map(|c| (c.ends_at > now).then_some(c.ends_at)).min()
-            .unwrap_or_else(|| now.saturating_add(GUIDE_POLL_SECONDS))
+            .unwrap_or_else(|| now.saturating_add(GUIDE_POLL_SECONDS)).min(roll)
     }
 }
 
@@ -130,7 +152,12 @@ impl Guide {
 enum Work { Discover, Grid(Guide) }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct LiveTvReq { sid: ServerId, key: ClientKey, now: i64, work: Work }
+pub struct LiveTvReq {
+    sid: ServerId, key: ClientKey, now: i64, work: Work,
+    /// The far end the grid is read to: the store's reach when the read was made (`0` for the live window, which the
+    /// read widens to the window's own end).
+    until: i64,
+}
 impl LiveTvReq {
     pub fn server(&self) -> (ServerId, ClientKey) { (self.sid, self.key) }
 }
@@ -177,8 +204,8 @@ impl Source {
         Self { sid, key, adapter: Arc::new(Default::default()), request: 0, guides: Vec::new(),
             reading_grid: None, answered: false, complete: false, failed: false, retry_cd: 0, strikes: 0 }
     }
-    fn work(&self, now: i64) -> Option<Work> {
-        self.guides.iter().filter(|g| g.due(now)).min_by_key(|g| g.refresh_at).cloned().map(Work::Grid)
+    fn work(&self, now: i64, reach: i64) -> Option<Work> {
+        self.guides.iter().filter(|g| g.due(now, reach)).min_by_key(|g| g.refresh_at).cloned().map(Work::Grid)
             .or_else(|| (!self.complete && self.retry_cd == 0).then_some(Work::Discover))
     }
     fn failed(&mut self) {
@@ -191,9 +218,9 @@ impl Source {
         self.retry_cd = RETRY_FRAMES << self.strikes.min(RETRY_DOUBLINGS);
         self.strikes = self.strikes.saturating_add(1);
     }
-    fn standing(&self, now: i64) -> Standing {
+    fn standing(&self, now: i64, reach: i64) -> Standing {
         if self.adapter.fetch.busy() { Standing::Running }
-        else if (!self.complete && self.retry_cd == 0) || self.guides.iter().any(|g| g.due(now)) { Standing::Wanting }
+        else if (!self.complete && self.retry_cd == 0) || self.guides.iter().any(|g| g.due(now, reach)) { Standing::Wanting }
         else { Standing::Idle }
     }
 }
@@ -208,13 +235,15 @@ pub struct LiveTvState {
     /// The Recent mode the last seat input put the store in, and the row it resolves to (see [`recent`]).
     recent: Recent,
     recent_row: Vec<Channel>,
+    /// How far ahead the Guide shows ([`LiveTvCmd::Reach`]); `0` when it shows no more than the live window.
+    reach: i64,
     pub(crate) jobs: Vec<crate::stores::StoreJob>,
 }
 impl Default for LiveTvState {
     fn default() -> Self {
         Self { sources: Vec::new(), channels: Vec::new(), tiles: Vec::new(), status: LiveTvStatus::Loading,
             revision: 0, fanout: Default::default(), recent: Default::default(), recent_row: Vec::new(),
-            jobs: Vec::new() }
+            reach: 0, jobs: Vec::new() }
     }
 }
 impl LiveTvState {
@@ -236,6 +265,8 @@ impl LiveTvState {
                     for guide in &mut s.guides { guide.retry_cd = 0; }
                 }
             }
+            // held, not acted on here: a guide read to less is due, and the pump below asks for it
+            LiveTvCmd::Reach(until) => self.reach = until.max(0),
         }
         let changed = self.pump(gate, input);
         changed || (reset && self.publish(input.keys, &input.recent))
@@ -302,9 +333,10 @@ impl LiveTvState {
         }
         // With no time to judge a due refresh by, nothing is asked (the next frame that has one asks).
         if let Some(now) = input.now {
-            let mut turn = self.fanout.turn(self.sources.iter().enumerate().map(|(i, s)| (i, s.standing(now))));
+            let reach = self.reach;
+            let mut turn = self.fanout.turn(self.sources.iter().enumerate().map(|(i, s)| (i, s.standing(now, reach))));
             for (i, s) in self.sources.iter_mut().enumerate() {
-                if s.standing(now) != Standing::Wanting || !turn.admit(i) { continue; }
+                if s.standing(now, reach) != Standing::Wanting || !turn.admit(i) { continue; }
                 let Some(key) = s.key else {
                     dirty |= !s.failed;
                     s.failed = true;
@@ -312,13 +344,13 @@ impl LiveTvState {
                     turn.finished();
                     continue;
                 };
-                let work = s.work(now).expect("a wanting Live TV source has work");
+                let work = s.work(now, reach).expect("a wanting Live TV source has work");
                 s.reading_grid = match &work { Work::Discover => None, Work::Grid(g) => Some(g.dvr.clone()) };
                 s.request = s.request.wrapping_add(1);
                 s.adapter.fetch.claim(s.request);
                 self.jobs.push(crate::stores::StoreJob::LiveTv(Job {
                     addr: Addr { to: MachineId::Store(crate::stores::StoreId::LiveTv.ord()), req: RequestId(s.request) },
-                    req: LiveTvReq { sid: s.sid, key, now, work },
+                    req: LiveTvReq { sid: s.sid, key, now, work, until: reach },
                 }, LiveTvPort(Arc::clone(&s.adapter))));
             }
         }
@@ -374,12 +406,12 @@ fn finish_with(port: &LiveTvPort, addr: Addr, req: LiveTvReq,
 trait LiveTvIo {
     fn dvrs(&self) -> (Option<i32>, Option<Vec<plx_plex::plex::Dvr>>);
     fn channels(&self, provider: &str) -> (Option<i32>, Option<Vec<plx_plex::plex::EpgChannel>>);
-    fn on_now(&self, provider: &str, now: i64) -> Option<Vec<plx_plex::plex::Metadata>>;
+    fn guide(&self, provider: &str, now: i64, until: i64) -> Option<Vec<plx_plex::plex::Metadata>>;
 }
 impl LiveTvIo for Client {
     fn dvrs(&self) -> (Option<i32>, Option<Vec<plx_plex::plex::Dvr>>) { self.live_tv_dvrs() }
     fn channels(&self, provider: &str) -> (Option<i32>, Option<Vec<plx_plex::plex::EpgChannel>>) { self.epg_channels(provider) }
-    fn on_now(&self, provider: &str, now: i64) -> Option<Vec<plx_plex::plex::Metadata>> { self.epg_on_now(provider, now) }
+    fn guide(&self, provider: &str, now: i64, until: i64) -> Option<Vec<plx_plex::plex::Metadata>> { self.epg_guide(provider, now, until) }
 }
 
 /// What one lineup read says its HTTP status was: `none` when the transport never answered (so the
@@ -434,27 +466,28 @@ fn read(client: &impl LiveTvIo, req: &LiveTvReq) -> Option<ReadResult> {
                     result.complete = false; result.retry = true; continue;
                 };
                 let mapped = channels.len();
-                let mut channels = livetv::lineup(dvr, &channels, &[]);
+                let mut channels = livetv::lineup(dvr, &channels, &[], req.now);
                 log_lineup(req.sid, &dvr.key, status, mapped, channels.len());
                 if channels.is_empty() {
                     result.guides.push(Guide { dvr: dvr.key.clone(), provider: dvr.epg_identifier.clone(), channels,
-                        refresh_at: i64::MAX, retry_cd: 0, strikes: 0 });
+                        refresh_at: i64::MAX, retry_cd: 0, strikes: 0, until: req.until });
                     continue;
                 }
-                let airings = client.on_now(&dvr.epg_identifier, req.now);
-                if let Some(airings) = airings.as_deref() { livetv::update_on_now(&mut channels, airings); }
+                let airings = client.guide(&dvr.epg_identifier, req.now, req.until);
+                if let Some(airings) = airings.as_deref() { livetv::update_airings(&mut channels, airings, req.now); }
                 let refresh_at = if airings.is_some() { Guide::next_refresh(&channels, req.now) }
                     else { result.retry = true; req.now };
-                result.guides.push(Guide { dvr: dvr.key.clone(), provider: dvr.epg_identifier.clone(), channels, refresh_at, retry_cd: if airings.is_some() { 0 } else { RETRY_FRAMES }, strikes: 0 });
+                result.guides.push(Guide { dvr: dvr.key.clone(), provider: dvr.epg_identifier.clone(), channels, refresh_at, retry_cd: if airings.is_some() { 0 } else { RETRY_FRAMES }, strikes: 0, until: req.until });
             }
             Some(result)
         }
         Work::Grid(guide) => {
-            let now = client.on_now(&guide.provider, req.now)?;
+            let airings = client.guide(&guide.provider, req.now, req.until)?;
             let mut updated = guide.clone();
-            livetv::update_on_now(&mut updated.channels, &now);
+            livetv::update_airings(&mut updated.channels, &airings, req.now);
             updated.refresh_at = Guide::next_refresh(&updated.channels, req.now);
             updated.strikes = 0;
+            updated.until = req.until;
             Some(ReadResult { guides: vec![updated], roster: None, complete: true, retry: false })
         }
     }

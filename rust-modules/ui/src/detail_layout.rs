@@ -1,7 +1,7 @@
 //! Shared detail hero geometry, also used by the contrast and safe-area audits.
-use super::{consts::{MARGIN_X, MARGIN_Y}, theme, widgets};
+use super::{consts::{MARGIN_X, MARGIN_Y}, theme, widgets, Rect};
 #[cfg(any(test, feature = "test-support"))]
-use super::{consts::SCR_W, Rect};
+use super::consts::SCR_W;
 #[cfg(test)]
 use super::consts::SCR_H;
 
@@ -62,6 +62,33 @@ pub fn hero_chain(
     }
 }
 
+/// How far above the top of the hero's action row the synopsis ends: the block gap, the facts line, the
+/// block gap ([`hero_rows`](super::landing_hero::hero_rows) stacks them that way, whatever the
+/// synopsis's height).
+pub const SYNOPSIS_FOOT_ABOVE_ACTIONS: f32 = theme::hero::FACTS_H + 2.0 * theme::space::MD;
+
+/// **The focused pill of the hero control a menu or panel grows out of**, from the control's drawn rect
+/// (`[x, y, w, h]` as bits, like every panel argument): where the glass grows from and drains back into.
+pub fn hero_pill(anchor: [u32; 4]) -> Rect {
+    let [x, y, w, h] = anchor.map(f32::from_bits);
+    widgets::focus_pill(Rect::new(x, y, w, h))
+}
+
+/// **The host of every menu or panel that grows out of a Detail hero control** (`menu::Host::Grows`): the
+/// control's focused pill is the glass it morphs from and into; the panel stands OVER it (`Host::grown`: the
+/// shared `popover::cover_opener_clear` rule), clear of the synopsis above the action row whenever it fits (the
+/// synopsis' foot is [`SYNOPSIS_FOOT_ABOVE_ACTIONS`] above the row, whatever the synopsis' height; a panel that
+/// does not fit covers the text by exactly its shortfall); and the close's blob whitens toward the control's
+/// focused face. `anchor` is the control's drawn rect (`[x, y, w, h]` bits): its top is the action row's.
+pub fn hero_host(anchor: [u32; 4]) -> super::menu::Host {
+    super::menu::Host::Grows {
+        pill: hero_pill(anchor),
+        clear_y: Some(f32::from_bits(anchor[1]) - SYNOPSIS_FOOT_ABOVE_ACTIONS),
+        fill: Some(theme::ACCENT),
+        morph: super::menu::Morph::FromPill,
+    }
+}
+
 /// Bottom of the credits' full leading boxes, aligned by the last cap band to the facts.
 pub fn people_box_bottom(btn_y: f32, cap_h: f32) -> f32 {
     btn_y - theme::space::MD + PEOPLE_LEAD - (theme::hero::FACTS_H + cap_h) * 0.5
@@ -101,6 +128,36 @@ mod tests {
         let bare = hero_chain(72.0, false, &m);
         assert_eq!(bare.syn_y, ch.syn_y - widgets::RATING_MARK_D - theme::space::XS);
         assert_eq!(bare.btn_y, ch.btn_y - widgets::RATING_MARK_D - theme::space::XS);
+    }
+
+    /// **The hero's menu and panels stay clear of the synopsis whenever they fit, and say so in
+    /// numbers when they do not** (owner report: they slid UP over the description). The foot of the
+    /// synopsis is a constant above the action row, whatever its height; a panel that fits between it
+    /// and the safe frame's bottom stands there (never above the foot, still covering its control);
+    /// one that does not is `cover_opener`'s, and its overlap of the text is exactly the shortfall.
+    #[test]
+    fn the_hero_panel_clears_the_synopsis_when_it_fits_and_overlaps_by_its_shortfall_when_it_does_not() {
+        let m = crate::fixture::FixtureMeasure;
+        let safe_bottom = crate::consts::SAFE.y + crate::consts::SAFE.h;
+        for syn_h in [36.0, 72.0, 108.0] {
+            let ch = hero_chain(syn_h, true, &m);
+            let foot = ch.syn_y + syn_h;
+            assert_eq!(ch.btn_y - SYNOPSIS_FOOT_ABOVE_ACTIONS, foot, "the synopsis foot is a constant above the actions ({syn_h})");
+            let control = Rect::new(500.0, ch.btn_y, 60.0, 60.0);
+            let pill = widgets::focus_pill(control);
+            // the production host's own rule, not a copy of it: `Host::grown` is what `MenuCore` lays a `Grows` out by
+            let host = hero_host([control.x, control.y, control.w, control.h].map(f32::to_bits));
+            let over_by = |size: (f32, f32)| host.grown(size).expect("the hero host grows");
+            let room = safe_bottom - foot;
+            // fits: the panel stands below the synopsis, over its control
+            let fit = over_by((612.0, room - 1.0));
+            assert!(fit.y >= foot - 0.01 && fit.y + fit.h <= safe_bottom + 0.01, "syn {syn_h}: {fit:?} clears the foot {foot}");
+            assert!(fit.y <= pill.y && fit.y + fit.h >= pill.y + pill.h, "syn {syn_h}: and still covers its control");
+            // does not fit: the shared rule's rect, which covers the text by exactly what is missing
+            let over = over_by((612.0, room + 40.0));
+            assert_eq!(over, crate::popover::cover_opener(pill, (612.0, room + 40.0), crate::consts::SAFE), "syn {syn_h}");
+            assert!((foot - over.y - 40.0).abs() < 0.01, "syn {syn_h}: it covers the synopsis by its 40 px shortfall ({over:?})");
+        }
     }
 
     #[test]

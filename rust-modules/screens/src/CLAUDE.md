@@ -205,7 +205,7 @@ smallest worked example.
   `revision` (a counter that moves whenever anything the sections read moves), `sections` (the
   `SectionSpec`s, in order), `fallback` (the order focus falls back through when a section empties)
   and `cards` (a section's `CardSource`, `None` while it has no content). Optional hooks: `pending`,
-  `recover`, `card_has_menu`, `elem_of`, `plain_len`, `plain_elem`, `plain_step`, `focus_rect`,
+  `recover`, `card_has_menu`, `elem_of`, `plain_len`, `plain_elem`, `plain_name`, `plain_a11y`, `plain_step`, `focus_rect`,
   `element_rect`, `seat_override`, `reveal_margin`, `shelf_foot`, `shelf_foot_open`, `reveal_foot`, `wide_extent`, `plain_group`,
   `reveal_with`, `draw_heading`, `custom_draw`. Stacked shelves are adjacent sections and the air
   under one is its `shelf_foot` (Search, Person, Live TV), never a `Custom` gap section between two: a shelf's
@@ -373,7 +373,7 @@ on an inference from timing; BACK / STOP are `Cancel`. **`Art`** is driven by on
 `Frame`): `Waiting` before anything is known, `Covering` from the first press and while the stream has shown no frame yet,
 `Fading` once one exists, then `Settled`: a later stall or rebuffer never brings the art back, only a zap does. It is drawn by
 `plx_ui::art_ground` (the target programme's art over the video plane's hole, scaled 1.08 at 0.85 brightness: one textured quad of a blurred copy made once per
-image (`art_fit::BackdropSpec`, requested with the art, `tex::resolve_art_on`), never the live glass, so it is as soft over a
+image (`art_fit::Derive`, requested with the art, `tex::resolve_art_on`), never the live glass, so it is as soft over a
 bound video plane as anywhere; art with a clear ground stands on the app's flat ground: never black). **`Banner`** (`Entering`,
 `Shown { until }`) is raised on every stream the app starts (`AppMsg::PlayerStart`, through `Live::started`), on every press, and on
 Left, Right and OK; `Entering` is the page's first state, before it has a clock (the `PlayerStart` of the first mount is
@@ -387,11 +387,20 @@ live predicate is `plx_media::route::is_live(ps)`; `HudModel` carries no live fl
 **BACK lands on the channel left.** `app::playback::exit_player` names the channel the session was tuned to before it
 stops it and tells the page the player was launched from (`bridge::seat_live_channel`, `AppMsg::LiveTvSeat`, a covered
 page still receives an addressed command); `LiveTvScreen` keeps it and, on `Enter::Restored`, seats that channel's card:
-its Recent tile, else its On now poster, else its Channels tile (`left_elem`). OK on that card tunes it again.
+its Recent tile, else its On now poster, else its Channels tile (`left_elem`); on the Guide scope the channel's row, at the
+cell of what was airing, with that row's page showing. OK on that card tunes it again.
+
+**The Guide's window scrolls by half hours.** `Mode::Guide(Board)` carries the board and the board its window, `Window::Live`
+(the half hour before now, rolling with the clock) or `Window::Ahead(start)` (held where the reader moved it). RIGHT past a
+row's last cell, or LEFT past its first, is handed to the screen (`EdgeRule::Screen`) and moves the window 30 minutes later
+(as far as the server has guide data: a window that would hold no programme is refused) or earlier (never before the live
+window); the store is told how far to read (`LiveTvCmd::Reach`, the window's end and a step) and releases it when the page
+leaves. BACK first returns a scrolled window to the live one; a scope chosen and a restore from the player open on it too. A
+frame with the instant and no zone offset still lays the board out (`H::instant`) and only omits the clock words.
 
 ## Number entry (Live TV PR5)
 
-A digit typed on the What's on page or over the live player opens **one registered surface**, `AppArg::ChannelEntry`
+A digit typed on the What's on page, the Guide or over the live player opens **one registered surface**, `AppArg::ChannelEntry`
 (`channel_entry_panel.rs`, canon tag 16, page id 33, namespace `channel_entry`): a top-right panel on the safe frame
 (`ui::popover::corner_panel`: right 96, top 54, 560 wide) with the typed number, a window of five rows on `TableView`'s
 lineup face (`TableView::lineup`, `Row::lead`: the number in its own column, the station beside it) and "+N more" under
@@ -406,6 +415,9 @@ nothing itself, so a pick takes the host's own tune path: the page's `ContentReq
 following, exactly as a zap. The page opens it as `ContentPanel::ChannelEntry` (`Style::Compact`); the player asks
 `PlayerReq::OpenChannelEntry`, presented as `Style::PlayerPanel` (`bridge::open_channel_entry`), which leaves the host
 live so the video plane keeps presenting under it, and the digit drops a zap still pending (`Live::cancel_zap`).
+Its ground is derived from that style: `Ground::Menu` with `Scrim::over_host(DIM_COMPACT)`, so over the page the
+container owes the dim, the field latches and the panel is glass, and over the player nothing latches and it is the
+sheet with no dim on the picture (and `popover_glass` never draws glass on a video-plane frame).
 It is one surface however many keys ask for it: a request for a panel that is mounted is refused (the key reaches it as
 input), and one for a panel whose `Present` is still parked for this frame's commit is folded into the parked argument
 as one more opening digit (`bridge::present_once`, `Dispatcher::parked_present_mut`, `AppArg::absorb`). A panel dismissed

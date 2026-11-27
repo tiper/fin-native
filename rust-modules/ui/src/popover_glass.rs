@@ -198,6 +198,12 @@ pub fn draw_shadowed(
     shadow: f32,
     morph: plx_gfx::gfx::GlassMorph,
 ) -> bool {
+    // **Never over a bound video plane**: what is behind is a hole GL cannot read, and a frozen picture of the
+    // page standing there would be served back over the video. Whatever latched the field or took the frost
+    // earlier, this frame is the sheet.
+    if plx_gfx::gfx::video_plane_frame() {
+        return false;
+    }
     // The host snapshot is the page under the FIRST surface's dim. A menu over another surface
     // stands on that surface too, which neither picture holds: it keeps the field ground. Only the
     // dims at or BELOW this surface count: the whole frame's dims are recorded before any surface

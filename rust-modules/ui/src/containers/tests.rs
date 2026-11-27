@@ -448,6 +448,31 @@ fn the_scrim_ladder_scales_by_appear_and_the_route_dip() {
     assert!((d.nav.modals.scrims(1.0)[0].1 - 0.5).abs() < 1e-6);
 }
 
+/// **A dim that exists only over a held page is the style's answer, never the plane's** (`Scrim::over_host`,
+/// Live TV's number entry): a surface whose host is cached (a menu over a page) owes the page its dim, and with it
+/// the latched field its glass stands on; one whose host stays live (`PlayerPanel`, the video plane behind) owes
+/// none, whatever the plane's bound bit says, so nothing latches and no dim lands on the picture. A plain dim is
+/// unchanged on either style.
+#[test]
+fn a_host_only_dim_is_owed_over_a_held_page_and_never_over_a_live_host() {
+    let owed = |style: Style, over_host: bool| {
+        let (mut d, mut rig, _) = booted();
+        let id = open_modal(&mut d, &mut rig, style, 16);
+        let m = modal_mut(&mut d, id);
+        m.scrim_alpha = crate::theme::underlay::DIM_COMPACT;
+        m.scrim_over_host = over_host;
+        d.nav.modals.surface_mut(id).unwrap().motion = super::modal::PopoverMotion::at(1.0);
+        let dims = d.nav.modals.scrims(1.0);
+        (dims.len(), dims.first().map(|&(_, a)| a), d.nav.modals.first_dim(1.0).is_some())
+    };
+    let compact = crate::theme::underlay::DIM_COMPACT;
+    assert_eq!(owed(Style::Compact, true), (1, Some(compact), true), "a menu over a page owes its dim");
+    for style in [Style::PlayerPanel { survives_failure: false }, Style::PlayerPanel { survives_failure: true }] {
+        assert_eq!(owed(style, true), (0, None, false), "{style:?}: a live host has no page to dim");
+        assert_eq!(owed(style, false).0, 1, "{style:?}: a plain dim is the surface's own business");
+    }
+}
+
 /// **The frame's lowest dim as a pure value** (`ModalStack::first_dim`, which the host bakes the frost's
 /// body from at the head of the frame): the first of `scrims` at the same alpha, through the stack's
 /// field. Nothing latched, that is the flat scrim ink at that alpha (`underlay::plan`'s contract); a

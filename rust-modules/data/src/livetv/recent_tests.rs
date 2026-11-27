@@ -11,7 +11,7 @@ fn sid(n: u16) -> ServerId { ServerId::from_raw(n) }
 fn channel(server: u16, number: &str) -> Channel {
     Channel { sid: sid(server), dvr: "7".into(), channel: format!("C{number}"), vcn: number.into(),
         name: format!("Channel {number}"), thumb: String::new(), now: String::new(), now_thumb: String::new(),
-        now_summary: String::new(), begins_at: 0, ends_at: 0 }
+        now_summary: String::new(), begins_at: 0, ends_at: 0, later: Vec::new() }
 }
 fn key(server: u16, number: &str) -> RecentKey {
     RecentKey { sid: sid(server), dvr: "7".into(), channel: format!("C{number}") }

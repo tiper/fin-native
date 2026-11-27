@@ -11,11 +11,12 @@ use super::ids::normalize;
 use super::paths;
 use plx_plex::plex::urlenc_str as enc;
 use super::playback_info::Response;
-use super::time::iso_to_unix;
+use super::time::{iso_to_unix, unix_to_iso};
 use super::translate::primary_image;
 use plx_plex::plex::livetv::{LivePlay, LiveSession};
 use plx_plex::plex::{Dvr, EpgChannel, Media, Metadata};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 /// The one source a Jellyfin server offers, as the id both the lineup and the grid are read under.
 pub const SOURCE: &str = "jf";
@@ -37,24 +38,40 @@ pub fn channel_of(c: &BaseItemDto) -> Option<EpgChannel> {
 
 /// What a channel airs now, as the guide's airing: its slot and the channel it is on.
 pub fn airing_of(c: &BaseItemDto) -> Option<Metadata> {
-    let p = c.current_program.as_deref()?;
+    Some(airing(c.current_program.as_deref()?, &c.id, c.channel_number.as_deref()))
+}
+
+/// The guide's programmes ([`programs_path`]) as airings on their channels, numbered as the
+/// lineup `channels` numbers them; a programme on no channel of the lineup is dropped.
+pub fn programs_of(programs: &[BaseItemDto], channels: &[BaseItemDto]) -> Vec<Metadata> {
+    let lineup: HashMap<String, &BaseItemDto> = channels.iter().map(|c| (normalize(&c.id), c)).collect();
+    programs
+        .iter()
+        .filter_map(|p| {
+            let c = lineup.get(&normalize(p.channel_id.as_deref()?))?;
+            Some(airing(p, &c.id, c.channel_number.as_deref()))
+        })
+        .collect()
+}
+
+fn airing(p: &BaseItemDto, channel_id: &str, vcn: Option<&str>) -> Metadata {
     let at = |stamp: &Option<String>| stamp.as_deref().map_or(0, iso_to_unix);
     let series = p.series_name.clone().filter(|s| !s.is_empty());
-    Some(Metadata {
+    Metadata {
         title: p.name.clone(),
         kind: if series.is_some() { "episode".into() } else { "movie".into() },
         grandparent_title: series.unwrap_or_default(),
         summary: p.overview.clone().unwrap_or_default(),
         thumb: primary_image(p),
         media: vec![Media {
-            channel_identifier: normalize(&c.id),
-            channel_vcn: c.channel_number.clone().unwrap_or_default(),
+            channel_identifier: normalize(channel_id),
+            channel_vcn: vcn.unwrap_or_default().to_owned(),
             begins_at: at(&p.start_date),
             ends_at: at(&p.end_date),
             ..Default::default()
         }],
         ..Default::default()
-    })
+    }
 }
 
 /// What a live play arrives as: H.264 and AAC stereo. The profile allows nothing else, so a
@@ -86,6 +103,17 @@ pub fn channels_path(user_id: &str) -> String {
     format!(
         "/LiveTv/Channels?userId={}&addCurrentProgram=true&enableUserData=false&enableImages=true&enableImageTypes=Primary&imageTypeLimit=1",
         enc(user_id)
+    )
+}
+
+/// `GET`: the guide's programmes that have not ended by `now` and start by `until` (unix seconds),
+/// on every channel, in start order: per channel the one on now and the ones that follow.
+pub fn programs_path(user_id: &str, now: i64, until: i64) -> String {
+    format!(
+        "/LiveTv/Programs?userId={}&minEndDate={}&maxStartDate={}&sortBy=StartDate&fields=Overview&enableUserData=false&enableTotalRecordCount=false&enableImages=true&enableImageTypes=Primary&imageTypeLimit=1",
+        enc(user_id),
+        enc(&unix_to_iso(now)),
+        enc(&unix_to_iso(until))
     )
 }
 
@@ -150,6 +178,32 @@ mod tests {
         assert_eq!(media.channel_identifier, "ab12");
         assert_eq!(media.ends_at - media.begins_at, 3600);
         assert!(airing_of(&channel(r#"{"Id":"ab12"}"#)).is_none());
+    }
+
+    #[test]
+    fn a_guide_programme_airs_on_its_lineup_channel() {
+        let lineup = [channel(r#"{"Id":"ab12","Name":"Family","ChannelNumber":"101"}"#)];
+        let programs = [
+            channel(r#"{"Id":"p2","Name":"Next","ChannelId":"AB12","StartDate":"2026-11-26T11:00:00Z","EndDate":"2026-11-26T11:30:00Z"}"#),
+            channel(r#"{"Id":"p3","Name":"Other","ChannelId":"cd34"}"#),
+            channel(r#"{"Id":"p4","Name":"Loose"}"#),
+        ];
+        let airings = programs_of(&programs, &lineup);
+        assert_eq!(airings.len(), 1, "programmes on no lineup channel are dropped");
+        let m = &airings[0];
+        assert_eq!((m.title.as_str(), m.kind.as_str()), ("Next", "movie"));
+        let media = &m.media[0];
+        assert_eq!((media.channel_identifier.as_str(), media.channel_vcn.as_str()), ("ab12", "101"));
+        assert_eq!(media.ends_at - media.begins_at, 1800);
+    }
+
+    #[test]
+    fn the_guide_asks_for_what_has_not_ended_by_now_and_starts_by_until() {
+        let path = programs_path("u1", 1_764_151_200, 1_764_156_600);
+        assert!(path.starts_with("/LiveTv/Programs?userId=u1&"), "{path}");
+        assert!(path.contains("minEndDate=2025-11-26T10%3A00%3A00Z"), "{path}");
+        assert!(path.contains("maxStartDate=2025-11-26T11%3A30%3A00Z"), "{path}");
+        assert!(path.contains("sortBy=StartDate"), "{path}");
     }
 
     #[test]

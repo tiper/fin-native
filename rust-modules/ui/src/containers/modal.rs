@@ -275,7 +275,9 @@ impl<H: Host> Surface<H> {
         if self.phase == Phase::Hidden || self.faded() || matches!(self.style, Style::Opaque { .. }) {
             return None;
         }
-        Some(self.entry.inst.as_ref()?.screen.scrim())
+        let scrim = self.entry.inst.as_ref()?.screen.scrim();
+        // A dim that exists only over a held host page ([`Scrim::over_host`]) is no dim over a live one.
+        (!scrim.host_only || style_caches_host(self.style)).then_some(scrim)
     }
 }
 

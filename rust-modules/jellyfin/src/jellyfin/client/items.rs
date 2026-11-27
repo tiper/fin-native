@@ -401,7 +401,7 @@ impl JfClient {
     /// Raw bytes from a server path (a subtitle file), with the token in the query.
     pub fn get_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
         let a = self
-            .send(Verb::Get, &self.with_token(path), None)
+            .send_file(&self.with_token(path))
             .ok_or_else(|| "no answer".to_string())?;
         if !a.ok() {
             return Err(format!("HTTP {} ({} bytes)", a.status, a.body.len()));
