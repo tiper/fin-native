@@ -87,8 +87,13 @@ that it works is as useful as one that it doesn't.
 3. Install it from Dev Manager's **Apps** view, then open **FinNative** on the TV and sign in.
 
 The [installation guide](docs/install-finnative.md) walks through every step, including the
-Developer Mode session you must renew or LG removes the apps it installed. FinNative isn't in the
-Homebrew Channel catalogue yet.
+Developer Mode session you must renew or LG removes the apps it installed.
+
+**On a rooted TV with Homebrew Channel**, you can install and update FinNative from there instead.
+FinNative isn't in the Homebrew Channel catalogue yet, so add its repository once: open Homebrew
+Channel > **Settings** > **Add repository** and enter
+`https://raw.githubusercontent.com/tiper/fin-native/main/docs/homebrew/repo.json`. FinNative then
+appears in the list, and Homebrew Channel offers each new release.
 
 ## Credit
 
