@@ -21,7 +21,7 @@ fn capture_failure_of(ps: &mut route::PlaybackSession, sample_trigger: bool) {
 }
 
 /// The player's presentation for this frame. A failure is READ from the session (captured ahead of this by
-/// [`capture_failure`]); only the two inputs that move while it stands are sampled here ([`player::live_offers`]).
+/// [`capture_failure`]); only the three inputs that move while it stands are sampled here ([`player::live_offers`]).
 pub(super) fn capture(ps: &route::PlaybackSession, meta: plx_data::metadata::MetadataView<'_>) -> Presentation {
     plx_base::step::assert_io_allowed("player presentation capture");
     let state = player::state(ps);

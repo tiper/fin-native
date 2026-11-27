@@ -689,6 +689,26 @@ pub fn on_decoded_frame(ps: &mut PlaybackSession) {
     send_parked_write_back(ps);
 }
 
+/// Is a version picked on the failure screen still waiting to be proven by a picture ([`remember_version_that_played`])?
+/// The per-frame caller asks this before the (dearer) question whether a picture is playing.
+pub fn version_on_trial_pending(ps: &PlaybackSession) -> bool {
+    ps.version_on_trial.is_some()
+}
+
+/// **A version picked on the failure screen is remembered once the attempt that asked for it is playing**
+/// (`Recovery::PickVersion`), not when it is asked for ([`PlaybackSession::version_on_trial`]): a version that fails must
+/// not become what Play starts next time. The caller is the app's per-frame step, on the state both backends derive
+/// (`player::is_playing`: the Feed's presented frame, the URI service's Playing), so a URI set remembers it too; the
+/// Feed-only [`on_decoded_frame`] would never have seen one. Taken whatever the outcome, so it writes once; only while
+/// the request in force still asks for exactly that version of that item.
+pub fn remember_version_that_played(ps: &mut PlaybackSession) {
+    let Some((sid, rk, media)) = ps.version_on_trial.take() else { return };
+    let current = ps.request.as_ref().is_some_and(|r| r.sid == sid && r.rk == rk && r.version == Some(media));
+    if current {
+        choose_version(sid, &rk, media);
+    }
+}
+
 /// What the before-playback picker ([`commit_preplay_pick`]) is told about the item whose tracks it
 /// chose, none of it read from a session (there is none yet).
 pub struct PreplayItem<'a> {
@@ -776,7 +796,7 @@ pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::
 /// the failure that stands, and this decides whether it may be done and what it changes about the retry.
 ///
 /// * No failure stands, or its row does not offer the recovery's control (`player::failure_actions`, the table the row
-///   is drawn from, with `live` its two live inputs): refused, logged, nothing touched. A recovery is never defaulted
+///   is drawn from, with `live` its three live inputs): refused, logged, nothing touched. A recovery is never defaulted
 ///   into a retry the row never offered.
 /// * A track pick is held on the session BEFORE the retry starts ([`hold_pick_for_retry`]): the retry consumes it, a
 ///   retry that is refused or cancelled leaves it held for *Try again*, and the panel keeps reading it.
@@ -787,12 +807,19 @@ pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::
 pub fn begin_recovery(
     ps: &mut PlaybackSession,
     live: crate::player::LiveOffers,
+    failed_media: Option<plx_plex::plex::MediaId>,
     recovery: &crate::player::Recovery,
 ) -> Result<crate::player::RetryOverrides, crate::player::Refused> {
     use crate::player::Refused;
     let refused = match ps.failure.as_ref() {
         None => Refused::NoFailure,
         Some(failure) if !crate::player::recovery_offered(failure, live, recovery) => Refused::NotOffered(recovery.action()),
+        Some(failure)
+            if matches!(recovery, crate::player::Recovery::PickVersion(media)
+                if Some(*media) == failed_media && crate::player::version_repeat_refused(failure)) =>
+        {
+            Refused::SameVersion
+        }
         Some(_) => {
             if let crate::player::Recovery::PickTracks(pick) = recovery {
                 hold_pick_for_retry(ps, pick);
@@ -802,6 +829,25 @@ pub fn begin_recovery(
     };
     crate::player::log(&format!("recovery refused: {recovery:?}: {refused:?}"));
     Err(refused)
+}
+
+/// **The version the failed attempt asked for** (the request's: the viewer's pick, else the profile's remembered choice,
+/// `None` for the server's default), which *Select Version* over the failure screen checks as the one that just failed
+/// ([`taken_version`](super::taken_version) turns it into the row that plays unasked). It places the check mark; the file
+/// that is "the same" for the door is [`attempt_media`].
+pub fn attempt_version(ps: &PlaybackSession) -> Option<plx_plex::plex::MediaId> {
+    ps.request.as_ref().and_then(|r| r.version)
+}
+
+/// **The file the failed attempt actually landed on**, of the item's `versions` (the metadata store's
+/// `failed_versions`): the plan's `mediaIndex` (a position in `Media[]`, installed by `apply_plan` for a refused plan too)
+/// read against the list. It is what *Select Version* means by "the same file": the request's own version
+/// ([`attempt_version`]) is `None` when none was named and may be a file that is gone, where the default played. `None`
+/// when no plan landed for the request's item, or the list does not hold that position.
+pub fn attempt_media(ps: &PlaybackSession, versions: &[plx_data::pms::MediaVersion]) -> Option<plx_plex::plex::MediaId> {
+    let request = ps.request.as_ref()?;
+    (ps.cur_sid == request.sid && ps.cur_rk == request.rk).then_some(())?;
+    versions.get(ps.cur_media_index).map(|v| v.id)
 }
 
 /// **What the failure screen's picker starts from**: the held pick, else the attempt's standing

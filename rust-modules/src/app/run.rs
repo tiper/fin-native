@@ -2458,6 +2458,11 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
         // The failure of this frame's state, captured ahead of both readers below (the report and the request metrics).
         super::player_presentation::capture_failure(app);
         plx_media::player::report::tick_with_source(&app.player.session, terminal_source);
+        // A version picked on the failure screen is remembered once it plays: the state both backends derive, so a URI
+        // set (which never reaches the Feed pump's decoded-frame door) remembers it as a Feed one does.
+        if plx_media::route::version_on_trial_pending(&app.player.session) && plx_media::player::is_playing(&app.player.session) {
+            plx_media::route::remember_version_that_played(&mut app.player.session);
+        }
         if plx_media::player::state(&app.player.session)
             == plx_media::player::PlaybackState::Error {
             if let Some(kind) = plx_media::route::failure(&app.player.session).map(plx_media::player::PlaybackFailure::kind) {
@@ -7246,6 +7251,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
                 chapters: (1..=2).map(chapter).collect(),
                 hdr: false,
                 sub_choice: Default::default(),
+                versions: Vec::new(),
             }))));
             super::super::bridge::nav_push(&mut app.pages, AppArg::Player);
             frame(&mut app, 16);

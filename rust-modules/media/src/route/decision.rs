@@ -32,7 +32,8 @@ use super::track_memory::{SubMode, TrackContext};
 // says what is remembered about it; every public name keeps its `route::` path.
 #[path = "decision_memory.rs"]
 mod memory;
-pub use memory::{begin_recovery, commit_preplay_pick, failed_pick, hold_pick_for_retry, PreplayItem};
+pub use memory::{remember_version_that_played, version_on_trial_pending};
+pub use memory::{attempt_media, attempt_version, begin_recovery, commit_preplay_pick, failed_pick, hold_pick_for_retry, PreplayItem};
 pub use memory::{
     commit_audio_pick,commit_forced_only_and_sidecar, commit_forced_only_pick, commit_subtitle_and_sidecar, commit_subtitle_pick,
     on_decoded_frame, persist_subtitle_offset, rematch_subtitle_with_names, repoint_parked_subtitle, send_parked_write_back,
@@ -474,6 +475,13 @@ pub struct PlaybackSession {
     /// **Read only through [`held_pick`]**, which also returns it only while the request in force is
     /// for the item it was held on.
     held_pick: Option<HeldPick>,
+    /// **The version the viewer picked on the failure screen, not yet proven to play** (`Recovery::PickVersion`):
+    /// `(server, ratingKey, media)`. It is remembered for the profile ([`choose_version`]) once the attempt
+    /// that asked for it is playing, on either backend ([`remember_version_that_played`], which takes it), never when it is asked for, so a version that fails does not
+    /// become what Play starts next time. Set only by [`retry_current_play`] once its request was accepted. It survives
+    /// retries and the landing (a refused or failed attempt leaves it for the next one of the same request), and ends
+    /// where the request it belongs to does: a fresh, non-retry request and a [`StopKind::Visit`].
+    version_on_trial: Option<(ServerId, String, plx_plex::plex::MediaId)>,
     /// Is [`Self::cur_sub_sid`] an external sidecar (`metadata::Stream::sidecar_renderable`) rather
     /// than an embedded (in-container) track? Meaningless when `cur_sub_sid == 0`. Issue #266 I6:
     /// this is what tells `route::decision::facts`'s [`super::plan::SubtitleEffect::Sidecar`]
@@ -2012,6 +2020,7 @@ impl PlaybackSession {
         selection_known: false,
         carried_selection: None,
         held_pick: None,
+        version_on_trial: None,
         cur_sub_sidecar: false,
         cur_sub_client_drawable: false,
         cur_sub_ordinal: -1,
@@ -2130,6 +2139,7 @@ impl PlaybackSession {
             selection_known,
             carried_selection,
             held_pick,
+            version_on_trial,
             cur_sub_sidecar,
             cur_sub_client_drawable,
             cur_sub_ordinal,
@@ -2228,6 +2238,7 @@ impl PlaybackSession {
             selection_known: *selection_known,
             carried_selection: *carried_selection,
             held_pick: held_pick.clone(),
+            version_on_trial: version_on_trial.clone(),
             cur_sub_sidecar: *cur_sub_sidecar,
             cur_sub_client_drawable: *cur_sub_client_drawable,
             cur_sub_ordinal: *cur_sub_ordinal,
@@ -2426,6 +2437,7 @@ pub(crate) fn retire_stopped_playback(ps: &mut PlaybackSession, kind: StopKind) 
     if kind == StopKind::Visit {
         ps.request = None;
         ps.held_pick = None;
+        ps.version_on_trial = None;
     }
     if ps.engine_failure == Some(crate::player::RuntimeFailure::ServerStopped) {
         ps.engine_failure = None;
@@ -11947,6 +11959,7 @@ fn clear_track_selection(s: &mut PlaybackSession) {
 fn begin_track_selection(s: &mut PlaybackSession, retry: Option<RetryContext>) {
     if retry.is_none() {
         s.held_pick = None;
+        s.version_on_trial = None;
     }
     let source_selection = retry.and(s.source_selection);
     clear_track_selection(s);
@@ -12238,11 +12251,16 @@ pub fn retry_current_play(
     resume_ns: i64,
     overrides: crate::player::RetryOverrides,
 ) -> bool {
-    let crate::player::RetryOverrides { direct_play, origin } = overrides;
-    let Some(request) = ps.request.clone() else {
+    let crate::player::RetryOverrides { direct_play, version, origin } = overrides;
+    let Some(mut request) = ps.request.clone() else {
         crate::player::log("playback retry: no Plex request descriptor");
         return false;
     };
+    // *Select Version*: the same item on another file. The pick replaces the request's version here and nowhere else
+    // (`settle_version`, which remembers on ask, is the Detail page's: a version that fails must not be remembered).
+    if let Some(media) = version {
+        request.version = Some(media);
+    }
     // A channel has no position to return to: a retry tunes again and starts at the live edge.
     let resume_ns = if request.live.is_some() { 0 } else { resume_ns };
     crate::player::log(&format!(
@@ -12252,7 +12270,15 @@ pub fn retry_current_play(
     let retry = retry_context_with(ps, resume_ns, direct_play);
     // A retry repeats the attempt: it plans from the value that attempt began on.
     let caps = ps.attempt_caps();
-    request_play_inner(ps, meta, caps, request, Some(retry), None, true, origin)
+    let (sid, rk) = (request.sid, request.rk.clone());
+    let started = request_play_inner(ps, meta, caps, request, Some(retry), None, true, origin);
+    // Only an accepted request replaced the one in force; the pick is remembered by the first frame that plays it.
+    if started {
+        if let Some(media) = version {
+            ps.version_on_trial = Some((sid, rk, media));
+        }
+    }
+    started
 }
 
 /// [`rescue_retry_context`] with the failed attempt's Direct Play mode optionally replaced — the
@@ -12791,6 +12817,8 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             selection_known,
             carried_selection,
             held_pick: None,
+            // The landing is not the proof: the attempt playing is (`remember_version_that_played`, from the app's per-frame step).
+            version_on_trial: s.version_on_trial.take(),
             // Negative = an external sidecar the client draws itself (`sub_render_ordinal`'s own
             // convention); `None` (Off) never sets `sub_sid` either, so this reads `false` for it.
             cur_sub_sidecar: plan.sub_render_ordinal.is_some_and(|ord| ord < 0),

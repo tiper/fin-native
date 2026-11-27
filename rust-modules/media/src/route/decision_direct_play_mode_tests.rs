@@ -163,10 +163,10 @@ fn the_recovery_doors_overrides_set_the_mode_the_retry_resolves_under() {
     // a transient cause under Force: the row draws both *Try again* and *Play automatically*
     record_failure(&mut ps, PlaybackFailure::for_test(
         FailureKind::MediaSource, DirectPlayMode::Forced, FrozenOffers { can_retry: true, quality_carriable: true }));
-    let live = LiveOffers { repair_idle: true, tracks_available: false };
+    let live = LiveOffers { repair_idle: true, tracks_available: false, versions_available: false };
     let request = ps.request.clone().expect("seeded");
     let resolves_under = |ps: &mut PlaybackSession, recovery: Recovery| {
-        let overrides = begin_recovery(ps, live, &recovery).expect("the Force failure offers both");
+        let overrides = begin_recovery(ps, live, None, &recovery).expect("the Force failure offers both");
         let retry = retry_context_with(ps, 0, overrides.direct_play);
         request_env(ps, plx_data::stores::metadata::MetadataStore::default().view(), &request, Some(retry)).direct_play_mode
     };

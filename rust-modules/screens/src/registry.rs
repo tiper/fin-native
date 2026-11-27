@@ -389,6 +389,11 @@ pub enum PlayerReq {
     /// names the item and the attempt's part, and the style (`bridge::open_failed_tracks`).
     /// `anchor` is the drawn rect of the read-out's control (bits), never a fallback.
     OpenFailedTracks { anchor: [u32; 4] },
+    /// **The failure read-out's *Select Version***: present the item's versions over the player page, a
+    /// `versions_panel` on `versions_panel::Source::Failed` (the app names the item and the file the failed attempt
+    /// asked for, and the style, `bridge::open_failed_versions`). A pick comes back as
+    /// `PlayerReq::Recover(Recovery::PickVersion)`, the one recovery door. `anchor` is as for `OpenFailedTracks`.
+    OpenFailedVersions { anchor: [u32; 4] },
     /// **A digit was typed over a live channel: open number entry** (Live TV PR5, `screens::channel_entry_panel`).
     /// `first` is the digit (0-9) and `playing` the channel on screen by identity, so the panel tags it. Presented as
     /// a `Style::PlayerPanel` over the player page, which leaves the video plane live under it
@@ -865,6 +870,25 @@ fn versions_page<'a>(
     loaded_page(meta, arg.sid, &arg.rk)
 }
 
+/// **The versions a Select Version panel lists, and the one that wears the check mark**: on a Detail page the hero's
+/// (`detail::hero_versions`, and the file its Play takes now), on the failure screen the playing item's own (the
+/// metadata store's `failed_versions`, and the file the failed attempt asked for, else what plays unasked).
+fn versions_of<'a>(
+    meta: plx_data::metadata::MetadataView<'a>,
+    arg: &crate::versions_panel::VersionsArg,
+) -> (&'a [plx_data::pms::MediaVersion], Option<plx_plex::plex::MediaId>) {
+    match arg.source {
+        crate::versions_panel::Source::Page => {
+            let page = versions_page(meta, arg);
+            (page.map_or(&[][..], crate::detail::hero_versions), page.and_then(crate::detail::taken_version))
+        }
+        crate::versions_panel::Source::Failed { attempted, .. } => {
+            let versions = meta.failed_versions(arg.sid, &arg.rk).unwrap_or(&[]);
+            (versions, plx_media::route::taken_version(versions, attempted))
+        }
+    }
+}
+
 /// The loaded Detail when it is the item `(sid, rk)`: the page the hero's panels belong to.
 fn loaded_page<'a>(
     meta: plx_data::metadata::MetadataView<'a>,
@@ -918,6 +942,10 @@ pub(crate) fn empty_tracks(sid: plx_plex::plex::ServerId, rk: &str) -> plx_data:
 /// because a panel may not name the page's module (`ci/check-deps.sh`, `sibling`), and it reads the page off
 /// the host's metadata view, the way the mount does.
 pub(crate) fn versions_subject<H: MetadataLike>(cx: &Cx<'_, H>, arg: &crate::versions_panel::VersionsArg) -> Option<String> {
+    // On the failure screen the rows pick a file of the failed item itself, not of a page's hero.
+    if let crate::versions_panel::Source::Failed { .. } = arg.source {
+        return Some(arg.rk.clone());
+    }
     let d = versions_page(H::metadata(cx), arg)?;
     Some(d.play_rk().to_owned())
 }
@@ -1519,6 +1547,7 @@ impl ContentPanel {
                         rk: rk.to_string(),
                         anchor,
                         opener: Some(opener),
+                        source: crate::versions_panel::Source::Page,
                     }),
                 )
             }
@@ -2775,9 +2804,7 @@ where
                 crate::alt_sources::AltSourcesScreen::new(entry, arg.clone(), H::metadata(cx)),
             ),
             AppArg::VersionsPanel(arg) => {
-                let page = versions_page(H::metadata(cx), arg);
-                let versions = page.map_or(&[][..], crate::detail::hero_versions);
-                let taken = page.and_then(crate::detail::taken_version);
+                let (versions, taken) = versions_of(H::metadata(cx), arg);
                 Box::new(crate::versions_panel::VersionsPanelScreen::new(entry, arg.clone(), versions, taken, H::screen_inputs(cx).can_play()))
             }
             AppArg::PreplayPanel(arg) => {
@@ -2988,6 +3015,7 @@ pub fn every_surface_arg() -> Vec<AppArg> {
             rk: "1".into(),
             anchor: [0; 4],
             opener: None,
+            source: crate::versions_panel::Source::Page,
         }),
         AppArg::PreplayPanel(crate::preplay_panel::PreplayArg {
             host: plx_machine::machine::InstanceId(1),

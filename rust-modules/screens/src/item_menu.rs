@@ -711,7 +711,7 @@ fn build_versions(rk: &str, versions: &[MediaVersion], checked: Option<plx_plex:
     Form::new().section(plx_appkit::version_list::section("", versions, ItemRow::Version, |v| Action::SelectVersion {
         rk: rk.to_string(),
         media: v.id,
-    }, checked, unavailable))
+    }, checked, None, unavailable))
 }
 
 /// The anchor a menu with no rect to hang off falls back to — a centred card. The headless trigger

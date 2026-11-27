@@ -2669,7 +2669,7 @@ mod off_frame_release_tests {
                 plx_plex::plex::session::DirectPlayMode::Auto,
                 crate::player::FrozenOffers { can_retry: true, quality_carriable: true },
             ),
-            crate::player::LiveOffers { repair_idle: true, tracks_available: false },
+            crate::player::LiveOffers { repair_idle: true, tracks_available: false, versions_available: false },
         );
         assert!(actions.contains(&crate::player::FailureAction::TryAgain), "{actions:?}");
 
@@ -4070,7 +4070,7 @@ mod load_in_flight_tests {
                 plx_plex::plex::session::DirectPlayMode::Auto,
                 crate::player::FrozenOffers { can_retry: true, quality_carriable: true },
             ),
-            crate::player::LiveOffers { repair_idle: true, tracks_available: false },
+            crate::player::LiveOffers { repair_idle: true, tracks_available: false, versions_available: false },
         );
         assert!(
             actions.contains(&crate::player::FailureAction::TryAgain),

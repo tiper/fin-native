@@ -3017,7 +3017,7 @@ mod flight_tests {
         assert_eq!(shape.kind, crate::player::FailureKind::ServerStopped);
         assert_eq!(shape.detail, "stopped by the admin");
         assert_eq!(
-            crate::player::failure_actions(&crate::player::failure_for_test(&rig.ps), crate::player::LiveOffers { repair_idle: true, tracks_available: false }),
+            crate::player::failure_actions(&crate::player::failure_for_test(&rig.ps), crate::player::LiveOffers { repair_idle: true, tracks_available: false, versions_available: false }),
             vec![crate::player::FailureAction::Back]
         );
     }

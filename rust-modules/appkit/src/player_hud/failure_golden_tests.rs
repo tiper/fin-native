@@ -41,7 +41,7 @@ fn produce(ps: &rt::PlaybackSession, arm: Option<&str>, tracks: bool) -> Produce
     // the derivation `observe_failure` records (the capture's gating on the state is graded in `plx_media`)
     let failure = pl::failure_under_for_test(ps, arm);
     let error = failure.shape().clone();
-    let live = pl::LiveOffers { repair_idle: repair == Repair::Idle, tracks_available: tracks };
+    let live = pl::LiveOffers { repair_idle: repair == Repair::Idle, tracks_available: tracks, versions_available: false };
     let row = pl::failure_actions(&failure, live);
     let handled = pl::backend::handled_failure(error.kind);
     let head = format!(
@@ -157,10 +157,19 @@ fn snapshot() -> String {
     // ---- 1. the table: every kind x setting x offer, without a session ----------------------------
     writeln!(out, "# the action table (kind, setting): rows by offers [r=can retry, q=quality carriable, t=tracks, i=repair idle]").unwrap();
     let mut table: Vec<((String, &str), Vec<(String, Vec<String>)>)> = Vec::new();
-    for (failure, live, row) in pl::every_failure_row() {
-        let setting = if failure.forced() { "forced" } else if failure.direct_play_disabled() { "disabled" } else { "auto" };
-        let mask = format!("r{}q{}t{}i{}", failure.can_retry() as u8, failure.quality_carriable() as u8, live.tracks_available as u8, live.repair_idle as u8);
+    // The same table with the failed item's versions listed (`LiveOffers::versions_available`): only the rows that
+    // gain *Select Version* are written, under their own heading, so the one-file table above stays what it was.
+    let mut with_versions: Vec<((String, &str), Vec<(String, Vec<String>)>)> = Vec::new();
+    let mut without: std::collections::HashMap<(String, &str, String), String> = std::collections::HashMap::new();
+    let every = pl::every_failure_row();
+    let setting_of = |failure: &pl::PlaybackFailure| if failure.forced() { "forced" } else if failure.direct_play_disabled() { "disabled" } else { "auto" };
+    let mask_of = |failure: &pl::PlaybackFailure, live: &pl::LiveOffers| {
+        format!("r{}q{}t{}i{}", failure.can_retry() as u8, failure.quality_carriable() as u8, live.tracks_available as u8, live.repair_idle as u8)
+    };
+    for (failure, live, row) in every.iter().filter(|(_, live, _)| !live.versions_available) {
+        let (setting, mask) = (setting_of(failure), mask_of(failure, live));
         let key = (format!("{:?}", failure.kind()), setting);
+        without.insert((key.0.clone(), setting, mask.clone()), words(row));
         let entry = match table.iter_mut().find(|(k, _)| *k == key) {
             Some((_, rows)) => rows,
             None => {
@@ -168,9 +177,30 @@ fn snapshot() -> String {
                 &mut table.last_mut().unwrap().1
             }
         };
-        push(entry, words(&row), mask);
+        push(entry, words(row), mask);
+    }
+    for (failure, live, row) in every.iter().filter(|(_, live, _)| live.versions_available) {
+        let (setting, mask) = (setting_of(failure), mask_of(failure, live));
+        let key = (format!("{:?}", failure.kind()), setting);
+        if without.get(&(key.0.clone(), setting, mask.clone())) == Some(&words(row)) {
+            continue;
+        }
+        let entry = match with_versions.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, rows)) => rows,
+            None => {
+                with_versions.push((key, Vec::new()));
+                &mut with_versions.last_mut().unwrap().1
+            }
+        };
+        push(entry, words(row), mask);
     }
     for ((kind, setting), rows) in &table {
+        for (row, masks) in rows {
+            writeln!(out, "{kind} {setting}: [{row}] <- {}", masks_of(masks, 16)).unwrap();
+        }
+    }
+    writeln!(out, "\n# the same with the failed item's versions listed: only the rows that gain select_version (the row has four slots)").unwrap();
+    for ((kind, setting), rows) in &with_versions {
         for (row, masks) in rows {
             writeln!(out, "{kind} {setting}: [{row}] <- {}", masks_of(masks, 16)).unwrap();
         }

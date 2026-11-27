@@ -1051,6 +1051,16 @@ something.
   a picture on the panel" wants `player::seen_frame()`, not `frames() > 0`. `frames` counts libpf's
   5 Hz POSITION updates, not presented pictures, and the Dolby Vision guard's watch
   (`dv_start::Guard::step`) reads it as exactly that: no position update since the landing.
+- **The failure read-out's row is one table, and *Select Version* is its last fix.** `failure_actions` offers it wherever a
+  retry can happen and the failed item has more than one file (`LiveOffers::versions_available`, read per frame from
+  `PlayingItem.versions`, because the metadata can land after the failure), but only while the row has a slot left
+  (`FAILURE_ROW_SLOTS`, held equal to the UI's `STATUS_ROW_MAX` by a `screens::player` test): a row already holding
+  *Try again* or *Play automatically*, a rung and the track picker goes without it, because five pills are wider than
+  the screen in Belarusian, German and Hungarian. A pick is `Recovery::PickVersion`, through `route::begin_recovery`
+  like every recovery; `retry_current_play` puts it on the request, and it is remembered for the profile
+  (`route::choose_version`) only once that attempt is PLAYING (`PlaybackSession.version_on_trial`, taken by
+  `route::remember_version_that_played`, which the app's per-frame step calls on `player::is_playing`, the state both
+  backends derive: a URI attempt never reaches the Feed pump's decoded-frame door), never when it is asked for.
 - **A remembered track choice is written back to PMS on the first decoded frame, never at the
   landing.** `route::apply_plan` only PARKS it (`PlaybackSession.write_back`: installing a URL is not
   evidence the television accepted it, and a refused direct play's rescue PUTs its own selection);

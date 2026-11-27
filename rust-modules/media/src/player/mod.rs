@@ -309,7 +309,7 @@ pub use pump::{
 };
 pub use attempt_view::PlaybackState;
 pub use failure::{live_offers, observe_failure, FailureSettings, FailureTrigger, FrozenOffers, LiveOffers, PlaybackFailure};
-pub use failure::{Recovery, Refused, RetryOverrides};
+pub use failure::{version_repeat_refused, Recovery, Refused, RetryOverrides};
 pub(crate) use failure::recovery_offered;
 #[cfg(any(test, feature = "test-support"))]
 pub use failure::{error_for_test, failure_for_test, failure_under_for_test};
@@ -1099,6 +1099,11 @@ pub enum FailureAction {
     /// pick the pair Try again plays (`route::hold_pick_for_retry`). Offered where a retry can happen and
     /// the failed item has tracks to show ([`LiveOffers::tracks_available`]).
     ChangeTracks,
+    /// *Select Version*: the item's versions (its files), as the Detail hero's list shows them, over the failure
+    /// screen; a pick plays that version again ([`Recovery::PickVersion`]). Another file is another request, so it is
+    /// offered for a refusal and a stall alike, wherever a retry can happen and the item has more than one file
+    /// ([`LiveOffers::versions_available`]) and the row has a slot left for it ([`FAILURE_ROW_SLOTS`]).
+    SelectVersion,
     /// Review the sandbox repair (the confirmation `Player.repair` guards).
     Repair,
     /// Leave the player.
@@ -1141,10 +1146,14 @@ pub enum FailureAction {
 ///   ([`FailureKind::NoQualifiedBackend`]) gets *Back* alone, since nothing about the request changes that,
 ///   unless Force is on, where the Force arm's fix (switching to Auto, which lets a URI qualification in)
 ///   leads.
+/// * [`SelectVersion`](FailureAction::SelectVersion) is offered wherever a retry can happen and the failed item has more
+///   than one file ([`LiveOffers::versions_available`]), after the track picker and before *Back*, but only while the row
+///   has a slot left ([`FAILURE_ROW_SLOTS`]): a row already holding *Try again* (or *Play automatically*), a rung and the
+///   track picker goes without it, since a fifth pill is wider than the screen in some languages.
 /// * A file with no video track and an unrepairable sandbox get nothing but *Back*.
 ///
 /// It reads the captured [`PlaybackFailure`] (the cause, the settings in force and the offers its attempt made, all
-/// frozen at capture) and the two inputs that move while a failure stands ([`LiveOffers`]: the repair and the tracks).
+/// frozen at capture) and the three inputs that move while a failure stands ([`LiveOffers`]: the repair, the tracks and the versions).
 pub fn failure_actions(failure: &PlaybackFailure, live: LiveOffers) -> Vec<FailureAction> {
     use FailureAction as A;
     use FailureKind as K;
@@ -1173,6 +1182,10 @@ pub fn failure_actions(failure: &PlaybackFailure, live: LiveOffers) -> Vec<Failu
                 v.push(A::PlayAutomatically);
                 if transient {
                     v.push(A::TryAgain);
+                }
+                // Force asks for the original of whichever file plays: another file may be one this TV can play as it is.
+                if live.versions_available && kind != K::NoQualifiedBackend && room_for_version(&v) {
+                    v.push(A::SelectVersion);
                 }
             }
         }
@@ -1211,6 +1224,10 @@ pub fn failure_actions(failure: &PlaybackFailure, live: LiveOffers) -> Vec<Failu
                 if live.tracks_available {
                     v.push(A::ChangeTracks);
                 }
+                // Another file of the item is another request, which a refusal of this one does not repeat.
+                if live.versions_available && room_for_version(&v) {
+                    v.push(A::SelectVersion);
+                }
             }
         }
     }
@@ -1218,11 +1235,30 @@ pub fn failure_actions(failure: &PlaybackFailure, live: LiveOffers) -> Vec<Failu
     v
 }
 
+/// **The read-out's row has this many slots** (`plx_ui::widgets::STATUS_ROW_MAX`, the UI's to name; `screens::player`'s
+/// `the_failure_table_never_outgrows_the_read_outs_row` holds the two equal). The table may never offer more controls.
+pub const FAILURE_ROW_SLOTS: usize = 4;
+
+/// Is there a slot left for *Select Version* after the controls `row` already holds, with *Back* still to come? It is
+/// the last control offered before *Back*, so a row that is already full of the fixes the viewer has had longer (Try
+/// again, a rung, the track picker) keeps them and goes without it, rather than the read-out growing a fifth pill:
+/// five controls do not fit the screen's width in every language (Belarusian, German and Hungarian measured over).
+fn room_for_version(row: &[FailureAction]) -> bool {
+    row.len() + 2 <= FAILURE_ROW_SLOTS
+}
+
 /// **Does the failed item have tracks the picker can show?** The one question behind
 /// [`LiveOffers::tracks_available`]: not a channel, and the playing item's lists address the failed
 /// attempt's part (`MetadataView::failed_tracks`, which is also what the panel's rows read).
 pub fn failed_tracks_available(ps: &crate::route::PlaybackSession, meta: plx_data::metadata::MetadataView<'_>) -> bool {
     !crate::route::is_live(ps) && meta.has_failed_tracks(crate::route::cur_sid(ps), &crate::route::cur_rk(ps), crate::route::cur_part_id(ps))
+}
+
+/// **Does the failed item have more than one version (file) to pick from?** The one question behind
+/// [`LiveOffers::versions_available`]: not a channel, and the playing item lists several versions
+/// (`MetadataView::failed_versions`, which is also what the panel's rows read).
+pub fn failed_versions_available(ps: &crate::route::PlaybackSession, meta: plx_data::metadata::MetadataView<'_>) -> bool {
+    !crate::route::is_live(ps) && meta.failed_versions(crate::route::cur_sid(ps), &crate::route::cur_rk(ps)).is_some()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2980,10 +3016,12 @@ pub fn every_failure_row() -> Vec<(PlaybackFailure, LiveOffers, Vec<FailureActio
                 for quality_carriable in [false, true] {
                     for repair_idle in [false, true] {
                         for tracks_available in [false, true] {
-                            let failure = PlaybackFailure::for_test(kind, mode, FrozenOffers { can_retry, quality_carriable });
-                            let live = LiveOffers { repair_idle, tracks_available };
-                            let row = failure_actions(&failure, live);
-                            out.push((failure, live, row));
+                            for versions_available in [false, true] {
+                                let failure = PlaybackFailure::for_test(kind, mode, FrozenOffers { can_retry, quality_carriable });
+                                let live = LiveOffers { repair_idle, tracks_available, versions_available };
+                                let row = failure_actions(&failure, live);
+                                out.push((failure, live, row));
+                            }
                         }
                     }
                 }
@@ -3007,6 +3045,7 @@ mod tests {
         quality_carriable: bool,
         repair_idle: bool,
         tracks_available: bool,
+        versions_available: bool,
     }
 
     fn actions(kind: FailureKind, cx: Cx) -> Vec<FailureAction> {
@@ -3014,7 +3053,7 @@ mod tests {
         let mode = if cx.forced { Mode::Forced } else if cx.direct_play_disabled { Mode::Disabled } else { Mode::Auto };
         let failure = PlaybackFailure::for_test(kind, mode,
             FrozenOffers { can_retry: cx.can_retry, quality_carriable: cx.quality_carriable });
-        failure_actions(&failure, LiveOffers { repair_idle: cx.repair_idle, tracks_available: cx.tracks_available })
+        failure_actions(&failure, LiveOffers { repair_idle: cx.repair_idle, tracks_available: cx.tracks_available, versions_available: cx.versions_available })
     }
 
     /// [`every_failure_row`] with each failure's inputs flattened back into a [`Cx`], for the tests that grade the table.
@@ -3027,6 +3066,7 @@ mod tests {
                 quality_carriable: failure.quality_carriable(),
                 repair_idle: live.repair_idle,
                 tracks_available: live.tracks_available,
+                versions_available: live.versions_available,
             };
             (failure.kind(), cx, row)
         }).collect()
@@ -3042,6 +3082,7 @@ mod tests {
             quality_carriable: failure.quality_carriable(),
             repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle,
             tracks_available,
+            versions_available: false,
         }
     }
 
@@ -3421,7 +3462,7 @@ mod tests {
         assert_eq!(shape.kind, FailureKind::TunersBusy);
         assert_eq!(shape.readout, plx_os::i18n::msg::widgets_verdict_tuners_busy());
         for forced in [false, true] {
-            let cx = Cx { forced, direct_play_disabled: false, can_retry: true, repair_idle: false, quality_carriable: false, tracks_available: false };
+            let cx = Cx { forced, direct_play_disabled: false, can_retry: true, repair_idle: false, quality_carriable: false, tracks_available: false, versions_available: false };
             assert_eq!(actions(shape.kind, cx), vec![FailureAction::TryAgain, FailureAction::Back]);
             assert_eq!(actions(shape.kind, Cx { can_retry: false, ..cx }), vec![FailureAction::Back]);
         }
@@ -3529,7 +3570,7 @@ mod tests {
     #[test]
     fn no_qualified_backend_offers_only_back_unless_force_is_on() {
         use FailureAction as A;
-        let cx = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
+        let cx = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true, versions_available: false };
         assert_eq!(actions(FailureKind::NoQualifiedBackend, cx), [A::Back]);
         assert_eq!(actions(FailureKind::NoQualifiedBackend, Cx { direct_play_disabled: true, ..cx }), [A::Back]);
         assert_eq!(actions(FailureKind::NoQualifiedBackend, Cx { forced: true, ..cx }),
@@ -3600,7 +3641,7 @@ mod tests {
     /// every rung Force overrides. The fix is the one change that re-enables the fallback.
     #[test]
     fn forced_direct_play_offers_the_fix_and_never_the_quality_ladder() {
-        let cx = Cx { forced: true, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
+        let cx = Cx { forced: true, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true, versions_available: false };
         let row = actions(FailureKind::PlaybackPolicy, cx);
         assert_eq!(row.first(), Some(&FailureAction::PlayAutomatically));
         assert!(!row.contains(&FailureAction::ChangeQuality), "{row:?}");
@@ -3622,6 +3663,7 @@ mod tests {
         for (kind, cx, row) in rows() {
             let at = format!("{kind:?} {cx:?}: {row:?}");
             assert_eq!(row.last(), Some(&A::Back), "{at}");
+            assert!(row.len() <= FAILURE_ROW_SLOTS, "the row has {FAILURE_ROW_SLOTS} slots — {at}");
             assert_eq!(row.iter().filter(|a| **a == A::Back).count(), 1, "{at}");
             if row.contains(&A::PlayAutomatically) {
                 assert_eq!(row.first(), Some(&A::PlayAutomatically), "the fix leads, where focus seats — {at}");
@@ -3636,7 +3678,7 @@ mod tests {
                 assert!(!row.contains(&A::PlayAutomatically), "a stall must not offer the saved setting — {at}");
             }
             if !cx.can_retry {
-                for a in [A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::PlayAutomatically] {
+                for a in [A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::PlayAutomatically, A::SelectVersion] {
                     assert!(!row.contains(&a), "no request to resolve again — {at}");
                 }
             }
@@ -3646,7 +3688,12 @@ mod tests {
             if matches!(kind, K::PlaybackPolicy | K::NoQualifiedBackend) {
                 // The app's own refusals: no rung or pick changes the answer, only lifting the policy can.
                 assert!(!row.contains(&A::ChangeQuality) && !row.contains(&A::ChangeTracks), "{at}");
-                assert_eq!(row.len() - 1 == 1, row.contains(&A::PlayAutomatically), "{at}");
+                // (another FILE is the one thing besides the setting that can change a refusal, under Force only)
+                let fixes = row.iter().filter(|a| !matches!(a, A::Back | A::SelectVersion)).count();
+                assert_eq!(fixes == 1, row.contains(&A::PlayAutomatically), "{at}");
+            }
+            if matches!(kind, K::NoQualifiedBackend) {
+                assert!(!row.contains(&A::SelectVersion), "no backend plays any file of the item — {at}");
             }
             if matches!(kind, K::NoQualifiedBackend) && !cx.forced {
                 assert_eq!(row, [A::Back], "{at}");
@@ -3654,10 +3701,13 @@ mod tests {
             if matches!(kind, K::NoVideoTrack) {
                 assert_eq!(row, [A::Back], "{at}");
             }
+            if !cx.can_retry || !cx.versions_available {
+                assert!(!row.contains(&A::SelectVersion), "no request to resolve again, or no other file — {at}");
+            }
             assert_eq!(row.contains(&A::Repair), kind == K::JailMissingRtkmem && cx.repair_idle, "{at}");
         }
         // and a transient failure without Force keeps both of its recoveries
-        let cx = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: false };
+        let cx = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: false, versions_available: false };
         let row = actions(K::PlaybackInterrupted, cx);
         assert_eq!(&row[..2], &[A::TryAgain, A::ChangeQuality]);
     }
@@ -3676,7 +3726,7 @@ mod tests {
                 assert!(!row.contains(&A::ChangeQuality), "{kind:?} {cx:?}: the ladder leads nowhere — {row:?}");
             }
         }
-        let uri_only = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: false, repair_idle: true, tracks_available: false };
+        let uri_only = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: false, repair_idle: true, tracks_available: false, versions_available: false };
         assert_eq!(actions(K::PlaybackInterrupted, uri_only), [A::TryAgain, A::Back]);
         let feed = Cx { quality_carriable: true, ..uri_only };
         assert_eq!(actions(K::PlaybackInterrupted, feed), [A::TryAgain, A::ChangeQuality, A::Back]);
@@ -3744,12 +3794,46 @@ mod tests {
                 }
             }
         }
-        let cx = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
+        let cx = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true, versions_available: false };
         assert_eq!(actions(K::PlaybackInterrupted, cx), [A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::Back]);
         let no_rung = Cx { quality_carriable: false, ..cx };
         assert_eq!(actions(K::PlaybackInterrupted, no_rung), [A::TryAgain, A::ChangeTracks, A::Back]);
         let refused = actions(K::DecisionRefused, cx);
         assert_eq!(refused, [A::ChangeQuality, A::ChangeTracks, A::Back], "a refusal repeats, a different pair may not");
+    }
+
+    /// **A failed item with more than one version offers *Select Version*** (discussion #905: a failure whose
+    /// other file would play was a dead end). Another file is another request, so it is offered for a refusal and a
+    /// stall alike, and under Force (which asks for the original of whichever file plays); not where a retry cannot
+    /// happen, where the file has no picture or the TV's sandbox is the cause, where a server's stop ended the
+    /// playback, where no backend plays anything, for a single-version item, or where the row is already full
+    /// ([`FAILURE_ROW_SLOTS`]). It comes after *Audio & Subtitles* and before *Back*.
+    #[test]
+    fn a_failed_item_with_two_versions_offers_select_version() {
+        use FailureAction as A;
+        use FailureKind as K;
+        let cx = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true, versions_available: true };
+        assert_eq!(actions(K::DecisionRefused, cx), [A::ChangeQuality, A::ChangeTracks, A::SelectVersion, A::Back],
+            "a refusal repeats for the same file, not for another");
+        assert_eq!(actions(K::DecisionRefused, Cx { quality_carriable: false, tracks_available: false, ..cx }), [A::SelectVersion, A::Back]);
+        assert_eq!(actions(K::PlaybackInterrupted, Cx { tracks_available: false, ..cx }), [A::TryAgain, A::ChangeQuality, A::SelectVersion, A::Back]);
+        assert_eq!(actions(K::PlaybackInterrupted, Cx { quality_carriable: false, ..cx }), [A::TryAgain, A::ChangeTracks, A::SelectVersion, A::Back]);
+        // The row is full (the read-out has four slots, and five pills do not fit the screen in every language): the
+        // controls the viewer has always had keep their places and Select Version is the one that is not offered.
+        assert_eq!(actions(K::PlaybackInterrupted, cx), [A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::Back],
+            "a stall's full row has no slot for it");
+        assert_eq!(actions(K::DecisionRefused, Cx { direct_play_disabled: true, ..cx }),
+            [A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks, A::Back], "nor does the Disabled refusal's");
+        assert_eq!(actions(K::MediaSource, Cx { direct_play_disabled: true, ..cx }), [A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::Back]);
+        assert_eq!(actions(K::PlaybackPolicy, Cx { forced: true, ..cx }), [A::PlayAutomatically, A::SelectVersion, A::Back]);
+        assert_eq!(actions(K::MediaSource, Cx { forced: true, ..cx }), [A::PlayAutomatically, A::TryAgain, A::SelectVersion, A::Back]);
+        // where it does not apply
+        for kind in [K::NoVideoTrack, K::ServerStopped, K::JailMissingRtkmem, K::TunersBusy, K::PreviewNotDirect, K::NoQualifiedBackend] {
+            assert!(!actions(kind, cx).contains(&A::SelectVersion), "{kind:?}");
+            assert!(!actions(kind, Cx { forced: true, ..cx }).contains(&A::SelectVersion), "{kind:?} under Force");
+        }
+        assert!(!actions(K::PlaybackInterrupted, Cx { versions_available: false, ..cx }).contains(&A::SelectVersion), "one file: nothing to pick");
+        assert!(!actions(K::PlaybackInterrupted, Cx { can_retry: false, ..cx }).contains(&A::SelectVersion), "no request to play again");
     }
 
     #[test]
@@ -4512,7 +4596,7 @@ mod tests {
         assert_eq!(e.kind.code(), "preview_not_direct", "{:?}", e.kind);
         assert_ne!(e.kind, FailureKind::Unspecified);
         assert!(e.detail.is_empty(), "no server sentence rides a refusal that is ours");
-        let cx = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: false, tracks_available: false };
+        let cx = Cx { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: false, tracks_available: false, versions_available: false };
         assert_eq!(actions(e.kind, cx), vec![FailureAction::Back], "same item, same refusal: no Try Again");
     }
 

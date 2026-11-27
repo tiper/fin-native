@@ -135,6 +135,75 @@ Unspecified disabled: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
 Unspecified disabled: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
 Unspecified disabled: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
 
+# the same with the failed item's versions listed: only the rows that gain select_version (the row has four slots)
+DecisionRefused auto: [select_version,back] <- r1q0t0i0 r1q0t0i1
+DecisionRefused auto: [change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+DecisionRefused auto: [change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+DecisionRefused auto: [change_quality,change_tracks,select_version,back] <- r1q1t1i0 r1q1t1i1
+DecisionRefused forced: [play_automatically,select_version,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+DecisionRefused disabled: [play_automatically,select_version,back] <- r1q0t0i0 r1q0t0i1
+DecisionRefused disabled: [play_automatically,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+DecisionRefused disabled: [play_automatically,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+PlaybackPolicy forced: [play_automatically,select_version,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+NoVideoTranscodeTarget auto: [select_version,back] <- r1q0t0i0 r1q0t0i1
+NoVideoTranscodeTarget auto: [change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+NoVideoTranscodeTarget auto: [change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+NoVideoTranscodeTarget auto: [change_quality,change_tracks,select_version,back] <- r1q1t1i0 r1q1t1i1
+NoVideoTranscodeTarget forced: [play_automatically,select_version,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+NoVideoTranscodeTarget disabled: [play_automatically,select_version,back] <- r1q0t0i0 r1q0t0i1
+NoVideoTranscodeTarget disabled: [play_automatically,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+NoVideoTranscodeTarget disabled: [play_automatically,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+MediaSource auto: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+MediaSource auto: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+MediaSource auto: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+MediaSource forced: [play_automatically,try_again,select_version,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+MediaSource disabled: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+MediaSource disabled: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+MediaSource disabled: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+PlaybackInterrupted auto: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+PlaybackInterrupted auto: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+PlaybackInterrupted auto: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+PlaybackInterrupted forced: [play_automatically,try_again,select_version,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+PlaybackInterrupted disabled: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+PlaybackInterrupted disabled: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+PlaybackInterrupted disabled: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+TvPipeline auto: [select_version,back] <- r1q0t0i0 r1q0t0i1
+TvPipeline auto: [change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+TvPipeline auto: [change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+TvPipeline auto: [change_quality,change_tracks,select_version,back] <- r1q1t1i0 r1q1t1i1
+TvPipeline forced: [play_automatically,select_version,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+TvPipeline disabled: [play_automatically,select_version,back] <- r1q0t0i0 r1q0t0i1
+TvPipeline disabled: [play_automatically,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+TvPipeline disabled: [play_automatically,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+LoadTimeout auto: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+LoadTimeout auto: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+LoadTimeout auto: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+LoadTimeout forced: [play_automatically,try_again,select_version,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+LoadTimeout disabled: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+LoadTimeout disabled: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+LoadTimeout disabled: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+ReleaseTimeout auto: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+ReleaseTimeout auto: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+ReleaseTimeout auto: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+ReleaseTimeout forced: [play_automatically,try_again,select_version,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+ReleaseTimeout disabled: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+ReleaseTimeout disabled: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+ReleaseTimeout disabled: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+ResolveFailed auto: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+ResolveFailed auto: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+ResolveFailed auto: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+ResolveFailed forced: [play_automatically,try_again,select_version,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+ResolveFailed disabled: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+ResolveFailed disabled: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+ResolveFailed disabled: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+Unspecified auto: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+Unspecified auto: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+Unspecified auto: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+Unspecified forced: [play_automatically,try_again,select_version,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+Unspecified disabled: [try_again,select_version,back] <- r1q0t0i0 r1q0t0i1
+Unspecified disabled: [try_again,change_tracks,select_version,back] <- r1q0t1i0 r1q0t1i1
+Unspecified disabled: [try_again,change_quality,select_version,back] <- r1q1t0i0 r1q1t0i1
+
 # the sessions (cause, setting)
 
 ## arm:verdict / auto

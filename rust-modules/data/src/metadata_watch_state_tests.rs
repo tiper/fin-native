@@ -403,6 +403,30 @@ fn versions_are_listed_only_when_there_is_a_choice() {
     assert!(crate::pms::versions_of(&one).is_empty());
 }
 
+/// **The playing item carries the item's versions**, whichever one was fetched to play, so the failure screen's Select
+/// Version has its list for a play started with no Detail loaded; a single-file item carries none, and the view offers
+/// the list only for the item that failed.
+#[test]
+fn the_playing_item_carries_every_version_and_the_failure_view_lists_them() {
+    let it = two_versions();
+    for want in [None, Some(plx_plex::plex::MediaId(3082))] {
+        let (item, _) = playing_version_from(SRV_A, "42", Some(&it), want);
+        assert_eq!(item.versions.iter().map(|v| v.id.0).collect::<Vec<_>>(), [3086, 3082], "{want:?}");
+    }
+    let one: plx_plex::plex::Metadata = serde_json::from_value(serde_json::json!({ "type": "movie",
+        "Media": [{ "id": 1, "Part": [{ "key": "/p/1" }] }] })).unwrap();
+    assert!(playing_item_from(SRV_A, "42", Some(&one)).versions.is_empty());
+
+    let adapter = MetadataAdapter::default();
+    let mut state = MetadataState::default();
+    state.playing = Some(playing_item_from(SRV_A, "42", Some(&it)));
+    let v = MetadataView { state: &state, adapter: &adapter };
+    assert_eq!(v.failed_versions(SRV_A, "42").map(<[_]>::len), Some(2));
+    assert!(v.failed_versions(SRV_A, "43").is_none(), "another item's failure");
+    state.playing = Some(playing_item_from(SRV_A, "42", Some(&one)));
+    assert!(MetadataView { state: &state, adapter: &adapter }.failed_versions(SRV_A, "42").is_none(), "one file: nothing to pick");
+}
+
 #[test]
 fn each_version_carries_the_dolby_vision_of_its_own_video_stream() {
     let it: plx_plex::plex::Metadata = serde_json::from_value(serde_json::json!({ "Media": [

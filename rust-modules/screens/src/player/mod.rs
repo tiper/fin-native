@@ -1320,6 +1320,12 @@ impl PlayerScreen {
                 let anchor = [rect.x, rect.y, rect.w, rect.h].map(f32::to_bits);
                 Self::ask(fx, PlayerReq::OpenFailedTracks { anchor })
             }
+            // The same: the item's versions hang off the control that opened them.
+            A::SelectVersion => {
+                let Some(rect) = readout.frames(measure).get(idx).copied().flatten() else { return };
+                let anchor = [rect.x, rect.y, rect.w, rect.h].map(f32::to_bits);
+                Self::ask(fx, PlayerReq::OpenFailedVersions { anchor })
+            }
             A::Repair => {
                 if ps.repair_status == plx_os::tv::native_video::State::Idle && !self.repair_alert.visible() {
                     self.repair_scroll = 0;
@@ -2953,7 +2959,7 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Focusable<H> for PlayerScree
                     Some(rk) => item.with_subject(rk),
                     None => item,
                 },
-                Fail::ChangeQuality | Fail::ChangeTracks | Fail::Repair | Fail::Back => item,
+                Fail::ChangeQuality | Fail::ChangeTracks | Fail::SelectVersion | Fail::Repair | Fail::Back => item,
             });
         }
         if (ELEM_SECTION_BASE..ELEM_SECTION_END).contains(&key) {
@@ -4954,6 +4960,9 @@ pub(crate) mod step_ladder_tests {
         assert_eq!(asked(&mut page, 2), [PlayerReq::OpenOverlay(overlay::OverlayKind::More {
             page: Some(plx_appkit::more_menu::MorePage::Quality) })]);
         assert!(matches!(asked(&mut page, 3).as_slice(), [PlayerReq::OpenFailedTracks { .. }]));
+        show(&mut page, vec![Fail::TryAgain, Fail::ChangeTracks, Fail::SelectVersion, Fail::Back]);
+        assert!(matches!(asked(&mut page, 2).as_slice(), [PlayerReq::OpenFailedVersions { anchor }] if *anchor != [0; 4]),
+            "Select Version opens the item's versions, anchored on its own drawn rect");
         show(&mut page, vec![Fail::TryAgain, Fail::Back]);
         assert_eq!(asked(&mut page, 1), [PlayerReq::Exit]);
     }
@@ -5554,6 +5563,7 @@ mod scrub_ownership_tests {
     /// table's own property test.
     #[test]
     fn the_failure_table_never_outgrows_the_read_outs_row() {
+        assert_eq!(plx_media::player::FAILURE_ROW_SLOTS, plx_ui::widgets::STATUS_ROW_MAX, "the table's cap is the row's slots");
         for (kind, cx, row) in plx_media::player::every_failure_row() {
             assert!(
                 row.len() <= plx_ui::widgets::STATUS_ROW_MAX,

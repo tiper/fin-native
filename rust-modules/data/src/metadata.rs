@@ -138,6 +138,16 @@ impl<'a> MetadataView<'a> {
             pick,
         })
     }
+    /// **The playing item's versions for the failure screen's Select Version**: the item that was playing when
+    /// `(sid, rk)` failed, when it has more than one version. `None` for another playing item or a single file. The ONE
+    /// rule behind both the read-out's *Select Version* entry and the panel's rows, so the entry is offered exactly when
+    /// the panel has something to choose from.
+    pub fn failed_versions(&self, sid: plx_plex::plex::ServerId, rk: &str) -> Option<&'a [crate::pms::MediaVersion]> {
+        self.playing()
+            .filter(|p| plx_plex::plex::same_item((p.sid, p.rk.as_str()), (sid, rk)))
+            .map(|p| p.versions.as_slice())
+            .filter(|versions| versions.len() > 1)
+    }
     /// [`Self::failed_tracks`] is `Some`, asked once per presentation capture.
     pub fn has_failed_tracks(&self, sid: plx_plex::plex::ServerId, rk: &str, part_id: i64) -> bool {
         self.failed_tracks(sid, rk, part_id, None).is_some()
@@ -3035,6 +3045,11 @@ pub struct PlayingItem {
     /// The subtitle half of the pre-play pick this item was planned under ([`PreplayPick::apply`],
     /// the one writer); `Server` when none applies.
     pub sub_choice: SubPick,
+    /// Every version (file) of a movie or episode that has more than one (`pms::versions_of`, empty otherwise): what the
+    /// failure screen's Select Version lists, so a play started from anywhere (Home, Continue Watching, Up Next), with no
+    /// Detail of the item loaded, still has the list the viewer cannot otherwise see. Taken from the metadata the plan
+    /// fetched or the loaded page already held, so it costs no request.
+    pub versions: Vec<crate::pms::MediaVersion>,
 }
 
 impl PlayingItem {
@@ -3070,6 +3085,7 @@ impl PlayingItem {
             chapters: Vec::new(),
             hdr: false,
             sub_choice: SubPick::Server,
+            versions: Vec::new(),
         }
     }
 }
@@ -3121,6 +3137,7 @@ fn cached_playing(state: &MetadataState, sid: plx_plex::plex::ServerId, rk: &str
             chapters: d.chapters.clone(),
             hdr: d.hdr,
             sub_choice: SubPick::Server,
+            versions: d.versions.clone(),
         })
 }
 
@@ -3400,6 +3417,10 @@ fn playing_item_of(
         chapters,
         hdr,
         sub_choice: SubPick::Server,
+        versions: it
+            .filter(|it| it.kind == "movie" || it.kind == "episode")
+            .map(crate::pms::versions_of)
+            .unwrap_or_default(),
     }
 }
 

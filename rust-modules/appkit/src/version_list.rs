@@ -23,6 +23,10 @@ pub fn title() -> &'static str {
 /// line for a reason that belongs to the rows above it: it wraps, where a per-row value would not
 /// fit beside a version's label and detail).
 ///
+/// `refused` is a version whose row is disabled with the others enabled: the failure screen's list on a refusal, where
+/// choosing the file that just failed would repeat the request the row withholds (`player::version_repeat_refused`). It
+/// is the same disabled row (it answers no press), with no reason of its own.
+///
 /// `header` is the section heading: [`title()`] for a list that stands alone, `""` under a page header that
 /// already names it (the menu's pushed page: the back-mark header says "Select Version" once).
 pub fn section<Id: FormId, A, D>(
@@ -31,6 +35,7 @@ pub fn section<Id: FormId, A, D>(
     id: impl Fn(u16) -> Id,
     act: impl Fn(&MediaVersion) -> A,
     checked: Option<plx_plex::plex::MediaId>,
+    refused: Option<plx_plex::plex::MediaId>,
     unavailable: Option<&str>,
 ) -> FormSection<Id, A, D> {
     let mut sec = FormSection::new(header);
@@ -39,7 +44,7 @@ pub fn section<Id: FormId, A, D>(
         if !detail.is_empty() {
             row = row.detail(detail);
         }
-        sec = sec.item(id(n as u16), RowKind::Button, act(v), row).disabled(unavailable.is_some());
+        sec = sec.item(id(n as u16), RowKind::Button, act(v), row).disabled(unavailable.is_some() || refused == Some(v.id));
     }
     match unavailable {
         Some(why) => sec.note(why),
@@ -153,7 +158,7 @@ mod tests {
             for unavailable in [None, Some(plx_os::i18n::msg::browse_detail_no_playback())] {
                 let mut form: FormTable<Pos, plx_plex::plex::MediaId, Infallible> = FormTable::new(plx_ui::table_screen::BAND_BASE);
                 // The check mark takes the leading column, so the list is fitted with one shown.
-                form.set(Form::new().section(section(title(), &sample(), Pos, |v| v.id, Some(sample()[1].id), unavailable)), None);
+                form.set(Form::new().section(section(title(), &sample(), Pos, |v| v.id, Some(sample()[1].id), None, unavailable)), None);
                 let tag = format!("{} versions{}", language.tag(), if unavailable.is_some() { " (no playback)" } else { "" });
                 out.extend(form.table.menu_cap_failure(&measure, &tag));
                 out.extend(form.table.app_fit_failures(plx_ui::table::MENU_MAX_W, &tag));
@@ -161,6 +166,17 @@ mod tests {
             }
         }
         plx_ui::table::assert_no_fit_failures(&out);
+    }
+
+    /// A refused version's row alone is disabled and presses nothing; the others press as before.
+    #[test]
+    fn a_refused_version_is_one_disabled_row() {
+        let mut form: FormTable<Pos, plx_plex::plex::MediaId, Infallible> = FormTable::new(plx_ui::table_screen::BAND_BASE);
+        form.set(Form::new().section(section(title(), &sample(), Pos, |v| v.id, Some(sample()[1].id), Some(sample()[1].id), None)), None);
+        let rows: Vec<_> = form.table.sections.iter().flat_map(|s| s.rows.iter()).filter(|row| !row.is_note()).collect();
+        assert_eq!((rows[0].disabled, rows[1].disabled), (false, true));
+        assert!(form.activate(0).is_some(), "the other file still presses");
+        assert!(form.activate(1).is_none(), "the refused one answers no press");
     }
 
     /// With a reason every row is disabled and answers no press, and the reason is said once, as the
@@ -171,7 +187,7 @@ mod tests {
         let why = plx_os::i18n::msg::browse_detail_no_playback();
         for (unavailable, disabled) in [(None, false), (Some(why), true)] {
             let mut form: FormTable<Pos, plx_plex::plex::MediaId, Infallible> = FormTable::new(plx_ui::table_screen::BAND_BASE);
-            form.set(Form::new().section(section(title(), &sample(), Pos, |v| v.id, None, unavailable)), None);
+            form.set(Form::new().section(section(title(), &sample(), Pos, |v| v.id, None, None, unavailable)), None);
             let rows: Vec<_> = form.table.sections.iter().flat_map(|s| s.rows.iter()).collect();
             let versions: Vec<_> = rows.iter().filter(|row| !row.is_note()).collect();
             let notes: Vec<_> = rows.iter().filter(|row| row.is_note()).collect();

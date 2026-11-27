@@ -177,7 +177,7 @@
   },
   "browse.detail.select_version": {
     "value": "Select Version",
-    "description": "The detail page's Select Version button, shown on a movie or episode that has more than one file (version). It is a round icon button whose name slides out beside it when focused, so keep it short. Pressing it opens the list of versions to choose which one Play and Resume start; choosing one does not start playback."
+    "description": "A button that opens the list of a movie's or episode's versions (files), shown only when the item has more than one. It is the Select Version button on the detail page, a round icon button whose name slides out beside it when focused, and a capsule button in the playback failure screen's row of buttons, so keep it short. On the detail page choosing a version only selects the one Play and Resume start; on the failure screen choosing one plays the item again on that version."
   },
   "browse.detail.resume": {
     "value": "Resume",

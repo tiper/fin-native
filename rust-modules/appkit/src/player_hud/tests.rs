@@ -920,7 +920,7 @@ fn a_dead_producer_reads_out_whether_or_not_a_picture_was_up() {
 fn readout_of(e: &plx_media::player::ErrorShape) -> FailureReadout {
     let failure = plx_media::player::PlaybackFailure::for_test(e.kind, plx_plex::plex::session::DirectPlayMode::Forced,
         plx_media::player::FrozenOffers { can_retry: true, quality_carriable: true });
-    let live = plx_media::player::LiveOffers { repair_idle: true, tracks_available: true };
+    let live = plx_media::player::LiveOffers { repair_idle: true, tracks_available: true, versions_available: false };
     FailureReadout::of(e, plx_media::player::failure_actions(&failure, live), "0.7.0 · webOS 4.5 · code".into())
 }
 
@@ -981,6 +981,8 @@ fn every_failure_row_fits_the_screen_in_every_language() {
         }
     }
     assert!(rows.contains(&vec![A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks, A::Back]), "the widest Disabled row is enumerated");
+    assert!(rows.contains(&vec![A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::Back]), "the widest stall row is enumerated");
+    assert!(rows.iter().any(|r| r.contains(&A::SelectVersion)), "Select Version's rows are width-checked");
     let mut out = Vec::new();
     for language in plx_os::i18n::SHIPPED {
         let _guard = language_on_this_thread_for_test(language);
@@ -1075,7 +1077,7 @@ fn every_app_refusal_reason_fits_the_reason_slot_in_every_language() {
 fn the_app_refusal_readouts_name_the_policy_and_the_build_not_the_server() {
     use plx_media::player::FailureAction as A;
     let ps = plx_media::route::PlaybackSession::IDLE;
-    let live = plx_media::player::LiveOffers { repair_idle: true, tracks_available: true };
+    let live = plx_media::player::LiveOffers { repair_idle: true, tracks_available: true, versions_available: false };
     // the words come from the arm's derivation; the offers are the ones a retryable Plex play makes, under Disabled
     let readout = |arm: &str| {
         let shape = plx_media::player::failure_under_for_test(&ps, Some(arm)).shape().clone();

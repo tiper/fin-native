@@ -515,6 +515,7 @@ class SubjectBearing(unittest.TestCase):
         "screens/src/player/overlay.rs": ("more.fold.previous", "more.fold.next", "more.fold.from_beginning",
                                           "more.rung.*", "menu.audio.*", "menu.sub.*", "menu.off", "menu.forced",
                                           "menu.hit.*"),
+        "screens/src/versions_panel.rs": ("versions.row.*",),   # on the failure screen a row asks the recovery door
         "appkit/src/track_menu.rs": ("menu.hit.*",),   # a search result's OK asks the download; the overlay names the title
     }
 

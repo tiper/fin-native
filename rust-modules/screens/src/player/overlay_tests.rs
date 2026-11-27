@@ -134,7 +134,7 @@ pub(super) fn derive_state(ps: &mut plx_media::route::PlaybackSession, state: pl
 pub(super) fn failure_fixture(ps: &plx_media::route::PlaybackSession) -> plx_appkit::player_hud::FailureReadout {
     use plx_media::player;
     let failure = player::failure_for_test(ps);
-    let actions = player::failure_actions(&failure, player::LiveOffers { repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle, tracks_available: false });
+    let actions = player::failure_actions(&failure, player::LiveOffers { repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle, tracks_available: false, versions_available: false });
     let support = player::support_line(failure.kind());
     plx_appkit::player_hud::FailureReadout::captured(failure.attempt(), failure.shape().clone(), actions, support, ps.repair_status)
 }
@@ -1332,7 +1332,7 @@ fn the_player_panels_dim_through_the_container_in_the_neutral_dim_whatever_the_i
     assert!(store.run(plx_data::stores::metadata::MetadataCmd::InstallPlaying(Some(plx_data::metadata::PlayingItem {
         sid: plx_plex::plex::ServerId::from_raw(0), rk: "rk".into(), show_rk: String::new(), kind: String::new(), duration_ms: None, audio: Vec::new(), subs: Vec::new(),
         video_fps: 0.0, width: 0, height: 0, bitrate: 0, video_kbps: 0, dovi: Default::default(),
-        markers: Vec::new(), chapters: Vec::new(), hdr: false, sub_choice: Default::default(),
+        markers: Vec::new(), chapters: Vec::new(), hdr: false, sub_choice: Default::default(), versions: Vec::new(),
     }))));
     for (kind, alpha) in [
         (OverlayKind::Tracks { tab: 0 }, DIM_PLAYER),

@@ -219,7 +219,10 @@ pub(crate) fn perform_recovery_with(
         return Recovered::Refused;
     }
     let live = plx_media::player::live_offers(ps, meta.view());
-    let Ok(overrides) = plx_media::route::begin_recovery(ps, live, &recovery) else {
+    // The file the failed attempt landed on, from the versions the panel listed: a pick of it repeats a refusal.
+    let failed_media = plx_media::route::attempt_media(
+        ps, meta.view().failed_versions(plx_media::route::cur_sid(ps), &plx_media::route::cur_rk(ps)).unwrap_or(&[]));
+    let Ok(overrides) = plx_media::route::begin_recovery(ps, live, failed_media, &recovery) else {
         return Recovered::Refused;
     };
     if let Some(mode) = overrides.direct_play {
@@ -967,6 +970,7 @@ pub(crate) fn player_requests(
             // present a panel immediately rather than through the row's deferred press. The
             // tabs row is not an asker: it asks `ToggleSection` (Info and Chapters are sections).
             PlayerReq::OpenFailedTracks { anchor } => super::bridge::open_failed_tracks(&player.session, anchor, pages),
+            PlayerReq::OpenFailedVersions { anchor } => super::bridge::open_failed_versions(&player.session, bridge.metadata_view(), anchor, pages),
             // A digit over a live channel (Live TV PR5): number entry, a player panel that leaves the video live.
             PlayerReq::OpenChannelEntry { first, playing } => super::bridge::open_channel_entry(first, playing, pages),
             PlayerReq::OpenOverlay(kind) => {
