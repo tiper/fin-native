@@ -1706,6 +1706,20 @@ fn pump_frame(ps: &mut crate::route::PlaybackSession, pa: &mut super::adapter::P
             }
         }
     }
+    // ---------- a conversion's picture started before its audio: restart it on the picture ----------
+    // The restart is a seek like the viewer's own, taken by the branch below. A seek already
+    // waiting is newer than the Load this one measured, and wins.
+    if let Some(target_ns) = ps.readout().realign_seek() {
+        ps.step_readout(super::readout::ReadoutEvent::RealignTaken);
+        if ps.readout().pending_seek().is_none() && crate::route::is_transcoding(ps) {
+            super::log(&format!(
+                "seek(transcode): the picture starts before the audio asked at {} ms; restart at {} ms",
+                ps.readout().open_disp_base_ns() / 1_000_000,
+                target_ns / 1_000_000,
+            ));
+            super::request_seek(ps, pa, target_ns);
+        }
+    }
     // ---------- pending seek: flush, drop queued AUs, re-point the demux ----------
     let t = ps.readout().pending_seek().unwrap_or(-1);
     // A live transcode has NO Content-Length (file_size stays -1), so gate it on duration

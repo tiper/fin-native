@@ -321,6 +321,9 @@ pub struct Shared {
     // main (M) -> the next Engine's first keyframe: anchor `disp_base` on it
     // (`native_executor::anchored_disp_base`). Taken once, at that keyframe.
     pub anchor_rebase: AtomicBool,
+    // feed -> main: the film time of the conversion keyframe that anchor landed on
+    // (`FeedRaw::conversion_keyframe_ns`). -1 = none this session.
+    pub conversion_keyframe_ns: AtomicI64,
     // UI loading state: true from a seek request until playback resumes at the new position (prime→
     // Play). The HUD shows a spinner + freezes the playhead at `seek_display_ns` so it doesn't
     // wobble through the seek/rebase. -1 display = not loading.
@@ -772,6 +775,7 @@ impl Shared {
             disp_base: AtomicI64::new(0),
             seek_to_ns: AtomicI64::new(-1),
             anchor_rebase: AtomicBool::new(false),
+            conversion_keyframe_ns: AtomicI64::new(-1),
             seek_target_ns: AtomicI64::new(-1),
             seeking: AtomicBool::new(false),
             seek_display_ns: AtomicI64::new(-1),
@@ -1160,6 +1164,7 @@ impl Shared {
         self.seek_to_ns.store(-1, Ordering::Relaxed);
         self.seek_target_ns.store(-1, Ordering::Relaxed);
         self.anchor_rebase.store(false, Ordering::Relaxed);
+        self.conversion_keyframe_ns.store(-1, Ordering::Relaxed);
         self.seeking.store(false, Ordering::Relaxed);
         self.seek_display_ns.store(-1, Ordering::Relaxed);
         self.seek_epoch.store(0, Ordering::Relaxed);
