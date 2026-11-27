@@ -87,6 +87,7 @@ tizen/host/PlxHost/obj/
 tizen/host/PlxHost/lib/
 tizen/host/PlxHost/res/appfont*.ttf
 tizen/host/PlxHost/res/fonts/
+tizen/host/PlxHost/res/esprobe/
 tizen/host/PlxHost/res/libass-plx*.so.0
 tizen/host/PlxHost/res/OFL.txt
 tizen/host/PlxHost/res/THIRD-PARTY-NOTICES.md

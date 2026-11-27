@@ -36,6 +36,7 @@ static SERVICES: plx_os::tv::Services = plx_os::tv::Services {
         probe_device: crate::webos::probe,
         start_capability_probe: crate::webos::caps::start_probe,
         repair_native_video: Some(crate::webos::jail_repair::execute),
+        packet_probe: None,
         device_files: crate::webos::DEVICE_FILES,
         system_locale: crate::webos::system_locale,
         sound_output: crate::webos::sound_output,

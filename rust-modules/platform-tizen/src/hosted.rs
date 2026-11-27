@@ -273,6 +273,13 @@ impl Hosted {
         self.player.drain_cues(out)
     }
 
+    /// Whether a host player is open: an epoch was opened and its `PLAYER_CLOSED` has not been accepted. The
+    /// packet-player probe refuses to START while one is; nothing stops a viewer opening a title during a run, when the
+    /// two contend for the decoder (the probe then logs the refusal it meets, and the viewer's start may fail).
+    pub fn player_live(&self) -> bool {
+        self.player.any_live()
+    }
+
     /// The host's media player, or why there is none. A table that does not offer one is not an error.
     pub fn player_support(&self) -> Result<(), NoPlayer> {
         match self.callbacks.get() {
@@ -371,6 +378,12 @@ impl Hosted {
     /// A stop was requested (`plx_host_stop` closed the gate).
     pub(crate) fn stopping(&self) -> bool {
         self.gate.stopping()
+    }
+
+    /// The app is in the background (a pause the loop delivered and no resume since) or stopping: the packet-player
+    /// probe's worker reads it between calls and tears its player down (`esprobe::run`).
+    pub(crate) fn backgrounded(&self) -> bool {
+        self.paused.load(Ordering::SeqCst) || self.gate.stopping()
     }
 
     /// Ask the host to run `job` on its main thread, through `run_on_host`, without waiting for it. `false`
@@ -978,13 +991,16 @@ mod tests {
             w.start(|_| Ok(()), move |_, ()| {
                 let mut rec = Rec::default();
                 let mut states = Vec::new();
+                let mut background = Vec::new();
                 // pause, then resume, then pause again: armed state after each is what is asserted.
                 for (phase, expected_len) in [(Input::Pause, 1usize), (Input::Resume, 2), (Input::Pause, 3)] {
                     hosted.push(phase).unwrap();
                     hosted.deliver(&mut rec);
                     assert_eq!(rec.seen.len(), expected_len, "{:?}", rec.seen);
                     states.push(plx_base::task::watchdog::is_armed());
+                    background.push(hosted.backgrounded());
                 }
+                assert_eq!(background, [true, false, true], "the probe's cancel flag follows the pause and the resume");
                 tx.send((states, rec.seen.clone())).unwrap();
                 while !rec.seen.iter().any(|e| e == "quit") {
                     hosted.deliver(&mut rec);
@@ -1001,6 +1017,7 @@ mod tests {
             ["lifecycle DidBackground", "lifecycle DidForeground", "lifecycle DidBackground"]
         );
         hosted.stop(Duration::from_secs(30));
+        assert!(hosted.backgrounded(), "a stop cancels the probe too");
         w.wait_stopped(1);
         let armed_at_report = seen(|s| s.stopped[0].2);
         assert!(!armed_at_report, "the watchdog was disarmed when on_stopped ran");

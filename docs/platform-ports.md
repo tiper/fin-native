@@ -860,9 +860,12 @@ split by who reads it (critic M4):
 1. `tv::Services` (`plx_os::tv`, installed once by `run_application`) holds what LOWER layers read through the
    private `tv::port()` (F5):
    - `identity { probe_device, start_capability_probe, repair_native_video: Option<fn() -> Result<(), Failure>>,
-     device_files: Files, system_locale, sound_output }` (`repair_native_video` is optional: `None` is a platform
-     with nothing to repair, and the repair then answers `Failure::Unsupported`; `device_files` is the reader
-     `devcaps` parses through, `Files::NONE` for a platform with none);
+     packet_probe: Option<fn(Command) -> Status>, device_files: Files, system_locale, sound_output }`
+     (`repair_native_video` is optional: `None` is a platform with nothing to repair, and the repair then answers
+     `Failure::Unsupported`; `packet_probe` (`plx_os::tv::packet_probe`) is too: `None` is a platform without the
+     packet-player probe, which answers `Unavailable`, and Settings > Diagnostics then shows no row for it; Tizen
+     states `esprobe::command`; `device_files` is the reader `devcaps` parses through, `Files::NONE` for a platform
+     with none);
    - `secure { seal, open, remove, mode }` (Target shape 4; until W2 `mode` is W3a's own once-set value);
    - `system { go_home, poll_home, deliver_toast }`;
    - `storage { authority }` (W8a): `Authority::Helper` (webOS: the LS2/DB8 storage helper is the canonical store of

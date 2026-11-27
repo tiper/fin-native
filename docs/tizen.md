@@ -30,10 +30,11 @@
 | `tizen/package.py` | stages the package's `lib/` and `res/`, refuses without signing material, packs and checks the `.tpk` |
 | `ci/check-tizen-so.py` | the contract check: header against C# as text (`abi`), the linker's version script (`map`), the linked library (`verify`) |
 | `tools/tizen-log-receiver.py` | the UDP log receiver, with a lost-datagram report |
+| `tizen/esprobe/`, `tools/make-esprobe-clips.py` | the packet-player probe's clips and the script that makes them ("The packet player", below) |
 
 Generated and never committed (`.gitignore`): `rust-modules/target-tizen/`, `tizen/out/`, `tizen/sdl-build/`, and under
 `tizen/host/PlxHost/` the staged `lib/`, `bin/`, `obj/`, `res/appfont*.ttf`, `res/fonts/`, `res/libass-plx*.so.0`, `res/OFL.txt`, `res/dev-boot.json`,
-`res/log-host.txt`, `res/THIRD-PARTY-NOTICES.md`, `res/licenses/` and the icon.
+`res/log-host.txt`, `res/THIRD-PARTY-NOTICES.md`, `res/licenses/`, `res/esprobe/` and the icon.
 
 ## The targets
 
@@ -619,6 +620,139 @@ Measured on the TV 10.0 emulator against `tests/mock_pms.py`:
 
 Not measured: a retail set, other layouts and languages (the `globe` key), the panel's arrows `<` / `>`, and the
 `filter_event` forwarding flutter-tizen does while the panel is up, which this emulator did not need.
+
+## The packet player (emulator probe, 2026-11-27; NOT run on a retail set)
+
+Phase 1 of the Feed port: which native API takes the elementary-stream packets the Feed engine demuxes, what it does on the TV 10.0
+emulator, a probe a retail tester can run, and the port's design. Nothing here has run on a retail set; the probe is how one will.
+
+**The candidates, from the firmware itself** (the TV 10.0 x86_64 emulator image; the managed assemblies were read with a
+System.Reflection.Metadata dump, the native libraries with `nm -D`, `readelf` and `objdump`):
+
+| API | What it is | Verdict |
+| --- | --- | --- |
+| `libesplusplayer.so` (`esplusplayer_*`, the image's build is esplusplayer 1.11.3) | the native elementary-stream player: one call per packet (`esplusplayer_submit_packet` with a 64-byte `esplusplayer_es_packet`), per-stream info structs, callbacks for each state change | **chosen**: `dlopen`ed by `libplx.so` itself, by bare SONAME (the managed binding's `/usr/lib64` path is the x86_64 image's; armv7 differs) |
+| `Tizen.TV.Multimedia.ESPlayer` (C#) | Samsung's managed binding over the same library: its `DllImport`s name `/usr/lib64/libesplusplayer.so` and the same `esplusplayer_*` entry points | not used: a packet a call through the host's C# boundary buys nothing the direct call lacks, and its `PrivilegeChecker` refuses without the privilege below |
+| `libcapi-media-player.so.0` media-stream push (`player_set_media_stream_info`, `player_push_media_stream`, `player_foreach_media_stream_supported_format`) | Tizen's public native player API (3.0 and later): packets as `media_packet_h` over a `media_format_h` | the fallback if a retail set refuses esplusplayer; present on the emulator (all three exported by `libcapi-media-player.so.0.4.0`), not probed beyond that, and the probe logs whether a set has it |
+
+- **The privilege.** The managed binding checks `http://developer.samsung.com/privilege/esplay`, which Samsung's TizenFX TV API
+  reference for `ESPlayer` lists at the **Partner** level (with `SDK Support: N`). The native library carries no privilege string (nor do
+  `libespplayer-core.so` and `libtrackrenderer.so`). This package does not declare it. On the emulator, create and open succeed without
+  it; a retail set may differ, and the probe's `privilege` line says which.
+- **The layouts.** The probe compares the library's own `get_size_of_esplusplayer_es_packet`, `..._video_stream_info` and
+  `..._audio_stream_info` with this build's structs before any packet is submitted (64, 40 and 32 bytes on x86_64) and refuses on any
+  difference: armv7's sizes are the set's, read at run time, not assumed.
+- **The protocol** (as the binding drives it, and as the emulator answered): `create`, the callbacks, `open`; `set_ecore_display` on the
+  Ecore main thread (the probe hands it to the host thread, `Hosted::on_host`, like the URI player's display) over the library's window
+  (`ecore_wl2_display_window_find(display, 1)`); `set_video_stream_info` / `set_audio_stream_info` (the mime numbers are the binding's
+  `VideoMimeType`/`AudioMimeType`: H.264 2, HEVC 3, VP9 8, AV1 10, AAC 1, AC3 4, EAC3 5, PCM S16LE 8); `prepare_async`; packets once
+  `ready_to_prepare` names their stream; `prepare_async_done(true)`; `start`. Times are milliseconds.
+- **The payload is the Feed engine's own**: Annex-B H.264 and HEVC with the parameter sets in-band on the keyframe and no codec data,
+  B-frames in decode order, ADTS AAC, AV1 with its `av1C` as codec data, VP9 as demuxed. HDR10 rides the first packet after a prepare
+  (and, by the binding's design, after a seek: not verified, since the probe never seeks the `hevc10` clip) as the packet's
+  `matroska_color_info` (the mastering display and content light levels); HDR10+ has a metadata pointer of its
+  own; the packet has no Dolby Vision field.
+- **The clock** is `esplusplayer_get_playing_time` (ms). **Seek** is `esplusplayer_seek(ms)`, then `ready_to_seek(stream, offset)` per
+  stream, the feed resumed from the keyframe at or before the offset, then `seek_done`; the probe never calls `esplusplayer_flush`.
+  **The end** is `submit_eos_packet` per stream, then the `eos` callback.
+- **Threads.** Every callback the emulator raised came on the player's own threads (the probe counts them: 7 in the clock run, none on
+  the calling thread), so a callback only posts into a mailbox the worker drains; nothing is done in one.
+- **The first picture.** The library exports `esplusplayer_set_first_video_decoding_done_cb`, which the binding does not use. Its setter
+  keeps `rdi`, `rsi` and `rdx` exactly as `esplusplayer_set_eos_cb`'s does (handle, callback, user data), and the library's trampoline
+  is `listener_bridge::OnFirstDecodingDone(void*)`, the shape of the `OnEos(void*)` behind the binding's `void (*)(void*)` end-of-stream
+  callback. That is evidence for the setter's arguments, not a primary statement of the callback's. The probe sets it, before `open`
+  like every other callback, from a table of its own, and **the emulator never raised it** (two runs, every video scenario), so it is a
+  note in the log (`first-frame: ...`), not a counted step: whether a retail set raises it is the tester's log's.
+- **Which sets have it.** The emulator image (TV 10.0) has esplusplayer 1.11.3; Samsung's reference gives the managed class version
+  5.5.0. The tester's set (discussion #1460, a 2023 UA65CU7700) logged a **Tizen 9.0** platform, not 7.0; whether its library and
+  sizes match is the probe's first lines.
+
+### The probe
+
+**Settings > Diagnostics > Packet player test** runs it, on Tizen only: the row exists where the platform states
+`IdentityHooks::packet_probe` (`plx_os::tv::packet_probe`), and the page learns that from the runner's answer to its status query
+(`AppFx::PacketProbe`), never from a platform check of its own; every other platform answers `Unavailable` and keeps its three rows. It
+survives `RELEASE=1` (it is not a dev trigger). It plays only the clips this package ships (`res/esprobe/*.plxes`, 0.74 MB, made by
+`tools/make-esprobe-clips.py` from FFmpeg's test sources, and a PCM tone it makes), never the viewer's media; it asks no server and writes
+nothing but its log lines. One run at a time, refused while the host's player is open (`Busy`; only at the start: a title opened during a run contends with
+the probe for the decoder, so the tester must not play anything until the row shows the tally); the row then reads `Running` and, at the
+end, the tally (`57 passed, 5 failed` on the emulator), so a run whose log was lost still says how it went. The run ends early, with a
+`cancelled` FAIL and the current player torn down, when the app goes to the background or stops, and at 180 s; a run stuck in a native
+call reads done 30 s after that, with one more FAIL and an `esprobe: timeout:` line. A failure counts once per scenario: what the same
+cause raises after it (a later callback, a refused teardown) is an `after the failure:` note.
+
+The code is `rust-modules/platform-tizen/src/esprobe/`: `clip.rs` (the clip format), `api.rs` (the library's functions, structs and
+constants, each from the binding), `machine.rs` (the Sans-IO logic: which call next and what an answer means, tested over a simulated
+player in `tests.rs`) and `run.rs` (the worker that makes the calls). Every line starts `esprobe:`; a step is `esprobe: PASS <step>
+<detail>` or `esprobe: FAIL <step> <detail>`, with return codes by number and name. In order:
+
+1. `fallback libcapi-media-player.so.0: ...` (a note: whether the public push family is there), `api`, `layout`;
+2. `h264-clock`, the Feed engine's steps on H.264 alone: `open` (and, once, `privilege`), `display`, `video-info`, `prepare`,
+   `position` (advancing after `start`), `pause` (held for 700 ms), `resume`, `seek` (from 3 s to 5.5 s: landed near the target), `eos`,
+   `teardown`, and a `first-frame:` note (whether `first_video_decoding_done` came, and when; not counted);
+3. `h264+aac` together, then one acceptance run per codec: `hevc`, `hevc10-hdr10` (Main 10, PQ, BT.2020, the HDR10 colour on its first
+   packet), `av1`, `vp9`, `aac`, `ac3`, `eac3`, `pcm_s16le`: info accepted, prepared, playing;
+4. `esprobe: done pass=N fail=M`.
+
+### On the emulator
+
+The row was pressed on a debug build at `5c3a00875` signed in to the mock (`TIZEN_MOCK_HOST`): the row dimmed and read `Running`, and
+the log ended `done pass=57 fail=5`, which the row then showed as `57 passed, 5 failed`; `av1`'s `prepare_async_done(false)` after its
+error callback is the note `av1 after the failure: ...`, not a second FAIL. The timings below are from the previous press (`done pass=57
+fail=6`, the same steps, from a build that still counted every failure line). A `RELEASE=1` build of the same tree (features `tizen,uri`, no dev triggers: 22,596,196 bytes, the
+eight clips staged under `res/esprobe/`) linked and verified, but a release build has no dev boot and opens on the plex.tv sign-in, so
+its row was not pressed; the row, its effect and the hook have no feature gate. Earlier runs from a scratch trigger and with the
+first-frame callback counted gave the same steps.
+
+| Step | Emulator |
+| --- | --- |
+| `fallback` | the push family present |
+| `api`, `layout` | PASS; sizes 64 / 40 / 32, equal to this build's |
+| `privilege` | PASS: create and open without declaring it |
+| `h264-clock` | open 6102 ms (the first of a process; later opens 1-3 ms), `set_ecore_display -> 0`, prepared 182 ms after `prepare_async` with 26 packets, advancing 615 ms after `start`, paused at 1547 ms and moved 0 ms in 700 ms, resumed in 206 ms, `seek_done` 156 ms after the seek, landed at 5863 ms for 5500, `eos` at 7737 ms, `stop`/`close`/`destroy` 0 |
+| `h264+aac`, `hevc`, `hevc10-hdr10`, `vp9` | PASS (prepared and advancing) |
+| `first-frame` | never raised, in any scenario |
+| `av1` | FAIL: error callback `-26476497` (`not_supported_video_codec`), then `prepare_async_done(false)` |
+| `aac`, `ac3`, `eac3` alone | FAIL: prepared, then the clock stayed at 128 ms. The emulator has no audio path (its process has no PulseAudio connection), so these are **not determined**, not codec verdicts |
+| `pcm_s16le` | FAIL: `prepare_async_done(false)`. Not determined: the same emulator, and it decides the TrueHD and DTS plan below |
+
+No picture was seen: the app's window is opaque and the overlay shows only through a `(0, 0, 0, 0)` hole, which neither the player
+route's failure read-out nor the Settings page draws.
+
+### The port (design; not built)
+
+- **The seam.** The Feed engine reaches the set through `plx_os::tv::sink::VideoSink`, which is Starfish-shaped (`feed_abi_is_cow`, the
+  ACB window) and installed through `LegacyWebosMedia.sink`, which Tizen leaves at `NONE`. The OS-neutral sink is step L15b; the Tizen
+  sink is that interface's second implementation, so L15b lands first, cut from what both need: open with stream infos, submit (a full
+  queue answered, not dropped), EOS, seek with a per-stream resume offset, pause, resume, the clock, close, and events.
+- **Direct `dlopen`, not host verbs.** The packet path is a call per frame; `libplx.so` calls `libesplusplayer.so` itself, as the probe
+  does. The only host-thread call is `set_ecore_display`, through `Hosted::on_host`.
+- **Threads and Sans-IO.** The sink is a runner, not a machine: it owns the player handle on one worker (`plx_base::task::spawn`, inside
+  the existing ledgers), submits from the engine's feed, and turns every callback into one event posted to a mailbox (the probe's
+  `Mailbox`, keyed by `user_data`, never a static), which the engine drains as it drains Starfish's. The library's reference to a
+  mailbox is given back only after a destroy that returned 0; a player left undestroyed (a display bind that never answered, a refused
+  destroy, an unwinding worker) keeps its mailbox, and one whose bind is pending gets no call at all (the probe's `UserData`). The
+  engine's machines are unchanged.
+- **FFmpeg in the TPK.** The same bundled FFmpeg 9.0 (`ci/build-ffmpeg.sh`: LGPL, `-plx` suffix, no network), built for armv7 with the
+  pinned NDK the Tizen armv7 link already uses and for x86_64 for the emulator, staged under `res/` and checked by `verify_tpk` the way
+  #1576 stages `libass-plx`, and opened by absolute path from the payload directory, as `media-codecs/src/ffi.rs` opens it on webOS. Its
+  size in the package is measured at that step, not here.
+- **TrueHD and DTS** are decoded in the app to PCM, as on webOS (`ff_pcm::PcmDecoder`), and submitted as PCM, if a retail set prepares
+  PCM; the emulator did not, so the tester's `pcm_s16le` line decides it. If a set refuses PCM, those titles fall to the server's audio
+  transcode.
+- **PGS and VobSub** are decoded in the app with FFmpeg and drawn by the GL overlay above the plane, as on webOS; the window's hole and
+  straight-alpha mixing ("The video plane", above) apply unchanged.
+- **A mid-play track switch** is a reload, the webOS rule: close the player and open a new one at the current position, never a stream
+  swap on a live player.
+- **Composition.** `player/compose.rs` installs only `TizenUriDriver`. With the Feed sink it installs both, and the Feed's own checks (the
+  library opens and its sizes match) run at its first use, never at boot: a viewer who never needs the Feed pays no `dlopen` of the
+  player stack (review-checklist item 3), and the planner chooses between them per title as it does on webOS: the URI driver
+  for the host player's direct play, Feed for what needs the app's demux (remux, app-decoded audio, picture subtitles).
+
+**Unknowns the tester's log answers:** whether a retail Tizen 9.0 set opens `libesplusplayer.so` and with what sizes; whether create
+and open succeed without the Partner privilege; HEVC Main 10 and HDR10 on a real panel; AV1 (the emulator refuses it); AAC, AC3,
+EAC3 and PCM alone (the emulator has no audio); whether `first_video_decoding_done` fires; the clock, pause, seek and EOS timings on a
+set; whether the public push family is present. Not measured anywhere yet: Dolby Vision, a picture on the plane, armv7.
 
 ## Known gaps seen on the emulator (2026-11-21)
 

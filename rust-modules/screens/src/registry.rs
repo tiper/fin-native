@@ -56,6 +56,8 @@ pub enum AppFx {
     Preferences(PreferenceCmd),
     /// Local firmware logging; the runner answers this surface through an addressed event.
     PlaybackTrace(plx_os::playback_trace::Command),
+    /// The platform's packet-player probe; answered like the trace, by an addressed event.
+    PacketProbe(plx_os::tv::packet_probe::Command),
     /// A store command, executed as a `Deliver` to the store machine in the same drain.
     Store(StoreId, StoreCmd),
     /// Poll only the store work this visible route owns, after its read-only step returns.
@@ -88,6 +90,7 @@ pub enum AppFx {
 pub enum InlineAppFx {
     Session(plx_session::auth::SessionCmd),
     PlaybackTrace(plx_os::playback_trace::Command),
+    PacketProbe(plx_os::tv::packet_probe::Command),
     Store(StoreId, StoreCmd),
     StoreWork(StoreWork),
     Consent(ConsentCmd),
@@ -137,6 +140,7 @@ impl plx_machine::machine::AppEffect for AppFx {
         match self {
             Self::Session(v) => Inline(InlineAppFx::Session(v)),
             Self::PlaybackTrace(v) => Inline(InlineAppFx::PlaybackTrace(v)),
+            Self::PacketProbe(v) => Inline(InlineAppFx::PacketProbe(v)),
             Self::Store(id, v) => Inline(InlineAppFx::Store(id, v)),
             Self::StoreWork(v) => Inline(InlineAppFx::StoreWork(v)),
             Self::Consent(v) => Inline(InlineAppFx::Consent(v)),
@@ -1785,6 +1789,7 @@ pub enum AppMsg {
     PlayerPresented { watch: Option<plx_appkit::skip_policy::OfferId>, paired: bool },
     AutoSkipResolved { id: plx_appkit::skip_policy::OfferId, outcome: plx_appkit::skip_policy::OfferOutcome },
     PlaybackTrace(plx_os::playback_trace::Status),
+    PacketProbe(plx_os::tv::packet_probe::Status),
     Session(plx_session::auth::owner::SessionEvent),
     Consent(ConsentCmd),
     /// A command of the player-HUD package store, delivered to [`MachineId::Huds`].

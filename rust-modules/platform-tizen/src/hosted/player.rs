@@ -87,6 +87,11 @@ impl PlayerLink {
         }
     }
 
+    /// Whether any epoch is live (opened, not yet closed).
+    pub fn any_live(&self) -> bool {
+        !self.lock().live.is_empty()
+    }
+
     /// The host refused the open: nothing will come for `epoch`.
     pub fn forget(&self, epoch: u32) {
         self.lock().live.retain(|e| *e != epoch);
@@ -225,6 +230,20 @@ mod tests {
             [(1, PlayerKind::Prepared), (1, PlayerKind::Closed), (2, PlayerKind::Started)]
         );
         assert_eq!(drained.stale, 2);
+    }
+
+    /// A player is live from its open until its close or the host's refusal (what the packet probe asks).
+    #[test]
+    fn a_player_is_live_from_its_open_until_its_close_or_refusal() {
+        let link = PlayerLink::new();
+        assert!(!link.any_live());
+        link.opened(3);
+        assert!(link.any_live());
+        link.forget(3);
+        assert!(!link.any_live(), "a refused open");
+        link.opened(4);
+        link.accept(ev(4, PlayerKind::Closed, 0)).expect("queued");
+        assert!(!link.any_live(), "closed");
     }
 
     /// A refused open leaves nothing live; a stale epoch cannot come back.

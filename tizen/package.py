@@ -63,6 +63,8 @@ DEV_BOOT_TOKEN = "plxnative-emulator-placeholder-token"
 # Inter, CJK, emoji, Arabic, Hebrew; ci/test_shipped_faces.py holds this list to it), which the subtitle renderer reads too. `appfont-cjk.ttf` is
 # the renderer's default face (`plx_ass_create`) as well as the UI's CJK fallback; the Arabic and Hebrew faces are what the right-to-left text
 # path shapes with the renderer's library (rust-modules/gfx/src/rtl.rs); the per-script subtitle faces are SUBS_FONT_DIR's.
+# The probe's clip names: `CLIPS` in rust-modules/platform-tizen/src/esprobe/mod.rs (a test holds the two lists equal).
+ESPROBE_CLIPS = ("h264", "aac", "hevc", "hevc10", "av1", "vp9", "ac3", "eac3")
 PAYLOAD = (
     ("pkg/appfont.ttf", "res/appfont.ttf"),
     ("pkg/appfont-bold.ttf", "res/appfont-bold.ttf"),
@@ -74,6 +76,9 @@ PAYLOAD = (
     ("pkg/appfont-hebrew-bold.ttf", "res/appfont-hebrew-bold.ttf"),
     ("pkg/OFL.txt", "res/OFL.txt"),
     ("pkg/dev/largeIcon.png", f"shared/res/{PACKAGE_ID}.png"),
+    # The packet-player probe's clips (tools/make-esprobe-clips.py; rust-modules/platform-tizen/src/esprobe/): synthetic test patterns and
+    # tones, read from `res/esprobe/` (docs/tizen.md, "The packet player").
+    *((f"tizen/esprobe/{name}.plxes", f"res/esprobe/{name}.plxes") for name in ESPROBE_CLIPS),
 )
 # The subtitle faces (tools/cut-noto-subs.py) and their manifest, which the renderer reads from `fonts/subs/` under the application directory
 # (rust-modules/media/src/player/ass/fonts.rs) in the manifest's order. The whole directory is staged, as the .ipk stages it (Makefile,
@@ -90,7 +95,7 @@ ASS_NAMES = ("libass-plx.so.0", "libass-plx-host.so.0")
 NOTICES_FILE = "THIRD-PARTY-NOTICES.md"
 LICENSE_DOCS = ("LICENSE", "LICENSING.md", "TRADEMARKS.md")
 # The generated, gitignored files of the host project, removed before every staging.
-GENERATED = ("lib", "bin", "obj", "res/dev-boot.json", "res/log-host.txt", *(target for _, target in PAYLOAD), "res/fonts",
+GENERATED = ("lib", "bin", "obj", "res/dev-boot.json", "res/log-host.txt", *(target for _, target in PAYLOAD), "res/fonts", "res/esprobe",
              *(f"res/{name}" for name in ASS_NAMES), f"res/{NOTICES_FILE}", "res/licenses")
 # What bin/ and lib/ may hold: nothing but our own assembly (and its symbols) and the library. The four packages PlxHost.deps.json lists carry no
 # runtime or native assets into the package: Tizen.NET and Tizen.NET.API8 are referenced and provided by the device's runtime,

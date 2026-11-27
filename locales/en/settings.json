@@ -1441,6 +1441,35 @@
     "value": "Saving",
     "description": "Local playback diagnostics save in progress."
   },
+  "settings.packet_probe.title": {
+    "value": "Packet player test",
+    "translate": false,
+    "description": "Settings > Diagnostics row on Samsung TVs only: runs a built-in check of the TV's video packet player with clips shipped in the app and writes the results to the diagnostic log. A support tool; shown in English."
+  },
+  "settings.packet_probe.idle": {
+    "value": "Not run",
+    "translate": false,
+    "description": "Value of the packet player test row before it has run. Shown in English."
+  },
+  "settings.packet_probe.running": {
+    "value": "Running",
+    "translate": false,
+    "description": "Value of the packet player test row while it runs (about a minute). Shown in English."
+  },
+  "settings.packet_probe.result": {
+    "value": "{pass} passed, {fail} failed",
+    "translate": false,
+    "description": "Value of the packet player test row after a run: how many checks passed and failed. Shown in English.",
+    "args": {
+      "fail": "i64",
+      "pass": "i64"
+    }
+  },
+  "settings.packet_probe.refused": {
+    "value": "Busy",
+    "translate": false,
+    "description": "Value of the packet player test row when it could not start because a video is open. Shown in English."
+  },
   "settings.hud.browse": {
     "value": "Browse HUDs",
     "description": "Player HUD gallery: browse"

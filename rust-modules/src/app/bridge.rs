@@ -3652,6 +3652,13 @@ impl Bridge<'_> {
                 plx_os::playback_trace::Status::Off)))));
             return;
         }
+        // Nor the live packet probe: a replay has none.
+        if self.retained.home_io.is_some() && matches!(fx,
+            InlineAppFx::PacketProbe(plx_os::tv::packet_probe::Command::Status)) {
+            out.push(Fx::Deliver(from, Delivery::Screen(ScreenEvent::App(AppMsg::PacketProbe(
+                plx_os::tv::packet_probe::Status::Unavailable)))));
+            return;
+        }
         if let Some(io) = &mut self.retained.home_io {
             if let Err(reason) = super::bootstrap::effects::inline(&fx) {
                 io.failure = Some(reason);
@@ -3664,6 +3671,10 @@ impl Bridge<'_> {
             InlineAppFx::PlaybackTrace(command) => {
                 let status = self.playback_trace_command(from, command);
                 out.push(Fx::Deliver(from, Delivery::Screen(ScreenEvent::App(AppMsg::PlaybackTrace(status)))));
+            }
+            InlineAppFx::PacketProbe(command) => {
+                let status = plx_os::tv::packet_probe::command(command);
+                out.push(Fx::Deliver(from, Delivery::Screen(ScreenEvent::App(AppMsg::PacketProbe(status)))));
             }
             InlineAppFx::Huds(command) => out.push(Fx::Deliver(MachineId::Huds, Delivery::Machine(AppMsg::Huds(command)))),
             InlineAppFx::Store(StoreId::Person, StoreCmd::Person(command)) => out.push(Fx::Deliver(

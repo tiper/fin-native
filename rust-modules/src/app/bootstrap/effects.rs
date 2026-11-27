@@ -246,6 +246,7 @@ pub(crate) fn app(effect: &AppFx) -> Result<Value, &'static str> {
         AppFx::Session(command) => json!({"session":wire(command)?}),
         AppFx::SessionEffect(effect) => json!({"session_effect":wire(effect)?}),
         AppFx::PlaybackTrace(plx_os::playback_trace::Command::Status) => json!({"playback_trace":"status"}),
+        AppFx::PacketProbe(plx_os::tv::packet_probe::Command::Status) => json!({"packet_probe":"status"}),
         AppFx::Preferences(_) => return Err("unsupported controlled preferences effect"),
         // Yielding is not authorization: these heads must refuse before any MainThread,
         // recorder, catalog write or native player resource is borrowed by the runner.
@@ -277,9 +278,11 @@ pub(crate) fn inline(effect: &plx_screens::registry::InlineAppFx) -> Result<Valu
     match effect {
         InlineAppFx::Session(command) => Ok(json!({"session":wire(command)?})),
         InlineAppFx::PlaybackTrace(plx_os::playback_trace::Command::Status) => Ok(json!({"playback_trace":"status"})),
+        InlineAppFx::PacketProbe(plx_os::tv::packet_probe::Command::Status) => Ok(json!({"packet_probe":"status"})),
         InlineAppFx::Store(id, command) => Ok(json!({"store":id.ord().0,"command":store(command)?})),
         InlineAppFx::StoreWork(work) => Ok(json!({"work":work_value(work)?})),
-        InlineAppFx::PlaybackTrace(_) | InlineAppFx::Consent(_) | InlineAppFx::Huds(_) => Err("unsupported Home application effect"),
+        InlineAppFx::PlaybackTrace(_) | InlineAppFx::PacketProbe(_) | InlineAppFx::Consent(_) | InlineAppFx::Huds(_) =>
+            Err("unsupported Home application effect"),
     }
 }
 
@@ -351,6 +354,7 @@ pub(crate) fn message(message: &AppMsg) -> Result<Value, &'static str> {
             _ => return Err("unsupported Home Session delivery"),
         },
         AppMsg::PlaybackTrace(plx_os::playback_trace::Status::Off) => json!({"playback_trace":"off"}),
+        AppMsg::PacketProbe(plx_os::tv::packet_probe::Status::Unavailable) => json!({"packet_probe":"unavailable"}),
         AppMsg::Store(command) => store(command)?,
         AppMsg::PersonCommand { command, .. } => store(&plx_data::stores::StoreCmd::Person(command.clone()))?,
         AppMsg::StoreWork(work) => work_value(work)?,
@@ -527,6 +531,20 @@ mod tests {
         assert_eq!(super::message(&AppMsg::PlaybackTrace(Status::Off)), Ok(serde_json::json!({"playback_trace":"off"})));
         assert!(super::app(&AppFx::PlaybackTrace(Command::Start)).is_err());
         assert!(super::message(&AppMsg::PlaybackTrace(Status::Recording)).is_err());
+    }
+
+    /// **A replay records only the packet probe's status query and its `Unavailable` answer**: a Start would run the
+    /// live player, so it is refused, as is any answer a live probe gave.
+    #[test]
+    fn controlled_diagnostics_records_only_the_packet_probes_unavailable_query() {
+        use plx_os::tv::packet_probe::{Command, Status};
+        use plx_screens::registry::{AppFx, AppMsg, InlineAppFx};
+        assert_eq!(super::app(&AppFx::PacketProbe(Command::Status)), Ok(serde_json::json!({"packet_probe":"status"})));
+        assert_eq!(super::inline(&InlineAppFx::PacketProbe(Command::Status)), Ok(serde_json::json!({"packet_probe":"status"})));
+        assert_eq!(super::message(&AppMsg::PacketProbe(Status::Unavailable)), Ok(serde_json::json!({"packet_probe":"unavailable"})));
+        assert!(super::app(&AppFx::PacketProbe(Command::Start)).is_err());
+        assert!(super::inline(&InlineAppFx::PacketProbe(Command::Start)).is_err());
+        assert!(super::message(&AppMsg::PacketProbe(Status::Done { pass: 1, fail: 0 })).is_err());
     }
 
     /// **A by-id input is recorded once and decodes only in its canonical spelling**: the id must

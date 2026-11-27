@@ -574,8 +574,10 @@ time (`plx_base::dynlib!`; the crates it compiles are the `cargo tree` of `plx_p
 the renderer above, which the package carries; `libcurl.so.4` or `libcurl.so.5` (`rust-modules/net/src/net.rs:91`, `curlio.rs:179`, `net/connect_only.rs:14`); `libEGL.so.1`
 (`rust-modules/platform-tizen/src/egl.rs:27`); `libecore_wl2.so.1`, `libecore_input.so.1` and `libwayland-egl.so.1`
 (`rust-modules/platform-tizen/src/ecore.rs:40-114` and `:423-427`; `libecore_wl2` brings in `libwayland-client`, which this library does not name); and, only
-if the user starts a playback trace in Settings, `libgstreamer-1.0.so.0` (`rust-modules/os/src/playback_trace.rs:29`). The .NET host, not `libplx.so`, opens
-two more by name when it P/Invokes them (`tizen/host/PlxHost/PlayerNative.cs`): the device's media player library `libcapi-media-player.so.0`, which plays the
+if the user starts a playback trace in Settings, `libgstreamer-1.0.so.0` (`rust-modules/os/src/playback_trace.rs:29`); and, only if the user runs Settings >
+Diagnostics > Packet player test, the elementary-stream player `libesplusplayer.so` and `libcapi-media-player.so.0`, whose media-stream push symbols it only looks
+up (`rust-modules/platform-tizen/src/esprobe/api.rs`, `esprobe/run.rs` `fallback_presence`). The .NET host also opens
+two by name when it P/Invokes them (`tizen/host/PlxHost/PlayerNative.cs`): the device's media player library `libcapi-media-player.so.0`, which plays the
 video the application asks for (the host's `player_open` and `player_verb`; it is probed with `dlopen` at start and a device without it simply plays nothing),
 and `libecore_wl2.so.1` again, to find the window `libplx.so` made. All of them are the Tizen image's own; none is staged. The library also tries names this package does NOT ship, which fail to open: the bundled FFmpeg (`libavformat-plx.so.63`,
 `libavcodec-plx.so.63`, `libavutil-plx.so.61`, and the dev capture's scaler; `rust-modules/media-codecs/src/ffi.rs:310-455`, the `ff: ... MISSING` lines of
@@ -615,13 +617,14 @@ outside `lib/`, so a new assembly or native library needs an entry in this secti
 - **3 Dynamically linked: applies with a difference.** It describes the webOS television's libraries. For the Tizen package every library below
   is the Tizen image's own, at that image's versions (none is the table's), and none is distributed here: glibc and `libgcc_s.so.1` (linked,
   `DT_NEEDED`); `libGLESv2.so.2` (linked, required; see 4); libcurl, `libEGL.so.1`, `libecore_wl2.so.1`, `libecore_input.so.1`, `libwayland-egl.so.1`,
-  `libwayland-client` (through Ecore_Wl2), `libcapi-media-player.so.0` (opened by the host at run time, above) and, on request, `libgstreamer-1.0.so.0` (opened at run time, above). SDL2, SDL2_ttf and FreeType are NOT
+  `libwayland-client` (through Ecore_Wl2), `libcapi-media-player.so.0` (opened by the host at run time, above) and, on request, `libgstreamer-1.0.so.0` and
+  `libesplusplayer.so` (opened at run time, above). SDL2, SDL2_ttf and FreeType are NOT
   dynamically linked (statically linked, above), and the renderer's FreeType, FriBidi, HarfBuzz, libunibreak and libass are its own (1.2), never
   the image's. Not loaded by this library: zlib, luna-service2 and GLib (above).
 - **4 Not determined: applies with a difference.** Its "licence not established" list is the `.ipk`'s (LG's `libGLESv2.so.2`, `libAcbAPI`,
   `libplayerAPIs`, `libpf`); the Tizen library does not link the last three. The Tizen image's own `libGLESv2.so.2` is required by the library and
   its licence is likewise not established; the licences of the other Tizen-image libraries listed in 3 (libEGL, Ecore, `libwayland-egl`,
-  `libwayland-client`, `libcapi-media-player`, `libgstreamer`) have not been read here, and none is distributed. The historical NDK archive paragraph does not apply (ARM
+  `libwayland-client`, `libcapi-media-player`, `libgstreamer`, `libesplusplayer`) have not been read here, and none is distributed. The historical NDK archive paragraph does not apply (ARM
   webOS builds). The non-affiliation paragraph and the third-party-brands paragraph apply as written, and PlxNative is likewise not affiliated with
   Samsung or Tizen, whose names are their owners'.
 - **5 The `licenses/` directory: applies with a difference.** Its table is written for the `.ipk` (it names FFmpeg, libass and Sentry Native).
