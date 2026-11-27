@@ -574,7 +574,8 @@ pub fn failure_action_label(a: plx_media::player::FailureAction) -> &'static std
 }
 
 /// The glyph above the verdict, by cause — read off the same `FailureKind` the words come from, so
-/// the two cannot disagree (the rule `StatusOverlay::page` states for its callers).
+/// the two cannot disagree (the rule `StatusOverlay::page` states for its callers). The server badge
+/// is for the SERVER's refusal; the app's own (`PlaybackPolicy`, `NoQualifiedBackend`) draw the plain alert.
 fn failure_glyph(kind: plx_media::player::FailureKind) -> plx_ui::icons::Icon {
     use plx_media::player::FailureKind as K;
     use plx_ui::icons::Icon;

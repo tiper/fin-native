@@ -2660,14 +2660,16 @@ path. Never run only this one before a release. `tests/README.md` has the tier t
   and green on the simulator with a stored session; pair a `/tmp/plxnative-servers` entry's
   `"scheme":"https"` with its new `"pin":"<address>"` field to put a pinned TLS origin through the
   registry headlessly),
-  `/tmp/plxnative-failtest[=verdict|audio|novideo|stream|connection|tv|jail|none]` (force one
+  `/tmp/plxnative-failtest[=verdict|audio|novideo|stream|connection|tv|jail|policy|disabled|no_backend|none]` (force one
   variant of the full-screen **failure read-out** — the one screen that cannot be reached on
   purpose, since it needs a server that refuses, and the one most meant to be LOOKED at: it is
   shaped to survive a phone photograph in an issue thread. Live-read, so arming it mid-playback
   swaps the frame at once; `stream`, `connection`, and `tv` exercise the runtime media-source,
   interrupted-transfer, and native-pipeline reasons; `jail` forces the missing-`/dev/rtkmem`
   read-out regardless of the real device probe, since most dev machines are not an affected SoC;
-  pair `audio` with
+  `policy`, `disabled` and `no_backend` are the app's own refusals (Force Direct Play, Direct Play
+  Disabled, a build with no qualified backend: the read-out says whose refusal it is, and its row is
+  the table's for that setting); pair `audio` with
   `/tmp/plxnative-nopass` for the PLEX PASS capsule line. Every arm but `jail` feeds the real
   `player::error_shape` (`jail` is the one `ErrorShape` `error_shape` never produces, so it calls
   the sibling `jail_error_shape` directly instead), and forces the STATE only at

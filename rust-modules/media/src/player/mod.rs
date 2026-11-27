@@ -991,8 +991,15 @@ pub enum FailureKind {
     DecisionRefused,
     /// The DVR has no available tuner for this channel.
     TunersBusy,
-    /// The explicit Direct Play policy cannot deliver the requested original stream.
+    /// The explicit Direct Play policy cannot deliver the requested original stream: Force Direct Play
+    /// ([`PlayVerdict::Forced`](crate::route::PlayVerdict::Forced), or any failure under Force) or Direct Play
+    /// set to Disabled ([`PlayVerdict::DirectPlayDisabled`](crate::route::PlayVerdict::DirectPlayDisabled)).
+    /// The viewer's own setting refused it, not the server.
     PlaybackPolicy,
+    /// This build composed no backend that can play the item ([`PlayVerdict::NoQualifiedBackend`](crate::route::PlayVerdict::NoQualifiedBackend)):
+    /// no Feed executor and no URI qualification, so the server was never asked. The app's own refusal; on
+    /// Tizen it is what every refused play reads.
+    NoQualifiedBackend,
     /// Transcoding, and the server produced no video stream — it found no usable video target.
     NoVideoTranscodeTarget,
     /// Direct playing, and the stream carries no video track, so the file disagrees with the PMS
@@ -1053,6 +1060,7 @@ impl FailureKind {
             FailureKind::ReleaseTimeout => C::ReleaseTimeout,
             FailureKind::ResolveFailed => C::ResolveFailed,
             FailureKind::PreviewNotDirect => C::PreviewNotDirect,
+            FailureKind::NoQualifiedBackend => C::NoQualifiedBackend,
             FailureKind::ServerStopped => C::ServerStopped,
             FailureKind::Unspecified => C::Unspecified,
         }
@@ -1071,8 +1079,9 @@ impl FailureKind {
 pub enum FailureAction {
     /// Set the Direct Play preference back to Auto (the value Settings writes, persisted) and
     /// resolve the same item again at the same position. The fix for every failure under Force
-    /// Direct Play (Force is what switched the automatic fallback off) and for one under Disabled
-    /// (which asks the server to convert, and is what the server just refused).
+    /// Direct Play (Force is what switched the automatic fallback off) and for a refusal under
+    /// Disabled: the server's refusal of the conversion Disabled asks for, or the app's own refusal
+    /// of a stream that can only play as the original ([`FailureKind::PlaybackPolicy`]).
     PlayAutomatically,
     /// Resolve the same item again, unchanged — worth offering only where the failure can be
     /// transient (the stream stopped, the pipeline never answered, no cause was reported).
@@ -1146,6 +1155,13 @@ pub struct FailureContext {
 /// * [`ChangeTracks`](FailureAction::ChangeTracks) is offered wherever a retry can play the pick (not forced, a request to
 ///   resolve again, [`FailureContext::tracks_available`]); it comes after the rung and before *Back*, so under Disabled
 ///   a refusal reads *Play automatically*, *Change quality*, *Audio & Subtitles*, *Back*, and the focus seats on the fix.
+/// * The app's OWN refusals are not the server's, and the row says so. Under Disabled a stream that can only
+///   play as the original ([`FailureKind::PlaybackPolicy`], from `PlayVerdict::DirectPlayDisabled`: Live TV, or a
+///   request with no item key) reads *Play automatically*, *Back*: no rung and no pick can change the answer of
+///   the setting that refused it. A build that composed no backend for the item
+///   ([`FailureKind::NoQualifiedBackend`]) gets *Back* alone, since nothing about the request changes that,
+///   unless Force is on, where the Force arm's fix (switching to Auto, which lets a URI qualification in)
+///   leads.
 /// * A file with no video track and an unrepairable sandbox get nothing but *Back*.
 pub fn failure_actions(kind: FailureKind, cx: FailureContext) -> Vec<FailureAction> {
     use FailureAction as A;
@@ -1175,9 +1191,20 @@ pub fn failure_actions(kind: FailureKind, cx: FailureContext) -> Vec<FailureActi
                 }
             }
         }
-        // Only reachable under Force (`with_forced_playback_context`); without it there is no
-        // policy to relax.
-        K::PlaybackPolicy => {}
+        // Reached under Direct Play **Disabled** only (Force was taken by the arm above): a policy the
+        // viewer set refused it (`PlayVerdict::DirectPlayDisabled`, a Live channel or a request with no
+        // item key), and there is no rung or retry that the same setting would not refuse again. The
+        // one change that can alter the outcome is lifting the setting.
+        K::PlaybackPolicy => {
+            if cx.direct_play_disabled && cx.can_retry {
+                v.push(A::PlayAutomatically);
+            }
+        }
+        // This build composed no backend that can play the item (`PlayVerdict::NoQualifiedBackend`).
+        // Nothing about the request changes that, and a rung or a retry resolves to the same refusal;
+        // under Force the arm above already offered the one change that can (a URI qualification
+        // is not possible under Force, so switching to Auto is the honest fix there).
+        K::NoQualifiedBackend => {}
         _ => {
             if cx.can_retry {
                 // Disabled is a setting the viewer can lift: the one change that re-enables the
@@ -1208,7 +1235,7 @@ pub fn failure_actions(kind: FailureKind, cx: FailureContext) -> Vec<FailureActi
 
 /// The live [`FailureContext`] (main thread).
 pub fn failure_context(ps: &crate::route::PlaybackSession, tracks_available: bool) -> FailureContext {
-    failure_context_captured(ps, failtest_forced(), tracks_available)
+    failure_context_captured(ps, plx_base::devtrig::read("failtest").as_deref(), tracks_available)
 }
 
 /// **Does the failed item have tracks the picker can show?** The one question behind
@@ -1218,11 +1245,12 @@ pub fn failed_tracks_available(ps: &crate::route::PlaybackSession, meta: plx_dat
     !crate::route::is_live(ps) && meta.has_failed_tracks(crate::route::cur_sid(ps), &crate::route::cur_rk(ps), crate::route::cur_part_id(ps))
 }
 
-/// App-boundary resolver using the diagnostic policy already sampled for this frame.
-pub fn failure_context_captured(ps: &crate::route::PlaybackSession, diagnostic_forced: bool, tracks_available: bool) -> FailureContext {
+/// App-boundary resolver using the `failtest` arm already sampled for this frame (`None` when the
+/// trigger is absent), so no second read can disagree with the shape [`error_captured`] built from it.
+pub fn failure_context_captured(ps: &crate::route::PlaybackSession, diagnostic: Option<&str>, tracks_available: bool) -> FailureContext {
     FailureContext {
-        forced: crate::route::forced_direct_play(ps) || diagnostic_forced,
-        direct_play_disabled: crate::route::direct_play_disabled(ps),
+        forced: crate::route::forced_direct_play(ps) || failtest_forced_by(diagnostic),
+        direct_play_disabled: crate::route::direct_play_disabled(ps) || failtest_disabled_by(diagnostic),
         can_retry: crate::route::can_retry_current_play(ps),
         quality_carriable: !crate::route::is_live(ps) && ps.quality_pick_carriable(),
         repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle,
@@ -1314,11 +1342,66 @@ fn jail_error_shape() -> ErrorShape {
     }
 }
 
+/// **Whose refusal it was, as the typed verdict says it** — the read-out of a plan that left without a
+/// URL on purpose. An EXHAUSTIVE match: a new [`PlayVerdict`](crate::route::PlayVerdict) cannot compile
+/// without choosing which cause it reads as. The sentence was once all that reached here, and every
+/// verdict read as the server's (`DecisionRefused`: "the server cannot play or convert this file"),
+/// including the two the server never made.
+///
+/// * `Server`: the server's own sentence, quoted verbatim beneath our static words. The only arm that
+///   blames the server.
+/// * `Forced`: stays [`DecisionRefused`](FailureKind::DecisionRefused) HERE, because
+///   [`with_forced_playback_context`] is what turns a refusal under Force into
+///   [`PlaybackPolicy`](FailureKind::PlaybackPolicy) (and it needs the session's mode to do it).
+/// * `DirectPlayDisabled`: [`PlaybackPolicy`](FailureKind::PlaybackPolicy) in its own right, the viewer's
+///   setting. The verdict sentence is the reason (it names the way out), as Force's is.
+/// * `NoQualifiedBackend`: [`NoQualifiedBackend`](FailureKind::NoQualifiedBackend), this build's. No detail:
+///   there is nothing the server or the file said.
+/// * `PreviewNeedsDirectPlay` and `TunersBusy`: [`error_captured`] catches both before it asks for a
+///   shape, so they are unreachable from there; they map to the same shapes it returns, so the two
+///   places cannot disagree.
+fn verdict_shape(verdict: &crate::route::PlayVerdict) -> ErrorShape {
+    use crate::route::PlayVerdict as V;
+    match verdict {
+        V::Server(..) | V::Forced(_) => ErrorShape {
+            kind: FailureKind::DecisionRefused,
+            caption: plx_os::i18n::msg::widgets_failure_refused_c(),
+            // The panel's line is ours and static; the server's sentence rides on `detail`, whose
+            // surface (the full-screen read-out) is the one that can hold a whole sentence.
+            panel: plx_os::i18n::msg::widgets_panel_refused(),
+            readout: plx_os::i18n::msg::widgets_reason_refused(),
+            // OWNED since phase 9: the verdict is borrowed from the caller's session publication
+            // rather than from a `static mut`, so it cannot be lent for `'static`. One allocation,
+            // on the path where a playback has already failed.
+            detail: std::borrow::Cow::Owned(verdict.text().into_owned()),
+            no_pass: false,
+        },
+        V::DirectPlayDisabled => ErrorShape {
+            kind: FailureKind::PlaybackPolicy,
+            caption: plx_os::i18n::msg::widgets_failure_direct_play_disabled_c(),
+            panel: plx_os::i18n::msg::widgets_panel_direct_play_disabled(),
+            readout: plx_os::i18n::msg::widgets_verdict_direct_play_disabled(),
+            detail: std::borrow::Cow::Borrowed(plx_os::i18n::msg::widgets_verdict_direct_play_disabled()),
+            no_pass: false,
+        },
+        V::NoQualifiedBackend => ErrorShape {
+            kind: FailureKind::NoQualifiedBackend,
+            caption: plx_os::i18n::msg::widgets_failure_no_backend_c(),
+            panel: plx_os::i18n::msg::widgets_panel_no_backend(),
+            readout: plx_os::i18n::msg::widgets_reason_no_backend(),
+            detail: std::borrow::Cow::Borrowed(""),
+            no_pass: false,
+        },
+        V::PreviewNeedsDirectPlay { .. } => preview_not_direct_shape(),
+        V::TunersBusy => tuners_busy_shape(),
+    }
+}
+
 fn error_shape(
     no_video: bool,
     transcoding: bool,
     sub: plx_plex::plex::serverinfo::Subscription,
-    verdict: Option<&str>,
+    verdict: Option<&crate::route::PlayVerdict>,
     runtime: RuntimeFailure,
 ) -> ErrorShape {
     let no_pass = sub == plx_plex::plex::serverinfo::Subscription::No;
@@ -1334,19 +1417,7 @@ fn error_shape(
     // forbids — and it would be wrong twice over, since the arm is reachable for any source the
     // server's own ffmpeg cannot decode, which no subscription changes.
     if let Some(v) = verdict {
-        return ErrorShape {
-            kind: FailureKind::DecisionRefused,
-            caption: plx_os::i18n::msg::widgets_failure_refused_c(),
-            // The panel's line is ours and static; the server's sentence rides on `detail`, whose
-            // surface (the full-screen read-out) is the one that can hold a whole sentence.
-            panel: plx_os::i18n::msg::widgets_panel_refused(),
-            readout: plx_os::i18n::msg::widgets_reason_refused(),
-            // OWNED since phase 9: the verdict is borrowed from the caller's session publication
-            // rather than from a `static mut`, so it cannot be lent for `'static`. One allocation,
-            // on the path where a playback has already failed.
-            detail: std::borrow::Cow::Owned(v.to_owned()),
-            no_pass: false,
-        };
+        return verdict_shape(v);
     }
     if no_video && transcoding {
         return ErrorShape {
@@ -1465,7 +1536,10 @@ fn playing_subscription(ps: &crate::route::PlaybackSession) -> plx_plex::plex::s
 /// user-facing sentence or firmware error string is parsed to decide it.
 fn with_forced_playback_context(mut shape: ErrorShape, forced: bool) -> ErrorShape {
     if !forced { return shape; }
-    if shape.kind == FailureKind::DecisionRefused {
+    // `NoQualifiedBackend` under Force is the same refusal: a URI qualification is not possible under
+    // Force (`pms_uri_possible = !forced && ..`), so on a build without a Feed the policy is what left
+    // no backend, and switching to Auto is the fix, not "this TV can't".
+    if matches!(shape.kind, FailureKind::DecisionRefused | FailureKind::NoQualifiedBackend) {
         shape.kind = FailureKind::PlaybackPolicy;
         shape.caption = plx_os::i18n::msg::widgets_failure_forced_playback_c();
         shape.panel = plx_os::i18n::msg::widgets_panel_forced_playback();
@@ -1478,6 +1552,18 @@ fn with_forced_playback_context(mut shape: ErrorShape, forced: bool) -> ErrorSha
     }
     shape.no_pass = false;
     shape
+}
+
+/// The read-out for [`FailureKind::TunersBusy`]: the DVR had no tuner to give.
+fn tuners_busy_shape() -> ErrorShape {
+    ErrorShape {
+        kind: FailureKind::TunersBusy,
+        caption: plx_os::i18n::msg::widgets_verdict_tuners_busy_c(),
+        panel: plx_os::i18n::msg::widgets_verdict_tuners_busy(),
+        readout: plx_os::i18n::msg::widgets_verdict_tuners_busy(),
+        detail: std::borrow::Cow::Borrowed(""),
+        no_pass: false,
+    }
 }
 
 /// The read-out for [`FailureKind::PreviewNotDirect`]. A preview shows no read-out of its own, so
@@ -1514,14 +1600,7 @@ pub fn error_captured(ps: &crate::route::PlaybackSession, diagnostic: Option<&st
     // The typed verdict, not the sentence: a refused preview is ours, not the server's, and must
     // not read as `DecisionRefused`.
     if crate::route::tuners_busy(ps) {
-        return ErrorShape {
-            kind: FailureKind::TunersBusy,
-            caption: plx_os::i18n::msg::widgets_verdict_tuners_busy_c(),
-            panel: plx_os::i18n::msg::widgets_verdict_tuners_busy(),
-            readout: plx_os::i18n::msg::widgets_verdict_tuners_busy(),
-            detail: std::borrow::Cow::Borrowed(""),
-            no_pass: false,
-        };
+        return tuners_busy_shape();
     }
     if crate::route::play_refused_as_preview(ps) {
         return preview_not_direct_shape();
@@ -1533,7 +1612,7 @@ pub fn error_captured(ps: &crate::route::PlaybackSession, diagnostic: Option<&st
         ps.attempt_view().facts().no_video.unwrap_or(false),
         crate::route::is_transcoding(ps),
         playing_subscription(&ps),
-        crate::route::play_verdict(ps).as_deref(),
+        crate::route::play_verdict_typed(ps),
         // The cause a released Engine left behind, else the live worker signals.
         crate::route::engine_failure(ps).unwrap_or_else(|| live_runtime_failure(ps)),
     );
@@ -1648,7 +1727,9 @@ const FAILTEST_VERDICT: &str =
 /// (an audio-only file that direct-played), `stream` (no usable media), `connection` (an interrupted
 /// transfer), `tv` (the native pipeline refused Load), `jail` (this device's jail is missing
 /// `/dev/rtkmem` — forces [`jail_error_shape`] regardless of the real device probe, since most
-/// dev machines are not an affected SoC), and `none` (no cause was reported). It feeds
+/// dev machines are not an affected SoC), `policy` (Force Direct Play's own refusal), `disabled` (Direct
+/// Play set to Disabled refused a stream that can only play as the original), `no_backend` (this build
+/// composed no backend for the item: every refused play on Tizen) and `none` (no cause was reported). It feeds
 /// [`error_shape`] rather than short-circuiting it, so what is photographed is the real resolver.
 ///
 /// `player_hud::busy` has the other half — the state itself — for the same reason.
@@ -1674,23 +1755,36 @@ fn failtest_arm(ps: &crate::route::PlaybackSession, diagnostic: Option<&str>) ->
         // verdict sentence for a video format the engine cannot take, through the real resolver.
         "policy" => with_forced_playback_context(
             error_shape(false, false, sub,
-                Some(&crate::route::PlayVerdict::Forced(crate::route::ForcedFailure::Video).text()),
+                Some(&crate::route::PlayVerdict::Forced(crate::route::ForcedFailure::Video)),
                 RuntimeFailure::Unknown),
             true,
         ),
+        // The app's own refusals, through the real resolver: Direct Play set to Disabled (the
+        // viewer's setting) and a build that composed no backend for the item (on Tizen, every
+        // refused play). Neither names the server.
+        "disabled" => error_shape(false, false, sub, Some(&crate::route::PlayVerdict::DirectPlayDisabled),
+            RuntimeFailure::Unknown),
+        "no_backend" => error_shape(false, false, sub, Some(&crate::route::PlayVerdict::NoQualifiedBackend),
+            RuntimeFailure::Unknown),
         _ => error_shape(
             false,
             true,
             sub,
-            Some(FAILTEST_VERDICT),
+            Some(&crate::route::PlayVerdict::Server(FAILTEST_VERDICT.into(), crate::route::DecisionCodes::default())),
             RuntimeFailure::Unknown,
         ),
     })
 }
 /// dev: the `policy` arm of `/tmp/plxnative-failtest` stands for a Force Direct Play session, so
 /// the action table sees the Force the arm's shape claims.
-fn failtest_forced() -> bool {
-    plx_base::devtrig::read("failtest").is_some_and(|a| a.trim() == "policy")
+fn failtest_forced_by(diagnostic: Option<&str>) -> bool {
+    diagnostic.is_some_and(|a| a.trim() == "policy")
+}
+
+/// dev: the `disabled` arm stands for a Direct Play **Disabled** session, for the same reason: its
+/// row is *Play automatically*, which the table offers only to a context that says Disabled.
+fn failtest_disabled_by(diagnostic: Option<&str>) -> bool {
+    diagnostic.is_some_and(|a| a.trim() == "disabled")
 }
 
 /// Publish the jail read-out fixture on the same session fact the owned confirmation reads.
@@ -2898,7 +2992,7 @@ pub fn vplane_since(ps: &crate::route::PlaybackSession, mark: &mut VplaneMark) -
 
 /// The shape the `failtest=policy` arm builds, for tests outside this module.
 #[cfg(any(test, feature = "test-support"))]
-pub fn failtest_policy_shape_for_test(verdict: &str) -> ErrorShape {
+pub fn failtest_policy_shape_for_test(verdict: &crate::route::PlayVerdict) -> ErrorShape {
     with_forced_playback_context(
         error_shape(false, false, plx_plex::plex::serverinfo::Subscription::Yes, Some(verdict), RuntimeFailure::Unknown),
         true,
@@ -2911,8 +3005,8 @@ pub fn failtest_policy_shape_for_test(verdict: &str) -> ErrorShape {
 #[cfg(any(test, feature = "test-support"))]
 pub fn every_failure_row() -> Vec<(FailureKind, FailureContext, Vec<FailureAction>)> {
     use FailureKind as K;
-    let kinds = [K::TunersBusy, K::DecisionRefused, K::PlaybackPolicy, K::NoVideoTranscodeTarget, K::NoVideoTrack,
-        K::MediaSource, K::PlaybackInterrupted, K::TvPipeline, K::LoadTimeout,
+    let kinds = [K::TunersBusy, K::DecisionRefused, K::PlaybackPolicy, K::NoQualifiedBackend, K::NoVideoTranscodeTarget,
+        K::NoVideoTrack, K::MediaSource, K::PlaybackInterrupted, K::TvPipeline, K::LoadTimeout,
         K::ReleaseTimeout, K::JailMissingRtkmem, K::ResolveFailed, K::PreviewNotDirect, K::ServerStopped,
         K::Unspecified];
     let mut out = Vec::new();
@@ -3264,9 +3358,11 @@ mod tests {
     #[test]
     fn forced_policy_refusal_does_not_claim_the_server_cannot_convert() {
         use plx_plex::plex::serverinfo::Subscription as Sub;
+        let verdict = crate::route::PlayVerdict::Forced(crate::route::ForcedFailure::Audio { codec: String::new() });
         let reason = "Force Direct Play is on, and this audio format can’t play without conversion.";
+        assert_eq!(verdict.text(), reason);
         let forced = with_forced_playback_context(
-            error_shape(false, false, Sub::No, Some(reason), RuntimeFailure::Unknown), true);
+            error_shape(false, false, Sub::No, Some(&verdict), RuntimeFailure::Unknown), true);
         assert_eq!(forced.kind, FailureKind::PlaybackPolicy);
         assert_eq!(forced.kind.code(), "playback_policy");
         assert_eq!(forced.detail, reason);
@@ -3274,8 +3370,9 @@ mod tests {
         assert!(!forced.caption.to_str().unwrap().contains("convert"));
         assert!(forced.panel.contains("automatic fallback is disabled"));
         assert!(!forced.no_pass);
+        let refused = crate::route::PlayVerdict::Server("PMS cannot convert this item".into(), crate::route::DecisionCodes::default());
         let server = with_forced_playback_context(
-            error_shape(false, true, Sub::No, Some("PMS cannot convert this item"), RuntimeFailure::Unknown), false);
+            error_shape(false, true, Sub::No, Some(&refused), RuntimeFailure::Unknown), false);
         assert_eq!(server.kind, FailureKind::DecisionRefused);
         assert!(server.readout.contains("server"));
     }
@@ -3289,13 +3386,14 @@ mod tests {
         let mut ps = crate::route::PlaybackSession::default();
         crate::route::name_refused_forced_audio(&mut ps, "dca");
         let verdict = crate::route::play_verdict(&ps).expect("a verdict").to_owned();
+        let standing = crate::route::play_verdict_typed(&ps).expect("a typed verdict").clone();
         let up_front = crate::route::PlayVerdict::Forced(crate::route::ForcedFailure::Audio {
             codec: plx_data::metadata::friendly_codec("dca"),
         });
         assert_eq!(verdict, up_front.text());
         assert!(verdict.contains("DTS"), "{verdict}");
         let shape = with_forced_playback_context(
-            error_shape(false, false, Sub::No, Some(&verdict), RuntimeFailure::TvPipeline), true);
+            error_shape(false, false, Sub::No, Some(&standing), RuntimeFailure::TvPipeline), true);
         assert_eq!(shape.kind, FailureKind::PlaybackPolicy);
         assert_eq!(shape.detail, verdict);
     }
@@ -3313,6 +3411,140 @@ mod tests {
             assert_eq!(failure_actions(shape.kind, cx), vec![FailureAction::TryAgain, FailureAction::Back]);
             assert_eq!(failure_actions(shape.kind, FailureContext { can_retry: false, ..cx }), vec![FailureAction::Back]);
         }
+    }
+
+    /// **The app's own refusals are never captioned as the server's.** `NoQualifiedBackend` (this build
+    /// composes no backend that can play the item: on Tizen, every refused play) and
+    /// `DirectPlayDisabled` (the viewer's own setting) were both reduced to a sentence and read back as
+    /// `DecisionRefused`, so the read-out said "the server cannot play or convert this file" about a
+    /// refusal the server never made.
+    #[test]
+    fn an_app_refusal_never_blames_the_server() {
+        use crate::route::{ForcedFailure, PlayVerdict as V};
+        use plx_os::i18n::msg;
+        use plx_plex::plex::session::DirectPlayMode;
+        let _guard = plx_base::testlock::serial();
+        let shape_of = |verdict: V, mode: DirectPlayMode| {
+            let mut ps = crate::route::PlaybackSession::IDLE;
+            crate::route::set_direct_play_mode_for_test(&mut ps, mode);
+            crate::route::refuse_for_test(&mut ps, verdict);
+            error_captured(&ps, None)
+        };
+        let auto = DirectPlayMode::Auto;
+
+        // The server's own refusal is the one that names the server, and quotes its sentence.
+        let server = shape_of(V::Server("no hevc encoder".into(), Default::default()), auto);
+        assert_eq!(server.kind, FailureKind::DecisionRefused);
+        assert_eq!(server.caption, msg::widgets_failure_refused_c());
+        assert_eq!(server.detail, "no hevc encoder");
+
+        // Direct Play Disabled is the viewer's setting: a policy refusal with its own caption, and the
+        // verdict sentence (which names the way out) as the reason.
+        let disabled = shape_of(V::DirectPlayDisabled, DirectPlayMode::Disabled);
+        assert_eq!(disabled.kind, FailureKind::PlaybackPolicy);
+        assert_eq!(disabled.kind.code(), "playback_policy");
+        assert_eq!(disabled.caption, msg::widgets_failure_direct_play_disabled_c());
+        assert_ne!(disabled.caption, msg::widgets_failure_refused_c());
+        assert_eq!(disabled.detail, V::DirectPlayDisabled.text());
+        assert!(!disabled.panel.contains("refused the item at /decision"), "{}", disabled.panel);
+
+        // No qualified backend is this build's: a kind and a wire code of its own, no server in the words,
+        // no detail (nothing was said by the server or the file), and not the generic open failure.
+        let none = shape_of(V::NoQualifiedBackend, auto);
+        assert_eq!(none.kind, FailureKind::NoQualifiedBackend);
+        assert_eq!(none.kind.code(), "no_qualified_backend");
+        assert_eq!(none.caption, msg::widgets_failure_no_backend_c());
+        assert_eq!(none.readout, msg::widgets_reason_no_backend());
+        assert!(none.detail.is_empty());
+        assert_ne!(none.caption, msg::widgets_failure_refused_c());
+        assert_ne!(none.caption, msg::widgets_failure_open_c());
+        assert!(!none.panel.contains("server refused"), "{}", none.panel);
+
+        // Under Force a build with no Feed has no backend BECAUSE of Force (`pms_uri_possible` needs
+        // `!forced`), so Auto could play it: the Force policy's read-out, not "this TV can't".
+        let none_forced = shape_of(V::NoQualifiedBackend, DirectPlayMode::Forced);
+        assert_eq!(none_forced.kind, FailureKind::PlaybackPolicy);
+        assert_eq!(none_forced.caption, msg::widgets_failure_forced_playback_c());
+        // Force's refusal stays the force policy's (the session's mode is what converts it), and without the
+        // mode it is still a decision refusal, as before.
+        let forced = shape_of(V::Forced(ForcedFailure::Video), DirectPlayMode::Forced);
+        assert_eq!(forced.kind, FailureKind::PlaybackPolicy);
+        assert_eq!(shape_of(V::Forced(ForcedFailure::Video), auto).kind, FailureKind::DecisionRefused);
+
+        // The two the resolver catches before it asks for a shape keep the shapes `verdict_shape` gives them.
+        assert_eq!(shape_of(V::TunersBusy, auto).kind, FailureKind::TunersBusy);
+        let preview = V::PreviewNeedsDirectPlay { reason: plx_telemetry::telemetry::classes::PreviewRefusal::NotDirect };
+        assert_eq!(shape_of(preview.clone(), auto).kind, FailureKind::PreviewNotDirect);
+        for verdict in [V::TunersBusy, preview] {
+            let by_verdict = verdict_shape(&verdict);
+            let by_resolver = shape_of(verdict, auto);
+            assert_eq!((by_verdict.kind, by_verdict.caption, by_verdict.readout),
+                (by_resolver.kind, by_resolver.caption, by_resolver.readout));
+        }
+    }
+
+    /// **The refusal under Disabled is still answered**: #1556 gave a Live TV channel under Disabled
+    /// *Play automatically* (it was *Back* alone) while the refusal read as the server's. Now that the
+    /// refusal is the policy's, the same row survives the kind move, and a channel has no rung or pick to
+    /// add to it.
+    #[test]
+    fn direct_play_disabled_refusal_still_offers_play_automatically() {
+        use FailureAction as A;
+        use plx_plex::plex::session::DirectPlayMode;
+        let _guard = plx_base::testlock::serial();
+        let mut ps = crate::route::PlaybackSession::IDLE;
+        crate::route::set_direct_play_mode_for_test(&mut ps, DirectPlayMode::Disabled);
+        crate::route::refuse_for_test(&mut ps, crate::route::PlayVerdict::DirectPlayDisabled);
+        let kind = error_captured(&ps, None).kind;
+        assert_eq!(kind, FailureKind::PlaybackPolicy);
+        let cx = FailureContext { can_retry: true, ..failure_context_captured(&ps, None, true) };
+        assert!(cx.direct_play_disabled && !cx.forced);
+        assert_eq!(failure_actions(kind, cx), [A::PlayAutomatically, A::Back]);
+        for (quality_carriable, tracks_available) in [(false, false), (true, false), (true, true)] {
+            let cx = FailureContext { quality_carriable, tracks_available, ..cx };
+            assert_eq!(failure_actions(kind, cx), [A::PlayAutomatically, A::Back], "no rung or pick changes a policy's answer");
+        }
+        assert_eq!(failure_actions(kind, FailureContext { can_retry: false, ..cx }), [A::Back], "nothing to resolve again");
+        // Under Auto there is no policy to lift, so nothing is offered.
+        assert_eq!(failure_actions(kind, FailureContext { direct_play_disabled: false, ..cx }), [A::Back]);
+    }
+
+    /// **No qualified backend has one answer**: *Back*, because nothing about the request changes what the
+    /// build can compose, and a retry or a rung resolves to the same refusal. Under Force the Force arm's
+    /// fix (Auto lets a URI qualification in) leads, as it does for every failure there.
+    #[test]
+    fn no_qualified_backend_offers_only_back_unless_force_is_on() {
+        use FailureAction as A;
+        let cx = FailureContext { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
+        assert_eq!(failure_actions(FailureKind::NoQualifiedBackend, cx), [A::Back]);
+        assert_eq!(failure_actions(FailureKind::NoQualifiedBackend, FailureContext { direct_play_disabled: true, ..cx }), [A::Back]);
+        assert_eq!(failure_actions(FailureKind::NoQualifiedBackend, FailureContext { forced: true, ..cx }),
+            [A::PlayAutomatically, A::Back]);
+    }
+
+    /// **The `failtest` arms for the app's own refusals** reach the real resolver and the table, so
+    /// `ui-sim` can show each read-out: `disabled` reads as the policy's and its row offers *Play
+    /// automatically*; `no_backend` reads as this build's and its row is *Back*.
+    #[test]
+    fn the_failtest_arms_show_the_app_refusals() {
+        use FailureAction as A;
+        let _guard = plx_base::testlock::serial();
+        let ps = crate::route::PlaybackSession::IDLE;
+        let disabled = error_captured(&ps, Some("disabled"));
+        assert_eq!(disabled.kind, FailureKind::PlaybackPolicy);
+        assert_eq!(disabled.caption, plx_os::i18n::msg::widgets_failure_direct_play_disabled_c());
+        let cx = FailureContext { can_retry: true, ..failure_context_captured(&ps, Some("disabled"), false) };
+        assert!(cx.direct_play_disabled && !cx.forced, "the arm stands for a Disabled session");
+        assert_eq!(failure_actions(disabled.kind, cx), [A::PlayAutomatically, A::Back]);
+        let none = error_captured(&ps, Some("no_backend"));
+        assert_eq!(none.kind, FailureKind::NoQualifiedBackend);
+        let cx = FailureContext { can_retry: true, ..failure_context_captured(&ps, Some("no_backend"), false) };
+        assert!(!cx.direct_play_disabled && !cx.forced);
+        assert_eq!(failure_actions(none.kind, cx), [A::Back]);
+        // The existing arms keep their contexts: `policy` is Force, the rest are neither.
+        assert!(failure_context_captured(&ps, Some("policy"), false).forced);
+        assert!(!failure_context_captured(&ps, Some("verdict"), false).forced);
+        assert!(!failure_context_captured(&ps, None, false).direct_play_disabled);
     }
 
     /// **Each cause converts to its own telemetry class, under the code it always had.** The class
@@ -3336,6 +3568,7 @@ mod tests {
             (K::ResolveFailed, "resolve_failed"),
             (K::TunersBusy, "tuners_busy"),
             (K::PreviewNotDirect, "preview_not_direct"),
+            (K::NoQualifiedBackend, "no_qualified_backend"),
             (K::ServerStopped, "server_stopped"),
             (K::Unspecified, "unspecified"),
         ];
@@ -3393,8 +3626,16 @@ mod tests {
                     assert!(!row.contains(&a), "no request to resolve again — {at}");
                 }
             }
-            if matches!(kind, K::DecisionRefused | K::PlaybackPolicy | K::TvPipeline | K::NoVideoTranscodeTarget) {
+            if matches!(kind, K::DecisionRefused | K::PlaybackPolicy | K::NoQualifiedBackend | K::TvPipeline | K::NoVideoTranscodeTarget) {
                 assert!(!row.contains(&A::TryAgain), "a deterministic refusal repeats — {at}");
+            }
+            if matches!(kind, K::PlaybackPolicy | K::NoQualifiedBackend) {
+                // The app's own refusals: no rung or pick changes the answer, only lifting the policy can.
+                assert!(!row.contains(&A::ChangeQuality) && !row.contains(&A::ChangeTracks), "{at}");
+                assert_eq!(row.len() - 1 == 1, row.contains(&A::PlayAutomatically), "{at}");
+            }
+            if matches!(kind, K::NoQualifiedBackend) && !cx.forced {
+                assert_eq!(row, [A::Back], "{at}");
             }
             if matches!(kind, K::NoVideoTrack) {
                 assert_eq!(row, [A::Back], "{at}");
@@ -3441,7 +3682,7 @@ mod tests {
         use FailureAction as A;
         use plx_plex::plex::session::DirectPlayMode;
         let mut ps = crate::route::PlaybackSession::IDLE;
-        let retryable = |ps: &crate::route::PlaybackSession| FailureContext { can_retry: true, ..failure_context_captured(ps, false, false) };
+        let retryable = |ps: &crate::route::PlaybackSession| FailureContext { can_retry: true, ..failure_context_captured(ps, None, false) };
 
         crate::route::set_direct_play_mode_for_test(&mut ps, DirectPlayMode::Disabled);
         let cx = retryable(&ps);
@@ -4399,7 +4640,7 @@ mod tests {
                 true,
                 true,
                 sub,
-                Some(VP9),
+                Some(&crate::route::PlayVerdict::Server(VP9.into(), Default::default())),
                 RuntimeFailure::PlaybackInterrupted,
             );
             assert_eq!(
@@ -4429,7 +4670,8 @@ mod tests {
             false,
             true,
             Sub::No,
-            Some("Implementation for video encoder 'hevc' not found."),
+            Some(&crate::route::PlayVerdict::Server(
+                "Implementation for video encoder 'hevc' not found.".into(), Default::default())),
             RuntimeFailure::PlaybackInterrupted,
         );
         assert!(!e.no_pass);
@@ -4438,7 +4680,7 @@ mod tests {
             false,
             true,
             Sub::No,
-            Some(""),
+            Some(&crate::route::PlayVerdict::Server(String::new(), Default::default())),
             RuntimeFailure::PlaybackInterrupted,
         );
         assert_eq!(e.readout, "The server cannot play or convert this file");

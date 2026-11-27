@@ -11,8 +11,7 @@ pub(super) fn capture(ps: &plx_media::route::PlaybackSession, meta: plx_data::me
     if forced || state == player::PlaybackState::Error {
         let error = player::error_captured(ps, diagnostic.as_deref());
         let caption = error.caption;
-        let context = player::failure_context_captured(ps, diagnostic.as_deref().is_some_and(|arm| arm.trim() == "policy"),
-            player::failed_tracks_available(ps, meta));
+        let context = player::failure_context_captured(ps, diagnostic.as_deref(), player::failed_tracks_available(ps, meta));
         let actions = player::failure_actions(error.kind, context);
         let support = player::support_line(error.kind);
         let readout = FailureReadout::captured(error, actions, support, ps.repair_status);

@@ -7504,6 +7504,12 @@ pub fn note_engine_failure(ps: &mut PlaybackSession, cause: crate::player::Runti
 pub fn play_verdict(ps: &PlaybackSession) -> Option<std::borrow::Cow<'_, str>> {
     ps.play_verdict.as_ref().map(PlayVerdict::text)
 }
+/// The refusal as the TYPED verdict, for the one reader that must tell the app's own refusals from the
+/// server's (`player::error_captured`): [`play_verdict`] is the sentence, and a sentence cannot say whose
+/// decision it was. `None` when nothing was refused. MAIN THREAD, like [`play_verdict`].
+pub(crate) fn play_verdict_typed(ps: &PlaybackSession) -> Option<&PlayVerdict> {
+    ps.play_verdict.as_ref()
+}
 pub(crate) fn tuners_busy(ps: &PlaybackSession) -> bool {
     matches!(ps.play_verdict, Some(PlayVerdict::TunersBusy))
 }
