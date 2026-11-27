@@ -240,6 +240,19 @@ fn aac_that_is_adts_already_is_passed_through_untouched() {
     assert!(!packet_has_adts(&framed[7..]), "the payload after the one header is the raw block");
 }
 
+/// A 7.1 track is framed with all eight channels whatever its own configuration says.
+#[test]
+fn a_7_1_aac_track_is_framed_with_eight_channels() {
+    assert_eq!(adts_chan_cfg(7, 8), 7, "HE-AAC 7.1 states 7 itself");
+    assert_eq!(adts_chan_cfg(12, 8), 7, "FFmpeg's 7.1 AAC-LC states 12");
+    assert_eq!(adts_chan_cfg(0, 8), 7, "a PCE-described 7.1");
+    assert_eq!(adts_chan_cfg(2, 2), 2);
+    assert_eq!(adts_chan_cfg(6, 6), 6);
+    assert_eq!(adts_chan_cfg(0, 6), 6, "a PCE-described 5.1 keeps its width");
+    assert_eq!(adts_chan_cfg(0, 0), 2, "nothing known stays stereo");
+    assert_eq!(adts_chan_cfg(0, 12), 2, "wider than 7.1 has no ADTS config");
+}
+
 /// Passing a framed unit through needs no parameters; reframing a raw one does.
 #[test]
 fn without_parameters_only_adts_is_usable() {
