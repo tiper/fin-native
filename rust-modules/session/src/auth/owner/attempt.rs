@@ -197,6 +197,7 @@ impl Partition {
 impl PartitionView<'_> {
     pub(super) fn roster_dead_end(&self) -> bool { self.attempt.phase() == Phase::Profiles && self.attempt.picker_data().users.is_empty() && !self.common.pending.values().any(|pending| pending.key.op == SessionOp::HomeRoster) }
     pub(super) fn dead_end_resumes(&self) -> bool { matches!(self.common.authority, BootstrapAuthority::DevPms { .. }) || self.common.committed_credentials.merge_into(&self.common.persisted).can_go_local() }
+    pub(super) fn dev_session(&self) -> bool { matches!(self.common.authority, BootstrapAuthority::DevPms { .. }) }
     pub(super) fn switch_refused(&self) -> bool { self.common.switch_refused_for.as_ref().is_some_and(|id| id.matches(&self.common.persisted)) }
     pub(super) fn readout_account(&self) -> Option<&str> { self.attempt.readout_account() }
     pub(super) fn roster_readout_up(&self) -> bool { self.attempt.roster_readout_up() }

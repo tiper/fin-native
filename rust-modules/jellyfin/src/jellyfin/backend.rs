@@ -1047,7 +1047,7 @@ impl Backend for Shared {
         let Some(channels) = self.0.live_channels_of(epg) else { return (None, None) };
         (Some(200), Some(channels.iter().filter_map(livetv::channel_of).collect()))
     }
-    fn epg_on_now(&self, epg: &str, _now: i64) -> Option<Vec<Metadata>> {
+    fn epg_guide(&self, epg: &str, _now: i64, _until: i64) -> Option<Vec<Metadata>> {
         Some(self.0.live_channels_of(epg)?.iter().filter_map(livetv::airing_of).collect())
     }
     fn tune(&self, _off: &plx_base::task::OffFrame, _dvr: &str, channel: &str, playback: &str) -> plx_plex::plex::livetv::TuneOutcome {

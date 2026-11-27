@@ -19,10 +19,10 @@ fn take(stores: &mut Stores) -> (Job<LiveTvReq>, LiveTvPort) {
     (job, port)
 }
 fn guide(numbers: &[&str], end: i64) -> Guide {
-    Guide { dvr: "7".into(), provider: "tv.plex.providers.epg.xmltv:7".into(), refresh_at: end, retry_cd: 0, strikes: 0, channels: numbers.iter()
+    Guide { dvr: "7".into(), provider: "tv.plex.providers.epg.xmltv:7".into(), refresh_at: end, retry_cd: 0, strikes: 0, until: 0, channels: numbers.iter()
         .map(|number| LiveChannel { dvr: "7".into(), channel: format!("C{number}"), vcn: number.to_string(),
             name: "Channel".into(), thumb: "/logo".into(), now: "Show".into(),
-            now_thumb: "/show".into(), now_summary: String::new(), begins_at: 0, ends_at: end }).collect() }
+            now_thumb: "/show".into(), now_summary: String::new(), begins_at: 0, ends_at: end, later: Vec::new() }).collect() }
 }
 fn complete(guides: Vec<Guide>) -> ReadResult { ReadResult { guides, roster: None, complete: true, retry: false } }
 fn answer(stores: &mut Stores, result: Option<Vec<Guide>>) {
@@ -255,11 +255,16 @@ struct Script {
     second_dvr: bool,
     fail_lineup: std::cell::Cell<bool>,
     fail_grid: std::cell::Cell<bool>,
+    /// The far end each grid read was asked for (`0`: the Guide's live window).
+    untils: std::cell::RefCell<Vec<i64>>,
     empty_grid: bool,
     empty_lineup: bool,
+    later: bool,
 }
 impl Script {
-    fn new() -> Self { Self { calls: Default::default(), second_dvr: false, fail_lineup: false.into(), fail_grid: false.into(), empty_grid: false, empty_lineup: false } }
+    fn new() -> Self { Self { calls: Default::default(), second_dvr: false, fail_lineup: false.into(), fail_grid: false.into(), untils: Default::default(), empty_grid: false, empty_lineup: false, later: false } }
+    /// The grid answers a second airing after the one on now.
+    fn with_later(mut self) -> Self { self.later = true; self }
 }
 impl LiveTvIo for Script {
     fn dvrs(&self) -> (Option<i32>, Option<Vec<plx_plex::plex::Dvr>>) {
@@ -274,12 +279,20 @@ impl LiveTvIo for Script {
         if self.empty_lineup { return (Some(200), Some(Vec::new())); }
         (Some(200), Some(vec![plx_plex::plex::EpgChannel { grid_key: "C2".into(), vcn: "2".into(), title: "2 Channel".into(), thumb: "/logo".into() }]))
     }
-    fn on_now(&self, provider: &str, now: i64) -> Option<Vec<plx_plex::plex::Metadata>> {
+    fn guide(&self, provider: &str, now: i64, until: i64) -> Option<Vec<plx_plex::plex::Metadata>> {
         self.calls.borrow_mut().push(format!("grid:{provider}:{now}"));
+        self.untils.borrow_mut().push(until);
         if self.fail_grid.get() { None }
         else if self.empty_grid { Some(Vec::new()) }
-        else { Some(vec![serde_json::from_value(serde_json::json!({"title":"Programme","thumb":"/programme",
-            "Media":[{"channelVcn":"2","channelIdentifier":"C2","endsAt":now + 50}]})).unwrap()]) }
+        else {
+            let mut rows = vec![serde_json::from_value(serde_json::json!({"title":"Programme","thumb":"/programme",
+                "Media":[{"channelVcn":"2","channelIdentifier":"C2","endsAt":now + 50}]})).unwrap()];
+            if self.later {
+                rows.push(serde_json::from_value(serde_json::json!({"title":"Next",
+                    "Media":[{"channelVcn":"2","channelIdentifier":"C2","beginsAt":now + 50,"endsAt":now + 800}]})).unwrap());
+            }
+            Some(rows)
+        }
     }
 }
 fn execute(stores: &mut Stores, io: &Script) {
@@ -417,6 +430,27 @@ fn livetv_play_title_preserves_the_unnumbered_name_and_stale_guides_do_not_spin(
     assert_eq!(Guide::next_refresh(&guide(&["1"], 200).channels, 201), 261);
 }
 
+/// The Guide's window slides every half hour, so the guide is read again when it does even if the airing on now
+/// runs far past it: otherwise a programme entering the window's far end waits for some airing to end.
+#[test]
+fn the_guide_is_read_again_when_the_window_moves_if_that_comes_before_an_airing_ends() {
+    let ends_much_later = 1_792_522_800 + 6 * 3_600;
+    let channels = guide(&["1"], ends_much_later).channels;
+    let now = 1_792_522_800 + 600;
+    assert_eq!(Guide::next_refresh(&channels, now), 1_792_522_800 + 1_800, "the next half hour, not the airing's end");
+    assert_eq!(Guide::next_refresh(&guide(&["1"], now + 60).channels, now), now + 60, "an airing that ends first is read at its end");
+    assert_eq!(Guide::next_refresh(&[], 1_792_522_800 + 1_790), 1_792_524_600, "the poll never runs past the window's move");
+}
+
+#[test]
+fn livetv_the_grid_read_publishes_the_programmes_after_the_one_on_now() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_later();
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    let channel = &stores.livetv_view().channels[0];
+    assert_eq!(channel.now, "Programme");
+    assert_eq!(channel.later.iter().map(|a| (a.title.as_str(), a.begins_at, a.ends_at)).collect::<Vec<_>>(), [("Next", 150, 900)]);
+}
+
 #[test]
 fn an_armed_landing_gate_asks_no_live_tv_lineup() {
     // A recording or replay owns the run and its tape carries no Live TV read.
@@ -429,4 +463,66 @@ fn an_armed_landing_gate_asks_no_live_tv_lineup() {
     stores.landgate.disarm();
     assert!(!pump(&mut stores, &keys, 100));
     assert_eq!(stores.take_jobs_of(StoreId::LiveTv).len(), 2);
+}
+
+/// The Guide scrolled ahead asks the store for the far end of the window it shows ([`LiveTvCmd::Reach`]); the store
+/// reads the guide again to it when it grows, by the one re-read rule (a due guide is read), and never for a value
+/// it has already read to.
+#[test]
+fn a_reach_past_what_the_guide_was_read_to_reads_it_again_to_that_end_and_only_when_it_grows() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_later();
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    assert_eq!(io.untils.borrow().as_slice(), [0], "the first read is the live window's");
+    run(&mut stores, LiveTvCmd::Reach(7_200), &keys, 100);
+    let (job, port) = take(&mut stores);
+    assert!(matches!(&job.req.work, Work::Grid(_)), "the grid alone, not the lineup");
+    assert_eq!(job.req.until, 7_200);
+    finish_with(&port, job.addr, job.req, |req| read(&io, req));
+    pump(&mut stores, &keys, 100);
+    assert_eq!(io.untils.borrow().as_slice(), [0, 7_200]);
+    for reach in [7_200, 5_400, 0] {
+        run(&mut stores, LiveTvCmd::Reach(reach), &keys, 100);
+        assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty(), "a reach it has read to or past reads nothing: {reach}");
+    }
+    run(&mut stores, LiveTvCmd::Reach(9_000), &keys, 100);
+    assert_eq!(stores.take_jobs_of(StoreId::LiveTv).len(), 1, "a reach that grows reads again");
+}
+
+/// A shift made while a read is in flight is not lost when the read lands short: the guide is still behind the reach.
+#[test]
+fn a_read_that_lands_short_of_the_reach_leaves_the_guide_due() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_later();
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    run(&mut stores, LiveTvCmd::Reach(9_000), &keys, 100);
+    let (first, port) = take(&mut stores);
+    run(&mut stores, LiveTvCmd::Reach(10_800), &keys, 100);
+    assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty(), "one read at a time");
+    finish_with(&port, first.addr, first.req, |req| read(&io, req));
+    pump(&mut stores, &keys, 100);
+    let (second, _) = take(&mut stores);
+    assert_eq!(second.req.until, 10_800, "the landed read was short of the reach, so the guide is read again");
+}
+
+/// Release: with the reach back at 0 the next scheduled read is the live window's again.
+#[test]
+fn releasing_the_reach_returns_the_scheduled_reads_to_the_live_window() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_later();
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    run(&mut stores, LiveTvCmd::Reach(7_200), &keys, 100);
+    execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    run(&mut stores, LiveTvCmd::Reach(0), &keys, 100);
+    pump(&mut stores, &keys, 400);
+    let (job, _) = take(&mut stores);
+    assert_eq!(job.req.until, 0, "the airing ended: the scheduled read asks for no more than the live window");
+}
+
+/// A reach set before the lineup is read is carried by that read, which then holds the guide to it.
+#[test]
+fn a_reach_set_before_the_first_read_is_carried_by_it() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_later();
+    run(&mut stores, LiveTvCmd::Reach(9_000), &keys, 100);
+    execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    assert_eq!(io.untils.borrow().as_slice(), [9_000]);
+    pump(&mut stores, &keys, 100);
+    assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty(), "read to the reach already");
 }

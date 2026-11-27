@@ -67,6 +67,7 @@ fn channel(vcn: &str) -> Channel {
         now_summary: String::new(),
         begins_at: 0,
         ends_at: 0,
+        later: Vec::new(),
     }
 }
 
@@ -153,6 +154,18 @@ fn seated(out: &[Stamped<TestHost>]) -> Vec<u32> {
 /// The panel's root, run through the id conformance (`AppArg::ChannelEntry`; the coverage table calls this).
 pub(crate) fn channel_entry_conforms() -> plx_ui::a11y::Namespaces {
     vec![plx_ui::a11y::conform::<TestHost, _>(&panel(2), &cx_at(0, None))]
+}
+
+/// **The panel is glass where there is a page and the sheet where there is the video plane, from one declaration**:
+/// it asks for the compact menu's dim over the HOST PAGE only (`Scrim::over_host`), which the container answers for
+/// `Style::Compact` (the What's on page: the field latches, `Ground::Menu` stands the glass) and drops for
+/// `Style::PlayerPanel` (the live player: nothing latches, no dim on the picture, `Ground::Menu` falls to the sheet).
+/// The container's half is `containers::tests::a_host_only_dim_is_owed_over_a_held_page_and_never_over_a_live_host`.
+#[test]
+fn the_panel_asks_for_the_compact_dim_over_a_held_page_only() {
+    let got = Screen::<TestHost>::scrim(&panel(2));
+    assert_eq!(got.alpha, plx_ui::theme::underlay::DIM_COMPACT);
+    assert!(got.host_only, "owed over a held page only");
 }
 
 /// Typing "2" lists every channel whose number starts with 2 in lineup order, the digit is on screen before any

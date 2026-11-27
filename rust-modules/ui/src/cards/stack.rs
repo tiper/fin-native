@@ -220,6 +220,12 @@ pub trait StackPage<H: Host> {
     fn plain_name(&self, _k: Self::Key, _n: usize) -> Option<&'static str> {
         None
     }
+    /// What a list's element says to the accessibility projection beyond its id: the page adds the label (what
+    /// the element is) and the subject (the title it acts on, as a card's) to `a11y`, which already carries the
+    /// element's id ([`plain_name`](Self::plain_name), else its position `n`). The default adds nothing.
+    fn plain_a11y<'a>(&'a self, _cx: &Cx<'_, H>, _k: Self::Key, _n: usize, a11y: A11y<'a>) -> A11y<'a> {
+        a11y
+    }
     /// Where a move `dir` from element `at` of a multi-element section ends inside it, as an index
     /// into [`plain_elem`](Self::plain_elem); `None` is the section's edge (its group's
     /// [`EdgeRule`]s and the page's links decide what is beyond).
@@ -1333,7 +1339,7 @@ impl<K: Copy + Eq, H: Host<Elem = u32>, P: StackPage<H, Key = K>> Focusable<H> f
                     Some(leaf) => section.name(leaf),
                     None => section.index(n),
                 };
-                Some(A11y::new(path, Role::Button))
+                Some(p.plain_a11y(cx, k, n, A11y::new(path, Role::Button)))
             }
         }
     }

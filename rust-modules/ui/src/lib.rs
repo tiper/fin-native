@@ -78,7 +78,10 @@ pub mod master_detail; // RESTRUCTURE (spec §10): reusable two-region focus/ret
 // `Screen` mounted through `app::bridge` rather than a `Popover` reached through `app.rs`'s key
 // ladders. Its deletion readout now borrows the Session owner's immutable publication;
 // no module-level deletion counter remains for a newly mounted screen to poll.
-pub mod page_stack; // the drill-in page stack Tracks and More share
+pub mod page_stack; // the drill-in page stack and the focus-stop functions the menus share
+#[cfg(test)]
+mod menu_tests; // every transition of `menu`, and the illegal combinations
+pub mod menu; // THE menu component: a table of rows in glass / sheet / flat card, its page stack and motion (grew out of page_stack)
 pub mod panel_motion; // the resize/page-slide spring of the in-player table popovers (Tracks, More)
 
 pub mod breadcrumb; // 'Films > Collections' crumb (PR5)
@@ -86,6 +89,7 @@ pub mod hstack; // one gap between a run of measured items (UIStackView spacing)
 pub mod vstack; // the same stack top to bottom (VStack/VFlow over hstack's engine) + the alert head ladder
 pub mod page_header; // the page header row: one layout, paint, focus group and motion for the Library, Collections, Recommended and Watchlist pages
 pub mod page_regions; // the column NAV/HEADER/CONTENT/RAIL: one table for the pages' links, BACK and first seat
+pub mod time_grid; // every row of a list against one clock: the Live TV Guide's board (axis, cells, overlap travel, paging, paint)
 pub mod caption_policy; // "Under posters": what a focused poster's caption band shows and how tall it is (CONTRACT FREEZE: P3 fills)
 pub mod pill; // THE CAPSULE OUTLINE — three blended arcs per corner, solved; not a stadium
 pub(crate) mod poster_grid; // uniform six-column portrait geometry for collection-like pages

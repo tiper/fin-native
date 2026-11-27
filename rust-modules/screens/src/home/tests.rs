@@ -2496,6 +2496,7 @@ fn ok_on_a_live_tv_channel_tunes_it_and_holding_it_opens_no_item_menu() {
         now_summary: String::new(),
         begins_at: 0,
         ends_at: 0,
+        later: Vec::new(),
     };
     plx_data::pms::seed_for_test(&mut state, &adapter, 0, plx_data::pms::HubState::Ready);
     let snapshot = plx_data::pms::hubs_snapshot(&state);
@@ -4025,7 +4026,7 @@ struct HeroArtState {
 /// A poster source that answers READY only for what the test delivered, and records the rest.
 struct HeroArtSpy;
 impl plx_ui::tex::Source for HeroArtSpy {
-    fn probe(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<plx_ui::art_fit::BackdropSpec>) -> Option<plx_machine::machine::PosterKey> {
+    fn probe(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<plx_ui::art_fit::Derive>) -> Option<plx_machine::machine::PosterKey> {
         HERO_ART.with(|a| {
             let mut a = a.borrow_mut();
             a.probed.push(path.into());
@@ -4035,7 +4036,7 @@ impl plx_ui::tex::Source for HeroArtSpy {
                 .map(|i| plx_machine::machine::PosterKey(i as u32))
         })
     }
-    fn warm(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<plx_ui::art_fit::BackdropSpec>) -> plx_ui::tex::Warm {
+    fn warm(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<plx_ui::art_fit::Derive>) -> plx_ui::tex::Warm {
         HERO_ART.with(|a| a.borrow_mut().warmed.push(path.into()));
         plx_ui::tex::Warm::Claimed
     }
@@ -4086,7 +4087,7 @@ fn deliver_hero_art(path: &str) {
     });
     plx_ui::tex::accept(plx_ui::tex::PosterReady {
         key: plx_machine::machine::PosterKey(key as u32),
-        result: Ok(plx_ui::tex::Decoded { w: 16, h: 9, rgba: vec![0; 16 * 9 * 4].into_boxed_slice(), backdrop: None }),
+        result: Ok(plx_ui::tex::Decoded { w: 16, h: 9, rgba: vec![0; 16 * 9 * 4].into_boxed_slice(), backdrop: None, ink: None }),
     });
     let mut budget = plx_ui::frame::Budget::new();
     budget.begin_frame(0);

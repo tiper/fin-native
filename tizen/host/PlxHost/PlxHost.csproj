@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- The .NET host of the Tizen package: a `type="dotnet"` application (a retail television refuses a native `capp` package) whose only job
-       is to load lib/libplx.so and drive its three C exports (plx_host_start / plx_host_post / plx_host_stop; the contract is
+       is to load lib/libplx.so and drive the C exports its header declares (the plx_host_* functions; the contract is
        rust-modules/platform-tizen/include/plx_host.h). It draws nothing and has no UI of its own.
 
        TFM `tizen80` (API 8, Tizen 6.0) through the Tizen.NET.Sdk NuGet route: the newer `net*-tizen` workload accepts only Tizen 8 and later, and

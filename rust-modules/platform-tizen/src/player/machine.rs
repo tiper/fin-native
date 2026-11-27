@@ -32,16 +32,17 @@
 //! do, not a codec verdict ([`CAPS`]); which streams the platform player decodes is the qualifier's concern
 //! ([`super::qualifier`]).
 use super::port::{Refusal, Verb, FULL_WINDOW};
-use crate::host_abi::{language_of_word, PlayerEvent, PlayerKind, AUDIO_LANGUAGE_REPORTS, PLAYER_FAIL_BASE};
+use crate::host_abi::{language_of_word, HostCue, PlayerEvent, PlayerKind, AUDIO_LANGUAGE_REPORTS, PLAYER_FAIL_BASE,
+    TEXT_LANGUAGE_REPORTS};
 use plx_media::route::uri_preflight::lang_matches;
-use plx_playback_contract::uri::{native_index, NativeTrackCheck, NativeTrackIndex, UriSource};
+use plx_playback_contract::uri::{native_index, NativeTrackCheck, NativeTrackIndex, UriCaption, UriSource};
 use plx_playback_contract::{AttemptId, Capabilities, CommandId, ContentTime, DispatchResult, DriverEvent,
     EvidenceSource, ExitDisposition, Failure, Observation, Observed, Operation, Playback, ReleaseStatus, Requirements,
     SourceKey, SourceKind, StopReason, TrackChoice, TrackKind, TrackSelection};
 use std::collections::VecDeque;
 
-/// What the driver can call: a progressive source, pause and seek. No HLS, no audio disable, no packet feed, no
-/// subtitle selection, and no variable speed (that has no flag: the planner refuses any rate but normal for every
+/// What the driver can call: a progressive source, pause, seek, an audio track and a text subtitle the app draws. No HLS,
+/// no audio disable, no packet feed, and no variable speed (that has no flag: the planner refuses any rate but normal for every
 /// URI driver). The flags say what is CALLABLE, never a codec veto.
 ///
 /// `audio_track` is `true`: the contract makes a play whose PMS-selected audio stream has an id a `Selected` track
@@ -58,13 +59,22 @@ use std::collections::VecDeque;
 /// UNMEASURED on a retail set: the native order, and whether the call succeeds in READY for an HTTP progressive source.
 /// Only a retail tester's log says either (`docs/tizen.md`, "The audio track is selected").
 ///
-/// `subtitle_off` is `true` by construction too: the host player is given no subtitle (no `player_set_subtitle_path`,
-/// no text-track selection, no subtitle callback), and `docs/tizen.md` ("Subtitles off") records the emulator run in
-/// which a file with an embedded default text track played with no subtitle on the picture. A play with subtitle
-/// streams and none selected is therefore one this driver carries, and its `SelectTrack(Subtitle, Off)` is settled
-/// without a host call ([`Machine::select_subtitle`]).
+/// `subtitle_track` is `true`: the APP draws a selected embedded text subtitle, and the driver's part is to make the
+/// host player raise that track's cues and hand them over. A `SelectTrack(Subtitle, Selected)` is asked of the host
+/// ([`Verb::TextTrack`], `player_select_track(TEXT)` on its video thread, which also turns the epoch's cues on) at the
+/// native index chosen the way an audio stream's is ([`choose_native_track`] over the languages the host posts before
+/// PREPARED; a Part's sole subtitle stream needs no language, but is still asked, because the verb is what turns the
+/// cues on), and settled when the host's `PLAYER_TRACK` echoes it. From then on each cue of that track is a
+/// [`UriCaption`] ([`Machine::cues`]). The player draws nothing of its own: measured on the emulator (2026-11-26,
+/// `docs/tizen.md`, "Selected text subtitles"), with and without the cue callback. Which codecs are offered is the qualifier's
+/// certification, not this flag.
+///
+/// `subtitle_off` is `true` by construction: since the player draws nothing, Off needs no host call. Its
+/// `SelectTrack(Subtitle, Off)` is settled at once, and the cues of a track that was on are dropped from then on
+/// ([`Machine::select_subtitle`]); `docs/tizen.md` ("Subtitles off") records the emulator run in which a file with an
+/// embedded default text track played with no subtitle on the picture.
 pub const CAPS: Capabilities = Capabilities { progressive_uri: true, hls_uri: false, packet_feed: false, pause: true,
-    seek: true, audio_track: true, subtitle_track: false, audio_off: false, subtitle_off: true };
+    seek: true, audio_track: true, subtitle_track: true, audio_off: false, subtitle_off: true };
 
 /// The deadlines the machine enforces, in milliseconds on the executor's clock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,8 +148,13 @@ struct Pending {
     command: CommandId,
     operation: Operation,
     deadline_ms: u64,
-    /// The native index an audio request asked for, which its `PLAYER_TRACK` must echo; `None` for every other control.
+    /// The native index an audio or subtitle request asked for, which its `PLAYER_TRACK` must echo; `None` for every
+    /// other control.
     native: Option<i64>,
+    /// The unanswered subtitle requests this one superseded ([`supersede_subtitle`]), held until its verb has gone out:
+    /// a verb the host refuses ([`Machine::verb_refused`]) puts them back, so a refused request supersedes nothing. Empty
+    /// for every other control.
+    superseded: Vec<Pending>,
 }
 
 /// ISO 639-2's codes that name no language: a track tagged with one cannot be told apart by its language.
@@ -163,6 +178,13 @@ fn names_language(code: &str) -> bool {
 /// call (`player_get_track_language_code`); the player API's codec and channel reads are of the CURRENT stream, not of
 /// an index, so they cannot tell siblings apart before a selection (`docs/tizen.md`, "The audio track is selected").
 pub(super) fn choose_native_audio(ordinal: i64, language: &str, native: &[Option<String>]) -> Result<i64, String> {
+    choose_native_track("audio", ordinal, language, native)
+}
+
+/// [`choose_native_audio`]'s rule for a track of either kind (`what` names it in a refusal): a subtitle stream with
+/// siblings is matched against the native TEXT tracks' languages the same way, with the same blind spot.
+pub(super) fn choose_native_track(what: &str, ordinal: i64, language: &str, native: &[Option<String>])
+    -> Result<i64, String> {
     if !names_language(language) {
         return Err(format!("PMS states no language for the stream ({language:?}), so its native track cannot be told"));
     }
@@ -173,8 +195,8 @@ pub(super) fn choose_native_audio(ordinal: i64, language: &str, native: &[Option
     match matching.as_slice() {
         _ if matching.contains(&ordinal) => Ok(ordinal),
         [only] => Ok(*only),
-        [] => Err(format!("no native audio track reports {language:?} (the player reported {native:?})")),
-        _ => Err(format!("native audio tracks {matching:?} all report {language:?} and the ordinal {ordinal} is not one \
+        [] => Err(format!("no native {what} track reports {language:?} (the player reported {native:?})")),
+        _ => Err(format!("native {what} tracks {matching:?} all report {language:?} and the ordinal {ordinal} is not one \
             of them (the player reported {native:?})")),
     }
 }
@@ -188,6 +210,10 @@ struct Active {
     checks: Vec<(TrackSelection, NativeTrackCheck)>,
     /// Each native audio track's language as the host reported it before PREPARED, in the player's order.
     native_audio: Vec<Option<String>>,
+    /// Each native TEXT track's language, reported the same way.
+    native_text: Vec<Option<String>>,
+    /// The subtitle whose cues are handed over: set when the host settled its `TextTrack`, cleared by an Off.
+    captioned: Option<TrackSelection>,
     start_deadline_ms: u64,
     prepared: bool,
     started_once: bool,
@@ -219,6 +245,17 @@ fn note(out: &mut VecDeque<DriverEvent>, attempt: AttemptId, observation: Observ
 
 fn observed<T>(value: T) -> Observed<T> {
     Observed { value, from: EvidenceSource::BackendReport }
+}
+
+/// Take every unanswered subtitle request out of the controls: a newer one was accepted ([`Machine::select_subtitle`]),
+/// and the contract completes only the newer. The host's answer to one taken out matches no control and is ignored. The
+/// caller holds them on the newer request until its verb has gone out ([`Pending::superseded`]). Their own held requests
+/// were superseded by verbs that did go out, so those are dropped.
+fn supersede_subtitle(active: &mut Active) -> Vec<Pending> {
+    let (superseded, kept) = std::mem::take(&mut active.controls).into_iter().partition(|control|
+        matches!(control.operation, Operation::SelectTrack { kind: TrackKind::Subtitle, .. }));
+    active.controls = kept;
+    superseded.into_iter().map(|control| Pending { superseded: Vec::new(), ..control }).collect()
 }
 
 /// The pure step of the Tizen URI driver.
@@ -324,7 +361,7 @@ impl Machine {
         // The attempt id is spent by a Start the host then refuses: the planner mints a new one for its next try.
         self.last_started = Some(attempt);
         self.active = Some(Active { attempt, epoch, phase: Phase::Opening, tracks, checks, native_audio: Vec::new(),
-            start_deadline_ms: now_ms.saturating_add(self.timing.startup_timeout_ms), prepared: false, started_once: false,
+            native_text: Vec::new(), captioned: None, start_deadline_ms: now_ms.saturating_add(self.timing.startup_timeout_ms), prepared: false, started_once: false,
             paused: false, ended: false, rebuffering: false, stalled_since: None, last_position: None, frozen: false,
             controls: Vec::new() });
         fx.push(Fx::Open { epoch, url, area: FULL_WINDOW });
@@ -366,8 +403,11 @@ impl Machine {
                 }
                 None
             }
-            Verb::Play | Verb::Pause | Verb::Seek { .. } | Verb::AudioTrack { .. } => {
-                active.controls.pop();
+            Verb::Play | Verb::Pause | Verb::Seek { .. } | Verb::AudioTrack { .. } | Verb::TextTrack { .. } => {
+                // A refused subtitle request supersedes nothing: the requests it took out are pending again.
+                if let Some(refused) = active.controls.pop() {
+                    active.controls.extend(refused.superseded);
+                }
                 Some(DispatchResult::Refused(refusal.failure()))
             }
         }
@@ -403,7 +443,7 @@ impl Machine {
             _ => return DispatchResult::Refused(Failure::Unsupported),
         };
         active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms),
-            native: None });
+            native: None, superseded: Vec::new() });
         fx.push(Fx::Verb { epoch: active.epoch, verb });
         DispatchResult::Queued
     }
@@ -450,25 +490,97 @@ impl Machine {
         let Ok(command_word) = i64::try_from(command.get()) else { return DispatchResult::Refused(Failure::Unsupported) };
         let operation = Operation::SelectTrack { kind: TrackKind::Audio, choice };
         active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms),
-            native: Some(index) });
+            native: Some(index), superseded: Vec::new() });
         fx.push(Fx::Verb { epoch: active.epoch, verb: Verb::AudioTrack { index, command: command_word } });
         DispatchResult::Queued
     }
 
-    /// A subtitle request. The host player has no subtitle verb, so only Off can be honoured, and it is settled by
-    /// construction: the player is never given a subtitle to show ([`CAPS`]). Selecting a subtitle is `Unsupported`.
-    pub fn select_subtitle(&mut self, attempt: AttemptId, command: CommandId, choice: TrackChoice) -> DispatchResult {
-        let Some(active) = self.active.as_ref().filter(|a| a.attempt == attempt) else {
+    /// A subtitle request. Off is settled by construction (the player draws nothing of its own) and drops the cues of the
+    /// track that was on. A selected stream is asked of the host at the native TEXT index its evidence picks, as an audio
+    /// stream is ([`choose_native_track`]; a Part's sole subtitle stream needs no language), and settled on the host's
+    /// `PLAYER_TRACK` ([`CAPS`]). A stream the map does not name, or whose native track cannot be told, is `Unsupported`
+    /// and logged.
+    ///
+    /// An accepted request SUPERSEDES a subtitle request the host has not answered yet (the contract lets a second
+    /// `SelectTrack` go out while the first is pending, and completes only the newer): the older one is forgotten, so its
+    /// late `PLAYER_TRACK` neither makes its track the captioned one nor reports it selected. The host answers verbs in
+    /// order, so after a newer pick the native track is the newer one's; after Off it may be the older one's, which draws
+    /// nothing, since the app no longer takes its cues. A refused request supersedes nothing, whether this step refuses it
+    /// or the host refuses its verb: the superseded requests ride on the newer one until its verb has gone out, and a
+    /// refused verb puts them back ([`Machine::verb_refused`]), with their own deadlines.
+    pub fn select_subtitle(&mut self, now_ms: u64, attempt: AttemptId, command: CommandId, choice: TrackChoice,
+        fx: &mut Vec<Fx>) -> DispatchResult {
+        let Some(active) = self.active.as_mut().filter(|a| a.attempt == attempt) else {
             return DispatchResult::Refused(Failure::Stale);
         };
-        if choice != TrackChoice::Off {
-            return DispatchResult::Refused(Failure::Unsupported);
-        }
         if active.phase != Phase::Open || !active.prepared {
             return DispatchResult::Refused(Failure::Busy);
         }
-        self.pending.push_back(DriverEvent::TrackSettled { attempt, command, kind: TrackKind::Subtitle, choice });
+        let id = match choice {
+            TrackChoice::Off => {
+                // Off asks nothing of the host, so nothing can refuse it: what it supersedes is retired at once.
+                drop(supersede_subtitle(active));
+                active.captioned = None;
+                self.pending.push_back(DriverEvent::TrackSettled { attempt, command, kind: TrackKind::Subtitle, choice });
+                return DispatchResult::Queued;
+            }
+            TrackChoice::Selected(id) => id,
+            TrackChoice::Unspecified => return DispatchResult::Refused(Failure::Unsupported),
+        };
+        let track = TrackSelection { kind: TrackKind::Subtitle, id };
+        let Some(ordinal) = native_index(&active.tracks, track) else { return DispatchResult::Refused(Failure::Unsupported) };
+        let check = active.checks.iter().find(|(stated, _)| *stated == track).map(|(_, check)| check);
+        let chosen = match check {
+            // The Part's only subtitle stream: no sibling to mistake it for. Still asked, since the verb turns cues on.
+            Some(NativeTrackCheck::Sole) if ordinal == 0 => Ok(0),
+            Some(NativeTrackCheck::Sole) => Err(format!("a sole stream cannot sit at ordinal {ordinal}")),
+            Some(NativeTrackCheck::Language(language)) => choose_native_track("text", ordinal, language, &active.native_text),
+            None => Err("the source states no identity for the stream".to_owned()),
+        };
+        let index = match chosen {
+            Ok(index) => index,
+            Err(why) => {
+                fx.push(Fx::Log(format!("tizen-uri: subtitle stream {id} at ordinal {ordinal} refused: {why}")));
+                return DispatchResult::Refused(Failure::Unsupported);
+            }
+        };
+        if index != ordinal {
+            fx.push(Fx::Log(format!(
+                "tizen-uri: subtitle stream {id} is native text track {index}, not its ordinal {ordinal}, by its language")));
+        }
+        let Ok(command_word) = i64::try_from(command.get()) else { return DispatchResult::Refused(Failure::Unsupported) };
+        let operation = Operation::SelectTrack { kind: TrackKind::Subtitle, choice };
+        let superseded = supersede_subtitle(active);
+        active.controls.push(Pending { command, operation, deadline_ms: now_ms.saturating_add(self.timing.control_timeout_ms),
+            native: Some(index), superseded });
+        fx.push(Fx::Verb { epoch: active.epoch, verb: Verb::TextTrack { index, command: command_word } });
         DispatchResult::Queued
+    }
+
+    /// The host's cues as the app's captions, appended to `out`: only a cue of the active, prepared epoch whose subtitle
+    /// the host settled and nothing turned off since, and only one with text and a duration (an empty cue is the
+    /// player's "the cue ended", which a caption's own duration already says). A cue whose times are negative is dropped.
+    /// While a subtitle `TextTrack` is unanswered NO cue is handed over: the host selects the new native track before it
+    /// posts `PLAYER_TRACK`, so a cue then may already be the new track's and must not be drawn as the settled one's.
+    pub fn cues(&self, cues: &[HostCue], out: &mut Vec<UriCaption>) {
+        let Some(active) = self.active.as_ref() else { return };
+        let Some(track) = active.captioned else { return };
+        if active.phase != Phase::Open || !active.prepared {
+            return;
+        }
+        if active.controls.iter().any(|c| matches!(c.operation, Operation::SelectTrack { kind: TrackKind::Subtitle, .. })) {
+            return;
+        }
+        for cue in cues.iter().filter(|cue| cue.epoch == active.epoch && !cue.text.is_empty()) {
+            let (Ok(start), Ok(duration_ms)) = (u64::try_from(cue.position_ms), u64::try_from(cue.duration_ms)) else {
+                continue;
+            };
+            if duration_ms == 0 {
+                continue;
+            }
+            out.push(UriCaption { attempt: active.attempt, track, start: ContentTime::from_millis(start), duration_ms,
+                text: cue.text.clone() });
+        }
     }
 
     /// A Stop of `attempt`: close, and wait for the host's confirmation.
@@ -568,6 +680,15 @@ impl Machine {
                     active.native_audio[index] = language_of_word(event.b);
                 }
             }
+            // The same, one per native TEXT track.
+            PlayerKind::TextLanguage if live && !active.prepared => {
+                if let Some(index) = usize::try_from(event.a).ok().filter(|index| *index < TEXT_LANGUAGE_REPORTS) {
+                    if active.native_text.len() <= index {
+                        active.native_text.resize(index + 1, None);
+                    }
+                    active.native_text[index] = language_of_word(event.b);
+                }
+            }
             PlayerKind::Track => {
                 let at = active.controls.iter().position(|c| matches!(c.operation, Operation::SelectTrack { .. })
                     && i64::try_from(c.command.get()) == Ok(event.a));
@@ -580,6 +701,9 @@ impl Machine {
                     }.filter(|_| live && event.b >= 0 && control.native == Some(event.b));
                     match selected {
                         Some(track) => {
+                            if track.kind == TrackKind::Subtitle {
+                                active.captioned = Some(track);
+                            }
                             note(out, attempt, Observation::TrackSelected(observed(track)));
                             out.push_back(DriverEvent::TrackSettled { attempt, command: control.command, kind, choice });
                         }
@@ -742,9 +866,9 @@ impl Machine {
         self.active.is_some()
     }
 
-    /// An audio stream the active source's track map names: the ones [`Machine::select_audio`] can ask the host for.
+    /// A stream the active source's track map names: the ones [`Machine::select_audio`] and [`Machine::select_subtitle`]
+    /// can ask the host for.
     pub fn maps_track(&self, selection: TrackSelection) -> bool {
-        selection.kind == TrackKind::Audio
-            && self.active.as_ref().is_some_and(|a| native_index(&a.tracks, selection).is_some())
+        self.active.as_ref().is_some_and(|a| native_index(&a.tracks, selection).is_some())
     }
 }

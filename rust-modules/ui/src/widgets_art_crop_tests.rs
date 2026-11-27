@@ -90,8 +90,8 @@ fn a_card_resolves_the_blurred_copy_with_its_picture() {
     use plx_machine::machine::PosterKey;
     struct Always;
     impl Source for Always {
-        fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::BackdropSpec>) -> Option<PosterKey> { Some(PosterKey(7)) }
-        fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::BackdropSpec>) -> Warm { Warm::Known }
+        fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> Option<PosterKey> { Some(PosterKey(7)) }
+        fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> Warm { Warm::Known }
         fn logo(&self, _: u16, _: &str) -> Option<PosterKey> { None }
         fn logo_warm(&self, _: u16, _: &str) -> Warm { Warm::Known }
         fn unresident(&self, _: PosterKey, _: bool) {}
@@ -108,8 +108,8 @@ fn a_card_resolves_the_blurred_copy_with_its_picture() {
     crate::tex::install(&SOURCE);
     for (w, h, expect_copy) in [(375u16, 375u16, true), (250, 375, false)] {
         crate::tex::reset_for_test(usize::MAX);
-        let picture = Decoded { w, h, rgba: [40, 80, 120, 255].repeat(w as usize * h as usize).into_boxed_slice(), backdrop: None };
-        crate::tex::accept(PosterReady { key: PosterKey(7), result: Ok(crate::art_fit::attach_backdrop(picture, crate::art_fit::BackdropSpec::POSTER)) });
+        let picture = Decoded { w, h, rgba: [40, 80, 120, 255].repeat(w as usize * h as usize).into_boxed_slice(), backdrop: None, ink: None };
+        crate::tex::accept(PosterReady { key: PosterKey(7), result: Ok(crate::art_fit::attach_derived(picture, crate::art_fit::Derive::POSTER)) });
         let mut budget = crate::frame::Budget::new();
         budget.begin_frame(0);
         let mut present = plx_machine::present::Present::new();
@@ -199,18 +199,18 @@ fn a_contained_tile_fading_in_fades_its_card_once() {
 /// and the draw would not find it again.
 #[test]
 fn a_led_tile_resolves_the_key_its_rows_fit_draws() {
-    use crate::art_fit::BackdropSpec;
+    use crate::art_fit::Derive;
     use crate::tex::{Source, Warm};
     use plx_machine::machine::PosterKey;
     use std::sync::Mutex;
-    static ASKED: Mutex<Vec<Option<BackdropSpec>>> = Mutex::new(Vec::new());
+    static ASKED: Mutex<Vec<Option<Derive>>> = Mutex::new(Vec::new());
     struct Spy;
     impl Source for Spy {
-        fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool, backdrop: Option<BackdropSpec>) -> Option<PosterKey> {
+        fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool, backdrop: Option<Derive>) -> Option<PosterKey> {
             ASKED.lock().unwrap().push(backdrop);
             None
         }
-        fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<BackdropSpec>) -> Warm { Warm::Known }
+        fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<Derive>) -> Warm { Warm::Known }
         fn logo(&self, _: u16, _: &str) -> Option<PosterKey> { None }
         fn logo_warm(&self, _: u16, _: &str) -> Warm { Warm::Known }
         fn unresident(&self, _: PosterKey, _: bool) {}
@@ -220,7 +220,7 @@ fn a_led_tile_resolves_the_key_its_rows_fit_draws() {
     let _guard = plx_base::testlock::serial();
     crate::tex::install(&SPY);
     let facts = || crate::tile::TileFacts { owner: 880_500, thumb: "/library/metadata/9/thumb/1", ..Default::default() };
-    for (style, expect) in [(RowStyle::PROGRAMME, Some(BackdropSpec::POSTER)), (RowStyle::HOME, None)] {
+    for (style, expect) in [(RowStyle::PROGRAMME, Some(Derive::POSTER)), (RowStyle::HOME, None)] {
         ASKED.lock().unwrap().clear();
         crate::card_row::lead_focused(Painter::root(), &Art::Poster(Some(facts())), Rect::new(0.0, 0.0, 250.0, 375.0), 1.0, &style);
         assert_eq!(*ASKED.lock().unwrap(), vec![expect], "the lead asks for the copy exactly when the row contains");

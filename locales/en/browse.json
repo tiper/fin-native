@@ -2198,6 +2198,23 @@
     "value": "No channels available",
     "description": "Live TV read-out when no channels are available"
   },
+  "browse.livetv.guide": {
+    "value": "Guide",
+    "description": "Live TV scope row stop, beside What's on: the page that lays every channel's programmes along a time ruler"
+  },
+  "browse.livetv.guide_range": {
+    "value": "Channels {from}–{to} of {total}",
+    "description": "Live TV Guide page indicator on the time ruler's line: which of the lineup's channels the page shows, numbered from 1 by their place in the lineup (not their channel numbers), and how many there are",
+    "args": {
+      "from": "str",
+      "to": "str",
+      "total": "str"
+    }
+  },
+  "browse.livetv.no_guide": {
+    "value": "No guide information",
+    "description": "Live TV Guide: the one cell of a channel the guide has no programme for in the window; pressing it tunes the channel"
+  },
   "browse.collection.loading": {
     "value": "Loading collection…",
     "description": "Collection page read-out while its first answer is pending"

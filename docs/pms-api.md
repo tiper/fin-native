@@ -1257,7 +1257,7 @@ mirrored in `img.rs`'s decode-budget note.
 
 | UI element | request (all `minSize=1`) | source aspect differs from the box → |
 |---|---|---|
-| Poster card | `width=250&height=375`, `url=thumb` | long side overshoots; cropped at draw (`art_uv`), except on Live TV's On now shelf (`RowStyle::PROGRAMME`), where art more than 8% off 2:3 is contained whole over its own blurred copy (`art_fit::place`), or, for a programme image with transparency, over the flat Recent-plate ground instead of a blur (`art_fit::BackdropSpec::ground`); Live TV's Channels shelf is not a poster row, it draws the 250 x 140 channel plate |
+| Poster card | `width=250&height=375`, `url=thumb` | long side overshoots; cropped at draw (`art_uv`), except on Live TV's On now shelf (`RowStyle::PROGRAMME`), where art more than 8% off 2:3 is contained whole over its own blurred copy (`art_fit::place`), or, for a programme image with transparency, over the flat Recent-plate ground instead of a blur (`art_fit::CopySpec::ground`); Live TV's Channels shelf is not a poster row, it draws the 250 x 140 channel plate |
 | Landscape still (episode / shelf) | `width=420&height=236`, still → show art → poster | cropped at draw (`art_uv`) |
 | Person headshot, profile avatar | `width=300&height=300`, `url=thumb` | cropped at draw, headshots riding high (`Crop::Headshot`) |
 | Profile chip avatar | `width=128&height=128` | cropped at draw |
@@ -1265,6 +1265,7 @@ mirrored in `img.rs`'s decode-budget note.
 | Home hero backdrop | `width=1280&height=720`, `url=art` | overflowed off-panel (`Rect::cover`) |
 | Detail backdrop | `width=1920&height=1080`, `url=art` | overflowed off-panel (`Rect::cover`) |
 | Hero clearLogo | `width=600&height=240&format=png` | contained in its column (`hero_logo::fit`) |
+| Live TV channel logo (the 250 x 140 plate) | `width=436&height=168&format=png` (twice its slot, for the focus pop, as the logos are) | contained in the plate's 218 x 84 slot, sized by the mark's INK, not the canvas (a resizer pads a logo with clear texels): the request asks for the picture's ink box (`art_fit::Derive::Ink`), found once at decode, and the plate draws that window of the texture, a texel or two wider, and never past 2 px a texel (`hero_logo::fit_ink`); a logo with no visible texel draws the channel's name instead |
 
 ---
 
@@ -1859,6 +1860,18 @@ XMLTV guide. The app's reads live in `rust-modules/plex/src/plex/livetv.rs`.
   `channelIdentifier`, `channelTitle`, `channelThumb`, `protocol` `livetv`, `beginsAt` and `endsAt`
   (Unix seconds), and a `Channel[]` tag. The comparison operator is part of the KEY (`beginsAt%3C=`).
   Adding `type=1,4` returned the same four rows.
+- **The window form (measured 2026-11-26, read-only, as Guest, on the maintainer's server):**
+  `GET /{epgIdentifier}/grid?beginsAt%3C={until}&endsAt%3E={now}` honours BOTH bounds, so `until` after `now` asks
+  for every airing that has not ended by `now` and begins by `until`. Asked with `until` = `now` it answered one airing for
+  the one channel of the lineup that has guide data (the lineup is 16 channels; the other 15, Pluto channels,
+  have none and appear in no answer); with `until` = `now` + 90 min, still one (the airing
+  ran past that); with `until` = `now` + 6 h, two (the airing on now and the one after it). An answer took 2-4 ms. This is
+  the Guide's read (`livetv::guide_path`): `until` is the far end of the window the Guide shows (the 90-minute window
+  that starts at the last half hour at or before `now`, or, once the reader has scrolled the board by half hours, the
+  later window's end plus one more step: the store's `Reach`, which only grows while the page is open and returns to the
+  live window's end when it leaves). The app sends no `beginsAt` / `endsAt` lower bound earlier than `now`, so a
+  programme that has already ended is never asked for (the Guide draws the aired part of the window shaded and
+  empty). A channel with no airing in the answer has no guide data for the window.
 
 ### Watching a channel (the official LG client's sequence, read from the server log 2026-10-21)
 
@@ -1956,7 +1969,9 @@ server answers a retune after a stop is as unmeasured as the rest of this route.
 
 The mock server models this whole sequence for tests without a tuner:
 `tests/mock_pms.py --livetv-fixture` (one DVR, two tuners, sixteen channels including an MPEG-2/AC-3
-and an AC-4 one, whose airings began at different times; `--livetv-busy` for no free tuner), pinned by `tests/test_mock_pms_livetv.py`.
+and an AC-4 one; a deterministic guide of back-to-back programmes of 15 to 120 minutes that runs six hours past the half
+hour a read falls in, on every channel but 103, which has no guide data, with a gap on 112; the grid honours both bounds;
+`--livetv-busy` for no free tuner), pinned by `tests/test_mock_pms_livetv.py`.
 Its busy (503) and live-transcode answers follow the inferences above; they are not captures.
 
 ---
@@ -1986,7 +2001,7 @@ only `size`.
 | Key of `movie.topunwatched` and `movie.by.actor.or.director` (random hubs) | yes | not recorded | The listing came back in the same order on two calls; the windows (0,6) and (6,50) together equal the whole listing; every preview card is in it. The library held only 13 items, so large lists are not covered. |
 | `/playlists/all` (the key of the playlists hub in the Home hub list, `/hubs` and `/hubs/promoted`) | yes | yes | Measured on PMS 1.43: `X-Plex-Container-Start=2&X-Plex-Container-Size=2` answered `size` 2, `totalSize` 5, `offset` 2, items of type `playlist`. The app does not page it and no row shows it: a hub of type `playlist` is not listed (`pms::listable`), so it never reaches a shelf, and `is_pageable_hub_key` does not admit the key. |
 
-| `/livetv/dvrs`, `/{epg}/lineups/dvr/channels`, `/{epg}/grid?beginsAt%3C=…&endsAt%3E=…` (Live TV, §10) | no | no | Measured on PMS 1.43.3 with one DVR: the DVR list and the lineup come whole (one DVR, four mapped channels); the grid bounded to one instant returns one airing per channel. |
+| `/livetv/dvrs`, `/{epg}/lineups/dvr/channels`, `/{epg}/grid?beginsAt%3C=…&endsAt%3E=…` (Live TV, §10) | no | no | Measured on PMS 1.43.3 with one DVR: the DVR list and the lineup come whole (one DVR, four mapped channels); the grid bounded to one instant returns one airing per channel, and to the Guide's window (`beginsAt<=window end`, `endsAt>=now`) the airing on now and the ones after it that begin inside it. |
 
 ## App data-layer summary
 

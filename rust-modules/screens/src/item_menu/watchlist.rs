@@ -10,7 +10,7 @@
 //! rather than offering a press that can only fail. An UNKNOWN membership is not unreachable: it
 //! wears the Add face, because the PUT is idempotent.
 //! Filmography's add-only menu uses its captured catalog ID directly; it needs no membership face.
-use std::convert::Infallible;
+use super::MenuPage;
 
 use plx_data::catalog::Membership;
 use plx_data::watchlist::model::Kind;
@@ -76,8 +76,8 @@ pub fn face_row(face: &Face) -> Built {
 
 /// Add `face`'s row to `sec`, or leave it alone with no face (service unreachable).
 pub fn push_face(
-    sec: FormSection<ItemRow, Action, Infallible>, face: Option<&Face>,
-) -> FormSection<ItemRow, Action, Infallible> {
+    sec: FormSection<ItemRow, Action, MenuPage>, face: Option<&Face>,
+) -> FormSection<ItemRow, Action, MenuPage> {
     match face {
         Some(f) => {
             let (id, action, row) = face_row(f);

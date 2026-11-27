@@ -24,6 +24,9 @@ receiver = importlib.util.module_from_spec(rspec)
 rspec.loader.exec_module(receiver)
 
 SECRET = "hunter2-do-not-print"
+LICENCE_TEXTS = ("licenses/Zlib.txt", "licenses/FreeType.txt", "licenses/libass-ISC.txt", "licenses/HarfBuzz-Old-MIT.txt",
+                 "licenses/libunibreak-Zlib.txt", "licenses/LGPL-2.1.txt")
+ELF = b"\x7fELF fake"
 
 
 def fake_root(tmp: Path) -> Path:
@@ -31,11 +34,25 @@ def fake_root(tmp: Path) -> Path:
     for source, _ in package.PAYLOAD:
         (root / source).parent.mkdir(parents=True, exist_ok=True)
         (root / source).write_bytes(b"payload " + source.encode())
+    subs = root / "pkg" / package.SUBS_FONT_DIR
+    subs.mkdir(parents=True)
+    (subs / "NotoSansThai-Bold.ttf").write_bytes(b"thai")
+    (subs / package.SUBS_MANIFEST).write_text(json.dumps({"faces": [{"file": "NotoSansThai-Bold.ttf"}]}))
     (root / package.HOST_DIR).mkdir(parents=True)
-    for name in (package.NOTICES_FILE, *package.LICENSE_DOCS, "licenses/Zlib.txt", "licenses/FreeType.txt"):
+    for name in (package.NOTICES_FILE, *package.LICENSE_DOCS, *LICENCE_TEXTS):
         (root / name).parent.mkdir(parents=True, exist_ok=True)
         (root / name).write_bytes(b"notice " + name.encode())
     return root
+
+
+def built(tmp: Path, arch: str = "x86_64") -> tuple[Path, Path]:
+    """A library and its renderer, side by side in one architecture's build directory."""
+    so = tmp / arch / "libplx.so"
+    so.parent.mkdir(exist_ok=True)
+    so.write_bytes(b"elf")
+    ass = so.parent / ("libass-plx-host.so.0" if arch == "x86_64" else "libass-plx.so.0")
+    ass.write_bytes(ELF)
+    return so, ass
 
 
 class Inputs(unittest.TestCase):
@@ -95,10 +112,9 @@ class Signing(unittest.TestCase):
     def test_the_tpk_build_refuses_before_staging_anything(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = fake_root(Path(tmp))
-            so = Path(tmp) / "libplx.so"
-            so.write_bytes(b"elf")
+            so, ass = built(Path(tmp))
             with self.assertRaises(package.PackageError):
-                package.build_tpk(root, so, None, None, {})
+                package.build_tpk(root, so, ass, None, None, {})
             self.assertFalse((root / package.HOST_DIR / "lib").exists())
 
 
@@ -110,9 +126,7 @@ class DotnetBuild(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             root = fake_root(tmp)
-            so = tmp / "x86_64" / "libplx.so"
-            so.parent.mkdir()
-            so.write_bytes(b"elf")
+            so, ass = built(tmp)
             author, dist = tmp / "a.p12", tmp / "d.p12"
             author.write_bytes(b"x")
             dist.write_bytes(b"x")
@@ -126,13 +140,13 @@ class DotnetBuild(unittest.TestCase):
                 out = Path(cwd) / "bin/Release" / package.TFM
                 out.mkdir(parents=True)
                 with zipfile.ZipFile(out / "plxntizen0-0.1.0.tpk", "w") as z:
-                    for name in package.REQUIRED_IN_TPK:
-                        z.writestr(name, b"elf" if name == "lib/libplx.so" else "x")
+                    for name, data in members(package.REQUIRED_IN_TPK, ass):
+                        z.writestr(name, data)
                 return unittest.mock.Mock(returncode=0)
 
             with unittest.mock.patch.object(package.subprocess, "run", fake_run), \
                     unittest.mock.patch.object(package.shutil, "which", lambda *a, **k: "/usr/bin/dotnet"):
-                package.build_tpk(root, so, None, None, env)
+                package.build_tpk(root, so, ass, None, None, env)
             return seen
 
     def test_the_child_env_has_no_platform_and_the_command_pins_anycpu(self):
@@ -210,17 +224,16 @@ class Staging(unittest.TestCase):
     def test_stage_writes_the_payload_and_the_asked_for_files_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = fake_root(Path(tmp))
-            so = Path(tmp) / "libplx.so"
-            so.write_bytes(b"elf")
-            host = package.stage(root, so, None, None)
+            so, ass = built(Path(tmp))
+            host = package.stage(root, so, ass, None, None)
             self.assertEqual((host / "lib/libplx.so").read_bytes(), b"elf")
             self.assertTrue((host / "res/appfont.ttf").is_file())
             self.assertFalse((host / "res/dev-boot.json").exists())
             self.assertFalse((host / "res/log-host.txt").exists())
-            host = package.stage(root, so, "10.0.2.2:32499", "10.0.2.2:9999")
+            host = package.stage(root, so, ass, "10.0.2.2:32499", "10.0.2.2:9999")
             self.assertTrue((host / "res/dev-boot.json").is_file())
             self.assertEqual((host / "res/log-host.txt").read_text(), "10.0.2.2:9999\n")
-            host = package.stage(root, so, None, None)  # a stale dev-boot of the last staging must not ride along
+            host = package.stage(root, so, ass, None, None)  # a stale dev-boot of the last staging must not ride along
             self.assertFalse((host / "res/dev-boot.json").exists())
             self.assertFalse((host / "res/log-host.txt").exists())
 
@@ -228,100 +241,197 @@ class Staging(unittest.TestCase):
         # THIRD-PARTY-NOTICES.md names its texts as `licenses/<name>`; the package must hold both, the FreeType credit and zlib among them
         with tempfile.TemporaryDirectory() as tmp:
             root = fake_root(Path(tmp))
-            so = Path(tmp) / "libplx.so"
-            so.write_bytes(b"elf")
-            host = package.stage(root, so, None, None)
+            so, ass = built(Path(tmp))
+            host = package.stage(root, so, ass, None, None)
             self.assertEqual((host / "res/THIRD-PARTY-NOTICES.md").read_bytes(), b"notice THIRD-PARTY-NOTICES.md")
             for name in ("LICENSE", "LICENSING.md", "TRADEMARKS.md", "Zlib.txt", "FreeType.txt"):
                 self.assertTrue((host / "res/licenses" / name).is_file(), name)
             (root / "licenses/Zlib.txt").unlink()  # a text that went away must not ride along from the last staging
             (root / "licenses/Zlib.txt").parent.joinpath("Extra.txt").write_bytes(b"x")
-            host = package.stage(root, so, None, None)
+            host = package.stage(root, so, ass, None, None)
             self.assertFalse((host / "res/licenses/Zlib.txt").exists())
             self.assertTrue((host / "res/licenses/Extra.txt").is_file())
 
     def test_a_checkout_without_the_notices_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = fake_root(Path(tmp))
-            so = Path(tmp) / "libplx.so"
-            so.write_bytes(b"elf")
+            so, ass = built(Path(tmp))
             (root / package.NOTICES_FILE).unlink()
             with self.assertRaisesRegex(package.PackageError, "THIRD-PARTY-NOTICES.md is missing"):
-                package.stage(root, so, None, None)
+                package.stage(root, so, ass, None, None)
 
     def test_the_real_checkout_has_every_file_the_staging_copies(self):
         root = HERE.parent
-        for name in (package.NOTICES_FILE, *package.LICENSE_DOCS, "licenses/Zlib.txt", "licenses/FreeType.txt"):
+        for name in (package.NOTICES_FILE, *package.LICENSE_DOCS, *LICENCE_TEXTS):
             self.assertTrue((root / name).is_file(), name)
+        for source, _ in package.PAYLOAD:
+            self.assertTrue((root / source).is_file(), source)
+        manifest = json.loads((root / "pkg" / package.SUBS_FONT_DIR / package.SUBS_MANIFEST).read_text(encoding="utf-8"))
+        for face in manifest["faces"]:
+            self.assertTrue((root / "pkg" / package.SUBS_FONT_DIR / face["file"]).is_file(), face["file"])
 
     def test_stage_refuses_a_missing_library(self):
         with tempfile.TemporaryDirectory() as tmp:
+            so, ass = built(Path(tmp))
             with self.assertRaises(package.PackageError):
-                package.stage(fake_root(Path(tmp)), Path(tmp) / "none.so", None, None)
+                package.stage(fake_root(Path(tmp)), Path(tmp) / "none.so", ass, None, None)
+            with self.assertRaisesRegex(package.PackageError, "missing"):
+                package.stage(fake_root(Path(tmp) / "b"), so, so.parent / "libass-plx.so.0", None, None)
+
+
+    def test_the_renderer_and_the_fonts_it_reads_are_staged_in_the_application_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = fake_root(Path(tmp))
+            so, ass = built(Path(tmp))
+            host = package.stage(root, so, ass, None, None)
+            self.assertEqual((host / "res/libass-plx-host.so.0").read_bytes(), ELF)
+            for name in ("appfont-cjk.ttf", "appfont-arabic.ttf", "appfont-arabic-bold.ttf", "appfont-hebrew.ttf", "appfont-hebrew-bold.ttf"):
+                self.assertTrue((host / "res" / name).is_file(), name)
+            self.assertEqual((host / "res/fonts/subs/NotoSansThai-Bold.ttf").read_bytes(), b"thai")
+            self.assertTrue((host / "res/fonts/subs/manifest.json").is_file())
+            for name in LICENCE_TEXTS:
+                self.assertTrue((host / "res" / name).is_file(), name)
+            # the armv7 renderer replaces the emulator's on the next staging, and a face that left the checkout leaves the package
+            (root / "pkg/fonts/subs/NotoSansThai-Bold.ttf").unlink()
+            so, ass = built(Path(tmp), "armv7")
+            host = package.stage(root, so, ass, None, None)
+            self.assertFalse((host / "res/libass-plx-host.so.0").exists())
+            self.assertTrue((host / "res/libass-plx.so.0").is_file())
+            self.assertFalse((host / "res/fonts/subs/NotoSansThai-Bold.ttf").exists())
+
+    def test_a_renderer_of_another_name_or_architecture_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = fake_root(Path(tmp))
+            so, ass = built(Path(tmp))
+            other = Path(tmp) / "libass.so.9"
+            other.write_bytes(ELF)
+            with self.assertRaisesRegex(package.PackageError, "not a renderer name"):
+                package.stage(root, so, other, None, None)
+            _, arm = built(Path(tmp), "armv7")
+            with self.assertRaisesRegex(package.PackageError, "not beside"):
+                package.stage(root, so, arm, None, None)
+
+    def test_a_checkout_without_the_subtitle_manifest_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = fake_root(Path(tmp))
+            so, ass = built(Path(tmp))
+            (root / "pkg/fonts/subs/manifest.json").unlink()
+            with self.assertRaisesRegex(package.PackageError, "manifest.json is missing"):
+                package.stage(root, so, ass, None, None)
+
+
+def members(names, ass: Path, so_bytes=b"elf"):
+    """The members of a fake package: the library, the renderer under its name, the subtitle manifest and the face it names, the rest text."""
+    out = []
+    for name in names:
+        if name == "lib/libplx.so":
+            out.append((name, so_bytes))
+        elif name.endswith("/manifest.json"):
+            out.append((name, json.dumps({"faces": [{"file": "NotoSansThai-Bold.ttf"}]})))
+        else:
+            out.append((name, "x"))
+    return out + [(f"res/{ass.name}", ass.read_bytes()), ("res/fonts/subs/NotoSansThai-Bold.ttf", "thai")]
 
 
 class PackageCheck(unittest.TestCase):
-    def make(self, tmp: Path, names, so_bytes=b"elf") -> tuple[Path, Path]:
-        so = tmp / "libplx.so"
-        so.write_bytes(b"elf")
+    def make(self, tmp: Path, names, so_bytes=b"elf", extra=(), drop=()) -> tuple[Path, Path]:
+        so, self.ass = built(tmp)
         tpk = tmp / "p.tpk"
         with zipfile.ZipFile(tpk, "w") as z:
-            for name in names:
-                z.writestr(name, so_bytes if name == "lib/libplx.so" else "x")
+            for name, data in [*(m for m in members(names, self.ass, so_bytes) if m[0] not in drop), *extra]:
+                z.writestr(name, data)
         return tpk, so
 
     def test_complete_package_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             tpk, so = self.make(Path(tmp), package.REQUIRED_IN_TPK)
-            package.verify_tpk(tpk, so, None, None)
+            package.verify_tpk(tpk, so, self.ass, None, None)
 
     def test_a_package_without_the_notices_is_refused(self):
         for gone in ("res/THIRD-PARTY-NOTICES.md", "res/licenses/FreeType.txt", "res/licenses/Zlib.txt"):
             with tempfile.TemporaryDirectory() as tmp:
                 tpk, so = self.make(Path(tmp), [n for n in package.REQUIRED_IN_TPK if n != gone])
                 with self.assertRaisesRegex(package.PackageError, re.escape(gone)):
-                    package.verify_tpk(tpk, so, None, None)
+                    package.verify_tpk(tpk, so, self.ass, None, None)
 
     def test_the_exact_bin_and_lib_set_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             tpk, so = self.make(Path(tmp), (*package.REQUIRED_IN_TPK, "bin/PlxHost.pdb", "PlxHost.deps.json", "bin/", "lib/"))
-            package.verify_tpk(tpk, so, None, None)
+            package.verify_tpk(tpk, so, self.ass, None, None)
 
     def test_an_extra_assembly_is_refused_until_it_has_a_notices_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             tpk, so = self.make(Path(tmp), (*package.REQUIRED_IN_TPK, "bin/Foo.dll"))
             with self.assertRaisesRegex(package.PackageError, r"bin/Foo\.dll.*section 2\.8"):
-                package.verify_tpk(tpk, so, None, None)
+                package.verify_tpk(tpk, so, self.ass, None, None)
 
     def test_an_extra_native_library_is_refused_until_it_has_a_notices_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             tpk, so = self.make(Path(tmp), (*package.REQUIRED_IN_TPK, "lib/libfoo.so"))
             with self.assertRaisesRegex(package.PackageError, r"lib/libfoo\.so.*section 2\.8"):
-                package.verify_tpk(tpk, so, None, None)
+                package.verify_tpk(tpk, so, self.ass, None, None)
 
     def test_missing_member_is_named(self):
         with tempfile.TemporaryDirectory() as tmp:
             tpk, so = self.make(Path(tmp), [n for n in package.REQUIRED_IN_TPK if n != "res/OFL.txt"])
             with self.assertRaisesRegex(package.PackageError, "OFL.txt"):
-                package.verify_tpk(tpk, so, None, None)
+                package.verify_tpk(tpk, so, self.ass, None, None)
 
     def test_a_stale_dev_boot_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             tpk, so = self.make(Path(tmp), (*package.REQUIRED_IN_TPK, "res/dev-boot.json"))
             with self.assertRaisesRegex(package.PackageError, "carries res/dev-boot.json"):
-                package.verify_tpk(tpk, so, None, None)
+                package.verify_tpk(tpk, so, self.ass, None, None)
 
     def test_a_requested_log_file_must_be_there(self):
         with tempfile.TemporaryDirectory() as tmp:
             tpk, so = self.make(Path(tmp), package.REQUIRED_IN_TPK)
             with self.assertRaisesRegex(package.PackageError, "lacks res/log-host.txt"):
-                package.verify_tpk(tpk, so, None, "10.0.2.2:9")
+                package.verify_tpk(tpk, so, self.ass, None, "10.0.2.2:9")
+
+    def test_the_renderer_must_be_there_and_be_the_verified_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tpk, so = self.make(Path(tmp), package.REQUIRED_IN_TPK, drop=("res/libass-plx-host.so.0",))
+            with self.assertRaisesRegex(package.PackageError, "not exactly res/libass-plx-host.so.0"):
+                package.verify_tpk(tpk, so, self.ass, None, None)
+        with tempfile.TemporaryDirectory() as tmp:
+            tpk, so = self.make(Path(tmp), package.REQUIRED_IN_TPK)
+            self.ass.write_bytes(ELF + b" rebuilt")
+            with self.assertRaisesRegex(package.PackageError, "packaged libass-plx-host.so.0 differs"):
+                package.verify_tpk(tpk, so, self.ass, None, None)
+
+    def test_a_second_native_library_outside_lib_is_refused(self):
+        for name in ("res/libass-plx.so.0", "res/libfreetype.so.6", "res/fonts/subs/plugin.ttf"):
+            with tempfile.TemporaryDirectory() as tmp:
+                tpk, so = self.make(Path(tmp), package.REQUIRED_IN_TPK, extra=((name, ELF),))
+                with self.assertRaisesRegex(package.PackageError, re.escape(name) + r".*section 2\.8"):
+                    package.verify_tpk(tpk, so, self.ass, None, None)
+
+    def test_a_subtitle_face_the_manifest_names_must_be_packaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tpk, so = self.make(Path(tmp), package.REQUIRED_IN_TPK, drop=("res/fonts/subs/NotoSansThai-Bold.ttf",))
+            with self.assertRaisesRegex(package.PackageError, "NotoSansThai-Bold.ttf"):
+                package.verify_tpk(tpk, so, self.ass, None, None)
+        with tempfile.TemporaryDirectory() as tmp:
+            tpk, so = self.make(Path(tmp), package.REQUIRED_IN_TPK, drop=("res/fonts/subs/manifest.json",),
+                                extra=(("res/fonts/subs/manifest.json", "[]"),))
+            with self.assertRaisesRegex(package.PackageError, "not the subtitle face manifest"):
+                package.verify_tpk(tpk, so, self.ass, None, None)
+
+    def test_the_renderer_fonts_and_licences_are_required(self):
+        for gone in ("res/appfont-cjk.ttf", "res/appfont-arabic.ttf", "res/fonts/subs/manifest.json", "res/licenses/libass-ISC.txt",
+                     "res/licenses/HarfBuzz-Old-MIT.txt", "res/licenses/libunibreak-Zlib.txt", "res/licenses/LGPL-2.1.txt"):
+            self.assertIn(gone, package.REQUIRED_IN_TPK)
+            with tempfile.TemporaryDirectory() as tmp:
+                tpk, so = self.make(Path(tmp), [n for n in package.REQUIRED_IN_TPK if n != gone])
+                with self.assertRaisesRegex(package.PackageError, re.escape(gone)):
+                    package.verify_tpk(tpk, so, self.ass, None, None)
 
     def test_packaged_library_must_be_the_verified_one(self):
         with tempfile.TemporaryDirectory() as tmp:
             tpk, so = self.make(Path(tmp), package.REQUIRED_IN_TPK, so_bytes=b"other")
             with self.assertRaisesRegex(package.PackageError, "differs"):
-                package.verify_tpk(tpk, so, None, None)
+                package.verify_tpk(tpk, so, self.ass, None, None)
 
 
 class LogReceiver(unittest.TestCase):

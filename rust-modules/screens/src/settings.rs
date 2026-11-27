@@ -734,6 +734,8 @@ impl<H: DirectoryLike> Machine<H> for RouteSurface {
             ScreenEvent::Timer(id) => self.step_top(ScreenEvent::Timer(*id), cx, fx),
             ScreenEvent::App(super::registry::AppMsg::PlaybackTrace(status)) => self.step_top(
                 ScreenEvent::App(super::registry::AppMsg::PlaybackTrace(*status)), cx, fx),
+            ScreenEvent::App(super::registry::AppMsg::PacketProbe(status)) => self.step_top(
+                ScreenEvent::App(super::registry::AppMsg::PacketProbe(*status)), cx, fx),
             ScreenEvent::StoreChanged(o, g) => {
                 for eid in self.inner.entries.iter().map(|e| e.id).collect::<Vec<_>>() {
                     self.deliver(eid, ScreenEvent::StoreChanged(*o, *g), cx, fx);

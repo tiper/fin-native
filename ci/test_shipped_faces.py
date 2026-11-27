@@ -4,7 +4,7 @@
 `rust-modules/gfx/src/text.rs` names the faces it opens out of the app directory (`appfont*.ttf`).
 Each list below copies files into some install or bundle by name, so a face added to the chain but
 not to one of them is missing exactly there: on the television (the .ipk payload, and the package
-gate that grades it), in a simulator bundle, in the GPL source bundle, or in the inputs that decide
+gate that grades it; the Tizen .tpk payload), in a simulator bundle, in the GPL source bundle, or in the inputs that decide
 when a documentation still is stale. A missing face draws no error; its script just becomes boxes.
 """
 import re
@@ -38,6 +38,7 @@ LISTS = [
     ("the Windows/WSL simulator staging", "tools/sim.ps1", r"for file in appfont", r"; do$"),
     ("the GPL source bundle's pkg/ files", "ci/source_bundle.py", r"^PKG_FILES = \{", r"\}"),
     ("the documentation stills' inputs", "tools/site_stills.py", r"^TREE_PATHS = \(", r"^\)"),
+    ("the Tizen package payload (tizen/package.py PAYLOAD)", "tizen/package.py", r"^PAYLOAD = \(", r"^\)"),
 ]
 
 

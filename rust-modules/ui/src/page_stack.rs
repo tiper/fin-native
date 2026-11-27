@@ -68,6 +68,20 @@ impl<P: Copy, R> PageStack<P, R> {
         self.saved.last().map(|s| s.page)
     }
 
+    /// The page pushed at depth `i` (`0` = the first above the root).
+    pub fn page_at(&self, i: usize) -> Option<P> {
+        self.saved.get(i).map(|s| s.page)
+    }
+
+    /// Pop every page from depth `depth` up; the FIRST popped (the one that opened the page `depth`
+    /// restores), `None` when nothing is above `depth`.
+    pub fn truncate(&mut self, depth: usize) -> Option<Saved<P, R>> {
+        if depth >= self.saved.len() {
+            return None;
+        }
+        self.saved.drain(depth..).next()
+    }
+
     /// The first page pushed (what a pop-to-root restores), `None` at the root.
     pub fn first(&self) -> Option<&Saved<P, R>> {
         self.saved.first()
@@ -250,10 +264,63 @@ pub fn popover_seat<S: PopoverPanel, E: IndexElem>(s: &S, entry: EntryId) -> Foc
     FocusKey { entry, elem: E::of_index(key.map_or(0, |k| k.0)) }
 }
 
-/// Register every selectable row's stop (a hover parks, a click activates) and the title band's
-/// pointer-only stop (no hover focus, never in the D-pad column; a click pops). Only the ACTIVE
-/// page registers, where it is drawn this frame: the slide's x offset and the animated card as the
-/// clip; the pointer is held while either moves.
+/// **The ONE registration of a popover's focus stops**, whatever hosts it: every selectable row's stop
+/// (a hover parks, a click activates) and the title band's pointer-only stop (no hover focus, never in
+/// the D-pad column; a click pops). Only the ACTIVE page registers, where it is drawn this frame: `natural`
+/// is the layout the rows are framed in, `shown` the animated card (the clip), `dx` the slide's x offset;
+/// the pointer is held while either moves. `p` is the painter the stops are registered through and
+/// `activate` how a click on one acts (`Direct` for the player's popovers, which act on the press;
+/// `Immediate` for [`crate::menu::Menu`], whose surface steps the press itself); `key_at(i)` is the focus
+/// key of row `i` (`None`: not a stop).
+#[allow(clippy::too_many_arguments)]
+pub fn register_stops<H: Host>(
+    f: &mut DrawFrame<'_, '_, H>,
+    entry: EntryId,
+    p: Painter,
+    activate: Activate,
+    table: &TableView,
+    natural: Rect,
+    shown: Rect,
+    dx: f32,
+    key_at: &dyn Fn(usize) -> Option<u32>,
+) where
+    H::Elem: IndexElem,
+{
+    let moved = |rect: Rect| Rect::new(rect.x + dx, rect.y, rect.w, rect.h);
+    for i in 0..table.n_rows() {
+        let Some(key) = key_at(i as usize) else {
+            continue;
+        };
+        if let Some(row) = table.row_frame(natural, i) {
+            f.stop(
+                p,
+                Stop {
+                    key: FocusKey { entry, elem: H::Elem::of_index(key) },
+                    rect: moved(row),
+                    rest_rect: row,
+                    clip: shown,
+                    hover: Hover::Focus,
+                    activate,
+                },
+            );
+        }
+    }
+    if let Some(band) = table.title_rect(natural) {
+        f.stop(
+            p,
+            Stop {
+                key: FocusKey { entry, elem: H::Elem::of_index(TITLE_KEY) },
+                rect: moved(band),
+                rest_rect: band,
+                clip: shown,
+                hover: Hover::Ignore,
+                activate,
+            },
+        );
+    }
+}
+
+/// [`register_stops`] for the player's popovers: the root painter, a click that acts on the press.
 pub fn popover_register_stops<S: PopoverPanel, H: Host>(
     s: &S,
     entry: EntryId,
@@ -261,41 +328,8 @@ pub fn popover_register_stops<S: PopoverPanel, H: Host>(
 ) where
     H::Elem: IndexElem,
 {
-    let p = Painter::root();
     let r = s.panel_rect(f.measure);
-    let dx = s.motion().live_dx();
-    let clip = s.shown_rect(f.measure);
-    let moved = |rect: Rect| Rect::new(rect.x + dx, rect.y, rect.w, rect.h);
+    let (shown, dx) = (s.shown_rect(f.measure), s.motion().live_dx());
     let form = s.form();
-    for i in 0..form.table.n_rows() {
-        let Some(key) = form.key_at(i as usize) else {
-            continue;
-        };
-        if let Some(row) = form.table.row_frame(r, i) {
-            f.stop(
-                p,
-                Stop {
-                    key: FocusKey { entry, elem: H::Elem::of_index(key.0) },
-                    rect: moved(row),
-                    rest_rect: row,
-                    clip,
-                    hover: Hover::Focus,
-                    activate: Activate::Direct,
-                },
-            );
-        }
-    }
-    if let Some(band) = form.table.title_rect(r) {
-        f.stop(
-            p,
-            Stop {
-                key: FocusKey { entry, elem: H::Elem::of_index(TITLE_KEY) },
-                rect: moved(band),
-                rest_rect: band,
-                clip,
-                hover: Hover::Ignore,
-                activate: Activate::Direct,
-            },
-        );
-    }
+    register_stops(f, entry, Painter::root(), Activate::Direct, &form.table, r, shown, dx, &|i| form.key_at(i).map(|k| k.0));
 }

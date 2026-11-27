@@ -10,7 +10,18 @@
 //!
 //! **A surface on the container tree**, [`versions_panel`](crate::versions_panel)'s shape: whoever opens it names the
 //! style. Over the What's on page it is `Style::Compact`; over the live player it is `Style::PlayerPanel`, which
-//! leaves the host live, so the video plane keeps presenting under it. The panel REPORTS the channel it chose
+//! leaves the host live, so the video plane keeps presenting under it.
+//!
+//! **Its ground follows that style, from one declaration** (owner, 2026-11-27: glass while on the GUI). The panel
+//! draws `Ground::Menu` and asks for the compact dim over the host page only ([`Scrim::over_host`]). Over the page
+//! the container owes the dim, the field latches and the panel is glass (a menu's own); over the player it owes none,
+//! nothing latches and the panel is the opaque sheet it was, with no dim on the picture, for the whole entry
+//! (including the tune window, so nothing changes when the picture arrives). Style is fixed for the panel's life and
+//! the video plane's bound bit is not, so nothing here follows the bit. If playback starts under a page-hosted panel
+//! (a pick, which closes it) the panel's remaining frames, bound-plane frames, are the sheet: `popover_glass` never
+//! draws glass over a bound plane, so there is no frame of glass over the video.
+//!
+//! The panel REPORTS the channel it chose
 //! ([`AppMsg::LiveChannelPicked`], to the host instance on its argument) and starts nothing itself: the What's on page
 //! plays it through its own play path, and the player hands it to its zap machine (`player::zap`, one
 //! `PlayerReq::Tune`), so a number-entry tune and a zap share one tune path, one banner and one art ground.
@@ -38,7 +49,7 @@ use plx_ui::label::{HAlign, Label, VAlign};
 use plx_ui::popover::{Popover, Side};
 use plx_ui::screen::{
     Activate, At, AxisMask, Dir, DrawFrame, EdgeRule, ElemKind, FocusSource, FocusTarget, Focusable, GroupKind,
-    GroupSpec, HitSource, Hover, Placed, RenderStrategy, Screen, ScreenEvent, Seat, Step, Stop,
+    GroupSpec, HitSource, Hover, Placed, RenderStrategy, Scrim, Screen, ScreenEvent, Seat, Step, Stop,
 };
 use plx_ui::table::{Badge, Row, CONTENT_X, PAD_V, ROW_H, SIDE};
 use plx_ui::vstack::{Anchor, VStack};
@@ -434,6 +445,10 @@ impl<H: LiveTvLike> Screen<H> for ChannelEntryScreen {
         None
     }
     fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, H>) {}
+    /// The compact menu's dim over a held host page only: what makes the panel glass there ([`Scrim::over_host`]).
+    fn scrim(&self) -> Scrim {
+        Scrim::over_host(theme::underlay::DIM_COMPACT)
+    }
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
         let appear = f.page_alpha;
         let measure = f.measure;
@@ -448,7 +463,7 @@ impl<H: LiveTvLike> Screen<H> for ChannelEntryScreen {
         let frame = self.frame(measure);
         let text_x = |band: Rect| band.x + CONTENT_X - SIDE;
         plx_ui::profile::phase("dt.channel_entry", || {
-            plx_ui::widgets::panel_ground(p, r, PANEL_RAD, field, plx_ui::widgets::Ground::Sheet);
+            plx_ui::widgets::panel_ground(p, r, PANEL_RAD, field, plx_ui::widgets::Ground::Menu);
             if let (Some(band), Ok(run)) = (head, std::ffi::CString::new(typed)) {
                 let w = Label::new(run.as_ptr(), theme::size::DISPLAY, theme::TEXT_PRIMARY)
                     .bold()

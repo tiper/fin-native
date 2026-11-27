@@ -12,7 +12,7 @@ fn channel(vcn: &str, name: &str) -> Channel {
     Channel { sid: plx_plex::plex::ServerId::from_raw(0), dvr: "7".into(),
         channel: format!("C{vcn}.242.ersatztv.org"), vcn: vcn.into(), name: name.into(),
         thumb: String::new(), now: "Family Show".into(), now_thumb: String::new(),
-        now_summary: String::new(), begins_at: 0, ends_at: 0 }
+        now_summary: String::new(), begins_at: 0, ends_at: 0, later: Vec::new() }
 }
 
 #[derive(Default)]
