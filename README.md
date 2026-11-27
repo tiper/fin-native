@@ -35,22 +35,24 @@ draws the same interface as the television but plays no video, so there is no pl
   screen, and libraries, collections, seasons, episodes and people each have a page. A library can
   be filtered by genre.
 - **Search** across films, shows and people.
+- **Live TV** from your server's tuners and M3U sources: the channel list, what airs now, the
+  Guide, channel-number entry and your recent channels. Recording isn't supported.
 - **Several Jellyfin users** on one TV, on one server or several: add one with **Add user** and
   switch with **Change profile**.
 - **Playback** with the television's own decoders. FinNative tells your server what the TV can
   decode, and the server decides whether the file plays directly or is converted, within the limits
-  its administrator set. Audio the TV can't decode can be converted on the TV itself.
+  its administrator set. Audio the TV can't decode (DTS, for one) can be converted on the TV itself, which keeps
+  more films on direct play.
 - **The parts of watching you expect:** resume where you stopped, the next episode, Skip Intro and
   Skip Credits where the server knows them, scrub thumbnails, your audio and subtitle preferences,
   subtitle search through the server, and favourites. Watch progress is kept by your server.
+- **HDR10 and Dolby Vision** are named beside the resolution on a film's page and on Home.
 
 ## What doesn't work yet
 
-- **Music, photos and live TV** aren't supported.
+- **Music and photos** aren't supported.
 - **Playlists.** They are listed but can't be opened yet; collections work.
 - **Controlling the TV from the Jellyfin phone app.** The TV doesn't show up there as a player.
-- **Seeking and resuming through Cloudflare.** On a server behind Cloudflare, seeking or resuming
-  a file can fail.
 - **Items that need server transcoding** fail with "Playback failed" when your server can't or
   isn't allowed to transcode. That is the server's limit, not a FinNative bug.
 
