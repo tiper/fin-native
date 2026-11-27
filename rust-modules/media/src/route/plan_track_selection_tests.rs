@@ -765,12 +765,12 @@ fn account_subtitles_skip_unrenderable_tracks_without_enabling_a_burn() {
 
 #[test]
 fn known_audio_channels_cannot_fall_back_to_an_unknown_codec_default() {
-    let caps = plx_os::devcaps::Caps { audio_channels: [("aac".into(), 6)].into(), ..plx_os::devcaps::Caps::assumed() };
+    let caps = plx_os::devcaps::Caps { audio_channels: [("aac".into(), 2)].into(), ..plx_os::devcaps::Caps::assumed() };
     let mut track = trk(1, "aac", "eng", false);
-    track.channels = 8;
+    track.channels = 6;
     assert!(caps.audio_supports("aac", 0), "legacy unknown remains compatible");
     assert_eq!(pick_dp_audio_eligible(&[track.clone()], "aac", AudioLangPrefs::default(), 0, StandIn::Any, |c, n, _| caps.audio_supports(c, n)), None);
-    track.channels = 6;
+    track.channels = 2;
     assert_eq!(pick_dp_audio_eligible(&[track], "aac", AudioLangPrefs::default(), 0, StandIn::Any, |c, n, _| caps.audio_supports(c, n)), Some((0, "aac".into(), 1)));
 }
 
@@ -805,10 +805,10 @@ fn titled(mut s: plx_data::metadata::Stream, title: &str) -> plx_data::metadata:
 }
 
 fn aac_caps() -> plx_os::devcaps::Caps {
-    plx_os::devcaps::Caps { audio_channels: [("aac".into(), 6)].into(), ..plx_os::devcaps::Caps::assumed() }
+    plx_os::devcaps::Caps { audio_channels: [("aac".into(), 2)].into(), ..plx_os::devcaps::Caps::assumed() }
 }
 
-/// Direct-play pick under `stand_in` with the stock capability set (AAC capped at 6 channels).
+/// Direct-play pick under `stand_in` with a set whose AAC decoder stops at stereo.
 fn pick_kind(tracks: &[plx_data::metadata::Stream], acodec: &str, prefs: AudioLangPrefs<'_>, session: i64, stand_in: StandIn)
     -> Option<i64>
 {

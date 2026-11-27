@@ -249,12 +249,12 @@ fn profile_for_delivery_with(caps: &plx_os::devcaps::Caps, delivery: TranscodeDe
     profile_with(caps, delivery, tv_audio, false)
 }
 
-/// [`profile_for_delivery_with`], with `dts_fed_as_core` saying whether a DTS track the server leaves alone
-/// reaches the app's own demuxer, which feeds its core: then a DTS row that holds the core admits every
-/// DTS-family width ([`plx_os::devcaps::profile_audio_channels`], #1537). Only the direct-play ask
-/// says so ([`profile_for`]): an encoder session's output may go to the TV's own player (the URI
-/// backend's server legs), which reads a copied DTS-HD stream whole, so it keeps the row as it is.
-fn profile_with(caps: &plx_os::devcaps::Caps, delivery: TranscodeDelivery, tv_audio: bool, dts_fed_as_core: bool) -> String {
+/// [`profile_for_delivery_with`], with `fed` saying whether a track the server leaves alone reaches the
+/// app's own demuxer: then a row is widened as that path takes it ([`plx_os::devcaps::profile_audio_channels`]:
+/// a DTS row holding the core admits every DTS-family width, #1537, and an AAC row of 5.1 admits 7.1).
+/// Only the direct-play ask says so ([`profile_for`]): an encoder session's output may go to the TV's
+/// own player (the URI backend's server legs), which reads a copied stream whole, so it keeps the row as it is.
+fn profile_with(caps: &plx_os::devcaps::Caps, delivery: TranscodeDelivery, tv_audio: bool, fed: bool) -> String {
     let dp_video = direct_play_video_codecs(caps).join(",");
     // The table-gated copy codecs, in list order. Each one is advertised only when the table
     // carries ITS row, and each brings the row's own bound (see `row_limits`).
@@ -340,7 +340,7 @@ fn profile_with(caps: &plx_os::devcaps::Caps, delivery: TranscodeDelivery, tv_au
     let audio_limits = caps.audio_channels.iter()
         .filter(|(codec, _)| caps.audio_has(codec))
         .map(|(codec, channels)| {
-            let bound = if dts_fed_as_core { plx_os::devcaps::profile_audio_channels(codec, *channels) } else { *channels };
+            let bound = if fed { plx_os::devcaps::profile_audio_channels(codec, *channels) } else { *channels };
             audio_limit(profile_codec_name(codec), "audio.channels", bound)
         })
         .collect::<String>();

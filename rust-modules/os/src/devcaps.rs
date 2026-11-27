@@ -233,11 +233,28 @@ pub const DTS_CORE_CHANNELS: u32 = 6;
 /// PMS direct-plays the tracks the local gate admits instead of converting them.
 pub const DTS_HD_CHANNELS: u32 = 8;
 
-/// The `audio.channels` bound the PMS profile states for a codec whose row allows `limit`: the row as it
-/// is, except a DTS row that holds the core, which admits every DTS-family width ([`DTS_HD_CHANNELS`]):
-/// the pipeline is fed the core whatever the extension's layout. `codec` is any spelling.
+/// The widest AAC layout the app's demuxer feeds a set whose AAC row admits 5.1: 7.1. The tables say
+/// `AAC/6`, but the decoder behind them takes the eight channels of a 7.1 track (an LG C1 on webOS
+/// 6.5.3 played 7.1 AAC-LC and HE-AAC through the Feed with no decoder error, 2026-11-27; issue 49's
+/// set played 7.1 HE-AAC with sound under Force Direct Play, which has no channel ceiling). Like the
+/// DTS core ([`DTS_CORE_CHANNELS`]) it widens the fed path and the direct-play ask only: the set's own
+/// player (the URI backend) keeps the row as it is ([`Caps::audio_layout_supports`]).
+pub const AAC_FED_CHANNELS: u32 = 8;
+
+/// The narrowest AAC row that [`AAC_FED_CHANNELS`] widens: a 5.1 decoder.
+const AAC_SURROUND_ROW: u32 = 6;
+
+/// The `audio.channels` bound the PMS profile states for a codec whose row allows `limit`, and the one
+/// the path the app's demuxer feeds holds a track to ([`Caps::audio_supports`]): the row as it is,
+/// except a DTS row that holds the core, which admits every DTS-family width ([`DTS_HD_CHANNELS`]):
+/// the pipeline is fed the core whatever the extension's layout, and an AAC row of 5.1, which admits
+/// [`AAC_FED_CHANNELS`]. `codec` is any spelling.
 pub fn profile_audio_channels(codec: &str, limit: u32) -> u32 {
-    if audio_codec_id(codec) == "dts" && limit >= DTS_CORE_CHANNELS { DTS_HD_CHANNELS.max(limit) } else { limit }
+    match audio_codec_id(codec).as_ref() {
+        "dts" if limit >= DTS_CORE_CHANNELS => DTS_HD_CHANNELS.max(limit),
+        "aac" if limit >= AAC_SURROUND_ROW => AAC_FED_CHANNELS.max(limit),
+        _ => limit,
+    }
 }
 
 /// The channel ceiling of the PCM path: `pcmInfo.channelMode` has `mono` and `stereo` (and
@@ -1036,8 +1053,9 @@ impl Caps {
     }
 
     /// Local counterpart of the profile's codec-scoped audio.channels limitations, for a track the
-    /// app's own demuxer feeds: a DTS track arrives as its core, so the row bounds the core's width
-    /// ([`DTS_CORE_CHANNELS`], #1537). The TV's own player gets the whole stream instead; it is judged
+    /// app's own demuxer feeds, widened as the profile states it ([`profile_audio_channels`]): a DTS
+    /// track arrives as its core (#1537), and an AAC row of 5.1 takes 7.1. The TV's own player gets the
+    /// whole stream instead; it is judged
     /// by [`Caps::audio_layout_supports`].
     pub fn audio_supports(&self, codec: &str, channels: i64) -> bool {
         self.supports_channels(codec, channels, true)
@@ -1050,16 +1068,18 @@ impl Caps {
         self.supports_channels(codec, channels, false)
     }
 
-    fn supports_channels(&self, codec: &str, channels: i64, dts_fed_as_core: bool) -> bool {
+    fn supports_channels(&self, codec: &str, channels: i64, fed: bool) -> bool {
         let id = audio_codec_id(codec);
         if !self.audio_has(&id) {
             return false;
         }
         // DTS and the PCM path both need a stated channel count: an unknown one is not admitted.
         let needs_count = id == "dts" || is_pcm_codec(&id);
-        let channels = if id == "dts" && dts_fed_as_core { channels.min(i64::from(DTS_CORE_CHANNELS)) } else { channels };
         match self.audio_channels.get(id.as_ref()) {
-            Some(&limit) => (channels > 0 || !needs_count) && channels <= i64::from(limit),
+            Some(&row) => {
+                let limit = if fed { profile_audio_channels(&id, row) } else { row };
+                (channels > 0 || !needs_count) && channels <= i64::from(limit)
+            }
             None => !needs_count,
         }
     }
@@ -2705,6 +2725,22 @@ mod tests {
         assert_eq!(audio_codec_id("AC3"), "ac3");
     }
 
+    /// A 7.1 AAC track direct-plays in Auto on a set whose AAC row says 5.1, as it does under Force
+    /// Direct Play (issue 49): the app's demuxer feeds it, and the set's decoder takes eight channels.
+    /// The set's own player (the URI backend) is not widened, and a row below 5.1 is not either.
+    #[test]
+    fn a_surround_aac_row_admits_a_fed_7_1_track() {
+        let caps = parse(REAL).unwrap();
+        assert!(caps.audio_supports("aac", 8), "the AAC/6 row admits a fed 7.1 track");
+        assert!(!caps.audio_supports("aac", 9));
+        assert!(!caps.audio_layout_supports("aac", 8), "the set's own player gets the row as it is");
+        assert_eq!(profile_audio_channels("aac", 6), AAC_FED_CHANNELS);
+        assert_eq!(profile_audio_channels("AAC", 8), 8);
+        let stereo = Caps { audio_channels: [("aac".into(), 2)].into(), ..caps.clone() };
+        assert!(!stereo.audio_supports("aac", 8) && !stereo.audio_supports("aac", 6));
+        assert_eq!(profile_audio_channels("aac", 2), 2);
+    }
+
     /// Forced mode admits DTS only on table evidence (a DTS row with channels), but skips the
     /// channel ceiling. Auto bounds the CORE by the row (#1537): 7.1 DTS-HD MA plays as its 5.1 core
     /// in both modes on a 6-channel row, and a row narrower than the core keeps it from Auto only.
@@ -2719,7 +2755,7 @@ mod tests {
         assert!(stereo.forced_feeds_audio("dca"));
         assert_eq!(profile_audio_channels("dca", 6), DTS_HD_CHANNELS);
         assert_eq!(profile_audio_channels("dts", 2), 2);
-        assert_eq!(profile_audio_channels("aac", 6), 6);
+        assert_eq!(profile_audio_channels("ac3", 6), 6);
         assert!(!caps.audio_layout_supports("dca", 8), "the set's own player gets the whole 7.1 stream");
         assert!(caps.audio_layout_supports("dca", 6));
         assert!(!Caps::assumed().forced_feeds_audio("dca"));
@@ -3139,7 +3175,8 @@ mod tests {
         assert!(!caps.audio_supports("dts", 0));
         assert!(caps.audio_supports("aac", 2));
         assert!(caps.audio_supports("aac", 6));
-        assert!(!caps.audio_supports("aac", 8));
+        assert!(caps.audio_supports("aac", 8), "fed 7.1 on a 5.1 row (issue 49)");
+        assert!(!caps.audio_layout_supports("aac", 8));
         assert!(caps.audio_supports("eac3", 8));
         let merged = parse(&REAL.replace("\"name\" : \"FLAC\"", "\"name\" : \"EAC3\"" )).unwrap();
         assert!(!merged.audio_supports("eac3", 8));
