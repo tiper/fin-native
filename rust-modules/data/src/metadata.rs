@@ -90,6 +90,12 @@ impl<'a> MetadataView<'a> {
     pub fn detail_request_status(&self, sid: plx_plex::plex::ServerId, rk: &str) -> Option<bool> {
         detail_request_status(self.adapter, sid, rk)
     }
+    /// **What the page for `(sid, rk)` has to show** ([`DetailSlot`]): the loaded item, the settled
+    /// failure of its fetch, or neither yet. The one read a page that must tell "not here yet" from
+    /// "will not come" asks; [`Self::current`] and [`Self::detail_loading`] cannot say the second.
+    pub fn detail_slot(&self, sid: plx_plex::plex::ServerId, rk: &str) -> DetailSlot<'a> {
+        detail_slot(self.state, self.adapter, sid, rk)
+    }
     /// See [`detail_generation`] (free fn) for why a bare terminal `bool` is not enough identity.
     pub fn detail_generation(&self) -> u32 {
         detail_generation(self.adapter)
@@ -190,6 +196,31 @@ pub struct Playhead {
     pub dur_ns: i64,
 }
 
+/// **What a Detail page for one `(sid, rk)` has to show**, as the store answers it
+/// ([`MetadataView::detail_slot`]). Three states, because a page needs three answers: a spinner
+/// (`Waiting`), the item (`Loaded`) and a way out of a fetch that will not come (`Failed`). The
+/// fetch cannot say WHY it failed (`Client::metadata` answers `None` for a transport failure, a
+/// refusal, a missing item and an unparseable body alike), so `Failed` carries no cause.
+#[derive(Clone, Copy)]
+pub enum DetailSlot<'a> {
+    /// Nothing is loaded for the address and no answer has settled against it: not asked yet, or
+    /// the request is in flight ([`MetadataView::detail_loading`]).
+    Waiting,
+    /// The item is loaded. It stays `Loaded` through a refresh that fails: a page that has its
+    /// item keeps it.
+    Loaded(&'a Detail),
+    /// The request settled and nothing was loaded: the server did not answer, refused, or no longer
+    /// has the item. Only a new request ([`MetadataCmd::RequestDetail`]) leaves this state.
+    Failed,
+}
+
+/// The address a detail fetch settled without an item for ([`MetadataState::detail_failure`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DetailFailure {
+    sid: plx_plex::plex::ServerId,
+    rk: String,
+}
+
 /// One Metadata owner's main-thread-only logical state (`docs/stores-as-machines.md`). Production
 /// gains one through `stores::metadata::MetadataStore`; the worker-touched half is
 /// [`MetadataAdapter`].
@@ -200,6 +231,12 @@ pub struct MetadataState {
     /// Where in that order the detail read now out was issued ([`MetadataCmd::RequestDetail`]).
     detail_stamp: crate::viewledger::Stamp,
     current: Option<Detail>,
+    /// The item whose detail fetch SETTLED WITHOUT ONE and has no loaded page to fall back on
+    /// ([`DetailFailure`]). Written only by [`settle_detail_failed`] (the landing of a failed, dropped
+    /// or refused fetch, and a request refused for capacity), and cleared by every request, every
+    /// landed item and every close, so it only ever describes the latest request. Read only through
+    /// [`DetailSlot`], never as a flag.
+    detail_failure: Option<DetailFailure>,
     now: Option<NowPlaying>,
     playing: Option<PlayingItem>,
     /// Segments the user has already skipped in THIS playback — see the retired `SKIPPED` static's
@@ -2218,6 +2255,7 @@ fn patch_loaded_offset(state: &mut MetadataState, at: &crate::viewstate::ViewAt,
 fn clear(state: &mut MetadataState, adapter: &MetadataAdapter) {
     supersede_detail(adapter);
     state.current = None;
+    state.detail_failure = None;
     pick_step(state, PickEvent::PageGone);
     // The *Also available* copies describe the item that is going, so they go with it. Nothing
     // reads them afterwards — the store is addressed and no page's pair can match an empty one —
@@ -2242,6 +2280,9 @@ fn clear_item(state: &mut MetadataState, adapter: &MetadataAdapter, sid: plx_ple
         state.current = None;
         pick_step(state, PickEvent::PageGone);
         alt_clear(state);
+    }
+    if state.detail_failure.as_ref().is_some_and(|f| same(f.sid, &f.rk)) {
+        state.detail_failure = None;
     }
 }
 
@@ -2276,6 +2317,7 @@ fn withdraw(adapter: &MetadataAdapter, sid: plx_plex::plex::ServerId, rk: &str) 
 fn reset(state: &mut MetadataState, adapter: &MetadataAdapter) {
     supersede_detail(adapter);
     state.current = None;
+    state.detail_failure = None;
     state.now = None;
     state.playing = None;
     state.played_since_load = None;
@@ -2296,6 +2338,7 @@ fn reset(state: &mut MetadataState, adapter: &MetadataAdapter) {
 pub fn set_current_for_test(state: &mut MetadataState, d: Option<Detail>) {
     plx_base::testlock::assert_held("the detail store (set_current_for_test)");
     state.current = d;
+    state.detail_failure = None;
 }
 
 /// TEST-ONLY in-place edit of the loaded item, for a test that lands an episode page or drops one
@@ -4233,12 +4276,11 @@ pub fn fetch_full(client: &'static plx_plex::plex::Client, sid: plx_plex::plex::
     let t0 = crate::instruments::start();
     // The ONE line that says a detail page was asked for and got nothing — the summary at the end
     // of this function prints on success only, and nothing downstream can speak for the failure.
-    // Its worst shape is the page opened through `detail::open_rk`, which clears before requesting:
-    // `current()` is then None, `detail_loading()` settles the moment this lands so the spinner
-    // GOES, and the page sits on the catalog row's hero art with an empty body that nothing
-    // re-requests. The other request sites keep whatever was loaded, so they degrade more quietly —
-    // but all four are equally silent in the log without this, and byte-identical to the user
-    // never having pressed OK.
+    // Its worst shape is the page opened on an item with nothing loaded: `current()` is None and
+    // `detail_loading()` settles the moment this lands, so the spinner goes. The store then records the
+    // failure ([`DetailSlot::Failed`], [`settle_detail_failed`]) and the page offers *Try again*; the
+    // other request sites keep whatever was loaded, so they degrade more quietly — but all four are
+    // equally silent in the log without this.
     //
     // Worded as "no metadata" rather than "the GET failed": `fetch_detail` is `client.metadata(rk)?`,
     // and `metadata` answers `None` for a transport failure, a non-2xx and an unparseable body alike.
@@ -4377,6 +4419,22 @@ fn detail_request_status(adapter: &MetadataAdapter, sid: plx_plex::plex::ServerI
     let want = adapter.detail_want.lock().unwrap_or_else(|e| e.into_inner());
     want.as_ref().filter(|(wanted_sid, wanted_rk)| *wanted_sid == sid && wanted_rk == rk)
         .map(|_| detail_loading(adapter))
+}
+
+/// The page for `(sid, rk)`: its loaded item first (a refresh that failed leaves it), then a request
+/// still in flight for the address (a retry's spinner, whatever an earlier attempt settled), then
+/// the recorded failure.
+fn detail_slot<'a>(state: &'a MetadataState, adapter: &MetadataAdapter, sid: plx_plex::plex::ServerId, rk: &str) -> DetailSlot<'a> {
+    if let Some(d) = state.current.as_ref().filter(|d| plx_plex::plex::same_item((d.sid, &d.rk), (sid, rk))) {
+        return DetailSlot::Loaded(d);
+    }
+    if detail_request_status(adapter, sid, rk) == Some(true) {
+        return DetailSlot::Waiting;
+    }
+    match &state.detail_failure {
+        Some(f) if plx_plex::plex::same_item((f.sid, &f.rk), (sid, rk)) => DetailSlot::Failed,
+        _ => DetailSlot::Waiting,
+    }
 }
 
 /// Generation of the most recently admitted detail request (bumped once, synchronously, by
@@ -4556,9 +4614,15 @@ impl plx_machine::job::Port<(DetailKey, Option<Detail>)> for DetailPort {
 /// the job (see [`DetailReq`]).
 fn request_detail(state: &mut MetadataState, adapter: &std::sync::Arc<MetadataAdapter>, sid: plx_plex::plex::ServerId, rk: &str, prefer: Option<i64>) {
     let (_, addr, admission) = begin_detail_request(adapter, sid, rk);
+    // A new request ends the failure of the last one: the page it is for is back to loading.
+    state.detail_failure = None;
     // A request refused for capacity owns no worker and emits no job: `begin_detail_request` has
-    // already settled it synchronously, and nothing will ever answer it.
-    if admission.is_err() { return; }
+    // already settled it synchronously, and nothing will ever answer it, so the failure is recorded
+    // here, where a landing would have recorded it.
+    if admission.is_err() {
+        settle_detail_failed(state, Some(&(sid, rk.to_string())));
+        return;
+    }
     state.jobs.push(crate::stores::StoreJob::Detail(
         plx_machine::job::Job { addr, req: DetailReq { sid, rk: rk.to_string(), prefer } },
         DetailPort::of(adapter),
@@ -4724,9 +4788,10 @@ pub fn run_with_keys(state: &mut MetadataState, adapter: &std::sync::Arc<Metadat
 
 /// MAIN THREAD, once a frame, ROUTE-UNCONDITIONAL (a landing must never depend on which screen is
 /// mounted — the play paths request a detail from Home and flip straight to the player). Installs
-/// a landed fetch into CURRENT and returns true when a fresh item was published. A stale landing —
-/// superseded by a newer request, by a blocking load, or by `clear()` when the page closed — is
-/// dropped.
+/// a landed fetch into CURRENT and returns true when the store changed for its readers: a fresh item
+/// was published, or the awaited item's fetch settled without one ([`settle_detail_failed`]). A stale
+/// landing — superseded by a newer request, by a blocking load, or by `clear()` when the page closed
+/// — is dropped.
 pub fn pump_detail_with_gate(state: &mut MetadataState, adapter: &std::sync::Arc<MetadataAdapter>,
     keys: &plx_plex::plex::ClientKeys, controlled: bool,
     gate: &plx_machine::landgate::Gate) -> bool {
@@ -4768,10 +4833,14 @@ pub fn pump_detail_with_gate(state: &mut MetadataState, adapter: &std::sync::Arc
         adapter.detail_done.store(gen, Ordering::SeqCst);
         let d = match rec.lane {
             Lane::Data(_, d) => d,
-            // nothing arrived and nothing will: the spinner is settled, the page keeps its item
+            // nothing arrived and nothing will: the spinner is settled and the page keeps the item
+            // it has, or, with none, is Failed ([`settle_detail_failed`])
             Lane::Dropped(_) | Lane::Refused(_) => None,
         };
-        fresh |= install_landed_detail(state, adapter, d, keys, controlled);
+        fresh |= match d {
+            Some(d) => install_landed_detail(state, adapter, Some(d), keys, controlled),
+            None => settle_detail_failed(state, want.as_ref()),
+        };
     }
     fresh
 }
@@ -4782,13 +4851,32 @@ pub fn pump_detail(state: &mut MetadataState,
     pump_detail_with_gate(state, adapter, keys, controlled, plx_machine::landgate::fixture_gate())
 }
 
-/// Install a landed fetch: a `None` (the fetch failed or panicked) keeps the previously loaded
-/// item. The landing carries no title of its own, so the line naming WHICH page it was is
-/// written at the fetch site (`fetch_full`) — read it there rather than adding an anonymous one
-/// here. ONE arrival is not covered by that: a worker that PANICKED lands `None` too, and never
-/// reached `fetch_full`'s line. `task`'s panic logger names the thread and the source location,
-/// so the failure is in the log — it just is not in these words, and a `None` here with no
-/// `detail:` line above it is that case.
+/// A fetch settled with no item for the awaited address (it failed, panicked, was dropped or
+/// refused, or its admission was refused for capacity): record it as [`DetailSlot::Failed`] so the
+/// page can say so, where it used to read exactly like a fetch not yet answered. A page that has its
+/// item keeps it, and records nothing: a refresh that fails is no reason to take the page away. The
+/// item another page holds is kept too (`current` is not this fetch's to clear). Returns true when
+/// the store changed for its readers.
+///
+/// The landing carries no title of its own, so the line naming WHICH page it was is written at the
+/// fetch site (`fetch_full`) — read it there rather than adding an anonymous one here. ONE arrival
+/// is not covered by that: a worker that PANICKED lands `None` too, and never reached
+/// `fetch_full`'s line. `task`'s panic logger names the thread and the source location, so the
+/// failure is in the log — it just is not in these words, and a failure here with no `detail:` line
+/// above it is that case.
+fn settle_detail_failed(state: &mut MetadataState, awaited: Option<&DetailKey>) -> bool {
+    let Some((sid, rk)) = awaited else { return false };
+    if state.current.as_ref().is_some_and(|d| plx_plex::plex::same_item((d.sid, &d.rk), (*sid, rk))) {
+        return false;
+    }
+    let failure = DetailFailure { sid: *sid, rk: rk.clone() };
+    if state.detail_failure.as_ref() == Some(&failure) {
+        return false;
+    }
+    state.detail_failure = Some(failure);
+    true
+}
+
 fn restamp_detail_source(state: &mut MetadataState, keys: &plx_plex::plex::ClientKeys) -> bool {
     let Some(detail) = state.current.as_mut() else { return false };
     let credit = keys.facts(detail.sid).and_then(|facts| facts.described)
@@ -4798,9 +4886,14 @@ fn restamp_detail_source(state: &mut MetadataState, keys: &plx_plex::plex::Clien
     detail.source_credit.push_str(credit);
     true
 }
+/// Install a landed item. A `None` installs nothing and is not this function's to judge: the pump
+/// sends a failed fetch to [`settle_detail_failed`], which knows the awaited address. The failure of
+/// an earlier request ([`MetadataState::detail_failure`]) ends with an item landing: the page the item
+/// is for is `Loaded`, and no other page's request is still the awaited one.
 fn install_landed_detail(state: &mut MetadataState, adapter: &std::sync::Arc<MetadataAdapter>, d: Option<Detail>,
     keys: &plx_plex::plex::ClientKeys, controlled: bool) -> bool {
     let Some(mut d) = d else { return false };
+    state.detail_failure = None;
     if controlled { d.source_override = None; }
     d.source_credit = keys.facts(d.sid).and_then(|facts| facts.described)
         .map(|facts| facts.handle.clone()).unwrap_or_default();

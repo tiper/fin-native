@@ -11,6 +11,7 @@ mod cast;
 mod collection;
 mod episodes;
 mod extras;
+mod failed;
 mod hero;
 pub use hero::{face as hero_face, HeroCtl};
 mod related;
@@ -1041,6 +1042,12 @@ impl DetailScreen {
         })
     }
 
+    /// Did this page's fetch settle without an item ([`failed`])? The store's word for the page's
+    /// own `(sid, rk)`, so a covered page never reads the failure of the one over it.
+    fn failed(&self, meta: plx_data::metadata::MetadataView<'_>) -> bool {
+        matches!(meta.detail_slot(self.sid, &self.rk), plx_data::metadata::DetailSlot::Failed)
+    }
+
     fn selected(&self) -> Option<&plx_data::pms::PmsMovie> {
         self.selected.as_ref()
     }
@@ -1339,6 +1346,9 @@ impl DetailScreen {
     /// `tracks` is [`Self::tracks_available`] — the page's own answer, threaded in because this is
     /// an associated fn and because the About footer's element range is exactly what it decides.
     fn locate_local(elem: u32, tracks: bool) -> Option<Located> {
+        if elem == failed::RETRY_ELEM {
+            return Some(Located::Retry);
+        }
         if let Some(c) = hero::HeroCtl::of_elem(elem) {
             return Some(Located::Hero(c));
         }
@@ -1523,6 +1533,9 @@ impl DetailScreen {
     /// waits or retires all leave the toggle without any one of them having to fire, and a reflex OK
     /// on a page that has just appeared never writes to someone's account.
     fn default_elem<H: ContentLike + crate::registry::MetadataLike + PlayerLike>(&self, cx: &Cx<'_, H>) -> u32 {
+        if self.failed(<H as crate::registry::MetadataLike>::metadata(cx)) {
+            return failed::RETRY_ELEM;
+        }
         let stops = self.stops(cx);
         let set = self.hero_set(<H as crate::registry::MetadataLike>::metadata(cx));
         if let Some(ctl) = hero::default_stop(set, stops) {
@@ -1543,6 +1556,21 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
     fn groups(&self, cx: &Cx<'_, H>, out: &mut Vec<GroupSpec>) {
         let meta = H::metadata(cx);
         let measure = cx.measure;
+        // A page whose item will not come has one lone stop, *Try again*, and no hero row to
+        // declare ([`failed`]).
+        if self.failed(meta) {
+            out.push(GroupSpec {
+                id: failed::RETRY_GROUP,
+                kind: GroupKind::Row { wrap: false },
+                seat: Seat::First,
+                reachable: AxisMask::BOTH,
+                edge: [EdgeRule::Stop; 4],
+                extent: failed::retry_rect(measure),
+                len: 1,
+                elem: ElemKind::Control,
+            });
+            return;
+        }
         let set = self.hero_set(meta);
         let widths = hero::hero_widths(
             cx.measure,
@@ -1773,6 +1801,8 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
             }),
             // A lone stop: UP leaves by the heading group's own edge, DOWN by the shelf link.
             Located::CollectionHeading => None,
+            // The failed page's one stop: nowhere to travel to.
+            Located::Retry => None,
             Located::Cast(_) => return self.detail(meta).map_or(Step::Edge, |d| {
                 self.cast.neighbour::<H, _>(&self.cards(cards::Which::Cast, d), key, dir)
             }),
@@ -1804,6 +1834,10 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
             self.scroll_target
         };
         let (rect, rest_rect, index) = match located {
+            Located::Retry => {
+                let rect = failed::retry_rect(measure);
+                (rect, rect, Some(0))
+            }
             Located::Hero(ctl) => {
                 let set = self.hero_set(meta);
                 let i = hero::index_of(set, ctl)?;
@@ -1912,6 +1946,13 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
 
     fn reconcile(&self, want: FocusKey<u32>, cx: &Cx<'_, H>) -> FocusKey<u32> {
         let meta = H::metadata(cx);
+        // A page whose item will not come seats on *Try again*, and this is the FIRST check: the
+        // `return_pending` hold and the `provisional` seat below can each keep focus on a hero
+        // control, and the failed page has none, so a press could otherwise commit on the watched
+        // toggle the moment the fetch failed.
+        if self.failed(meta) {
+            return FocusKey { entry: want.entry, elem: failed::RETRY_ELEM };
+        }
         // Full-trailer mode narrows the hero row to its Play anchor, and this must be the
         // FIRST check in the function: the return_pending/restore_intent short-circuit below and
         // restore_focus() can each hand back a hero elem without knowing about full-trailer mode,
@@ -1932,7 +1973,8 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
         // the item brings back (Go to Show, Restart, Play Version) is not gone, only not here yet, so
         // a focus held on one stays there: sent to Play for the length of the load, it would be
         // Play's by the time the item landed, and the restore (`restore_focus`) is spent on a focus
-        // that has already been moved. `pump_restore` ends the wait when the request fails.
+        // that has already been moved. `pump_restore` ends the wait when the request fails, and the page
+        // is then the failed read-out, whose seat is Try again (`reconcile` answers it first).
         if self.return_pending && self.detail(meta).is_none() && hero::HeroCtl::of_elem(want.elem).is_some() {
             return want;
         }
@@ -2029,7 +2071,9 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
         // The row's stop a press UP into it seats on, and where a section's key that cannot be
         // resolved falls back to: the default stop, else (a row of writes only) its first stop.
         let first_stop = hero::default_stop(set, stops).unwrap_or_else(|| hero::first_stop(set, stops)).elem();
-        let elem = if group == hero::HERO_GROUP {
+        let elem = if group == failed::RETRY_GROUP {
+            return FocusKey { entry: self.entry, elem: failed::RETRY_ELEM };
+        } else if group == hero::HERO_GROUP {
             // The page's FIRST seat (nothing of this page focused yet: the container's
             // `FirstInGroup`) is its default, which may sit below the row; a viewer already on the
             // page who presses UP into the row chose it, so it seats on a stop of the row even when
@@ -2120,6 +2164,7 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
         // projection outlives the borrow of the views (a read-side state file only)
         let with_subject = |a: A11y<'static>, rk: &str| if rk.is_empty() { a } else { a.with_subject(rk.to_owned()) };
         Some(match located {
+            Located::Retry => A11y::new(named("status").name("retry"), A11yRole::Button),
             Located::Hero(ctl) => {
                 let a = A11y::new(named("hero").name(ctl.a11y_name()), A11yRole::Button);
                 match d.and_then(|d| hero_control_subject(ctl, d, self.selected())) {
@@ -2160,6 +2205,10 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
     /// listing cannot name.
     fn a11y_elems(&self, g: GroupId, cx: &Cx<'_, H>, out: &mut Vec<u32>) {
         let meta = H::metadata(cx);
+        if g == failed::RETRY_GROUP {
+            out.push(failed::RETRY_ELEM);
+            return;
+        }
         if g == hero::HERO_GROUP {
             let (ctls, n) = hero::visible_ctls(self.hero_set(meta), self.stops(cx));
             out.extend(ctls[..n].iter().map(|ctl| ctl.elem()));
@@ -2202,6 +2251,7 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
         let mut segs = path.segs();
         let located = match (segs.next(), segs.next(), segs.next(), segs.next()) {
             (Some(Seg::Name("hero")), Some(Seg::Name(word)), None, _) => Located::Hero(hero::HeroCtl::of_a11y_name(word)?),
+            (Some(Seg::Name("status")), Some(Seg::Name("retry")), None, _) => Located::Retry,
             (Some(Seg::Name("season")), Some(Seg::Index(i)), None, _) => Located::Season(i),
             (Some(Seg::Name("episodes")), Some(Seg::Name("still")), Some(Seg::Index(i)), None) => {
                 Located::Episode(i, episodes::Row::Still)
@@ -2233,8 +2283,15 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Focusable<H> f
 
 impl DetailScreen {
     fn valid(&self, located: Located, meta: plx_data::metadata::MetadataView<'_>, stops: hero::Stops) -> bool {
+        // The failed page has one stop and no other control is valid on it: the hero's controls act
+        // on an item that is not there (a Play that plays nothing, a watched toggle with nothing to
+        // mark), and `Retry` is valid nowhere else.
+        if self.failed(meta) {
+            return located == Located::Retry;
+        }
         let d = self.detail(meta);
         match located {
+            Located::Retry => false,
             // A control other than Play is never valid while full-trailer mode has narrowed the
             // row to its anchor, and a control that plays is never valid while no driver is
             // composed — `hero::focusable` is the same predicate `reconcile` and
@@ -2842,6 +2899,10 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Screen<H> for 
         }
         let p = f.painter;
         let nav_page_alpha = f.nav_page_alpha;
+        if self.failed(meta) {
+            self.draw_failed(f);
+            return;
+        }
         let d = self.detail(meta);
         self.draw_backdrop(p, d, f.measure, preview, meta);
         let hero_vis = hero_alpha(self.scroll.pos, HERO_FADE);
@@ -3493,12 +3554,25 @@ impl DetailScreen {
             );
     }
 
+    /// **The failed page** ([`failed`]): the shared page-placed read-out with *Try again* focused when
+    /// it holds the seat, and that one control's stop. Nothing else draws: no backdrop, no hero.
+    fn draw_failed<H: ContentLike + crate::registry::MetadataLike + PlayerLike>(&self, f: &mut DrawFrame<'_, '_, H>) {
+        let on = f.focus.current.is_some_and(|key| key.entry == self.entry && key.elem == failed::RETRY_ELEM);
+        failed::overlay().focused(on).draw_measured(&Env::inert(), f.painter.alpha(f.page_alpha), f.measure);
+        self.record_stops(f);
+    }
+
     fn record_stops<H: ContentLike + crate::registry::MetadataLike + PlayerLike>(&self, f: &mut DrawFrame<'_, '_, H>) {
         if !f.records_stops() { return; }
         let meta = H::metadata(f.cx);
         // Two placements per episode, each reading the section flow: one validation for all.
         let _layout = self.pin_layout(meta, f.cx.measure);
         let mut elems = Vec::new();
+        if self.failed(meta) {
+            // The one stop the failed page has: the hero's controls are not valid (`valid`) and the
+            // page below them does not exist.
+            elems.push((failed::RETRY_ELEM, Activate::Press));
+        }
         let set = self.hero_set(meta);
         // Full-trailer mode draws none of the row, Play included (`draw_buttons` fades it to
         // alpha 0 with the rest of the chrome) — Play only stays `valid()` so the engine has a
@@ -3509,7 +3583,7 @@ impl DetailScreen {
         // hover and click both go away together. A control that plays, with no driver composed, is
         // not `valid()` either, so `place` below yields it no rect and it registers no stop:
         // hovering a disabled pill never parks focus on it, nor does a click reach it.
-        if !self.stops(f.cx).full_trailer {
+        if !self.stops(f.cx).full_trailer && !self.failed(meta) {
             let (controls, n) = hero::hero_ctls(set);
             elems.extend(controls[..n].iter().map(|c| (c.elem(), Activate::Press)));
         }
@@ -3738,6 +3812,8 @@ enum Located {
     About(usize),
     Collection(usize),
     CollectionHeading,
+    /// *Try again* on the failed page ([`failed`]): the only stop it has.
+    Retry,
 }
 
 impl Located {
@@ -3750,6 +3826,7 @@ impl Located {
             Self::Extras(index) => extras::elem(index),
             Self::Collection(index) => collection::elem(index),
             Self::CollectionHeading => Some(collection::HEADING_ELEM),
+            Self::Retry => Some(failed::RETRY_ELEM),
             Self::Cast(index) => cast::elem(index),
             Self::About(0) => Some(about::CARD_ELEM),
             Self::About(_) => Some(about::LANGUAGES_ELEM),
@@ -3757,7 +3834,7 @@ impl Located {
     }
     fn section(self) -> i32 {
         match self {
-            Self::Hero(_) => 0,
+            Self::Hero(_) | Self::Retry => 0,
             Self::Season(_) => 1,
             Self::Episode(_, _) => 2,
             Self::Related(_) => 3,
@@ -3777,6 +3854,7 @@ impl Located {
             Self::Extras(_) => extras::EXTRAS_GROUP,
             Self::Collection(_) => collection::COLLECTION_GROUP,
             Self::CollectionHeading => collection::HEADING_GROUP,
+            Self::Retry => failed::RETRY_GROUP,
             Self::Cast(_) => cast::CAST_GROUP,
             Self::About(_) => about::ABOUT_GROUP,
         }
@@ -3787,7 +3865,7 @@ impl Located {
             Self::Hero(c) => c.elem() as usize,
             Self::Season(i) | Self::Episode(i, _) | Self::Related(i) | Self::Extras(i) | Self::Cast(i)
             | Self::Collection(i) => i,
-            Self::CollectionHeading => 0,
+            Self::CollectionHeading | Self::Retry => 0,
             Self::About(0) => 0,
             // Legacy Spot/focusprobe vocabulary keeps the four visual About columns numbered
             // Card=0, Information=1, Languages=2, Accessibility=3 even though only two are stops.
@@ -3977,9 +4055,9 @@ impl DetailScreen {
         if self.detail(meta).is_none() && meta.detail_request_status(self.sid, &self.rk) == Some(false) {
             self.restore_intent = None;
             self.return_pending = false;
-            // Nothing draws without a detail but the hero, which is faded out past `HERO_FADE`, and
-            // `reveal_focus` holds off without one: a body that kept its scroll through
-            // `restore_memory` would sit on the backdrop alone.
+            // The request failed: the page is the failed read-out (`failed`), which has no body to
+            // scroll, and `reveal_focus` holds off without a detail: a body that kept its scroll
+            // through `restore_memory` would sit past the top of a page that has nothing below it.
             self.scroll_target = 0.0;
             return;
         }
@@ -4287,7 +4365,8 @@ impl DetailScreen {
             self.restore_intent = None;
             self.return_pending = false;
         }
-        if !loaded {
+        // The spinner turns only while there is a fetch to wait for: the failed page is still.
+        if !loaded && !self.failed(meta) {
             self.spin_ms = self.spin_phase.advance(t, &mut fx.present());
         }
         if moving || meta.season_loading() {
@@ -4738,6 +4817,14 @@ impl DetailScreen {
 
     fn activate<H: ContentLike + crate::registry::MetadataLike>(&mut self, elem: u32, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
         let meta = H::metadata(cx);
+        // The failed page answers *Try again* and nothing else: a press that reaches a hero control
+        // in the frame before `reconcile` moved focus off it acts on an item that is not there.
+        if self.failed(meta) {
+            if self.locate(elem, meta) == Some(Located::Retry) {
+                self.retry(cx, fx);
+            }
+            return;
+        }
         // An OK on a landed page is the viewer's act on the focus it holds. One before the item is
         // there presses nothing (`activate_hero`) and must not end the page's claim on the seat: the
         // landing would then leave focus on a toggle the next OK writes with.
@@ -4827,6 +4914,20 @@ impl DetailScreen {
             }
             _ => {}
         }
+        fx.invalidate(Provenance::Input);
+    }
+
+    /// **Try again**: ask for the page's own item again, as a fresh open does. The store takes the page
+    /// back to loading when it admits the request, and the seat is the page's again until the viewer
+    /// acts at it (`provisional`, as `Enter` sets it): with no playback driver the first seat of a
+    /// page with no item is the watched toggle, which writes to the account once the item lands, and
+    /// the retry's landing must not leave focus there any more than a first open's does.
+    fn retry<H: ContentLike>(&mut self, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
+        self.provisional = !H::screen_inputs(cx).can_play();
+        fx.push(Fx::App(AppFx::Store(
+            StoreId::Metadata,
+            StoreCmd::Metadata(MetadataCmd::RequestDetail { sid: self.sid, rk: self.rk.clone() }),
+        )));
         fx.invalidate(Provenance::Input);
     }
 

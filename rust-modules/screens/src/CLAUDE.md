@@ -114,7 +114,12 @@ that mixes async content with a live cursor:
   Before the item lands, and in the landing frame before `reconcile` has moved focus off the toggle,
   only a focus move ends it: an OK there would let its press commit on the watched toggle, so an OK,
   a key that moves nothing, a wheel, a drag and a hover on the control already focused leave it the
-  page's.
+  page's. **A fetch that settles with no item is its own page** (`DetailSlot::Failed`,
+  `detail/failed.rs`): the page-placed `Failed` read-out with *Try again*, the hero row not drawn and
+  none of its controls valid, so `reconcile` answers *Try again* before it asks `provisional` anything
+  and an OK that reaches a hero control in the frame the failure landed on presses nothing. *Try again*
+  re-sends the page's `RequestDetail` and re-arms `provisional` as a fresh open does, so the retry's
+  landing does not leave focus on the watched toggle either.
 - **The grid absorbs an index landing, the page shifts its scroll.** The Library's grid is a
   `cards::Grid` in `ScrollMode::External`: when the focused element's index changes with no
   `FocusMoved` (an insert or reorder before it) the grid moves its pop with the element and

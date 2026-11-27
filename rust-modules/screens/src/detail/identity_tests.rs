@@ -375,11 +375,13 @@ fn a_failed_addressed_return_retires_the_intent_and_falls_back() {
     assert_eq!(d.focus(), Some(key));
     assert_eq!(test_store().view().detail_request_status(ServerId::UNSET, "a"), Some(true));
     assert_eq!(test_store().view().detail_request_status(ServerId::UNSET, "b"), None);
-    assert!(!{ let (__s, __a) = test_store().split_for_test(); plx_data::metadata::land_detail_for_test(&plx_plex::plex::ClientKeys::default(), false, __s, __a, ServerId::UNSET, "a", request, None) });
+    // The failed landing is a change the page must hear of: it records `Failed` for `a`.
+    assert!({ let (__s, __a) = test_store().split_for_test(); plx_data::metadata::land_detail_for_test(&plx_plex::plex::ClientKeys::default(), false, __s, __a, ServerId::UNSET, "a", request, None) });
     assert_eq!(test_store().view().detail_request_status(ServerId::UNSET, "a"), Some(false));
     d.store_changed(StoreId::Metadata.ord(), 64);
     frame(&mut d, &mut rig, 64);
-    assert_eq!(d.focus().unwrap().elem, hero::ELEM_PLAY);
+    // The page has no item to return to, so it shows the failed read-out and the seat is Try again.
+    assert_eq!(d.focus().unwrap().elem, super::failed::RETRY_ELEM);
     assert!(!screen(&d).return_pending && screen(&d).restore_intent.is_none());
     test_store().run(MetadataCmd::Clear);
 }

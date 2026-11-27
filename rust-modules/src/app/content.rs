@@ -2761,7 +2761,9 @@ mod library_publication_tests {
             sid,
             generation: reconciliation,
             detail: None,
-            expected_fresh: false,
+            // With no cached item the settled failure is recorded (`Failed`) and is a change the
+            // screens must hear of; what must not follow is a retry (asserted below).
+            expected_fresh: true,
             landed: false,
             store: rig.metadata_mut() as *mut _,
         };

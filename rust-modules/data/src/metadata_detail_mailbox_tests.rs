@@ -651,8 +651,9 @@ fn a_refused_detail_spawn_settles_the_spinner_through_the_landing() {
     let addr = detail_addr(test_adapter().detail_gen.load(Ordering::SeqCst));
     assert!(detail_loading(test_adapter()));
     assert_eq!(test_adapter().detail_landing.inflight(addr.to), 1, "OS refusal reserves its queued terminal");
-    assert!(!pump_detail(test_state(), test_adapter(), &plx_plex::plex::ClientKeys::default(), false), "no item arrived");
-    assert!(!detail_loading(test_adapter()), "but the refusal settled the wait");
+    assert!(pump_detail(test_state(), test_adapter(), &plx_plex::plex::ClientKeys::default(), false), "no item arrived, which the pump reports as the failure it is");
+    assert_eq!(slot_of(a, "9"), "failed");
+    assert!(!detail_loading(test_adapter()), "and the refusal settled the wait");
     assert_eq!(test_adapter().detail_landing.inflight(addr.to), 0);
     clear(test_state(), test_adapter());
 }
@@ -701,7 +702,8 @@ fn a_panicking_detail_fetch_acknowledges_and_settles_its_request() {
         true
     });
     assert!(detail_loading(test_adapter()), "terminal waits for pump");
-    assert!(!pump_detail(test_state(), test_adapter(), &plx_plex::plex::ClientKeys::default(), false));
+    assert!(pump_detail(test_state(), test_adapter(), &plx_plex::plex::ClientKeys::default(), false), "a panicked fetch is a failure the page is told of");
+    assert_eq!(slot_of(sid, "panic"), "failed");
     assert!(!detail_loading(test_adapter()));
     assert_eq!(test_adapter().detail_landing.inflight(detail_addr(0).to), 0);
     clear(test_state(), test_adapter());
@@ -720,7 +722,8 @@ fn a_detail_job_without_a_client_answers_the_failure_and_asks_nothing() {
         true
     });
     assert!(detail_loading(test_adapter()), "terminal waits for pump");
-    assert!(!pump_detail(test_state(), test_adapter(), &plx_plex::plex::ClientKeys::default(), false), "nothing landed");
+    assert!(pump_detail(test_state(), test_adapter(), &plx_plex::plex::ClientKeys::default(), false), "nothing landed, and that is a failure the page is told of");
+    assert_eq!(slot_of(sid, "no-client"), "failed");
     assert!(!detail_loading(test_adapter()), "and the spinner settled");
     assert_eq!(test_adapter().detail_landing.inflight(detail_addr(0).to), 0);
     clear(test_state(), test_adapter());
@@ -822,4 +825,115 @@ fn controlled_cancelled_detail_ack_is_recorded_and_recovers_capacity() {
     assert_eq!(crate::stores::tape::finish().1, None);
     clear(test_state(), test_adapter());
     crate::stores::tape::reset_for_test();
+}
+
+fn slot_of(sid: plx_plex::plex::ServerId, rk: &str) -> &'static str {
+    match detail_slot(test_state(), test_adapter(), sid, rk) {
+        DetailSlot::Waiting => "waiting",
+        DetailSlot::Loaded(_) => "loaded",
+        DetailSlot::Failed => "failed",
+    }
+}
+
+/// **A detail fetch that settles without an item is a recorded outcome, not a vanished one.** A page
+/// opened on an item the server does not answer for used to read exactly like one still loading the
+/// moment its spinner went: `None` was both "not yet" and "failed". The slot now says which, for the
+/// address that was asked, and a new request takes the page back to waiting.
+#[test]
+fn a_failed_detail_fetch_is_recorded_as_failed_for_its_address() {
+    let _serial = plx_base::testlock::serial();
+    clear(test_state(), test_adapter());
+    let sid = plx_plex::plex::ServerId::UNSET;
+    let keys = plx_plex::plex::ClientKeys::default();
+    assert_eq!(slot_of(sid, "gone"), "waiting", "nothing asked, nothing answered");
+
+    // the fetch answered `None`: the page is Failed, and the pump reports the change
+    let gen = begin_detail_for_test(test_adapter(), sid, "gone");
+    assert_eq!(slot_of(sid, "gone"), "waiting", "in flight");
+    land_detail(test_adapter(), sid, "gone", gen, None);
+    assert!(pump_detail(test_state(), test_adapter(), &keys, false), "a failure is a change the screens must hear of");
+    assert!(!detail_loading(test_adapter()), "the spinner settled");
+    assert_eq!(slot_of(sid, "gone"), "failed");
+    assert_eq!(slot_of(sid, "another"), "waiting", "the failure belongs to the address that was asked");
+    assert!(current(test_state()).is_none());
+    assert!(!pump_detail(test_state(), test_adapter(), &keys, false), "a settled failure is announced once");
+
+    // Try again: the request takes the page back to waiting, and a landed item is Loaded
+    request_detail(test_state(), test_adapter(), sid, "gone", None);
+    assert_eq!(slot_of(sid, "gone"), "waiting", "the retry is in flight");
+    let retry = detail_generation(test_adapter());
+    test_state().jobs.clear();
+    land_detail(test_adapter(), sid, "gone", retry, Some(Detail { sid, rk: "gone".into(), ..Default::default() }));
+    assert!(pump_detail(test_state(), test_adapter(), &keys, false));
+    assert_eq!(slot_of(sid, "gone"), "loaded");
+
+    // a retry that fails again is Failed again
+    clear(test_state(), test_adapter());
+    request_detail(test_state(), test_adapter(), sid, "gone", None);
+    let again = detail_generation(test_adapter());
+    test_state().jobs.clear();
+    land_detail(test_adapter(), sid, "gone", again, None);
+    assert!(pump_detail(test_state(), test_adapter(), &keys, false));
+    assert_eq!(slot_of(sid, "gone"), "failed");
+
+    // closing the page ends the record
+    clear(test_state(), test_adapter());
+    assert_eq!(slot_of(sid, "gone"), "waiting");
+}
+
+/// The same settled-without-an-item rule for the two other ways a request ends with no answer: the
+/// OS refusing the worker, and the admission refused for capacity (which queues no landing at all).
+#[test]
+fn a_refused_or_dropped_detail_request_is_recorded_as_failed() {
+    let _serial = plx_base::testlock::serial();
+    clear(test_state(), test_adapter());
+    let sid = plx_plex::plex::ServerId::UNSET;
+    let keys = plx_plex::plex::ClientKeys::default();
+
+    request_detail_with_spawn(test_adapter(), sid, "refused", |_| false);
+    assert!(pump_detail(test_state(), test_adapter(), &keys, false));
+    assert_eq!(slot_of(sid, "refused"), "failed", "a refused launch settles as Failed");
+    clear(test_state(), test_adapter());
+
+    // capacity: four superseded workers still hold their reservations, the fifth request is refused
+    let mut workers = Vec::new();
+    for _ in 0..4 {
+        request_detail_with_spawn(test_adapter(), sid, "old", |gen| { workers.push(gen); true });
+    }
+    request_detail(test_state(), test_adapter(), sid, "latest", None);
+    assert!(test_state().jobs.is_empty(), "a refused admission emits no job");
+    assert_eq!(slot_of(sid, "latest"), "failed", "nothing will ever answer it, so it is Failed at once");
+    for gen in workers {
+        land_detail(test_adapter(), sid, "old", gen, None);
+        pump_detail(test_state(), test_adapter(), &keys, false);
+    }
+    assert_eq!(slot_of(sid, "latest"), "failed", "a superseded worker's answer is not the page's");
+    clear(test_state(), test_adapter());
+}
+
+/// **A refresh of a page that has its item keeps the item.** The loaded page is re-read on a
+/// return from the player and after a watched toggle; a read that fails is no reason to replace the
+/// page with a failure read-out.
+#[test]
+fn a_failed_refresh_keeps_the_loaded_item() {
+    let _serial = plx_base::testlock::serial();
+    clear(test_state(), test_adapter());
+    let sid = plx_plex::plex::ServerId::UNSET;
+    let keys = plx_plex::plex::ClientKeys::default();
+    set_current_for_test(test_state(), Some(Detail { sid, rk: "kept".into(), ..Default::default() }));
+    let gen = begin_detail_for_test(test_adapter(), sid, "kept");
+    assert_eq!(slot_of(sid, "kept"), "loaded", "the item shows through its own refresh");
+    land_detail(test_adapter(), sid, "kept", gen, None);
+    assert!(!pump_detail(test_state(), test_adapter(), &keys, false), "nothing changed on the page");
+    assert_eq!(slot_of(sid, "kept"), "loaded");
+    assert_eq!(cur_rk().as_deref(), Some("kept"));
+
+    // another item's page that fails does not take the loaded one away, and is Failed itself
+    let gen = begin_detail_for_test(test_adapter(), sid, "other");
+    land_detail(test_adapter(), sid, "other", gen, None);
+    assert!(pump_detail(test_state(), test_adapter(), &keys, false));
+    assert_eq!(slot_of(sid, "other"), "failed");
+    assert_eq!(slot_of(sid, "kept"), "loaded");
+    assert_eq!(cur_rk().as_deref(), Some("kept"));
+    clear(test_state(), test_adapter());
 }
