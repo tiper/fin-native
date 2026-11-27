@@ -1047,8 +1047,14 @@ impl Backend for Shared {
         let Some(channels) = self.0.live_channels_of(epg) else { return (None, None) };
         (Some(200), Some(channels.iter().filter_map(livetv::channel_of).collect()))
     }
-    fn epg_guide(&self, epg: &str, _now: i64, _until: i64) -> Option<Vec<Metadata>> {
-        Some(self.0.live_channels_of(epg)?.iter().filter_map(livetv::airing_of).collect())
+    fn epg_guide(&self, epg: &str, now: i64, until: i64) -> Option<Vec<Metadata>> {
+        let channels = self.0.live_channels_of(epg)?;
+        let until = until.max(plx_plex::plex::livetv::window_end(now));
+        // A server that cannot answer the guide still says what is on now, as the lineup carries it.
+        match self.0.client().and_then(|c| c.live_programs(now, until)) {
+            Some(programs) => Some(livetv::programs_of(&programs, &channels)),
+            None => Some(channels.iter().filter_map(livetv::airing_of).collect()),
+        }
     }
     fn tune(&self, _off: &plx_base::task::OffFrame, _dvr: &str, channel: &str, playback: &str) -> plx_plex::plex::livetv::TuneOutcome {
         use plx_plex::plex::livetv::TuneOutcome;

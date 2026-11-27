@@ -238,8 +238,10 @@ pub struct BaseItemDto {
     /// how the pictures of that width are laid out. Only asked for by `paths::item_trickplay`.
     #[serde(deserialize_with = "nul")]
     pub trickplay: std::collections::HashMap<String, std::collections::HashMap<String, TrickplayInfoDto>>,
-    /// Live TV only: the channel's number (`"101"`), a programme's start, and the programme a channel airs now.
+    /// Live TV only: the channel's number (`"101"`), a programme's channel and start, and the
+    /// programme a channel airs now.
     pub channel_number: Option<String>,
+    pub channel_id: Option<String>,
     pub start_date: Option<String>,
     pub current_program: Option<Box<BaseItemDto>>,
 }
