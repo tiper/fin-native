@@ -1046,6 +1046,11 @@ impl Backend for Shared {
         }
         self.0.transcode_plan(spec).map(|(_, p)| p.decision)
     }
+    /// The profile asks for `CopyTimestamps` and the built URL for `copyTimestamps`, so a
+    /// conversion's first keyframe carries film time.
+    fn conversion_keeps_file_time(&self) -> bool {
+        true
+    }
     fn transcode_start_url(&self, spec: &TranscodeSpec<'_>) -> Option<StreamUrl> {
         let (c, p) = self.0.transcode_plan(spec)?;
         let url = match &p.server_url {

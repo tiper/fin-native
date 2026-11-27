@@ -467,7 +467,7 @@ pub struct Transcode<'a> {
 pub fn transcode(t: &Transcode<'_>, token: &str) -> String {
     let mut p = format!(
         "/Videos/{}/stream.mkv?static=false&container=mkv&mediaSourceId={}&playSessionId={}&deviceId={}\
-         &videoCodec={}&audioCodec={}&allowVideoStreamCopy={}&allowAudioStreamCopy={}",
+         &videoCodec={}&audioCodec={}&allowVideoStreamCopy={}&allowAudioStreamCopy={}&copyTimestamps=true",
         enc(t.item_id),
         enc(t.media_source_id),
         enc(t.play_session_id),

@@ -1251,6 +1251,7 @@ mod prime_livelock_tests {
             placed_src: (0, 0),
             eos_pushed: false,
             rebase_pending: false,
+            anchor_at_rebase: false,
             rebase_drops: 0,
             seek_armed_at: 0,
             seek_retries: 0,

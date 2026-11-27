@@ -91,7 +91,7 @@ pub fn device_profile(d: &Device<'_>) -> Value {
         ],
         "TranscodingProfiles": [
             {"Type": "Video", "Container": "mkv", "Protocol": "http", "Context": "Streaming",
-             "VideoCodec": video, "AudioCodec": audio_targets.join(","), "CopyTimestamps": false,
+             "VideoCodec": video, "AudioCodec": audio_targets.join(","), "CopyTimestamps": true,
              "EnableSubtitlesInManifest": false}
         ],
         "CodecProfiles": codec_profiles(d),
@@ -267,6 +267,9 @@ mod tests {
         let t = &p["TranscodingProfiles"][0];
         assert_eq!((t["Container"].as_str(), t["Protocol"].as_str()), (Some("mkv"), Some("http")));
         assert_eq!(t["AudioCodec"], "aac,ac3,eac3");
+        // A conversion keeps the file's timestamps, so its first keyframe carries film time and a
+        // subtitle in file time lines up with the picture (`Backend::conversion_keeps_file_time`).
+        assert_eq!(t["CopyTimestamps"], true);
         assert_eq!(p["CodecProfiles"][0]["Conditions"][0]["Value"], "3840");
         let subs: Vec<&str> = p["SubtitleProfiles"].as_array().unwrap().iter().filter_map(|s| s["Format"].as_str()).collect();
         assert!(subs.contains(&"srt") && subs.contains(&"ass"));

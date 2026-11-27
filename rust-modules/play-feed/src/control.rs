@@ -330,7 +330,7 @@ impl FeedControl for FeedBackend {
             FeedCommand::OwnPausedSeek { target_ns } => { FEED_TX.own_paused_seek(target_ns); }
             FeedCommand::FinishSeekPreroll => FEED_TX.finish_seek_preroll(),
             FeedCommand::NoteFailure(flag) => feed_pump::note_failure(flag),
-            FeedCommand::Rebase { playpos_ns, disp_base } => feed_pump::rebase(playpos_ns, disp_base),
+            FeedCommand::Rebase { playpos_ns, disp_base, anchor } => feed_pump::rebase(playpos_ns, disp_base, anchor),
             FeedCommand::SelectAudio { idx } => feed_pump::select_audio(idx),
             FeedCommand::BeginPlayback => crate::seek::set_native_seek_refused(false),
             FeedCommand::DvStandDown => feed_pump::dv_stand_down(&mut self.resources),
@@ -612,7 +612,7 @@ pub(crate) mod tests {
         let control: &mut dyn FeedControl = &mut backend;
         assert_eq!(mailboxes().raw.disp_base, 0);
 
-        control.command(FeedCommand::Rebase { playpos_ns: 600_000_000_000, disp_base: 600_000_000_000 });
+        control.command(FeedCommand::Rebase { playpos_ns: 600_000_000_000, disp_base: 600_000_000_000, anchor: false });
         assert_eq!(FEED_SHARED.disp_base.load(Relaxed), 600_000_000_000);
         assert_eq!(FEED_SHARED.playpos_ns.load(Relaxed), 600_000_000_000);
         assert_eq!(FEED_SHARED.seek_to_ns.load(Relaxed), -1, "a rebase arms no demuxer seek");

@@ -466,6 +466,8 @@ pub fn launch_native_open(
     side_reader.start_after_load_spawn();
 
     let (lead_at_start, lead_pending) = audio_lead.at_engine_start();
+    // Taken once, by the Engine `FeedCommand::Rebase` armed it for.
+    let anchor_at_rebase = shared.anchor_rebase.swap(false, Ordering::Relaxed);
     let eng = Engine {
         shared,
         attempt,
@@ -479,7 +481,8 @@ pub fn launch_native_open(
         // post-seek keyframe to fed-pts 0 so the pipeline sees a 0-based timeline identical
         // to fresh play (disp_base carries the content offset). Plain fresh play leaves this
         // false (first keyframe is already ~0).
-        rebase_pending: shared.seek_to_ns.load(Ordering::Relaxed) >= 0,
+        rebase_pending: shared.seek_to_ns.load(Ordering::Relaxed) >= 0 || anchor_at_rebase,
+        anchor_at_rebase,
         rebase_drops: 0,
         seek_armed_at: 0,
         segment_landing: None,
@@ -991,6 +994,24 @@ pub const STALE_BACKJUMP_NS: i64 = 2_000_000_000;
 pub const SEEK_STALE_AHEAD_NS: i64 = 6_000_000_000;
 pub const SEEK_STALE_BEHIND_NS: i64 = 30_000_000_000;
 pub const MAX_REBASE_DROPS: i32 = 240;
+/// How far a conversion's first keyframe may land from the offset it was asked at and still be read
+/// as carrying film time ([`anchored_disp_base`]). A server that keeps the file's timestamps cuts a
+/// copied video at the keyframe at or before the offset, so the keyframe lands up to about one GOP
+/// below it and never far above; a stream that restarted at 0 lands an offset away.
+pub const FILM_TIME_KEYFRAME_BEHIND_NS: i64 = 10_000_000_000;
+pub const FILM_TIME_KEYFRAME_AHEAD_NS: i64 = 1_000_000_000;
+
+/// The display base for a conversion restarted at `offset_ns` whose first keyframe carries `pts`,
+/// once that keyframe is rebased to fed-pts 0 (`playpos = fed + pts + base`). A keyframe in film
+/// time is its own position (base 0), so the playhead is the picture's time and a subtitle in file
+/// time lines up with it. A keyframe at 0 (a server that restarted its timestamps) keeps the old
+/// reading, `offset + fed`. Below [`FILM_TIME_KEYFRAME_BEHIND_NS`] the two readings differ by less
+/// than that window, and film time is what the anchored request asked for.
+pub fn anchored_disp_base(pts: i64, offset_ns: i64) -> i64 {
+    let film_time = pts >= offset_ns.saturating_sub(FILM_TIME_KEYFRAME_BEHIND_NS)
+        && pts <= offset_ns.saturating_add(FILM_TIME_KEYFRAME_AHEAD_NS);
+    if film_time { 0 } else { offset_ns.saturating_sub(pts) }
+}
 // Audio counterpart of the rebase guard: an audio AU this far AHEAD of the video high-water is a
 // stale drifted frame (the demuxer's pre-reopen audio after a seek). Feeding it poisons
 // max_fed_audio_pts (and then the backjump guard drops all LEGIT audio until the demux catches
@@ -1706,6 +1727,18 @@ fn feed_stream(mt: &MainThread, eng: &mut Engine, transport: &Transport, hooks: 
                     // reload / initial-resume seek: rebase the landed keyframe to fed-pts 0 (the
                     // fresh Load's pipeline expects a 0-based feed; disp_base carries the offset).
                     shared.pts_shift.store(-pts, Ordering::Relaxed);
+                    if eng.anchor_at_rebase {
+                        let offset = shared.disp_base.load(Ordering::Relaxed);
+                        let base = anchored_disp_base(pts, offset);
+                        shared.disp_base.store(base, Ordering::Relaxed);
+                        eng.anchor_at_rebase = false;
+                        plx_base::eventlog::log(&format!(
+                            "rebase: conversion keyframe pts={}ms at offset {}ms -> disp_base={}ms",
+                            pts / 1_000_000,
+                            offset / 1_000_000,
+                            base / 1_000_000
+                        ));
+                    }
                 }
                 eng.rebase_pending = false; // releases the AUDIO lane (which holds until this clears)
                 eng.seek_base_pts = pts + shared.pts_shift.load(Ordering::Relaxed); // fed-pts base
@@ -2593,5 +2626,43 @@ mod progressive_stall_tests {
             ["full", "eof"],
             "the names the resume line prints and the field checks grep for"
         );
+    }
+}
+
+#[cfg(test)]
+mod anchored_disp_base_tests {
+    use super::anchored_disp_base;
+    const S: i64 = 1_000_000_000;
+
+    #[test]
+    fn a_keyframe_in_film_time_is_its_own_position_so_the_playhead_follows_the_picture() {
+        // Resume at 50 s, the copied video starts on the keyframe at 47.9 s.
+        let (pts, offset) = (47_900_000_000, 50 * S);
+        let base = anchored_disp_base(pts, offset);
+        assert_eq!(base, 0);
+        assert_eq!(pts + base, pts, "the landed keyframe reads 47.9 s, not 50 s");
+    }
+
+    #[test]
+    fn a_keyframe_at_zero_keeps_the_offset_reading() {
+        // A server that restarted its timestamps: the first keyframe is 0, the position offset + fed.
+        let offset = 600 * S;
+        assert_eq!(anchored_disp_base(0, offset), offset);
+        assert_eq!(anchored_disp_base(40_000_000, offset), offset - 40_000_000);
+    }
+
+    #[test]
+    fn the_film_time_window_is_one_gop_behind_and_a_second_ahead() {
+        let offset = 300 * S;
+        assert_eq!(anchored_disp_base(offset - 10 * S, offset), 0);
+        assert_eq!(anchored_disp_base(offset + S, offset), 0);
+        assert_eq!(anchored_disp_base(offset - 11 * S, offset), 11 * S);
+        assert_eq!(anchored_disp_base(offset + 2 * S, offset), -2 * S);
+    }
+
+    #[test]
+    fn a_start_near_the_beginning_reads_film_time() {
+        assert_eq!(anchored_disp_base(0, 0), 0);
+        assert_eq!(anchored_disp_base(0, 4 * S), 0);
     }
 }

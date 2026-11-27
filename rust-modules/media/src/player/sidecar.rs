@@ -31,7 +31,10 @@
 //! than or at the requested offset — not always the last one (a 917 s request started on 914.914 s
 //! while 916.916 s existed; see `ff_subside`'s `sidecar_clock_at_917…` test) — and the engine
 //! labels that frame with the requested offset (`disp_base`), so the playhead leads the content by
-//! the snap (0.6 s to 2.2 s measured). The side reader finds that keyframe clock-only
+//! the snap (0.6 s to 2.2 s measured). (A server whose conversion keeps the file's timestamps,
+//! `plx_plex::plex::conversion_keeps_file_time`, is anchored on that keyframe's own time instead,
+//! `FeedCommand::Rebase`'s `anchor`, so there the playhead is file time and the delta measures 0.)
+//! The side reader finds that keyframe clock-only
 //! (`SIDE_READER_CLOCK_ONLY`: no cue read, byte-exact anchor match only) and
 //! `player::sidecar_clock_ns` adds its delta to the position the sidecar is drawn at, for a
 //! sidecar over a live remux only. Without an exact match, or off the reader's local-link and
