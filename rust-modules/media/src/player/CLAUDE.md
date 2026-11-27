@@ -1110,7 +1110,19 @@ something.
   claim's own, is the newer word and is left (an in-place subtitle pick's PUT names the subtitle only, so under
   one a refused audio rebuild is still undone). Every selection PUT goes out on the ONE serial queue: a
   claim or resolve worker's `put_selection` is queued behind what the serial worker holds and waits for
-  its answer, so a restore queued before it is always sent first and the server ends on the newest PUT. The memo half rides the claim: `PlayerControl::pending_memos` (beside
+  its answer, so a restore queued before it is always sent first and the server ends on the newest PUT. **A start's own PUT
+  (the resolve's, before its `/decision`: a failure-screen pick the retry carries, a remembered choice) is provisional until the attempt shows a
+  picture**: the landing installs it with what the server held before it (`PlaybackSession::provisional_selection`, from
+  `Plan::selection_sent` and `Plan::selection_fetched`), and `route::settle_start_selection`, which the app asks beside the failure's
+  capture (`capture_failure`), drops it once `player::state` is Playing (the state both backends derive, the one
+  `remember_version_that_played` reads) and settles it as a refused claim is (`FlightSelection::settle`, through the serial queue)
+  once the state is Error before that. A transient failure reverts too. The value is then `TakenBack` (`StartPut`, one value,
+  two phases), and a retry that PUTs the pick again (a converting resolve) replaces it, while a retry that plays the pick
+  WITHOUT converting (a direct play PUTs nothing) gets it written again once it plays (`FlightSelection::replay`: one PUT of the
+  fields that differ, only when the playback is of the same Part, the pick is what plays and the server's value is not a newer
+  word); a play whose pick the server already holds sends nothing extra. A visit's stop (or a fresh request) clears it; a
+  replacement stop keeps it for its retry. The show's
+  track memory is not touched by it. The memo half rides the claim: `PlayerControl::pending_memos` (beside
   `pending_user`, latest wins, merged on coalesce, taken into `claimed_user`, handed back on teardown)
   is written by `finish_route_action(Prepared)`, or at `install_claim_landing`'s `OriginalRecovery`
   arm (a displaced pick under an Original lands through `original_tail`, which never settles

@@ -7,7 +7,9 @@ use plx_media::{player, route};
 /// which records it when the attempt enters Error, keeps it while it stands and clears it when the state leaves Error.
 /// Idempotent, so it is called ahead of every reader of the value, each frame: at the publication
 /// (`publish_product_frame`, ahead of [`capture`]) and before each of the frame's two report observations (a refused
-/// plan can land between them). A controlled host (replay, a tape) has no dev trigger and samples none.
+/// plan can land between them). A controlled host (replay, a tape) has no dev trigger and samples none. The same
+/// boundary settles the attempt's provisional selection PUT ([`route::settle_start_selection`]): a failure that
+/// stands before the first picture writes the server's earlier selection back, as a queued effect.
 pub(super) fn capture_failure(app: &mut super::App) {
     let sampled = app.runtime.bridge(&mut app.bridge).samples_dev_triggers();
     capture_failure_of(&mut app.player.session, sampled);
@@ -18,6 +20,9 @@ fn capture_failure_of(ps: &mut route::PlaybackSession, sample_trigger: bool) {
     // Preserve the old exists semantics for an unreadable trigger as well as an empty file.
     let armed = sample_trigger && (arm.is_some() || plx_base::devtrig::flag("failtest"));
     player::observe_failure(ps, player::FailureTrigger { arm: arm.as_deref(), armed }, player::report::attempt_id());
+    // The attempt's own selection PUT is proven by its first picture or undone by its failure: asked at the same
+    // three points, so a refused plan that lands between the report's two observations is settled on its frame.
+    route::settle_start_selection(ps);
 }
 
 /// The player's presentation for this frame. A failure is READ from the session (captured ahead of this by
@@ -85,5 +90,26 @@ mod tests {
             assert!(!drawn.is_empty());
             assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::capture(&ps, store.view()))).is_err(), "the producer is explicitly outside StepScope");
         });
+    }
+}
+
+#[cfg(test)]
+mod start_selection_tests {
+    use super::*;
+
+    /// **The capture boundary settles the attempt's selection PUT.** A start's PUT is provisional until a picture
+    /// shows or the attempt fails: the app's frame step is the door's only caller, so a refused plan that stands at
+    /// the capture is taken here, and a start that has not failed is left alone.
+    #[test]
+    fn capturing_a_failure_settles_the_start_selection() {
+        let _serial = plx_base::testlock::serial();
+        let mut ps = route::PlaybackSession::IDLE;
+        route::arm_start_selection_for_test(&mut ps, 960_001, (36_014, 55), (36_014, 88));
+        capture_failure_of(&mut ps, false);
+        assert!(route::start_selection_pending(&ps), "an attempt that has not failed keeps its PUT provisional");
+
+        route::refuse_for_test(&mut ps, route::PlayVerdict::DirectPlayDisabled);
+        capture_failure_of(&mut ps, false);
+        assert!(!route::start_selection_pending(&ps), "the failure's capture settles it, once");
     }
 }

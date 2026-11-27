@@ -16,6 +16,9 @@
 //!     an item taken from the detail page's cache carries the flags of the fetch that produced it)
 //!     then the plan's PUTs ([`ServerSelection::after`]);
 //!   * a claim flight's landing ([`FlightSelection::settle`]), for the PUTs its worker sent;
+//!   * a start's own PUT ([`StartPut`], `PlaybackSession::provisional_selection`): written by the landing, settled
+//!     by [`settle_start_selection`] (undone if the attempt fails before a picture, written again if a retry that
+//!     converts nothing plays the pick), cleared by the stop of a visit;
 //!   * a queued selection ([`ServerSelection::after`] at the queue site; the serial worker has no way
 //!     back to its owner, so a PUT it fails stays recorded: the value then claims a pair the server
 //!     does not hold, and a restore to it is one more write of the pair on screen).
@@ -25,7 +28,7 @@
 //! `None` audio is unknown (the wire drops `audioStreamID` for it); a `None` subtitle is unknown and
 //! `Some(0)` is a known Off.
 
-use super::decision::{queue_selection, PlaybackSession};
+use super::decision::{cur_audio_sid, cur_part_id, cur_sid, cur_sub_sid, queue_selection, PlaybackSession};
 use plx_plex::plex::ServerId;
 
 /// One Part's selected streams on the server. `audio`/`subtitle` are stream ids; `None` is unknown
@@ -83,8 +86,8 @@ impl ServerSelection {
     }
 }
 
-/// The PUTs one claim flight's worker sent, merged, and what the server held before them: the
-/// worker's whole report about the selection, posted with its landing.
+/// The PUTs one claim flight's worker (or a start's resolve, [`settle_start_selection`]) sent, merged, and
+/// what the server held before them: the worker's whole report about the selection, posted with its landing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FlightSelection {
     pub(super) sid: ServerId,
@@ -110,10 +113,12 @@ impl FlightSelection {
     /// queued its own PUT while the flight flew) is the newer word and is left as it is: the claim's
     /// value for it is neither restored nor recorded. The other field is settled as usual, so a refused
     /// audio rebuild is still undone under an in-place subtitle pick, whose PUT names the subtitle only.
-    pub(super) fn settle(&self, ps: &mut PlaybackSession, accepted: bool) {
-        let Some(sent) = self.sent else { return };
+    ///
+    /// Answers whether a restore was queued.
+    pub(super) fn settle(&self, ps: &mut PlaybackSession, accepted: bool) -> bool {
+        let Some(sent) = self.sent else { return false };
         if ps.server_selection.is_some_and(|c| c.part_id != sent.part_id) {
-            return;
+            return false;
         }
         let current = ps.server_selection;
         let (cur_audio, cur_sub) = current.map_or((None, None), |c| (c.audio, c.subtitle));
@@ -126,7 +131,7 @@ impl FlightSelection {
                 audio: if audio_newer { cur_audio } else { sent.audio.or(cur_audio) },
                 subtitle: if sub_newer { cur_sub } else { sent.subtitle.or(cur_sub) },
             });
-            return;
+            return false;
         }
         let owed = ServerSelection {
             part_id: sent.part_id,
@@ -134,12 +139,125 @@ impl FlightSelection {
             subtitle: sent.subtitle.filter(|_| !sub_newer),
         };
         if let Some((audio, subtitle)) = self.before.and_then(|before| before.restore_of(&owed)) {
-            crate::player::log("select streams: restoring the selection a refused rebuild had written");
+            crate::player::log("select streams: restoring the selection a refused or failed pick had written");
             if queue_selection(self.sid, sent.part_id, audio, subtitle, false) {
                 ps.server_selection = Some(ServerSelection::after(current, ServerSelection::put(sent.part_id, audio, subtitle)));
+                return true;
             }
         }
+        false
     }
+}
+
+/// **A start's own selection PUT, and what became of it.** The one value of [`PlaybackSession::provisional_selection`],
+/// in two phases of one lifecycle (`docs/sans-io-guide.md`, checklist item 9):
+///   * `Pending`: the landing's PUT (what its resolve wrote to the Part before its own `/decision`, over what the
+///     server held before it), waiting for its attempt's first picture or its failure;
+///   * `TakenBack`: the attempt failed first and the PUT was written back. The same pair stays, naming the pick
+///     that was taken back, because the retry may play it WITHOUT converting (a direct play PUTs nothing), and
+///     then nothing else would say it to the server again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StartPut {
+    Pending(FlightSelection),
+    TakenBack(FlightSelection),
+}
+
+impl StartPut {
+    /// The value a landing installs: its own PUT (`sent` over what the server held, `fetched`) is `Pending`; a
+    /// landing that PUT nothing keeps a `TakenBack` pick standing from the attempt it retries, and a `Pending`
+    /// one that never settled is dropped.
+    pub(super) fn landed(
+        standing: Option<Self>, sid: ServerId, fetched: Option<ServerSelection>, sent: Option<ServerSelection>,
+    ) -> Option<Self> {
+        match sent {
+            Some(sent) => Some(Self::Pending(FlightSelection { sid, before: fetched, sent: Some(sent) })),
+            None => standing.filter(|s| matches!(s, Self::TakenBack(_))),
+        }
+    }
+}
+
+impl FlightSelection {
+    /// A pick this value took back is what the playing route shows, and the server does not hold it: write it again.
+    /// One PUT through the serial queue of the fields that differ, by the rules [`settle`](Self::settle) has:
+    /// a field is written only when the playback is of the same Part on the same server, the pick is what plays
+    /// (`cur_audio_sid`, `cur_sub_sid`) and the server's value is neither the pick nor a newer word (written since),
+    /// and a field the value does not know is never guessed.
+    fn replay(&self, ps: &mut PlaybackSession) {
+        let (Some(sent), Some(before), Some(current)) = (self.sent, self.before, ps.server_selection) else { return };
+        if current.part_id != sent.part_id || cur_sid(ps) != self.sid || cur_part_id(ps) != sent.part_id {
+            return;
+        }
+        let wanted = |pick: Option<i64>, earlier: Option<i64>, held: Option<i64>, playing: i64| {
+            pick.filter(|p| *p == playing && held != Some(*p) && !written_since(earlier, pick, held))
+        };
+        let audio = wanted(sent.audio, before.audio, current.audio, cur_audio_sid(ps));
+        let subtitle = wanted(sent.subtitle, before.subtitle, current.subtitle, cur_sub_sid(ps));
+        if audio.is_none() && subtitle.is_none() {
+            return;
+        }
+        crate::player::log("select streams: the retry plays the pick a failed start had taken back; writing it again");
+        let audio = audio.unwrap_or(0);
+        if queue_selection(self.sid, sent.part_id, audio, subtitle, false) {
+            ps.server_selection = Some(ServerSelection::after(Some(current), ServerSelection::put(sent.part_id, audio, subtitle)));
+        }
+    }
+}
+
+/// **A start's own selection PUT is undone when its attempt fails before showing a picture.** The resolve
+/// that starts a playback PUTs the Part's selection before its own `/decision` (the transcoder encodes what
+/// is SELECTED), so a refused plan, or a pipeline that never opens, would leave the viewer's pick (a
+/// failure-screen pick the retry carries, a remembered choice) as the Part's selection for the next start of
+/// the title to plan from. The landing hands the PUT over as [`PlaybackSession::provisional_selection`]; this
+/// is its settlement, asked once a frame by the app after the failure is captured
+/// (`app::player_presentation::capture_failure`):
+///   * a picture is playing (`player::state` is Playing, the state both backends derive, the one
+///     `remember_version_that_played` reads): a `Pending` PUT is proven and dropped, so a failure minutes
+///     later undoes nothing; a `TakenBack` pick that this landing plays (it converted nothing, so it PUT
+///     nothing) is written again ([`FlightSelection::replay`]), and a landing that did PUT it already sent
+///     it, so a play whose pick the server holds sends nothing extra;
+///   * the attempt is in Error with a `Pending` PUT: it is settled as a REFUSED claim is
+///     ([`FlightSelection::settle`]), through the serial queue, field by field, never guessing a field the
+///     server's earlier selection did not name, and becomes `TakenBack` when something was written back.
+///     Every failure before the first picture reverts, a transient one included: the retry carries the
+///     viewer's pick, and either PUTs it again before its own `/decision` or plays it unconverted, which
+///     the picture's replay covers, so a missed revert (the cold-start dead end) and a stranded pick are both
+///     closed;
+///   * anything else (resolving, connecting, buffering): the attempt is still in flight.
+///
+/// Only the server's selection moves. The show's track memory is not touched here: it is written at the
+/// pick's commit or acceptance, and a pick the server accepted stays remembered. A stop that ends the visit
+/// clears the value ([`super::retire_stopped_playback`]); a replacement keeps it for the retry it serves.
+pub fn settle_start_selection(ps: &mut PlaybackSession) {
+    use crate::player::PlaybackState;
+    let Some(start) = ps.provisional_selection else { return };
+    match (crate::player::state(ps), start) {
+        (PlaybackState::Playing, StartPut::Pending(_)) => ps.provisional_selection = None,
+        (PlaybackState::Playing, StartPut::TakenBack(pick)) => {
+            ps.provisional_selection = None;
+            pick.replay(ps);
+        }
+        (PlaybackState::Error, StartPut::Pending(pending)) => {
+            ps.provisional_selection = pending.settle(ps, false).then_some(StartPut::TakenBack(pending));
+        }
+        _ => {}
+    }
+}
+
+/// Is a start's selection PUT still waiting for its attempt's first picture or its failure
+/// ([`settle_start_selection`])?
+pub fn start_selection_pending(ps: &PlaybackSession) -> bool {
+    matches!(ps.provisional_selection, Some(StartPut::Pending(_)))
+}
+
+/// Test-only: leave `ps` as a landing whose plan PUT `sent` (audio, subtitle) over a Part that held `before` does,
+/// on no server.
+#[cfg(any(test, feature = "test-support"))]
+pub fn arm_start_selection_for_test(ps: &mut PlaybackSession, part_id: i64, before: (i64, i64), sent: (i64, i64)) {
+    ps.provisional_selection = Some(StartPut::Pending(FlightSelection {
+        sid: ServerId::UNSET,
+        before: Some(ServerSelection { part_id, audio: Some(before.0), subtitle: Some(before.1) }),
+        sent: Some(ServerSelection::put(part_id, sent.0, Some(sent.1))),
+    }));
 }
 
 /// The PUTs a flight's worker has sent so far, merged ([`ServerSelection::after`]).

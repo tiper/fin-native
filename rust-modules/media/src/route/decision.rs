@@ -24,7 +24,7 @@ use std::sync::Mutex;
 use super::flight::*;
 use super::plan::*;
 use super::prefs::*;
-use super::server_selection::{PutTrail, ServerSelection};
+use super::server_selection::{PutTrail, ServerSelection, StartPut};
 use super::track_memory::{SubMode, TrackContext};
 
 // The track memory's effects: the recall at a resolve, the parked write-back and the track menu's
@@ -436,6 +436,15 @@ pub struct PlaybackSession {
     /// server answered. What a refused rebuild's restore writes back. Unlike
     /// [`Self::source_selection`] a pick's commit never writes it: only a PUT does.
     pub(super) server_selection: Option<ServerSelection>,
+    /// **The start's own selection PUT, until the attempt it belongs to has shown a picture**: what the
+    /// landing's plan wrote to the Part before its own `/decision`, and what the server held before it
+    /// ([`FlightSelection`](super::server_selection::FlightSelection), from `Plan::selection_sent` /
+    /// `Plan::selection_fetched`), as one two-phase value ([`StartPut`]). An attempt that fails first writes
+    /// the earlier selection back and keeps the pick for the retry that plays it unconverted
+    /// ([`super::settle_start_selection`]); the first picture drops it. Written by the landing, the settlement
+    /// and the stop of a visit (or a fresh request). `None` for a plan that wrote nothing, and for a playback
+    /// that is over.
+    pub(super) provisional_selection: Option<StartPut>,
     /// The playback backends composed for this session: `BackendSet::FEED` until the composition installs
     /// the set its drivers form (`install_backends`). Policy asks it which physical backend can be offered,
     /// never which drivers were compiled in.
@@ -2016,6 +2025,7 @@ impl PlaybackSession {
         cur_audio: None,
         source_selection: None,
         server_selection: None,
+        provisional_selection: None,
         cur_sub_sid: 0,
         selection_known: false,
         carried_selection: None,
@@ -2135,6 +2145,8 @@ impl PlaybackSession {
             cur_audio,
             source_selection,
             server_selection,
+            // The owner's own pending effect, settled once by the main thread: a screen's copy has none.
+            provisional_selection: _,
             cur_sub_sid,
             selection_known,
             carried_selection,
@@ -2234,6 +2246,7 @@ impl PlaybackSession {
             cur_audio: cur_audio.clone(),
             source_selection: *source_selection,
             server_selection: *server_selection,
+            provisional_selection: None,
             cur_sub_sid: *cur_sub_sid,
             selection_known: *selection_known,
             carried_selection: *carried_selection,
@@ -2437,6 +2450,9 @@ pub(crate) fn retire_stopped_playback(ps: &mut PlaybackSession, kind: StopKind) 
     if kind == StopKind::Visit {
         ps.request = None;
         ps.held_pick = None;
+        // the visit is over: nothing is left to prove, undo or write again of its start's selection PUT (a
+        // replacement keeps it, for the retry it serves)
+        ps.provisional_selection = None;
         ps.version_on_trial = None;
     }
     if ps.engine_failure == Some(crate::player::RuntimeFailure::ServerStopped) {
@@ -10558,7 +10574,7 @@ pub(super) fn forced_server_decision(
 ///
 /// Returns what the server now holds because of it ([`ServerSelection::put`]) when it answered success,
 /// `None` when nothing was sent or it did not: the report a flight's worker posts with its landing
-/// ([`FlightSelection`]) and the resolve posts on its plan.
+/// ([`FlightSelection`](super::server_selection::FlightSelection)) and the resolve posts on its plan.
 ///
 /// **Every selection PUT goes out on the ONE serial channel.** This one is queued behind whatever the
 /// serial selection worker holds (a refused claim's restore, an in-place pick) and the calling worker
@@ -11960,6 +11976,7 @@ fn begin_track_selection(s: &mut PlaybackSession, retry: Option<RetryContext>) {
     if retry.is_none() {
         s.held_pick = None;
         s.version_on_trial = None;
+        s.provisional_selection = None;
     }
     let source_selection = retry.and(s.source_selection);
     clear_track_selection(s);
@@ -12647,6 +12664,9 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
         .selection_fetched
         .map(|fetched| plan.selection_sent.map_or(fetched, |put| ServerSelection::after(Some(fetched), put)))
         .or(plan.selection_sent);
+    // …and the plan's own PUT is provisional until the attempt shows a picture: an attempt that fails first
+    // writes what the server held back ([`settle_start_selection`]).
+    let provisional_selection = StartPut::landed(ps.provisional_selection, plan.sid, plan.selection_fetched, plan.selection_sent);
     // **The start of a playback is what spends the viewer's pick, and only a playable plan of the viewer's
     // own starts one**: a REFUSED plan installs its item too (its verdict feeds the read-out) but nothing
     // played, so BACK and Play must still find the pick; a hero preview is not the viewer's playback. A
@@ -12811,6 +12831,7 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             // A resolved Plan with its own source selection installs that exact value here.
             source_selection: plan.source_selection.or(s.source_selection),
             server_selection,
+            provisional_selection,
             // the part/show-selected subtitle (0 = none), so the menu checkmark, the timeline report
             // and any later transcode of this item all agree with what the renderer is told below
             cur_sub_sid: plan.sub_sid,
@@ -13320,7 +13341,7 @@ pub(super) struct RetranscodeClaimInputs {
     subtitle_sid: i64,
     /// What the server held of this Part when the claim was made ([`PlaybackSession::server_selection`],
     /// read on the main thread beside the other inputs): the value a refusal of this claim writes
-    /// back over the claim's own selection PUT. Settled at the landing ([`FlightSelection::settle`]).
+    /// back over the claim's own selection PUT. Settled at the landing ([`FlightSelection::settle`](super::server_selection::FlightSelection::settle)).
     pub(super) server_before: Option<ServerSelection>,
     namespace: String,
     offset_secs: i64,
@@ -15622,6 +15643,10 @@ mod version_choice_tests;
 #[cfg(test)]
 #[path = "decision_refused_pick_tests.rs"]
 mod refused_pick_tests;
+
+#[cfg(test)]
+#[path = "decision_refused_start_tests.rs"]
+mod refused_start_tests;
 
 #[cfg(test)]
 #[path = "decision_write_back_tests.rs"]

@@ -20,6 +20,9 @@ mod flight;
 mod plan;
 mod prefs;
 mod server_selection;
+pub use server_selection::{settle_start_selection, start_selection_pending};
+#[cfg(any(test, feature = "test-support"))]
+pub use server_selection::arm_start_selection_for_test;
 mod track_memory;
 
 pub use decision::*;
