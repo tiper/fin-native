@@ -40,8 +40,8 @@ pub struct LiveChannel {
     pub begins_at: i64,
     /// Unix seconds the current airing ends; 0 when nothing is airing. The row is stale after it.
     pub ends_at: i64,
-    /// The programmes after the current one that begin by the end the last read asked for ([`guide_path`]: at
-    /// least [`window_end`], further while the Guide is scrolled ahead), earliest first. Empty when the guide has
+    /// The programmes after the current one that begin by the end the held reads asked for (the live window's, or the reach's while a page reaches further: [`guide_path`], at
+    /// least [`window_end`]), earliest first. Empty when the guide has
     /// none (a guide of current airings only, or a channel with no data).
     pub later: Vec<LiveAiring>,
 }
@@ -53,6 +53,9 @@ pub struct LiveAiring {
     pub title: String,
     pub begins_at: i64,
     pub ends_at: i64,
+    /// The programme's art: its own still, else its show's, else the channel's logo (the airing on now's
+    /// `now_thumb` rule), so a Browse card of a later programme has a poster to draw.
+    pub thumb: String,
 }
 
 /// The length of the Guide's window in seconds: 90 minutes. It is the width of the board, not a limit on what
@@ -347,6 +350,11 @@ fn airing_label(m: &Metadata) -> &str {
     }
 }
 
+/// A programme's own art: its still, else its show's, else its background; `None` when the guide gives none.
+fn programme_art(m: &Metadata) -> Option<&String> {
+    [&m.thumb, &m.grandparent_thumb, &m.art].into_iter().find(|art| !art.is_empty())
+}
+
 /// Join a DVR's complete, tunable lineup with its airings in channel-number order.
 pub fn lineup(dvr: &Dvr, channels: &[EpgChannel], airings: &[Metadata], now: i64) -> Vec<LiveChannel> {
     if !is_path_id(&dvr.key) || !is_provider_id(&dvr.epg_identifier) { return Vec::new(); }
@@ -388,13 +396,13 @@ pub fn update_airings(rows: &mut [LiveChannel], airings: &[Metadata], now: i64) 
         mine.sort_by_key(|(_, media)| media.begins_at);
         let airing = mine.iter().rev().find(|(_, media)| media.begins_at <= now && (media.ends_at == 0 || media.ends_at > now)).copied();
         ch.later = mine.iter().filter(|(_, media)| media.begins_at > now)
-            .map(|(m, media)| LiveAiring { title: airing_label(m).to_owned(), begins_at: media.begins_at, ends_at: media.ends_at }).collect();
+            .map(|(m, media)| LiveAiring { title: airing_label(m).to_owned(), begins_at: media.begins_at, ends_at: media.ends_at,
+                thumb: programme_art(m).unwrap_or(&ch.thumb).clone() }).collect();
         ch.now = airing.map_or_else(String::new, |(m, _)| airing_label(m).to_owned());
         ch.now_summary = airing.map_or_else(String::new, |(m, _)| m.summary.clone());
         ch.begins_at = airing.map_or(0, |(_, media)| media.begins_at);
         ch.ends_at = airing.map_or(0, |(_, media)| media.ends_at);
-        ch.now_thumb = airing.and_then(|(m, _)| [&m.thumb, &m.grandparent_thumb, &m.art]
-            .into_iter().find(|art| !art.is_empty())).unwrap_or(&ch.thumb).clone();
+        ch.now_thumb = airing.and_then(|(m, _)| programme_art(m)).unwrap_or(&ch.thumb).clone();
     }
 }
 
@@ -911,6 +919,24 @@ mod tests {
         assert!(cartoons.later.is_empty(), "a channel whose guide is current airings only has no next");
         let anime = rows.iter().find(|r| r.vcn == "103").unwrap();
         assert!((anime.now.as_str(), anime.later.len()) == ("", 0), "a channel with no guide data has neither");
+    }
+
+    /// A programme after the one on now is a Browse card: its art is its own still, else its show's, else the
+    /// channel's logo (as the airing on now's is, `now_thumb`).
+    #[test]
+    fn a_later_programme_carries_its_own_art_else_its_shows_else_the_channels_logo() {
+        let dvr = page(DVRS).dvr.remove(0);
+        let channels = page(CHANNELS).channel;
+        let now = 1_792_523_200;
+        let mut own = airing("101", "Own", now + 100, now + 900);
+        own.thumb = "/own".into();
+        let mut show = airing("101", "Show", now + 900, now + 1_800);
+        (show.thumb, show.grandparent_thumb) = (String::new(), "/show".into());
+        let mut bare = airing("101", "Bare", now + 1_800, now + 2_400);
+        (bare.thumb, bare.grandparent_thumb, bare.art) = (String::new(), String::new(), String::new());
+        let rows = lineup(&dvr, &channels, &[own, show, bare], now);
+        let family = rows.iter().find(|r| r.vcn == "101").unwrap();
+        assert_eq!(family.later.iter().map(|a| a.thumb.as_str()).collect::<Vec<_>>(), ["/own", "/show", family.thumb.as_str()]);
     }
 
     #[test]

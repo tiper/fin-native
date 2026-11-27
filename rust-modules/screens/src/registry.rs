@@ -1467,6 +1467,11 @@ pub enum ContentPanel {
     /// typed on the What's on page. `first` is that digit (0-9). It takes no subject: the lineup is the Live TV
     /// store's and nothing is playing under the page.
     ChannelEntry { first: u8 },
+    /// **Browse's filter menu** (`screens::livetv::filter_menu`): the Live TV page's filter control opens it. `chosen` is the
+    /// filter in force (the row it opens on), `anchor` the drawn rect of the control it grows out of (bit-preserving) and
+    /// `opener` that control, the page's entry and element, which the page leaves out of its own pass and the opener lift
+    /// draws. It takes no subject: the filter is the page's own.
+    LiveTvFilter { chosen: crate::livetv::browse::Filter, anchor: [u32; 4], opener: (plx_machine::machine::EntryId, u32) },
 }
 
 impl ContentPanel {
@@ -1534,6 +1539,10 @@ impl ContentPanel {
             Self::ChannelEntry { first } => (
                 Style::Compact,
                 AppArg::ChannelEntry(crate::channel_entry_panel::ChannelEntryArg::opened_by(host, first, None)),
+            ),
+            Self::LiveTvFilter { chosen, anchor, opener } => (
+                Style::Compact,
+                AppArg::LiveTvFilter(crate::livetv::filter_menu::LiveTvFilterArg { host, chosen, anchor, opener }),
             ),
             Self::Tracks { page } => (
                 Style::Alert,
@@ -1854,6 +1863,9 @@ pub enum AppMsg {
     /// launched from, which is covered while the player is up. The page keeps it and seats the channel's card when it
     /// is restored: its Recent tile, else the row it belongs to. Named by identity (server, DVR, key).
     LiveTvSeat { sid: plx_plex::plex::ServerId, dvr: String, channel: String },
+    /// **Browse's filter menu chose a filter** (Live TV PR7, `screens::livetv::filter_menu`), delivered to the Live TV page that
+    /// opened it. The page is the filter's only owner: it changes it on this message and nowhere else.
+    LiveTvFilterPicked(crate::livetv::browse::Filter),
     /// **The app took no request for the tune the player asked for** (`PlayerReq::Tune`): its zap ends on this word, not
     /// on an inference from timing.
     LiveTuneRefused,
@@ -2329,6 +2341,10 @@ pub enum AppArg {
     /// instance the pick is reported to, the digits that opened it (one key, or several that arrived in the same frame
     /// and were folded in by `AppArg::absorb`) and the channel already on screen.
     ChannelEntry(crate::channel_entry_panel::ChannelEntryArg),
+    /// **Live TV Browse's filter menu** (`screens::livetv::filter_menu`, PR7): the four filters, in a glass panel that grows out
+    /// of the filter control on the page's header row. It carries the Live TV instance the pick is reported to, the filter in
+    /// force, the control's drawn rect and the control itself (the opener lift's).
+    LiveTvFilter(crate::livetv::filter_menu::LiveTvFilterArg),
     /// The Detail page's *Track information* sheet (§6.2's page-owned panels). It carries only the
     /// 1-based PAGE the sheet opens at — a boot address like `Settings`'s root, not an identity —
     /// because the sheet describes `metadata::current()` and the host it is presented over is the
@@ -2430,7 +2446,7 @@ impl AppArg {
             Self::Settings(_) | Self::FirstRunConsent(_) | Self::LibraryMenu(_)
             | Self::AccountMenu | Self::WatchlistMenu(_) | Self::ItemMenu(_)
             | Self::PlayerOverlay(_) | Self::AltSources(_) | Self::VersionsPanel(_)
-            | Self::PreplayPanel(_) | Self::ChannelEntry(_) | Self::TracksPanel(_) | Self::AboutPanel | Self::PersonBio | Self::CollectionAbout => ("", Surface),
+            | Self::PreplayPanel(_) | Self::ChannelEntry(_) | Self::LiveTvFilter(_) | Self::TracksPanel(_) | Self::AboutPanel | Self::PersonBio | Self::CollectionAbout => ("", Surface),
         };
         RouteProbe { word, kind }
     }
@@ -2461,6 +2477,7 @@ pub const ARG_SHAPE: &str = "AppArg{Login,Profiles,Onboard,Home,Library,LibraryC
      VersionsPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],opener:Option<{entry:u32,elem:u32}>},\
      PreplayPanel{host:u32,sid:u32,rk:str,anchor:[u32;4],opener:Option<{entry:u32,elem:u32}>,source:{Page,Failed{part_id:u64}}},\
      ChannelEntry{host:u32,digits:str,playing:Option<{sid:u32,dvr:str,channel:str}>},\
+     LiveTvFilter{host:u32,chosen:u32,anchor:[u32;4],opener:{entry:u32,elem:u32}},\
      TracksPanel{page:i32},AboutPanel,PersonBio,CollectionAbout,AccountMenu,\
      ItemMenu{sid:u32,rk:str,kind:{Card{from_deck:bool,type:u32},Episode{mark:u32},Season{mark:u32},Catalog{state:u32},WatchlistAdd{hex:str},HeroOverflow{rows:len}},\
      host:u32,focus:Option<{entry:u32,elem:u32}>,anchor:[u32;4],loaded_episode:bool,from_home:bool,catalog:Option<{guid:str}>},\
@@ -2511,6 +2528,8 @@ impl LogicalState for AppArg {
             Self::PreplayPanel(arg) => { c.u32(15); arg.write(c); }
             // 16, forward of the Audio & Subtitles panel's 15.
             Self::ChannelEntry(arg) => { c.u32(16); arg.write(c); }
+            // 17, forward of number entry's 16.
+            Self::LiveTvFilter(arg) => { c.u32(17); arg.write(c); }
             // The seven PAGE variants keep the canon bytes `Legacy(Route)` wrote — a `0` tag and
             // then the route's own — so a recording taken before the fold and one taken after are
             // byte-comparable at every page frame. Only the SHAPE STRING moved, which is what the
@@ -2564,6 +2583,7 @@ impl plx_ui::screen::ScreenArg for AppArg {
             | AppArg::VersionsPanel(_)
             | AppArg::PreplayPanel(_)
             | AppArg::ChannelEntry(_)
+            | AppArg::LiveTvFilter(_)
             | AppArg::TracksPanel(_)
             | AppArg::AboutPanel
             | AppArg::PersonBio
@@ -2627,6 +2647,8 @@ impl plx_ui::screen::ScreenArg for AppArg {
             AppArg::PreplayPanel(_) => 32,
             // 33, forward of the Audio & Subtitles panel's 32.
             AppArg::ChannelEntry(_) => 33,
+            // 34, forward of number entry's 33.
+            AppArg::LiveTvFilter(_) => 34,
         })
     }
     fn title(&self) -> Option<&str> {
@@ -2764,6 +2786,7 @@ where
             AppArg::ChannelEntry(arg) => {
                 Box::new(crate::channel_entry_panel::ChannelEntryScreen::new(entry, arg.clone(), H::livetv(cx).channels))
             }
+            AppArg::LiveTvFilter(arg) => Box::new(crate::livetv::filter_menu::new(entry, *arg)),
             AppArg::TracksPanel(arg) => Box::new(
                 crate::tracks_panel::TracksPanelScreen::new(entry, *arg),
             ),
@@ -2978,6 +3001,12 @@ pub fn every_surface_arg() -> Vec<AppArg> {
             digits: "2".into(),
             playing: None,
         }),
+        AppArg::LiveTvFilter(crate::livetv::filter_menu::LiveTvFilterArg {
+            host: plx_machine::machine::InstanceId(1),
+            chosen: crate::livetv::browse::Filter::OnNow,
+            anchor: [0; 4],
+            opener: (EntryId(0), 0),
+        }),
         AppArg::TracksPanel(crate::tracks_panel::TracksPanelArg { page: 1 }),
         AppArg::AboutPanel,
         AppArg::PersonBio,
@@ -2997,6 +3026,7 @@ pub fn every_surface_arg() -> Vec<AppArg> {
             | AppArg::VersionsPanel(_)
             | AppArg::PreplayPanel(_)
             | AppArg::ChannelEntry(_)
+            | AppArg::LiveTvFilter(_)
             | AppArg::TracksPanel(_)
             | AppArg::AboutPanel
             | AppArg::PersonBio
@@ -3086,6 +3116,7 @@ pub const SCREEN_SHAPES: &[&str] = &[
     crate::livetv::LiveTvScreen::SHAPE,
     crate::preplay_panel::SHAPE,
     crate::channel_entry_panel::SHAPE,
+    crate::livetv::filter_menu::SHAPE,
 ];
 
 /// The pin over [`SCREEN_SHAPES`] — bump it in the same edit that adds an entry, and say why.
@@ -3318,8 +3349,11 @@ pub const SCREEN_SHAPES: &[&str] = &[
 // `Pick(PickRow)` (canon tag 15) and its screen shape `depth:u32` (the page stack's depth). Previous pin: 0x62a1_9fdc_6c66_d317.
 // The Live TV Guide (PR6) joins the Live TV screen's canon: the scope and the board's page, window start and whether the
 // reader holds the window ahead (`scope`, `guide:Option<(page,window,ahead)>`). Previous pin: 0x1990_0160_ac8b_0137.
+// Live TV Browse (PR7) widens the Live TV screen's canon (the scope's filter, the empty-filter mode) and joins its filter menu
+// as `AppArg::LiveTvFilter` (canon tag 17) with `livetv::filter_menu::SHAPE`, which carries the checked filter (a host of the shared `plx_ui::menu::Menu`, which
+// stays up with the check moved). Previous pin: 0xd1ed_8cb4_ad5b_5093.
 // Re-record incompatible replay anchors.
-const SCREEN_SHAPES_PIN: u64 = 0xd1ed_8cb4_ad5b_5093;
+const SCREEN_SHAPES_PIN: u64 = 0x0c73_d7b2_0b49_1548;
 
 #[cfg(test)]
 mod arg_tests {
@@ -3697,6 +3731,7 @@ mod a11y_coverage_tests {
             AppArg::PlayerOverlay(_) => Covered("PlayerOverlay", crate::player::overlay_tests::player_overlay_conforms),
             AppArg::AltSources(_) => Covered("AltSources", crate::alt_sources::tests::focus_and_hit::alt_sources_conforms),
             AppArg::VersionsPanel(_) => Covered("VersionsPanel", crate::versions_panel::tests::versions_panel_conforms),
+            AppArg::LiveTvFilter(_) => Covered("LiveTvFilter", crate::livetv::filter_menu::tests::livetv_filter_conforms),
             AppArg::PreplayPanel(_) => Covered("PreplayPanel", crate::preplay_panel::tests::preplay_panel_conforms),
             AppArg::ChannelEntry(_) => Covered("ChannelEntry", crate::channel_entry_panel::tests::channel_entry_conforms),
             AppArg::TracksPanel(_) => Covered("TracksPanel", crate::tracks_panel::tests::tracks_panel_conforms),
@@ -3754,10 +3789,10 @@ mod a11y_coverage_tests {
         }
     }
 
-    /// How many leaf arms the table has: 24 flat `AppArg` arms, 5 `ContentArg`, 23 `SettingsPage` and
-    /// `FirstRunConsent`. A new arm fails [`coverage`] to compile, and then this to pass until the census
+    /// How many leaf arms the table has: the length of the census `every_arm()` builds, one entry per leaf arm of
+    /// [`coverage`]. A new arm fails [`coverage`] to compile, and then this to pass until the census
     /// below holds it too.
-    const ARMS: usize = 53;
+    const ARMS: usize = 54;
 
     /// **A value of every leaf arm** the table names: the registry's own page and surface censuses, plus
     /// the arms those leave out (Filmography and every Settings page).

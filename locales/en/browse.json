@@ -2215,6 +2215,26 @@
     "value": "No guide information",
     "description": "Live TV Guide: the one cell of a channel the guide has no programme for in the window; pressing it tunes the channel"
   },
+  "browse.livetv.browse": {
+    "value": "Browse",
+    "description": "Live TV scope row stop, beside What's on and the Guide: the grid of programmes filtered by how far through they are"
+  },
+  "browse.livetv.filter_just_started": {
+    "value": "Just started",
+    "description": "Live TV Browse filter: the programmes that began 10 minutes ago or less"
+  },
+  "browse.livetv.filter_ending_soon": {
+    "value": "Ending soon",
+    "description": "Live TV Browse filter: the programmes that end in 15 minutes or less"
+  },
+  "browse.livetv.filter_later_today": {
+    "value": "Later today",
+    "description": "Live TV Browse filter: the programmes that begin after now and before the end of the day"
+  },
+  "browse.livetv.browse_empty": {
+    "value": "Nothing matches this filter",
+    "description": "Live TV Browse read-out when the chosen filter leaves no programme to show"
+  },
   "browse.collection.loading": {
     "value": "Loading collection…",
     "description": "Collection page read-out while its first answer is pending"

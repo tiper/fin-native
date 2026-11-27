@@ -19,7 +19,7 @@ fn take(stores: &mut Stores) -> (Job<LiveTvReq>, LiveTvPort) {
     (job, port)
 }
 fn guide(numbers: &[&str], end: i64) -> Guide {
-    Guide { dvr: "7".into(), provider: "tv.plex.providers.epg.xmltv:7".into(), refresh_at: end, retry_cd: 0, strikes: 0, until: 0, channels: numbers.iter()
+    Guide { dvr: "7".into(), provider: "tv.plex.providers.epg.xmltv:7".into(), refresh_at: end, retry_cd: 0, strikes: 0, until: 0, far_at: 0, channels: numbers.iter()
         .map(|number| LiveChannel { dvr: "7".into(), channel: format!("C{number}"), vcn: number.to_string(),
             name: "Channel".into(), thumb: "/logo".into(), now: "Show".into(),
             now_thumb: "/show".into(), now_summary: String::new(), begins_at: 0, ends_at: end, later: Vec::new() }).collect() }
@@ -260,11 +260,14 @@ struct Script {
     empty_grid: bool,
     empty_lineup: bool,
     later: bool,
+    far: bool,
 }
 impl Script {
-    fn new() -> Self { Self { calls: Default::default(), second_dvr: false, fail_lineup: false.into(), fail_grid: false.into(), untils: Default::default(), empty_grid: false, empty_lineup: false, later: false } }
+    fn new() -> Self { Self { calls: Default::default(), second_dvr: false, fail_lineup: false.into(), fail_grid: false.into(), untils: Default::default(), empty_grid: false, empty_lineup: false, later: false, far: false } }
     /// The grid answers a second airing after the one on now.
     fn with_later(mut self) -> Self { self.later = true; self }
+    /// The grid answers a programme far past the live window when it is asked that far (`until` past the window's end).
+    fn with_far(mut self) -> Self { self.later = true; self.far = true; self }
 }
 impl LiveTvIo for Script {
     fn dvrs(&self) -> (Option<i32>, Option<Vec<plx_plex::plex::Dvr>>) {
@@ -290,6 +293,10 @@ impl LiveTvIo for Script {
             if self.later {
                 rows.push(serde_json::from_value(serde_json::json!({"title":"Next",
                     "Media":[{"channelVcn":"2","channelIdentifier":"C2","beginsAt":now + 50,"endsAt":now + 800}]})).unwrap());
+            }
+            if self.far && until > livetv::window_end(now) {
+                rows.push(serde_json::from_value(serde_json::json!({"title":"Far",
+                    "Media":[{"channelVcn":"2","channelIdentifier":"C2","beginsAt":livetv::window_end(now) + 600,"endsAt":livetv::window_end(now) + 1_200}]})).unwrap());
             }
             Some(rows)
         }
@@ -525,4 +532,78 @@ fn a_reach_set_before_the_first_read_is_carried_by_it() {
     assert_eq!(io.untils.borrow().as_slice(), [9_000]);
     pump(&mut stores, &keys, 100);
     assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty(), "read to the reach already");
+}
+
+/// The titles after the programme on now that the store publishes.
+fn later_titles(stores: &Stores) -> Vec<String> {
+    stores.livetv_view().channels[0].later.iter().map(|airing| airing.title.clone()).collect()
+}
+
+/// **The far span is read once, not at every scheduled refresh** (Browse's Later today holds the reach at the end of the day):
+/// the scheduled read of what is on now asks the live window alone, and the far programmes the far read answered stay
+/// published meanwhile, so the set a reach shows does not shrink to the window and grow back.
+#[test]
+fn a_scheduled_read_under_a_held_reach_asks_the_live_window_and_keeps_the_far_programmes() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_far();
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    run(&mut stores, LiveTvCmd::Reach(20_000), &keys, 100);
+    execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    assert_eq!(later_titles(&stores), ["Next", "Far"], "the far read answered the far programme");
+    // the airing ended: the scheduled read is due, with the reach still held and the far read current
+    pump(&mut stores, &keys, 400);
+    let (job, port) = take(&mut stores);
+    assert_eq!(job.req.until, 0, "the scheduled refresh asks the live window alone");
+    finish_with(&port, job.addr, job.req, |req| read(&io, req));
+    pump(&mut stores, &keys, 400);
+    assert_eq!(later_titles(&stores), ["Next", "Far"], "the far programme stays while its read is current");
+    assert_eq!(io.untils.borrow().as_slice(), [0, 20_000, 0]);
+}
+
+/// The far span is read again by the store's own schedule once its read is a window step old, with the reach still held.
+#[test]
+fn the_far_span_is_read_again_a_window_step_after_it_was_read() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_far();
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    run(&mut stores, LiveTvCmd::Reach(20_000), &keys, 100);
+    execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    let step = livetv::WINDOW_STEP_SECONDS;
+    pump(&mut stores, &keys, 100 + step - 1);
+    let (job, port) = take(&mut stores);
+    assert_eq!(job.req.until, 0, "a second short of the step: the scheduled read is the live window's");
+    finish_with(&port, job.addr, job.req, |req| read(&io, req));
+    pump(&mut stores, &keys, 100 + step - 1);
+    assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty());
+    pump(&mut stores, &keys, 100 + step);
+    let (job, _) = take(&mut stores);
+    assert_eq!(job.req.until, 20_000, "the step has passed: the far span is read again");
+}
+
+/// With the reach released, the far programmes do not outlive their read: the next scheduled read after it is a step old
+/// answers the live window and drops them.
+#[test]
+fn far_programmes_do_not_outlive_their_read_once_nothing_reaches_for_them() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_far();
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    run(&mut stores, LiveTvCmd::Reach(20_000), &keys, 100);
+    execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    run(&mut stores, LiveTvCmd::Reach(0), &keys, 100);
+    let later = 100 + livetv::WINDOW_STEP_SECONDS + 400;
+    pump(&mut stores, &keys, later);
+    let (job, port) = take(&mut stores);
+    assert_eq!(job.req.until, 0);
+    finish_with(&port, job.addr, job.req, |req| read(&io, req));
+    pump(&mut stores, &keys, later);
+    assert_eq!(later_titles(&stores), ["Next"], "the stale far programme is gone");
+    assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty());
+}
+
+/// A reach that ends inside the live window has no far span to hold: it does not make the far read due again and again.
+#[test]
+fn a_reach_inside_the_live_window_does_not_loop() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_far();
+    pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    run(&mut stores, LiveTvCmd::Reach(5_000), &keys, 100);
+    execute(&mut stores, &io); pump(&mut stores, &keys, 100);
+    pump(&mut stores, &keys, 101);
+    assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty(), "read to the reach already, and no step of its own to wait out");
 }

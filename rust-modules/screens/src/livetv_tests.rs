@@ -141,8 +141,8 @@ fn own_store_supplies_adjacent_recent_and_on_now_shelves_with_distinct_art() {
     let context = cx(view, None);
     let mut sections = Vec::new();
     StackPage::<TestHost>::sections(&screen.page, &context, &mut sections);
-    assert_eq!(sections.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Guide, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status]);
-    assert!(sections[2..5].iter().all(|s| matches!(s.kind, Kind::Shelf { .. })));
+    assert_eq!(sections.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Guide, Sec::Browse, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status]);
+    assert!(sections[3..6].iter().all(|s| matches!(s.kind, Kind::Shelf { .. })));
     assert_eq!(screen.page.mode, Mode::RecentNowChannels, "the silent channel is in neither row above");
     // the air under a shelf that has another under it: the handoff's 48 from the tiles to the next heading's line
     // box at rest, less the 18 of the collapsed label band, plus the 8 of ink drop (38); with a tile focused the
@@ -228,7 +228,7 @@ fn an_empty_recent_is_no_recent_shelf_with_programmes_on_with_a_bare_lineup_or_w
         let context = cx(store.view(), None);
         let mut specs = Vec::new();
         StackPage::<TestHost>::sections(&screen.page, &context, &mut specs);
-        assert_eq!(specs.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Guide, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status], "{case}");
+        assert_eq!(specs.iter().map(|s| s.key).collect::<Vec<_>>(), [Sec::Head, Sec::Guide, Sec::Browse, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status], "{case}");
         let len = |k: Sec| StackPage::<TestHost>::cards(&screen.page, &context, k).map_or(0, |c| CardSource::<TestHost>::len(&c));
         let first = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Channels);
         assert_eq!(len(Sec::Recent), 0, "{case}: no Recent shelf");
@@ -243,7 +243,7 @@ fn an_empty_recent_is_no_recent_shelf_with_programmes_on_with_a_bare_lineup_or_w
                 assert_eq!((len(Sec::Now), len(Sec::Channels)), (0, 2), "{case}: the lineup shelf");
                 assert_eq!(screen.page.regions().content, &[CHANNELS_GROUP], "{case}");
                 assert_eq!(screen.page.mode, Mode::ChannelsOnly, "{case}");
-                assert!(matches!(specs[4].kind, Kind::Shelf { style, .. } if *style == PLATE_STYLE), "{case}: the plate style, Recent's");
+                assert!(matches!(specs.iter().find(|s| s.key == Sec::Channels).map(|s| &s.kind), Some(Kind::Shelf { style, .. }) if **style == PLATE_STYLE), "{case}: the plate style, Recent's");
                 let cards = first.as_ref().expect("lineup cards");
                 assert!(matches!(CardSource::<TestHost>::art(cards, 0), Art::Channel { .. }), "{case}: a channel plate, not a poster tile");
                 assert!(CardSource::<TestHost>::progress(cards, 0).is_none(), "{case}");
@@ -782,7 +782,7 @@ use plx_ui::screen::{By, Dir};
 const GUIDE_NOW: i64 = NOW + 10 * MIN;
 
 fn later(title: &str, from: i64, to: i64) -> LiveAiring {
-    LiveAiring { title: title.into(), begins_at: NOW + from * MIN, ends_at: NOW + to * MIN }
+    LiveAiring { title: title.into(), begins_at: NOW + from * MIN, ends_at: NOW + to * MIN, thumb: String::new() }
 }
 
 /// A channel airing `from`..`to` minutes after [`NOW`], with the programmes that follow it.
@@ -907,8 +907,11 @@ fn the_scope_stops_are_named_and_the_row_walks_between_them() {
     assert_eq!(a11y(GUIDE_ELEM).as_deref(), Some("header.guide"));
     assert_eq!(move_from(&screen, store.view(), WHATS_ON_ELEM, Dir::Right), Some(GUIDE_ELEM));
     assert_eq!(move_from(&screen, store.view(), GUIDE_ELEM, Dir::Left), Some(WHATS_ON_ELEM));
-    assert_eq!(move_from(&screen, store.view(), GUIDE_ELEM, Dir::Right), None);
+    assert_eq!(move_from(&screen, store.view(), GUIDE_ELEM, Dir::Right), Some(BROWSE_ELEM));
+    assert_eq!(move_from(&screen, store.view(), BROWSE_ELEM, Dir::Left), Some(GUIDE_ELEM));
+    assert_eq!(move_from(&screen, store.view(), BROWSE_ELEM, Dir::Right), None, "the filter control is on the row only while Browse shows");
     assert_eq!(move_from(&screen, store.view(), WHATS_ON_ELEM, Dir::Left), None);
+    assert_eq!(a11y(BROWSE_ELEM).as_deref(), Some("header.browse"));
     // the stops are the row's plates: 96 x 148 of the Library's own row
     let one = Focusable::<TestHost>::place(&screen, &WHATS_ON_ELEM, &context, At::Drawn).unwrap().rect;
     let two = Focusable::<TestHost>::place(&screen, &GUIDE_ELEM, &context, At::Drawn).unwrap().rect;
@@ -1438,4 +1441,442 @@ fn a_landing_read_keeps_the_focus_on_its_programme() {
     store.install_for_test(lineup);
     let out = step(&mut screen, store.view(), Some(elem), &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 2));
     assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 0, 0)], "News at Nine is now the first cell: the focus follows it");
+}
+
+// ---- Browse (PR7, SPEC-6) ---------------------------------------------------------------------------------------
+
+use crate::registry::AppMsg;
+use super::browse::Filter;
+
+/// Three channels on air and one with no data, at [`NOW`] (20:30 UTC), with programmes after them:
+/// 101 began 5 minutes ago and runs 30 (just started), with two programmes after it and a third that begins after the day's end;
+/// 102 began 40 minutes ago and ends in 10 (ending soon); 103 began 20 minutes ago and ends in 40; 104 has nothing.
+fn browse_lineup() -> Vec<Channel> {
+    let mut a = airing("101", "One", 5, 30);
+    a.later = vec![later("Next 101", 25, 85), later("Evening 101", 85, 145), later("Past midnight 101", 230, 260)];
+    let b = airing("102", "Two", 40, 50);
+    let mut c = airing("103", "Three", 20, 60);
+    c.later = vec![later("Next 103", 40, 100)];
+    let mut d = channel("104", "Four");
+    d.now.clear();
+    vec![a, b, c, d]
+}
+
+/// English, and the default caption policy: what the words and the label band's height are measured in.
+fn browse_guards() -> (captions::PolicyPin, plx_os::i18n::ThreadLocaleGuard) {
+    (captions::PolicyPin::default_setting(), plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En))
+}
+
+/// A screen on Browse over `lineup` at [`NOW`], on the default filter.
+fn browse_over(lineup: Vec<Channel>) -> (LiveTvStore, LiveTvScreen) {
+    clock(NOW);
+    let mut store = LiveTvStore::default();
+    store.install_for_test(lineup);
+    let mut screen = LiveTvScreen::new(ENTRY);
+    step(&mut screen, store.view(), None, &ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(RECENT_GROUP) }));
+    choose(&mut screen, store.view(), BROWSE_ELEM);
+    (store, screen)
+}
+
+fn pick(screen: &mut LiveTvScreen, view: LiveTvView<'_>, filter: Filter) -> Vec<Stamped<TestHost>> {
+    let out = step(screen, view, Some(FILTER_ELEM), &ScreenEvent::App(AppMsg::LiveTvFilterPicked(filter)));
+    step(screen, view, Some(FILTER_ELEM), &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
+    out
+}
+
+/// OK on card `elem`: the focus arrives, then the press commits (the engine's own order).
+fn press_card(screen: &mut LiveTvScreen, view: LiveTvView<'_>, elem: u32) -> Vec<Stamped<TestHost>> {
+    step(screen, view, Some(elem), &ScreenEvent::FocusMoved { from: None, to: FocusKey { entry: ENTRY, elem }, by: By::Dir });
+    step(screen, view, Some(elem), &ScreenEvent::PressCommit(PressId(5)))
+}
+
+fn browse_set(screen: &LiveTvScreen) -> &Browse {
+    screen.page.mode.browse_set().expect("Browse is showing")
+}
+
+/// The channels' indices the grid shows, in order.
+fn shown_channels(screen: &LiveTvScreen) -> Vec<usize> {
+    browse_set(screen).picks.iter().map(|p| p.channel).collect()
+}
+
+/// The titles the grid shows, in order.
+fn shown_titles(screen: &LiveTvScreen, view: LiveTvView<'_>) -> Vec<String> {
+    browse_set(screen).picks.iter().map(|pick| {
+        let channel = &view.channels[pick.channel];
+        match pick.src { CellSrc::Now => channel.now.clone(), CellSrc::Later(n) => channel.later[n].title.clone() }
+    }).collect()
+}
+
+/// **Each filter shows the programmes its rule admits, in channel then start order**, one card per programme.
+#[test]
+fn each_filter_shows_what_its_rule_admits_in_channel_then_start_order() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_over(browse_lineup());
+    let view = store.view();
+    assert_eq!(screen.page.scope, Scope::Browse(Filter::OnNow), "On now is the default");
+    assert_eq!(shown_channels(&screen), [0, 1, 2], "101, 102 and 103 are on; 104 has nothing");
+    pick(&mut screen, view, Filter::JustStarted);
+    assert_eq!(shown_channels(&screen), [0], "101 began 5 minutes ago");
+    pick(&mut screen, view, Filter::EndingSoon);
+    assert_eq!(shown_channels(&screen), [1], "102 ends in 10");
+    pick(&mut screen, view, Filter::LaterToday);
+    assert_eq!(shown_titles(&screen, view), ["Next 101", "Evening 101", "Next 103"], "channel then start order; the one past midnight is another day's");
+}
+
+/// **The count reads "shown of on now" while a filter narrows what is on, and not otherwise.**
+#[test]
+fn the_count_reads_for_the_narrowing_filters_only() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_over(browse_lineup());
+    let view = store.view();
+    assert_eq!(screen.page.readout(), None, "On now is the whole");
+    pick(&mut screen, view, Filter::JustStarted);
+    assert_eq!(screen.page.readout().as_deref(), Some("1 of 3"));
+    pick(&mut screen, view, Filter::EndingSoon);
+    assert_eq!(screen.page.readout().as_deref(), Some("1 of 3"));
+    pick(&mut screen, view, Filter::LaterToday);
+    assert_eq!(screen.page.readout(), None, "Later today is another set, not a part of what is on");
+    // the readout is on the header row, before the filter control
+    pick(&mut screen, view, Filter::JustStarted);
+    let row = screen.page.header_row(&FixtureMeasure);
+    assert_eq!(row.readout(), Some("1 of 3"));
+}
+
+/// **A filter that shows nothing is an explicit state**: the empty read-out under the row, the filter control the one stop to reach.
+#[test]
+fn a_filter_with_no_programme_reads_out_and_leaves_the_control_the_only_stop() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_over(vec![airing("101", "One", 25, 60)]);
+    let view = store.view();
+    pick(&mut screen, view, Filter::JustStarted);
+    assert!(matches!(screen.page.mode, Mode::BrowseNone(_)));
+    assert_eq!(screen.page.readout().as_deref(), Some("0 of 1"));
+    let context = cx(view, Some(FILTER_ELEM));
+    assert_eq!(StackPage::<TestHost>::plain_len(&screen.page, Sec::Head), 4, "the three scopes and the filter control");
+    assert_eq!(StackPage::<TestHost>::plain_elem(&screen.page, Sec::Head, 3), Some(FILTER_ELEM));
+    assert!(StackPage::<TestHost>::cards(&screen.page, &context, Sec::Browse).is_none(), "no grid");
+    assert_eq!(
+        StackPage::<TestHost>::seat_override(&screen.page, &context, Sec::Head, plx_ui::screen::Placed { rect: Rect::FULL, rest_rect: Rect::FULL, clip: Rect::FULL, index: None }),
+        Some(FILTER_ELEM), "focus lands on the filter control");
+    // a card that is gone: focus goes to the control
+    let gone = BROWSE_FIRST_ELEM;
+    assert_eq!(Focusable::<TestHost>::reconcile(&screen, FocusKey { entry: ENTRY, elem: gone }, &context).elem, FILTER_ELEM);
+    pick(&mut screen, view, Filter::OnNow);
+    assert!(matches!(screen.page.mode, Mode::Browse(_)));
+}
+
+/// **A card whose programme leaves the set hands its focus to its channel's card, else the control.**
+#[test]
+fn a_focused_card_that_leaves_the_set_is_followed_to_its_channels_card_or_the_control() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_over(browse_lineup());
+    let view = store.view();
+    pick(&mut screen, view, Filter::JustStarted);
+    let elem = browse_set(&screen).elems[0];
+    // 7 minutes on, 101 is 12 minutes in: not just started any more
+    clock(NOW + 7 * MIN);
+    step(&mut screen, view, Some(elem), &ScreenEvent::Tick(Tick { ms: 32, dt_us: 16_667 }));
+    assert!(matches!(screen.page.mode, Mode::BrowseNone(_)), "the set was rebuilt when the clock crossed 11 minutes");
+    let context = cx(view, Some(elem));
+    assert_eq!(Focusable::<TestHost>::reconcile(&screen, FocusKey { entry: ENTRY, elem }, &context).elem, FILTER_ELEM);
+    // On now: the same programme is on, and keeps its element across the rebuild
+    pick(&mut screen, view, Filter::OnNow);
+    assert_eq!(browse_set(&screen).elems[0], elem, "a programme keeps its element across rebuilds");
+    // the airing ends (101 at +25): the focus lands on the channel's next programme, now on
+    clock(NOW + 26 * MIN);
+    step(&mut screen, view, Some(elem), &ScreenEvent::Tick(Tick { ms: 48, dt_us: 16_667 }));
+    let context = cx(view, Some(elem));
+    let to = Focusable::<TestHost>::reconcile(&screen, FocusKey { entry: ENTRY, elem }, &context).elem;
+    let titles = shown_titles(&screen, view);
+    let at = browse_set(&screen).index.get(&to).copied().expect("the focus lands on a card of the set");
+    assert_eq!(titles[at], "Next 101", "101's next programme took over: {titles:?}");
+}
+
+/// **OK on an airing programme tunes its channel; OK on a later one does nothing** (the Guide's rule).
+#[test]
+fn ok_tunes_an_airing_programme_and_ignores_a_later_one() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_over(browse_lineup());
+    let view = store.view();
+    let tune = |channel: &str, title: &str| PlayIntent::Live { sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: channel.into(), title: title.into() };
+    let first = browse_set(&screen).elems[0];
+    let out = press_card(&mut screen, view, first);
+    assert_eq!(asked_plays(&out), [tune("C101", "One")]);
+    pick(&mut screen, view, Filter::LaterToday);
+    let later = browse_set(&screen).elems[0];
+    let out = press_card(&mut screen, view, later);
+    assert!(asked_plays(&out).is_empty(), "a later programme has nothing to tune");
+    // the clock reaches it: now it is on
+    clock(NOW + 26 * MIN);
+    step(&mut screen, view, Some(later), &ScreenEvent::Tick(Tick { ms: 64, dt_us: 16_667 }));
+    pick(&mut screen, view, Filter::OnNow);
+    let elem = browse_set(&screen).elems.iter().copied().find(|e| *e == later).expect("on now now");
+    let out = press_card(&mut screen, view, elem);
+    assert_eq!(asked_plays(&out), [tune("C101", "One")]);
+}
+
+/// **BACK from the player seats the card of the programme tuned from Browse.**
+#[test]
+fn back_from_the_player_seats_the_browse_card_the_tune_came_from() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_over(browse_lineup());
+    let view = store.view();
+    let card = browse_set(&screen).elems[2];
+    let out = press_card(&mut screen, view, card);
+    assert_eq!(asked_plays(&out).len(), 1, "tuned from the card of 103");
+    assert!(step(&mut screen, view, None, &left("C103")).is_empty());
+    let out = step(&mut screen, view, Some(card), &ScreenEvent::Enter(Enter::Restored));
+    assert_eq!(seated_elems(&out), vec![card], "the same programme's card");
+    // while the player was up the programme ended and the next one began: the channel's card that stands there
+    pick(&mut screen, view, Filter::LaterToday);
+    let next = browse_set(&screen).elems[2];
+    pick(&mut screen, view, Filter::OnNow);
+    clock(NOW + 41 * MIN);
+    step(&mut screen, view, None, &left("C103"));
+    let out = step(&mut screen, view, Some(card), &ScreenEvent::Enter(Enter::Restored));
+    assert_eq!(seated_elems(&out), vec![next], "103's next programme is on, and its card is the one seated");
+}
+
+/// **A programme keeps its element while the lineup around it changes**, and no element names two programmes.
+#[test]
+fn a_programme_keeps_its_element_across_refreshes_and_no_element_names_two() {
+    let _guards = browse_guards();
+    let (mut store, mut screen) = browse_over(browse_lineup());
+    let before = browse_set(&screen).elems.clone();
+    let mut lineup = browse_lineup();
+    lineup.insert(0, airing("100", "Zero", 3, 60));
+    store.install_for_test(lineup);
+    step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 2));
+    let elems = &browse_set(&screen).elems;
+    assert_eq!(elems.len(), 4);
+    let mut unique = elems.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), elems.len(), "distinct");
+    assert_eq!(&elems[1..], before.as_slice(), "the three programmes already known stand on the elements they had");
+}
+
+/// **Every airing is reachable**: a lineup of seven hundred channels is seven hundred cards, each with its own element
+/// that finds its card back (no cap on what can be reached; the grid pages what it draws).
+#[test]
+fn a_lineup_of_seven_hundred_channels_is_seven_hundred_reachable_cards() {
+    let _guards = browse_guards();
+    let lineup: Vec<Channel> = (0..700).map(|n| airing(&n.to_string(), &format!("C{n}"), 5, 60)).collect();
+    let (store, screen) = browse_over(lineup);
+    let set = browse_set(&screen);
+    assert_eq!(set.picks.len(), 700);
+    let context = cx(store.view(), None);
+    let last = *set.elems.last().expect("a last card");
+    let cards = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Browse).expect("the grid");
+    assert_eq!(CardSource::<TestHost>::len(&cards), 700);
+    assert_eq!(CardSource::<TestHost>::index_of(&cards, &last), Some(699));
+    assert!(Focusable::<TestHost>::group_of(&screen, &last, &context).is_some(), "the last card is in the grid's group");
+}
+
+/// **The filter control opens the menu** carrying the filter in force; the menu reports its pick and the page applies it.
+#[test]
+fn ok_on_the_filter_control_asks_for_the_menu_and_a_pick_changes_the_filter() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_over(browse_lineup());
+    let view = store.view();
+    pick(&mut screen, view, Filter::EndingSoon);
+    let out = step(&mut screen, view, Some(FILTER_ELEM), &ScreenEvent::PressCommit(PressId(3)));
+    let panel = out.iter().find_map(|s| match &s.fx {
+        Fx::App(AppFx::Content(ContentReq::Panel(ContentPanel::LiveTvFilter { chosen, opener, .. }))) => Some((*chosen, *opener)),
+        _ => None,
+    });
+    assert_eq!(panel, Some((Filter::EndingSoon, (ENTRY, FILTER_ELEM))), "the menu opens on the filter in force, from the control");
+    // a pick for the filter already in force is spent
+    let same = pick(&mut screen, view, Filter::EndingSoon);
+    assert!(reaches(&same).is_empty());
+    assert_eq!(screen.page.scope, Scope::Browse(Filter::EndingSoon));
+    // while the Guide shows, a late pick from the menu changes nothing
+    choose(&mut screen, view, GUIDE_ELEM);
+    step(&mut screen, view, None, &ScreenEvent::App(AppMsg::LiveTvFilterPicked(Filter::LaterToday)));
+    assert_eq!(screen.page.scope, Scope::Guide, "a pick that finds no Browse is spent");
+}
+
+/// **Later today asks the store to read to the end of the day**, through the Guide's own reach path; leaving Browse lets go.
+#[test]
+fn later_today_reads_to_the_end_of_the_local_day_and_leaving_lets_go() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_over(browse_lineup());
+    let view = store.view();
+    let day_end = browse::day_end(NOW, Some(0));
+    let out = pick(&mut screen, view, Filter::LaterToday);
+    assert_eq!(reaches(&out), [day_end]);
+    let out = pick(&mut screen, view, Filter::OnNow);
+    assert_eq!(reaches(&out), [0], "the other filters read nothing more");
+    pick(&mut screen, view, Filter::LaterToday);
+    let out = choose(&mut screen, view, WHATS_ON_ELEM);
+    assert_eq!(reaches(&out), [0], "What's on needs no more than the live window");
+}
+
+/// **The canon says the filter**, so a replay that differs in it differs in state.
+#[test]
+fn the_canon_carries_the_filter() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_over(browse_lineup());
+    let canon = |screen: &LiveTvScreen| { let mut c = Canon::new(); screen.write(&mut c); c.finish() };
+    let on_now = canon(&screen);
+    pick(&mut screen, store.view(), Filter::EndingSoon);
+    assert_ne!(canon(&screen), on_now);
+}
+
+/// **The grid's geometry** (SPEC-6): six 250 x 375 posters to a row on the 280 pitch from y 244, and the next row under the focused row's
+/// label band. The board draws that at y 735 (619 + the 92 label block + 24); the shipped grids' two-line band is
+/// `caption_policy::BAND_TWO_LINES` (112, the label block and its air), so the row stands at 731, as the Library's does: the one band, not a Browse copy of it.
+#[test]
+fn the_grid_is_six_posters_a_row_on_the_280_pitch_from_244_and_the_next_row_peeks_under_the_label_band() {
+    let _guards = browse_guards();
+    let lineup: Vec<Channel> = (0..14).map(|n| airing(&n.to_string(), &format!("C{n}"), 5, 60)).collect();
+    let (store, mut screen) = browse_over(lineup);
+    let view = store.view();
+    let elems = browse_set(&screen).elems.clone();
+    let at = |screen: &LiveTvScreen, focus: Option<u32>, elem: u32| {
+        Focusable::<TestHost>::place(screen, &elem, &cx(view, focus), At::Drawn).expect("placed").rect
+    };
+    for frame in 1..=90 {
+        step(&mut screen, view, None, &ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_667 }));
+    }
+    let row: Vec<Rect> = elems[..7].iter().map(|e| at(&screen, None, *e)).collect();
+    for (i, rect) in row[..6].iter().enumerate() {
+        assert!(near(rect.x, 96.0 + 280.0 * i as f32) && near(rect.y, 244.0) && near(rect.w, 250.0) && near(rect.h, 375.0), "{i}: {rect:?}");
+    }
+    assert!(near(row[6].x, 96.0) && row[6].y > 244.0, "the seventh poster begins the next row: {:?}", row[6]);
+    // with the first poster focused the next row stands 24 under the label band
+    let first = elems[0];
+    step(&mut screen, view, Some(first), &ScreenEvent::FocusMoved { from: None, to: FocusKey { entry: ENTRY, elem: first }, by: By::Dir });
+    for frame in 1..=90 {
+        step(&mut screen, view, Some(first), &ScreenEvent::Tick(Tick { ms: 2000 + frame * 16, dt_us: 16_667 }));
+    }
+    let next = at(&screen, Some(first), elems[6]);
+    assert!(near(next.y, 619.0 + plx_ui::caption_policy::BAND_TWO_LINES), "the next row starts {} (619 + the shipped two-line band)", next.y);
+}
+
+/// **The grid's moves**: RIGHT and LEFT along a row, DOWN and UP between rows, UP from the first row to the header row (the filter control's
+/// neighbours on the row: the scopes to its left), and the row rides the page as the Library's does (it scrolls away with the grid).
+#[test]
+fn the_grid_moves_along_and_between_rows_and_up_from_the_first_row_reaches_the_header() {
+    let lineup: Vec<Channel> = (0..14).map(|n| airing(&n.to_string(), &format!("C{n}"), 5, 60)).collect();
+    let (store, mut screen) = browse_over(lineup);
+    let view = store.view();
+    let elems = browse_set(&screen).elems.clone();
+    let go = |screen: &LiveTvScreen, from: u32, dir: Dir| move_from(screen, view, from, dir);
+    assert_eq!(go(&screen, elems[0], Dir::Right), Some(elems[1]));
+    assert_eq!(go(&screen, elems[1], Dir::Left), Some(elems[0]));
+    assert_eq!(go(&screen, elems[0], Dir::Down), Some(elems[6]), "a row down, the same column");
+    assert_eq!(go(&screen, elems[6], Dir::Up), Some(elems[0]));
+    assert_eq!(go(&screen, elems[0], Dir::Up), None, "the grid's own edge: the link decides");
+    let mut links = Vec::new();
+    Screen::<TestHost>::links(&screen, &mut links);
+    assert!(links.contains(&Link { from: BROWSE_GROUP, dir: Dir::Up, to: HEAD_GROUP }), "up from the first row is the header row");
+    assert!(links.contains(&Link { from: HEAD_GROUP, dir: Dir::Down, to: BROWSE_GROUP }));
+    // the header row's own walk: the scopes, then the filter control as its last stop
+    assert_eq!(move_from(&screen, view, GUIDE_ELEM, Dir::Right), Some(BROWSE_ELEM));
+    assert_eq!(move_from(&screen, view, BROWSE_ELEM, Dir::Right), Some(FILTER_ELEM));
+    assert_eq!(move_from(&screen, view, FILTER_ELEM, Dir::Right), None);
+    // the grid scrolls a row and the header row goes up with it
+    let header = |screen: &LiveTvScreen| Focusable::<TestHost>::place(screen, &FILTER_ELEM, &cx(view, None), At::Drawn).expect("the control is placed").rect;
+    for frame in 1..=60 {
+        step(&mut screen, view, None, &ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_667 }));
+    }
+    let at_rest = header(&screen);
+    let second = elems[6];
+    step(&mut screen, view, Some(second), &ScreenEvent::FocusMoved { from: None, to: FocusKey { entry: ENTRY, elem: second }, by: By::Dir });
+    for frame in 1..=90 {
+        step(&mut screen, view, Some(second), &ScreenEvent::Tick(Tick { ms: 2000 + frame * 16, dt_us: 16_667 }));
+    }
+    assert!(screen.stack.scroll() > 100.0, "the grid scrolled a row: {}", screen.stack.scroll());
+    assert!(header(&screen).y < at_rest.y - 100.0, "the header row rides the page: {:?} from {at_rest:?}", header(&screen));
+    let rect = Focusable::<TestHost>::place(&screen, &second, &cx(view, Some(second)), At::Drawn).expect("placed").rect;
+    assert!(rect.y >= 0.0 && rect.y + rect.h <= SCR_H, "the focused row stands inside the screen: {rect:?}");
+}
+
+/// Scroll Browse's grid to the second row: focus its first card and let the page settle.
+fn scrolled_to_second_row(screen: &mut LiveTvScreen, view: LiveTvView<'_>) -> Vec<u32> {
+    let elems = browse_set(screen).elems.clone();
+    let second = elems[6];
+    step(screen, view, Some(second), &ScreenEvent::FocusMoved { from: None, to: FocusKey { entry: ENTRY, elem: second }, by: By::Dir });
+    for frame in 1..=120 {
+        step(screen, view, Some(second), &ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_667 }));
+    }
+    assert!(screen.stack.scroll() > 100.0, "the grid scrolled a row: {}", screen.stack.scroll());
+    elems
+}
+
+/// A Browse lineup of fourteen channels on air: three rows of the six-wide grid.
+fn browse_fourteen() -> (LiveTvStore, LiveTvScreen) {
+    browse_over((0..14).map(|n| airing(&n.to_string(), &format!("C{n}"), 5, 60)).collect())
+}
+
+/// **Browse's header row rides the page as the Library's does** (owner decision 2026-11-27): scrolled to the second row the row has
+/// left with the page and the top bar has tucked through the one `Handoff`, as on What's on. Red while the row stood on a mask and
+/// the bar stayed.
+#[test]
+fn the_header_row_scrolls_away_with_browses_grid_and_the_top_bar_tucks_with_it() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_fourteen();
+    let view = store.view();
+    let header = |screen: &LiveTvScreen| Focusable::<TestHost>::place(screen, &FILTER_ELEM, &cx(view, None), At::Drawn).expect("the control is placed").rect;
+    let at_rest = header(&screen);
+    assert_eq!(Screen::<TestHost>::chrome_tuck(&screen), 0.0, "at the top: the chrome shown");
+    scrolled_to_second_row(&mut screen, view);
+    assert!(header(&screen).y < at_rest.y - 100.0, "the row went up with the page: {:?} from {at_rest:?}", header(&screen));
+    assert_eq!(Screen::<TestHost>::chrome_tuck(&screen), 1.0, "row two: the bar has tucked with the row");
+}
+
+/// **UP from the first row reaches the filter and the scope row, and the page scrolls back** as the Library's does.
+#[test]
+fn focus_on_the_header_row_scrolls_the_grid_home() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_fourteen();
+    let view = store.view();
+    scrolled_to_second_row(&mut screen, view);
+    step(&mut screen, view, Some(FILTER_ELEM), &ScreenEvent::FocusMoved { from: None, to: FocusKey { entry: ENTRY, elem: FILTER_ELEM }, by: By::Dir });
+    for frame in 1..=240 {
+        step(&mut screen, view, Some(FILTER_ELEM), &ScreenEvent::Tick(Tick { ms: 3000 + frame * 16, dt_us: 16_667 }));
+    }
+    assert!(screen.stack.scroll() < 1.0, "the page went home to show the row: {}", screen.stack.scroll());
+    assert_eq!(Screen::<TestHost>::chrome_tuck(&screen), 0.0, "and the bar is back");
+}
+
+/// **A filter picked dissolves the header's words instead of cutting them** (the row's `HeaderSwap`, as the Watchlist's):
+/// the row rebuilt for a new filter and count begins a swap that runs out. Red while the row was built with no swap.
+#[test]
+fn a_filter_pick_swaps_the_header_words_and_the_swap_runs_out() {
+    let _guards = browse_guards();
+    let (store, mut screen) = browse_over(browse_lineup());
+    let view = store.view();
+    screen.page.header_row(&FixtureMeasure);
+    assert!(!screen.page.header_swap.borrow().is_active(), "a row first built has nothing to swap from");
+    pick(&mut screen, view, Filter::JustStarted);
+    screen.page.header_row(&FixtureMeasure);
+    assert!(screen.page.header_swap.borrow().is_active(), "the filter word and the count dissolve");
+    for frame in 1..=120 {
+        step(&mut screen, view, Some(FILTER_ELEM), &ScreenEvent::Tick(Tick { ms: frame * 16, dt_us: 16_667 }));
+    }
+    assert!(!screen.page.header_swap.borrow().is_active(), "and the swap ends");
+}
+
+/// **A programme's caption is one composition wherever a poster shows it**: Browse's card and What's on's On now card word the same
+/// programme alike, a long channel name included, whole and in order on one line (the line a band cannot hold is the shared
+/// caption's to glide from its head, not Browse's to cut).
+#[test]
+fn a_programme_caption_is_one_composition_on_browse_and_on_now() {
+    let _guards = browse_guards();
+    let mut long = airing("2006", "Pluto TV Star Trek: The Next Generation", 49, 60);
+    long.now = "Star Trek: The Next Generation".into();
+    let (store, mut screen) = browse_over(vec![long]);
+    let view = store.view();
+    WALL.with(|w| w.set(Some(Wall::from_secs(NOW, 0))));
+    let words = |label: &TileLabel| (label.title.as_ref().map(|t| t.to_str().unwrap().to_owned()), label.caption.as_ref().map(|c| c.to_str().unwrap().to_owned()));
+    let context = cx(view, None);
+    let browse = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Browse).unwrap();
+    let on_browse = words(&CardSource::<TestHost>::label(&browse, 0));
+    assert_eq!(on_browse, (Some("Star Trek: The Next Generation".into()), Some("Ch 2006 \u{b7} Pluto TV Star Trek: The Next Generation \u{b7} 11m left".into())));
+    choose(&mut screen, view, WHATS_ON_ELEM);
+    let context = cx(view, None);
+    let now = StackPage::<TestHost>::cards(&screen.page, &context, Sec::Now).unwrap();
+    assert_eq!(words(&CardSource::<TestHost>::label(&now, 0)), on_browse, "the same words as On now's");
 }

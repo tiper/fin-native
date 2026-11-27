@@ -1866,10 +1866,12 @@ XMLTV guide. The app's reads live in `rust-modules/plex/src/plex/livetv.rs`.
   the one channel of the lineup that has guide data (the lineup is 16 channels; the other 15, Pluto channels,
   have none and appear in no answer); with `until` = `now` + 90 min, still one (the airing
   ran past that); with `until` = `now` + 6 h, two (the airing on now and the one after it). An answer took 2-4 ms. This is
-  the Guide's read (`livetv::guide_path`): `until` is the far end of the window the Guide shows (the 90-minute window
+  the Guide's read (`livetv::guide_path`): `until` is the store's `Reach` (the 90-minute window
   that starts at the last half hour at or before `now`, or, once the reader has scrolled the board by half hours, the
-  later window's end plus one more step: the store's `Reach`, which only grows while the page is open and returns to the
-  live window's end when it leaves). The app sends no `beginsAt` / `endsAt` lower bound earlier than `now`, so a
+  later window's end plus one more step; Browse's Later today sets it to the end of the local day), which only grows
+  while the page is open and returns to the live window's end when it leaves. The far read is made when `Reach` grows
+  and again every 30 minutes; the scheduled reads in between ask for the live window alone (`until` = 0, widened to the
+  window's end) and the store keeps the far programmes the last far read answered. The app sends no `beginsAt` / `endsAt` lower bound earlier than `now`, so a
   programme that has already ended is never asked for (the Guide draws the aired part of the window shaded and
   empty). A channel with no airing in the answer has no guide data for the window.
 

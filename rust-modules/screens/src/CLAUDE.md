@@ -427,3 +427,34 @@ It is one surface however many keys ask for it: a request for a panel that is mo
 input), and one for a panel whose `Present` is still parked for this frame's commit is folded into the parked argument
 as one more opening digit (`bridge::present_once`, `Dispatcher::parked_present_mut`, `AppArg::absorb`). A panel dismissed
 from outside (a press that misses it) hears `Closing` and stops acting, so its timer cannot tune afterwards.
+
+## Browse (Live TV PR7)
+
+The scope row's third stop (`Scope::Browse(Filter)`), a grid of programmes under it (`livetv/browse.rs` is the pure half, `livetv.rs` the page).
+**The filter is the scope's own**: the scope carries it, so the filter exists exactly while Browse shows and no other scope can hold one
+that disagrees with the set on show; the filter control's menu (`livetv/filter_menu.rs`, `AppArg::LiveTvFilter`, canon tag 17, page id 34,
+namespace `livetv_filter`, opened as `ContentPanel::LiveTvFilter`) REPORTS a pick (`AppMsg::LiveTvFilterPicked`) and the page changes the
+filter on that message alone (`LiveTvScreen::pick_filter`), rebuilding the set at once. The control is the row's last stop, drawn as the Library's sort
+control (`HeaderItem::sort_control`), with "3 of 16" (the Library's own `library_header.filtered_of`) before it while a filter narrows what is on.
+**A card is a programme**, not a channel: `browse::shown` lists one per programme (the airing on now, then each `Channel::later`, in channel then
+start order), and what a programme IS right now is `browse::stand` (the clock and its own times, never which list it came from). The rules:
+On now = begun and not over (an airing with no known end is on while it has begun); Just started = on and at most 10 whole minutes in; Ending soon =
+on and at most 15 minutes left (whole minutes, rounded up; an open-ended airing is never ending soon); Later today = not begun and before the end of the
+local day (`browse::day_end`: the next local midnight from the frame's zone offset, the UTC day without one). The count reads "shown of on now" for the
+two narrowing filters only. The set is rebuilt by `Page::sync` when the store, the scope or the day changes and when the clock reaches the first instant
+anything can change (`browse::next_change`: a start, ten minutes after it, fifteen before the end, the end), so the grid follows the clock with no event.
+**A card's element is its programme's** (`Idents`, `livetv/idents.rs`: server, DVR, channel key and start, allocated the first time it is shown, counting up from
+`BROWSE_FIRST_ELEM`, never reused in the page's life and not capped, looked up by borrowing the channel's strings; when the local day turns it forgets the
+programmes that began before the previous day and are not on show), so the focus follows the programme across filters, clocks and refreshes. A focused
+card that leaves the set (`StackPage::recover`) goes to its channel's card, else the one where the channel would stand (`browse::seat_for`); with nothing
+shown it falls to the filter control (`Mode::BrowseNone`, the empty read-out under the row, the control the one stop). OK on a programme on air tunes
+its channel (the page's play path) and does nothing on a later one, as the Guide does; BACK from the player seats the card of the programme tuned
+(`left_elem`, the same rule). Later today asks the store to read to the end of the day through `LiveTvCmd::Reach` (the Guide's own re-read path; the
+other filters ask for nothing): that far read is made once when the reach grows and again every window step (30 minutes), while the scheduled refresh of what
+is on now asks the live window alone and keeps the far programmes the last far read answered (`data/src/livetv.rs`, `merge_far`). The grid is the shared `cards::Grid` (six columns of `RowStyle::PROGRAMME` posters on the Library's 280 pitch from y 244) and
+the row above it **rides the page as the Library's does** (owner decision 2026-11-27; `library/header.rs`: "the row scrolls away with the page"): from the second row
+it scrolls off with the grid and the top bar tucks through the one `scroll_chrome::Handoff`, and UP from the first row reaches the filter and the scope row and scrolls the
+page back; the control it opens the menu from is the opener lift's (`redraw_opener`, shifted by the page's scroll). The row is built with `SharedRow::get_replacing`
+and a `HeaderSwap`, so the filter word and the count dissolve; the filter menu is a host of the shared `plx_ui::menu::Menu`, built by `Menu::from_header_pill` as the Watchlist's Sort & Filter menu
+is: a pick is reported to the page and the menu stays up with the check moved. The next row stands under the focused row's label
+band as every shipped grid's does (`caption_policy::BAND_TWO_LINES`, 112: y 731), not at the board's 735.

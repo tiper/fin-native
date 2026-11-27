@@ -1,6 +1,6 @@
-//! Live TV's two pages, one screen: **What's on** (the landing page, the handoff's `SPEC-1` / `SPEC-2`) and **the
-//! Guide** (`SPEC-3`), chosen by the scope row both wear ([`Scope`], the Library's header row: What's on | Guide,
-//! the chosen one on the selected plate). What's on is the profile's Recent
+//! Live TV's three pages, one screen: **What's on** (the landing page, the handoff's `SPEC-1` / `SPEC-2`), **the
+//! Guide** (`SPEC-3`) and **Browse** (`SPEC-6`), chosen by the scope row they wear ([`Scope`], the Library's header row:
+//! What's on | Guide | Browse, the chosen one on the selected plate). What's on is the profile's Recent
 //! channels on top, the programmes airing now below, and the channels with neither under them: three adjacent
 //! shared card shelves over the store's one lineup. A Recent tile, a programme poster and a Channels tile all ask
 //! the content owner to play their channel. A channel is drawn as one thing wherever it stands, the handoff's
@@ -12,7 +12,7 @@
 //! may run past five and scroll like On now), holds the lineup channels with no programme on that are not in
 //! Recent, under the other rows, and is hidden while that set is empty. It is the What's on path for a channel
 //! without guide data (the Pluto channels of a server that has none; on the Guide such a channel is one cell
-//! across the window, and a Browse page is still to come); with nothing recent and nothing on it is the page's only row. A lineup with no channel at all is the store's empty read-out.
+//! across the window, and on Browse it is a card of the programmes it has); with nothing recent and nothing on it is the page's only row. A lineup with no channel at all is the store's empty read-out.
 //! Which rows the page shows is decided once, by [`Mode`] in `Page::sync`, and matched everywhere after.
 //! The page reads the frame's wall time ([`LiveTvLike::wall`]) for its captions and progress bars, and asks
 //! for a frame when the words of any airing change.
@@ -25,6 +25,12 @@
 //! does nothing**; a channel the guide has nothing for is one cell across the window that tunes it. **CH+ and CH-
 //! turn the page by six** (CH+ the next page: it is the next channel, as the live player's is); a digit opens
 //! number entry as on What's on; BACK from the player returns to the left channel's row (`Enter::Restored`).
+//!
+//! **Browse** is the scope's third page: a grid of programmes (one card per programme, the airing on now and each later
+//! one the store has read) under the row, narrowed by the one filter the row's last stop opens (On now, Just started, Ending
+//! soon, Later today). The rules and the decisions behind them are `browse.rs`'s; the filter's menu is `filter_menu.rs`'s.
+//! Browse and its filter are one value ([`Scope::Browse`]), a card's element is its programme's ([`Idents`]) and a filter
+//! that shows nothing is its own mode ([`Mode::BrowseNone`]), so no state can say two things at once.
 //!
 //! **The window scrolls by half hours** ([`Window`]): RIGHT past a row's last cell moves the whole window half an hour
 //! later, as far as the guide has data (some programme runs past the window's end: [`Board::has_more`]); LEFT past a
@@ -40,6 +46,7 @@
 //! revision, the scope and the window's start), never read from a clock at draw. The board is laid against the clock's
 //! instant ([`LiveTvLike::instant`]); a zone the platform cannot read costs the board its clock words (ruler labels,
 //! programme times, the chip), not its programmes.
+use std::collections::HashMap;
 use plx_data::livetv::{Channel, LiveTvStatus, LiveTvView};
 use plx_plex::plex::livetv::{window_start, WINDOW_SECONDS, WINDOW_STEP_SECONDS};
 use plx_data::stores::{StoreCmd, StoreId};
@@ -47,7 +54,7 @@ use plx_data::stores::livetv::LiveTvCmd;
 use plx_machine::machine::{Canon, Cx, Delivery, Edge, Effects, Enter, EntryId, FocusKey, FocusTarget,
     Fx, GroupId, Handled, InputEvent, InputKind, Key, LogicalState, Machine, Tick};
 use plx_machine::present::Provenance;
-use plx_ui::cards::{heading_ink_drop, CardEvent, CardSource, Kind, RowStyle, SectionSpec, Stack, StackEvent, StackPage, TileLabel};
+use plx_ui::cards::{heading_ink_drop, CardEvent, CardSource, GridSpec, Kind, RowStyle, SectionSpec, Stack, StackEvent, StackPage, TileLabel};
 use plx_ui::consts::*;
 use plx_ui::page_header::{HeaderItem, HeaderRow, PageHeader, PageHeaderSpec, SharedRow};
 use plx_ui::page_regions::{Arrival, BackStep, PageRegions};
@@ -63,6 +70,12 @@ use plx_ui::widgets::{AmbientWash, Art, PageGround, StatusKind, StatusOverlay};
 use plx_ui::{Env, Rect};
 use crate::registry::{captions, tile_facts, AppFx, AppMsg, ContentPanel, ContentReq, HomeReq, HomeTab, LiveTvLike, PlayIntent};
 
+pub(crate) mod browse;
+mod idents;
+use idents::Idents;
+pub mod filter_menu;
+use browse::{Filter, Pick};
+
 #[cfg(test)]
 pub(crate) mod cards_harness;
 
@@ -74,11 +87,18 @@ const HEAD_GROUP: GroupId = GroupId(2);
 const STATUS_GROUP: GroupId = GroupId(3);
 const CHANNELS_GROUP: GroupId = GroupId(4);
 const GUIDE_GROUP: GroupId = GroupId(5);
-/// The scope row's two stops: What's on, then the Guide.
+const BROWSE_GROUP: GroupId = GroupId(6);
+/// The scope row's three stops: What's on, the Guide, Browse; and Browse's filter control, the row's last stop, which
+/// is on the row only while Browse shows.
 const WHATS_ON_ELEM: u32 = 2;
 const GUIDE_ELEM: u32 = 3;
+const BROWSE_ELEM: u32 = 4;
+const FILTER_ELEM: u32 = 5;
 /// The Guide board's first element: above every card (`FIRST_CARD_ELEM` + two a channel), below the bar's.
 const GUIDE_FIRST_ELEM: u32 = 0x0010_0000;
+/// Browse's first card element: above the Guide's cells, below the accessibility namespaces' floor
+/// ([`plx_ui::geom::NAMESPACE_FLOOR`]). A card's element is allocated from [`Idents`] and never reused within a page.
+const BROWSE_FIRST_ELEM: u32 = 0x0100_0000;
 /// The Guide section's height: from the ruler to the bottom safe edge, so the document is one screen and
 /// never scrolls (the board's rows end at 932).
 const GUIDE_H: f32 = SCR_H - MARGIN_Y - time_grid::RULER_Y;
@@ -95,10 +115,31 @@ const PLATE_STYLE: RowStyle = RowStyle::CHANNEL;
 /// On now's posters: the Home poster tile, with art that is not poster-shaped contained on its own blurred
 /// copy rather than cover-cropped (`RowStyle::PROGRAMME`).
 const NOW_STYLE: RowStyle = RowStyle::PROGRAMME;
+/// The words a filter wears on the control and in its menu.
+fn filter_label(filter: Filter) -> &'static str {
+    use plx_os::i18n::msg;
+    match filter {
+        Filter::OnNow => msg::browse_livetv_on_now(),
+        Filter::JustStarted => msg::browse_livetv_filter_just_started(),
+        Filter::EndingSoon => msg::browse_livetv_filter_ending_soon(),
+        Filter::LaterToday => msg::browse_livetv_filter_later_today(),
+    }
+}
+
+/// **Browse's grid**: six columns of the programme poster (250 x 375 with the programme's art fit) on the Library's 280 pitch, from
+/// the grid's top (244, 40 under the row). Its rows REST as the Library's and the Watchlist's do: the focused row stands where the
+/// first does and the next peeks under it (`GridSpec::resting`).
+fn browse_spec() -> GridSpec {
+    GridSpec::resting(plx_ui::page_header::GRID_TOP).columns(plx_ui::cards::GRID_COLS, BROWSE_STYLE, MARGIN_X)
+}
+/// The grid's card: On now's poster (`RowStyle::PROGRAMME`) at the Library's 280 pitch.
+const BROWSE_STYLE: RowStyle = RowStyle { gap: BROWSE_GAP, ..RowStyle::PROGRAMME };
+/// The air between two posters: 280 less the poster.
+const BROWSE_GAP: f32 = 30.0;
 const STATUS_FRAME: Rect = Rect { x: MARGIN_X, y: plx_ui::page_header::GRID_TOP, w: SCR_W - 2.0 * MARGIN_X, h: SCR_H - plx_ui::page_header::GRID_TOP - MARGIN_Y };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Sec { Head, Guide, Recent, Now, Channels, Status }
+enum Sec { Head, Guide, Browse, Recent, Now, Channels, Status }
 
 impl Sec {
     /// The focus group the section's cards (or its retry read-out) stand in.
@@ -106,6 +147,7 @@ impl Sec {
         match self {
             Sec::Head => HEAD_GROUP,
             Sec::Guide => GUIDE_GROUP,
+            Sec::Browse => BROWSE_GROUP,
             Sec::Recent => RECENT_GROUP,
             Sec::Now => NOW_GROUP,
             Sec::Channels => CHANNELS_GROUP,
@@ -118,38 +160,51 @@ impl Sec {
         match self {
             Sec::Recent | Sec::Channels => Some(&PLATE_STYLE),
             Sec::Now => Some(&NOW_STYLE),
-            Sec::Head | Sec::Guide | Sec::Status => None,
+            Sec::Head | Sec::Guide | Sec::Browse | Sec::Status => None,
         }
     }
 }
 
-/// **Which of Live TV's two pages shows**: the scope row's selection, the one explicit state a press on the row
+/// **Which of Live TV's three pages shows**: the scope row's selection, the one explicit state a press on the row
 /// changes (`LiveTvScreen::commit`). It is the screen's, not the store's: leaving the page and coming back
-/// keeps it, a fresh page opens on What's on.
+/// keeps it, a fresh page opens on What's on. **Browse carries its filter**, so the filter exists exactly while Browse
+/// does and no other scope can hold a filter that disagrees with the one on show; the filter control's menu replaces
+/// it through [`LiveTvScreen::pick_filter`], the one place it changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Scope { WhatsOn, Guide }
+enum Scope { WhatsOn, Guide, Browse(Filter) }
 
 impl Scope {
-    /// The row's stops, left to right.
-    const ALL: [Scope; 2] = [Scope::WhatsOn, Scope::Guide];
+    /// The row's stops, left to right. Browse's is the filter it opens on (the default); a press on it while Browse is
+    /// already showing keeps the filter in force ([`same_page`](Self::same_page)).
+    const ALL: [Scope; 3] = [Scope::WhatsOn, Scope::Guide, Scope::Browse(Filter::OnNow)];
 
     /// The stop's element.
     const fn elem(self) -> u32 {
-        match self { Scope::WhatsOn => WHATS_ON_ELEM, Scope::Guide => GUIDE_ELEM }
+        match self { Scope::WhatsOn => WHATS_ON_ELEM, Scope::Guide => GUIDE_ELEM, Scope::Browse(_) => BROWSE_ELEM }
     }
 
     fn of_elem(elem: u32) -> Option<Scope> {
         Self::ALL.into_iter().find(|scope| scope.elem() == elem)
     }
 
-    /// The stop's accessibility name (`livetv.header.whats_on`).
-    const fn name(self) -> &'static str {
-        match self { Scope::WhatsOn => "whats_on", Scope::Guide => "guide" }
+    /// Is `other` the same page, whatever filter either holds?
+    fn same_page(self, other: Scope) -> bool {
+        std::mem::discriminant(&self) == std::mem::discriminant(&other)
     }
 
-    /// The canon's discriminant.
-    const fn code(self) -> u32 {
-        match self { Scope::WhatsOn => 0, Scope::Guide => 1 }
+    /// The stop's accessibility name (`livetv.header.whats_on`).
+    const fn name(self) -> &'static str {
+        match self { Scope::WhatsOn => "whats_on", Scope::Guide => "guide", Scope::Browse(_) => "browse" }
+    }
+
+    /// The canon's discriminant of the page, and of its filter (`0` for a scope with none).
+    const fn code(self) -> (u32, u32) {
+        match self { Scope::WhatsOn => (0, 0), Scope::Guide => (1, 0), Scope::Browse(filter) => (2, filter.code()) }
+    }
+
+    /// Browse's filter, while Browse shows.
+    const fn filter(self) -> Option<Filter> {
+        match self { Scope::Browse(filter) => Some(filter), Scope::WhatsOn | Scope::Guide => None }
     }
 }
 
@@ -183,6 +238,12 @@ enum Mode {
     /// The Guide's board under the scope row ([`Scope::Guide`] with a lineup and a clock to lay it against), which
     /// holds its window ([`Window`]) and the page of rows showing.
     Guide(Board),
+    /// Browse's grid under the scope row and the filter ([`Scope::Browse`] with a lineup and a clock): the programmes the
+    /// filter shows, at least one ([`Mode::browse`] decides this variant from the set, so it never holds an empty grid).
+    Browse(Browse),
+    /// Browse's filter shows nothing: the empty read-out under the row, whose filter control is the one stop that can be
+    /// reached. The same [`Browse`] as the grid's, with no card.
+    BrowseNone(Browse),
 }
 
 impl Mode {
@@ -214,7 +275,23 @@ impl Mode {
             Mode::NowChannels => &[Sec::Now, Sec::Channels],
             Mode::ChannelsOnly => &[Sec::Channels],
             Mode::Guide(_) => &[Sec::Guide],
+            Mode::Browse(_) => &[Sec::Browse],
+            // the read-out is the status section's; the row above it is all there is to reach
+            Mode::BrowseNone(_) => &[],
         }
+    }
+
+    /// Browse's set while Browse shows, with a card or none.
+    fn browse_set(&self) -> Option<&Browse> {
+        match self {
+            Mode::Browse(set) | Mode::BrowseNone(set) => Some(set),
+            _ => None,
+        }
+    }
+
+    /// The mode of Browse's `set`: the grid when it holds a programme, else the empty read-out.
+    fn browse(set: Browse) -> Self {
+        if set.picks.is_empty() { Mode::BrowseNone(set) } else { Mode::Browse(set) }
     }
 
     fn has(&self, k: Sec) -> bool {
@@ -223,7 +300,7 @@ impl Mode {
 
     /// Whether the page is a status read-out (the working, empty and failed ones) rather than rows.
     fn reads_out(&self) -> bool {
-        matches!(self, Mode::Loading | Mode::Empty | Mode::Failed)
+        matches!(self, Mode::Loading | Mode::Empty | Mode::Failed | Mode::BrowseNone(_))
     }
 
     /// The first row: where the arrival is seated.
@@ -239,7 +316,7 @@ impl Mode {
 
 /// **Where a Guide cell's words come from**: the channel's airing now, or one of its later programmes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CellSrc { Now, Later(usize) }
+pub(crate) enum CellSrc { Now, Later(usize) }
 
 /// **Where the Guide's window stands**: on the live half hour (it follows the clock as the half hour rolls over) or held
 /// `Ahead` of it at the half hour the reader scrolled to. It is the one state a shift changes, and the window's start
@@ -353,6 +430,44 @@ impl Board {
     }
 }
 
+/// **What Browse shows**: the programmes the filter admits at the clock's instant ([`browse::shown`]), each with its element
+/// ([`Idents`]), the total the header's count is read against, the end of the local day the set was made for, and the first
+/// instant at which the set may change with no new data ([`browse::next_change`]): the page rebuilds it when the clock reaches it.
+#[derive(Debug, PartialEq)]
+struct Browse {
+    picks: Vec<Pick>,
+    /// The element of card `i`.
+    elems: Vec<u32>,
+    /// The card an element stands for: the inverse of `elems`.
+    index: HashMap<u32, usize>,
+    /// How many programmes are on air: the "of" of the narrowing filters' count.
+    on_now: usize,
+    day_end: i64,
+    until: i64,
+}
+
+impl Browse {
+    fn build(channels: &[Channel], filter: Filter, now: i64, day_end: i64, idents: &mut Idents) -> Self {
+        let picks = browse::shown(channels, filter, now, day_end);
+        let elems: Vec<u32> = picks.iter().map(|pick| idents.elem(&channels[pick.channel], pick.begins_at)).collect();
+        let index: HashMap<u32, usize> = elems.iter().enumerate().map(|(i, elem)| (*elem, i)).collect();
+        // a day that turned lets go of the programmes a page no longer shows or can reach
+        idents.turn_day(day_end, |elem| index.contains_key(&elem));
+        Self { picks, elems, index, on_now: browse::on_now(channels, now), day_end, until: browse::next_change(channels, now, day_end) }
+    }
+
+    /// Has the clock reached the instant the set may change at?
+    fn due(&self, now: i64) -> bool {
+        now >= self.until
+    }
+
+    /// The card of a programme of `channel`, in lineup order: its own (the one airing now first), else where it would stand
+    /// ([`browse::seat_for`]), as its element.
+    fn seat(&self, channel: usize, now: i64) -> Option<u32> {
+        self.elems.get(browse::seat_for(&self.picks, channel, now)?).copied()
+    }
+}
+
 /// What a Guide row's sticky cell and cells say: the board's [`time_grid::Content`] over the lineup.
 struct Faces<'a> {
     channels: &'a [Channel],
@@ -370,8 +485,8 @@ impl time_grid::Content for Faces<'_> {
     }
 }
 
-/// What a sync was made from: the store's revision, the scope, and the start of the window (only while the Guide
-/// shows: What's on does not rebuild every thirty minutes).
+/// What a sync was made from: the store's revision, the scope, and, while a clock-dependent page shows, its anchor: the
+/// Guide's window start or Browse's end of the local day. What's on has none, so it does not rebuild every thirty minutes.
 type SyncKey = (u32, Scope, Option<i64>);
 
 struct Page {
@@ -403,6 +518,14 @@ struct Page {
     header_pop: plx_ui::widgets::CtlPop<1>,
     handoff: plx_ui::scroll_chrome::Handoff,
     header_rows: SharedRow<HeaderRow>,
+    /// What the row carries over from the row it replaced ([`HeaderSwap`]): a filter picked, a count that moved, a control that
+    /// comes or goes dissolves instead of cutting. Begun from the rebuild itself ([`Page::header_row`], `SharedRow::get_replacing`),
+    /// as the Watchlist's is.
+    header_swap: std::cell::RefCell<plx_ui::page_header::HeaderSwap>,
+    /// The elements of Browse's cards ([`Idents`]).
+    idents: Idents,
+    /// The page's own ground: the page's backdrop and the colour the tucked chrome's top fade lays over it.
+    ground: PageGround,
 }
 
 impl Page {
@@ -416,8 +539,9 @@ impl Page {
 
     /// Follow the store, the scope and the clock's `instant`: rebuild what the page shows when what it was made from moved.
     /// `true` when it did (the board, if any, is a new one).
-    fn sync(&mut self, view: LiveTvView<'_>, instant: Option<i64>) -> bool {
+    fn sync(&mut self, view: LiveTvView<'_>, instant: Option<i64>, offset: Option<i32>) -> bool {
         let guide = self.scope == Scope::Guide;
+        let browse = self.scope.filter();
         // The Guide's window is held where the reader put it (it follows the clock until then); a frame with no clock
         // has none to lay it against.
         let window = match &mut self.mode {
@@ -428,9 +552,13 @@ impl Page {
             _ => Window::Live,
         };
         let start = instant.filter(|_| guide).map(|now| window.start(now));
-        let key = (view.revision(), self.scope, start);
-        // a held window the live one has caught up to has the same start and is another window
-        let settled = matches!(&self.mode, Mode::Guide(board) if board.window != window);
+        // Browse is made for the end of the local day, which a zone change moves; it has no window
+        let day = instant.filter(|_| browse.is_some()).map(|now| browse::day_end(now, offset));
+        let key = (view.revision(), self.scope, start.or(day));
+        // a held window the live one has caught up to has the same start and is another window; a Browse set whose
+        // next boundary the clock has passed (a programme began, or is ten minutes in, or fifteen from its end, or ended) is another set
+        let settled = matches!(&self.mode, Mode::Guide(board) if board.window != window)
+            || matches!((self.mode.browse_set(), instant), (Some(set), Some(now)) if set.due(now));
         if self.synced == Some(key) && !settled { return false; }
         self.synced = Some(key);
         self.epoch = self.epoch.wrapping_add(1);
@@ -451,6 +579,11 @@ impl Page {
             // the Guide without a clock is still loading: its window has nothing to start from
             LiveTvStatus::Ready if guide => match (start, instant) {
                 (Some(start), Some(now)) => Mode::Guide(Board::build(view.channels, window, start, now, page)),
+                _ => Mode::Loading,
+            },
+            // Browse without a clock is still loading: what is on now cannot be told
+            LiveTvStatus::Ready if browse.is_some() => match (browse, instant, day) {
+                (Some(filter), Some(now), Some(day_end)) => Mode::browse(Browse::build(view.channels, filter, now, day_end, &mut self.idents)),
                 _ => Mode::Loading,
             },
             LiveTvStatus::Ready => Mode::of(!self.recent.is_empty(), !self.airings.is_empty(), !self.rest.is_empty()),
@@ -486,9 +619,13 @@ impl Page {
     }
 
     /// How far ahead the store must read the guide for what shows: the window's end and a step more, so the next shift has
-    /// its programmes ([`LiveTvCmd::Reach`]); `0` when no board shows.
+    /// its programmes, or the end of the day under Browse's Later today ([`LiveTvCmd::Reach`]); `0` when neither shows.
     fn reach(&self) -> i64 {
-        self.board().map_or(0, |board| board.grid.axis().end() + WINDOW_STEP_SECONDS)
+        match (&self.scope, self.mode.browse_set()) {
+            // Later today reads to the end of the local day: the Guide's own re-read rule, asked for further
+            (Scope::Browse(Filter::LaterToday), Some(set)) => set.day_end,
+            _ => self.board().map_or(0, |board| board.grid.axis().end() + WINDOW_STEP_SECONDS),
+        }
     }
 
     /// **The page follows the focus**: show the page `elem`'s row is on. `true` when that turned the page.
@@ -509,11 +646,11 @@ impl Page {
     }
 
     /// One number that moves exactly when the words or the bar of any airing the page shows does
-    /// ([`AiringPhase::stamp`]), or, on the Guide, the minute (its now line and chip) and whether it has a zone: what the
+    /// ([`AiringPhase::stamp`]), or, on the Guide and Browse, the minute (the now line and chip, the minutes left and the bar) and whether it has a zone: what the
     /// page asks a frame for. `0` without a wall time (the Guide needs only the instant).
     fn clock_stamp(&self, view: LiveTvView<'_>, instant: Option<i64>, wall: Option<Wall>) -> u64 {
         // The Guide's now line and chip move with the minute, and its clock words come with the zone
-        if let (Mode::Guide(_), Some(now)) = (&self.mode, instant) {
+        if let (Mode::Guide(_) | Mode::Browse(_), Some(now)) = (&self.mode, instant) {
             return now.div_euclid(60) as u64 | u64::from(wall.is_some()) << 62 | 1 << 63;
         }
         let Some(wall) = wall else { return 0 };
@@ -527,7 +664,26 @@ impl Page {
     /// row's is shorter than a poster row's, so the chrome tucks sooner). `0` with no row, which the handoff
     /// floors.
     fn first_row_pitch(&self) -> f32 {
-        self.mode.head().and_then(Sec::style).map_or(0.0, RowStyle::pitch_fixed)
+        match self.mode.head() {
+            Some(Sec::Browse) => browse_spec().pitch(),
+            head => head.and_then(Sec::style).map_or(0.0, RowStyle::pitch_fixed),
+        }
+    }
+
+    /// How many stops the scope row has: the scopes, and Browse's filter control after them while it shows.
+    fn head_stops(&self) -> usize {
+        Scope::ALL.len() + usize::from(self.browsing())
+    }
+
+    /// The `n`-th stop of the scope row, left to right.
+    fn head_elem(&self, n: usize) -> Option<u32> {
+        Scope::ALL.get(n).map(|scope| scope.elem()).or_else(|| (n == Scope::ALL.len() && self.browsing()).then_some(FILTER_ELEM))
+    }
+
+    /// Is Browse showing? Its scope row carries the filter control as its last stop. The row rides the page here as on every
+    /// page (the Library's: it scrolls away with the grid and the top chrome tucks through the one `Handoff`).
+    fn browsing(&self) -> bool {
+        self.mode.browse_set().is_some()
     }
 
     /// **The page's column**: the scope row, then the rows the mode shows. The page arrives in its content; while the
@@ -543,24 +699,59 @@ impl Page {
         }
     }
 
+    /// **Browse's header read-out**, "3 of 16": while the filter narrows what is on now ([`browse::count`]), in the Library's own
+    /// words (`library_header.filtered_of`) and ink. Read from the scope's filter and the set made for it: the two cannot
+    /// differ, for a filter changes only through [`LiveTvScreen::pick_filter`], which syncs the set at once.
+    fn readout(&self) -> Option<String> {
+        let (filter, set) = (self.scope.filter()?, self.mode.browse_set()?);
+        let (shown, total) = browse::count(filter, set.picks.len(), set.on_now)?;
+        let locale = plx_os::i18n::current();
+        Some(plx_os::i18n::msg::library_header_filtered_of(&locale.number(shown as i64), &locale.number(total as i64)))
+    }
+
     fn header_row(&self, measure: &dyn plx_machine::machine::Measure) -> std::rc::Rc<HeaderRow> {
-        // one row per locale and scope: the chosen scope wears the selected plate
-        let key = (std::ptr::from_ref(plx_os::i18n::current()) as usize as u64).wrapping_mul(2) + u64::from(self.scope == Scope::Guide);
-        self.header_rows.get(key, || {
+        use std::hash::{Hash, Hasher};
+        let readout = self.readout();
+        // one row per locale, scope (and filter), whether the filter control stands on it and its read-out: the chosen scope wears the selected plate
+        let key = {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            (std::ptr::from_ref(plx_os::i18n::current()) as usize, self.scope.code(), self.browsing(), &readout).hash(&mut hash);
+            hash.finish()
+        };
+        self.header_rows.get_replacing(key, || {
             use plx_os::i18n::msg;
-            let item = |scope: Scope, label: &str| HeaderItem { label: label.to_owned(), selected_plate: self.scope == scope, focusable: true, ..Default::default() };
-            let left = vec![item(Scope::WhatsOn, msg::browse_livetv_whats_on()), item(Scope::Guide, msg::browse_livetv_guide())];
-            let page = PageHeader::new(PageHeaderSpec { left, ..Default::default() }, &[], measure);
+            let item = |scope: Scope, label: &str| HeaderItem { label: label.to_owned(), selected_plate: self.scope.same_page(scope), focusable: true, ..Default::default() };
+            let left = vec![
+                item(Scope::WhatsOn, msg::browse_livetv_whats_on()),
+                item(Scope::Guide, msg::browse_livetv_guide()),
+                item(Scope::Browse(Filter::OnNow), msg::browse_livetv_browse()),
+            ];
+            // Browse's filter is the row's last stop, drawn as the Library's sort control, with the count before it
+            let mut right = Vec::new();
+            if let Some(filter) = self.scope.filter().filter(|_| self.browsing()) {
+                if let Some(readout) = readout {
+                    right.push(HeaderItem { label: readout, readout: true, ..Default::default() });
+                }
+                right.push(HeaderItem { a11y: Some("filter"), ..HeaderItem::sort_control(msg::browse_library_filter(), filter_label(filter)) });
+            }
+            let page = PageHeader::new(PageHeaderSpec { left, right, ..Default::default() }, &[], measure);
             let layout = page.layout(SCR_W, measure);
-            // the n-th laid-out left item is the n-th scope
+            // the n-th laid-out left item is the n-th scope; the one focusable right item is the filter
             let stops = layout.items.iter().enumerate()
                 .filter_map(|(index, rect)| match rect.slot {
                     plx_ui::page_header::Slot::Left(n) => Scope::ALL.get(n).map(|scope| (scope.elem(), index)),
+                    plx_ui::page_header::Slot::Right(_) if rect.focusable => Some((FILTER_ELEM, index)),
                     _ => None,
                 })
                 .collect();
             HeaderRow::new(page, layout, stops)
-        })
+        }, |old, new| self.header_swap.borrow_mut().begin(old, new))
+    }
+
+    /// The filter control as the focused pill draws it, where the menu's glass grows out of and drains back into (in the
+    /// row's document place: the caller shifts it by the page's scroll).
+    fn filter_pill(&self, measure: &dyn plx_machine::machine::Measure) -> Option<Rect> {
+        self.header_row(measure).plate(FILTER_ELEM).map(plx_ui::widgets::focus_pill)
     }
 
     fn status_overlay(&self, tick: u32) -> StatusOverlay<'static> {
@@ -568,6 +759,7 @@ impl Page {
             // placeholder-exempt: built here, counted by StatusOverlay's Working draw.
             Mode::Loading => StatusOverlay::new(STATUS_FRAME, plx_os::i18n::msg::browse_livetv_loading_c(), StatusKind::Working).phase(tick),
             Mode::Empty => StatusOverlay::new(STATUS_FRAME, plx_os::i18n::msg::browse_livetv_empty_c(), StatusKind::Empty),
+            Mode::BrowseNone(_) => StatusOverlay::new(STATUS_FRAME, plx_os::i18n::msg::browse_livetv_browse_empty_c(), StatusKind::Empty),
             Mode::Failed => StatusOverlay::new(Rect::FULL, plx_os::i18n::msg::browse_home_failed_c(), StatusKind::Failed)
                 .page(plx_ui::icons::Icon::ServerBadgeMinus).action(plx_os::i18n::msg::browse_action_retry_c()),
             // rows are showing: nothing to read out (never drawn)
@@ -663,20 +855,106 @@ impl<H: LiveTvLike> CardSource<H> for Cards<'_> {
             Row::Plates => captions::live_label(msg::browse_livetv_recent_on_now(&channel.now),
                 self.wall.and_then(|w| fmt::airing_line(Airing::Tile, channel.begins_at, channel.ends_at, w))),
             // The programme over its channel, number first ("Ch 2009 · Station · 42m left").
-            Row::Now => {
-                let identity = if channel.vcn.is_empty() { channel.name.clone() } else { msg::browse_livetv_channel(&channel.name, &channel.vcn) };
-                let line = match self.wall.and_then(|w| fmt::left(channel.begins_at, channel.ends_at, w)) {
-                    Some(left) => msg::core_airing_pair(&identity, &left),
-                    None => identity,
-                };
-                captions::live_label(channel.now.clone(), Some(line))
-            }
+            Row::Now => airing_caption(channel.now.clone(), channel, self.wall.and_then(|w| fmt::left(channel.begins_at, channel.ends_at, w))),
         }
     }
 
     fn subject(&self, i: usize) -> Option<std::borrow::Cow<'_, str>> {
         channel_subject(self.view, self.channel(i)?.0).map(Into::into)
     }
+}
+
+/// **Browse's cards**: one per programme the filter shows ([`Browse::picks`]), each a poster of the programme with the DS amber bar of
+/// how much has aired (a programme not begun has none), and, focused, the label: the programme, then
+/// "Ch 2000 · Pluto TV Spotlight · 2h 22m left" (a later programme says when it begins in place of the time left). The label is
+/// placed by the grid, under the card, through `card_row::anchor_label` as On now's is.
+struct BrowseCards<'a> { view: LiveTvView<'a>, set: &'a Browse, wall: Option<Wall> }
+impl BrowseCards<'_> {
+    fn channel(&self, i: usize) -> Option<(&Channel, Pick)> {
+        let pick = *self.set.picks.get(i)?;
+        Some((self.view.channels.get(pick.channel)?, pick))
+    }
+    /// The programme's words and art: its title and its thumb.
+    fn programme<'c>(channel: &'c Channel, pick: Pick) -> (&'c str, &'c str) {
+        match pick.src {
+            CellSrc::Now => (&channel.now, &channel.now_thumb),
+            CellSrc::Later(n) => channel.later.get(n).map_or(("", ""), |later| (later.title.as_str(), later.thumb.as_str())),
+        }
+    }
+    /// The amber bar: how much has aired, while the guide knows both ends and the programme is on.
+    fn resume(&self, pick: Pick) -> Option<Resume> {
+        let w = self.wall?;
+        if !matches!(browse::stand(pick.begins_at, pick.ends_at, w.unix_s()), browse::Stand::OnAir { left: Some(_), .. }) {
+            return None;
+        }
+        Some(Resume { frac: fmt::frac(pick.begins_at, pick.ends_at, w)?, left_ms: (pick.ends_at - w.unix_s()).max(0) * 1_000 })
+    }
+}
+impl<H: LiveTvLike> CardSource<H> for BrowseCards<'_> {
+    fn len(&self) -> usize { self.set.picks.len() }
+    fn elem(&self, i: usize) -> u32 { self.set.elems.get(i).copied().unwrap_or(BROWSE_FIRST_ELEM) }
+    fn index_of(&self, e: &u32) -> Option<usize> { self.set.index.get(e).copied() }
+    fn art(&self, i: usize) -> Art<'_> {
+        let Some((channel, pick)) = self.channel(i) else { return Art::Poster(None) };
+        Art::Poster(self.view.tiles.get(pick.channel).map(|tile| {
+            let (title, thumb) = Self::programme(channel, pick);
+            let mut facts = tile_facts::of(tile);
+            // a programme's own identity: its address stands for it as the channel's stood for the airing on now
+            facts.owner = match pick.src {
+                CellSrc::Now => channel as *const _ as usize,
+                CellSrc::Later(n) => &channel.later[n] as *const _ as usize,
+            };
+            facts.title = title;
+            facts.show_title = "";
+            facts.thumb = thumb;
+            facts.still = "";
+            facts.art = "";
+            facts.resume = self.resume(pick);
+            facts
+        }))
+    }
+    fn progress(&self, i: usize) -> Option<f32> {
+        self.resume(self.channel(i)?.1).map(|r| r.frac)
+    }
+    fn label(&self, i: usize) -> TileLabel {
+        let Some((channel, pick)) = self.channel(i) else { return TileLabel::default() };
+        // the time left while on, when it begins before it has: with no zone offset the identity says it alone
+        let when = self.wall.and_then(|w| match browse::stand(pick.begins_at, pick.ends_at, w.unix_s()) {
+            browse::Stand::OnAir { left: Some(_), .. } => fmt::left(pick.begins_at, pick.ends_at, w),
+            browse::Stand::Upcoming => fmt::clock_face(pick.begins_at, i64::from(w.utc_offset_s)),
+            _ => None,
+        });
+        airing_caption(Self::programme(channel, pick).0.to_owned(), channel, when)
+    }
+    fn subject(&self, i: usize) -> Option<std::borrow::Cow<'_, str>> {
+        channel_subject(self.view, self.channel(i)?.1.channel).map(Into::into)
+    }
+}
+
+/// **A programme's caption wherever a poster shows one** (What's on's On now and Browse): the programme over its channel's
+/// identity, number first, then when ("Ch 2009 · Station · 42m left"), through the one live caption policy
+/// ([`captions::live_label`]). A line longer than its band is the shared caption's to hold: it glides on the shared marquee
+/// from its head, as every caption line does.
+fn airing_caption(programme: String, channel: &Channel, when: Option<String>) -> TileLabel {
+    use plx_os::i18n::msg;
+    let identity = if channel.vcn.is_empty() { channel.name.clone() } else { msg::browse_livetv_channel(&channel.name, &channel.vcn) };
+    let line = match when {
+        Some(when) => msg::core_airing_pair(&identity, &when),
+        None => identity,
+    };
+    captions::live_label(programme, Some(line))
+}
+
+/// What a card section reads its cards from: a shelf's channels and programmes, or Browse's programmes.
+enum Source<'a> { Shelf(Cards<'a>), Browse(BrowseCards<'a>) }
+impl<H: LiveTvLike> CardSource<H> for Source<'_> {
+    fn len(&self) -> usize { match self { Source::Shelf(c) => CardSource::<H>::len(c), Source::Browse(c) => CardSource::<H>::len(c) } }
+    fn elem(&self, i: usize) -> u32 { match self { Source::Shelf(c) => CardSource::<H>::elem(c, i), Source::Browse(c) => CardSource::<H>::elem(c, i) } }
+    fn index_of(&self, e: &u32) -> Option<usize> { match self { Source::Shelf(c) => CardSource::<H>::index_of(c, e), Source::Browse(c) => CardSource::<H>::index_of(c, e) } }
+    fn art(&self, i: usize) -> Art<'_> { match self { Source::Shelf(c) => CardSource::<H>::art(c, i), Source::Browse(c) => CardSource::<H>::art(c, i) } }
+    fn progress(&self, i: usize) -> Option<f32> { match self { Source::Shelf(c) => CardSource::<H>::progress(c, i), Source::Browse(c) => CardSource::<H>::progress(c, i) } }
+    fn label(&self, i: usize) -> TileLabel { match self { Source::Shelf(c) => CardSource::<H>::label(c, i), Source::Browse(c) => CardSource::<H>::label(c, i) } }
+    fn subject(&self, i: usize) -> Option<std::borrow::Cow<'_, str>> { match self { Source::Shelf(c) => CardSource::<H>::subject(c, i), Source::Browse(c) => CardSource::<H>::subject(c, i) } }
 }
 
 /// **The accessibility subject of lineup channel `index`**, which every card and Guide cell of it acts on. Two servers
@@ -694,10 +972,18 @@ fn channel_subject(view: LiveTvView<'_>, index: usize) -> Option<String> {
 
 impl<H: LiveTvLike> StackPage<H> for Page {
     type Key = Sec;
-    type Cards<'a> = Cards<'a>;
+    type Cards<'a> = Source<'a>;
     fn revision(&self, cx: &Cx<'_, H>) -> u64 { u64::from(H::livetv(cx).revision()) | u64::from(self.epoch) << 32 }
     /// A focus whose cell a refresh took away stays on its channel: the last cell of its row.
-    fn recover(&self, _cx: &Cx<'_, H>, want: &u32) -> Option<u32> {
+    fn recover(&self, cx: &Cx<'_, H>, want: &u32) -> Option<u32> {
+        // A Browse card that left the set (its programme ended or began, or the filter changed) is followed to its channel: that
+        // channel's card in the set, else the card where the channel would stand ([`browse::seat_for`]). Nothing shown leaves it to the
+        // fallback, which seats the filter control.
+        if let Some(set) = self.mode.browse_set() {
+            let key = self.idents.programme(*want)?;
+            let index = H::livetv(cx).channels.iter().position(|c| c.sid == key.sid && c.dvr == key.dvr && c.channel == key.channel)?;
+            return set.seat(index, H::instant(cx)?);
+        }
         let board = self.board()?;
         let row = board.grid.row_of(*want)?;
         board.grid.elem(Cell { row, index: board.grid.cells(row).checked_sub(1)? })
@@ -707,9 +993,20 @@ impl<H: LiveTvLike> StackPage<H> for Page {
         let guide = matches!(self.mode, Mode::Guide(_));
         // The scope row is on every page and is focusable on every one; the Guide's ruler follows it directly,
         // What's on's first shelf under the air its heading keeps.
-        let head = if guide { time_grid::RULER_Y } else { plx_ui::page_header::GRID_TOP + heading_ink_drop(cx.measure) };
-        out.push(SectionSpec::new(Sec::Head, Kind::Custom { height: head, focusable: true }, Sec::Head.group()).ranked(1).named("header"));
+        let head = if guide {
+            time_grid::RULER_Y
+        } else if self.browsing() {
+            // Browse's grid begins at the grid's top, the row above it
+            plx_ui::page_header::GRID_TOP
+        } else {
+            plx_ui::page_header::GRID_TOP + heading_ink_drop(cx.measure)
+        };
+        let head = SectionSpec::new(Sec::Head, Kind::Custom { height: head, focusable: true }, Sec::Head.group()).ranked(1).named("header");
+        out.push(head);
         out.push(SectionSpec::new(Sec::Guide, Kind::Custom { height: if guide { GUIDE_H } else { 0.0 }, focusable: guide }, Sec::Guide.group()).named("guide"));
+        // Browse's grid: the programmes the filter shows, under the row, a row at a time; the first row of the content when it shows
+        let browse = SectionSpec::new(Sec::Browse, Kind::Grid { spec: browse_spec() }, Sec::Browse.group()).named("browse");
+        out.push(if self.mode.head() == Some(Sec::Browse) { browse.seated(plx_ui::page_regions::CONTENT_HEAD_SEAT) } else { browse });
         // Each row is its own section, with its own style: a shelf keeps its style from the body it was made
         // with, so a key never stands for two row styles. The head of the content is seated by its own rule
         // (`CONTENT_HEAD_SEAT`): the first row there is.
@@ -733,34 +1030,41 @@ impl<H: LiveTvLike> StackPage<H> for Page {
     /// The air under a shelf is the room of the heading of the shelf below, which that shelf's own reveal brings
     /// on: focusing a shelf scrolls for its tiles and open label band only.
     fn reveal_foot(&self, _k: Sec) -> bool { false }
-    fn fallback(&self, _cx: &Cx<'_, H>, out: &mut Vec<Sec>) { out.extend([Sec::Guide, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status, Sec::Head]); }
-    fn cards<'a>(&'a self, cx: &'a Cx<'_, H>, k: Sec) -> Option<Cards<'a>> {
+    fn fallback(&self, _cx: &Cx<'_, H>, out: &mut Vec<Sec>) { out.extend([Sec::Guide, Sec::Browse, Sec::Recent, Sec::Now, Sec::Channels, Sec::Status, Sec::Head]); }
+    fn cards<'a>(&'a self, cx: &'a Cx<'_, H>, k: Sec) -> Option<Source<'a>> {
+        if k == Sec::Browse {
+            return match &self.mode {
+                Mode::Browse(set) => Some(Source::Browse(BrowseCards { view: H::livetv(cx), set, wall: H::wall(cx) })),
+                _ => None,
+            };
+        }
         let (order, row) = match k { Sec::Recent => (&self.recent, Row::Plates), Sec::Now => (&self.airings, Row::Now), Sec::Channels => (&self.rest, Row::Plates), _ => return None };
-        self.mode.has(k).then(|| Cards { view: H::livetv(cx), order, row, wall: H::wall(cx) })
+        self.mode.has(k).then(|| Source::Shelf(Cards { view: H::livetv(cx), order, row, wall: H::wall(cx) }))
     }
     fn card_has_menu(&self, _cx: &Cx<'_, H>, _k: Sec, _elem: &u32) -> bool { false }
     fn caption_policy(&self, _cx: &Cx<'_, H>, k: Sec) -> Option<plx_ui::caption_policy::CaptionPolicy> {
-        matches!(k, Sec::Recent | Sec::Now | Sec::Channels).then(captions::live_tv_policy)
+        matches!(k, Sec::Recent | Sec::Now | Sec::Channels | Sec::Browse).then(captions::live_tv_policy)
     }
     fn elem_of(&self, k: Sec) -> Option<u32> { (k == Sec::Status).then_some(RETRY_ELEM) }
-    /// The scope row has its two stops, the Guide its board's cells, the status read-out its retry.
+    /// The scope row has its three stops, and Browse's filter control after them; the Guide its board's cells, the status
+    /// read-out its retry.
     fn plain_len(&self, k: Sec) -> usize {
         match k {
-            Sec::Head => Scope::ALL.len(),
+            Sec::Head => self.head_stops(),
             Sec::Guide => self.board().map_or(0, |board| board.grid.len()),
             _ => usize::from(k == Sec::Status),
         }
     }
     fn plain_elem(&self, k: Sec, n: usize) -> Option<u32> {
         match k {
-            Sec::Head => Scope::ALL.get(n).map(|scope| scope.elem()),
+            Sec::Head => self.head_elem(n),
             Sec::Guide => self.board().and_then(|board| board.grid.elem(board.grid.nth(n)?)),
             _ => (k == Sec::Status && n == 0).then_some(RETRY_ELEM),
         }
     }
     fn plain_name(&self, k: Sec, i: usize) -> Option<&'static str> {
         match k {
-            Sec::Head => Scope::ALL.get(i).map(|scope| scope.name()),
+            Sec::Head => Scope::ALL.get(i).map(|scope| scope.name()).or_else(|| (i == Scope::ALL.len() && self.browsing()).then_some("filter")),
             Sec::Status => (i == 0).then_some("retry"),
             _ => None,
         }
@@ -785,7 +1089,7 @@ impl<H: LiveTvLike> StackPage<H> for Page {
         match k {
             Sec::Head => match dir {
                 Dir::Left => at.checked_sub(1),
-                Dir::Right => Some(at + 1).filter(|next| *next < Scope::ALL.len()),
+                Dir::Right => Some(at + 1).filter(|next| *next < self.head_stops()),
                 Dir::Up | Dir::Down => None,
             },
             Sec::Guide => {
@@ -800,7 +1104,8 @@ impl<H: LiveTvLike> StackPage<H> for Page {
     fn element_rect(&self, cx: &Cx<'_, H>, k: Sec, n: usize, section: Rect) -> Rect {
         match k {
             Sec::Head => {
-                let plate = Scope::ALL.get(n).and_then(|scope| self.header_row(cx.measure).plate(scope.elem())).unwrap_or_default();
+                let plate = self.head_elem(n).and_then(|elem| self.header_row(cx.measure).plate(elem)).unwrap_or_default();
+                // the section's rect is where it is drawn: its place in the document, scrolled with the page
                 Rect::new(plate.x, plate.y + section.y, plate.w, plate.h)
             }
             Sec::Guide => {
@@ -813,6 +1118,8 @@ impl<H: LiveTvLike> StackPage<H> for Page {
     /// The scope row seats the scope on view; the Guide's board seats the airing on now of the first row showing.
     fn seat_override(&self, cx: &Cx<'_, H>, k: Sec, _from: plx_ui::screen::Placed) -> Option<u32> {
         match k {
+            // a filter that shows nothing leaves the filter control the one stop worth seating
+            Sec::Head if matches!(self.mode, Mode::BrowseNone(_)) => Some(FILTER_ELEM),
             Sec::Head => Some(self.scope.elem()),
             Sec::Guide => {
                 let board = self.board()?;
@@ -861,8 +1168,11 @@ impl<H: LiveTvLike> StackPage<H> for Page {
             let offset = H::wall(f.cx).map(|wall| wall.utc_offset_s);
             board.grid.draw(p, f.measure, now, offset, words, &Faces { channels, board }, focus);
         } else if k == Sec::Head {
+            // The row rides the page and leaves with the chrome and returns with it (`Handoff::head_alpha`), on Browse as on every
+            // page. The control a menu grew out of is the lift's to draw ([`LiveTvScreen::redraw_opener`]), not the row's.
             let p = f.painter.alpha(f.page_alpha).alpha(self.handoff.head_alpha(r.y));
-            self.header_row(f.measure).draw(p, r.y, &self.header_capsules, self.header_pop.scale_with(0, f.press), None);
+            let lifted = f.lifted.filter(|key| key.entry == self.entry).map(|key| key.elem);
+            self.header_row(f.measure).draw_with(p, -r.y, &self.header_capsules, self.header_pop.scale_with(0, f.press), lifted, &self.header_swap.borrow());
         } else if k == Sec::Status && self.mode.reads_out() {
             self.status_overlay(f.cx.tick.ms).focused(f.focus.current.is_some_and(|k| k.entry == self.entry && k.elem == RETRY_ELEM))
                 .draw_measured(&Env::inert(), f.painter.alpha(f.page_alpha), f.measure);
@@ -873,7 +1183,6 @@ impl<H: LiveTvLike> StackPage<H> for Page {
 pub struct LiveTvScreen {
     page: Page,
     stack: Stack<Sec>,
-    ground: PageGround,
     ground_seeded: bool,
     /// The page's own arrival seat while nobody has chosen another (the Watchlist's rule): `None`
     /// once the reader acts or the page is restored.
@@ -903,7 +1212,7 @@ impl LiveTvScreen {
     /// The heartbeat word, byte-identical to the route word.
     pub const WORD: &'static str = "livetv";
 
-    pub const SHAPE: &'static str = "LiveTvScreen{entry:u32,status:u32,scope:u32,channels:[{sid:u32,rk:str}],airings:[u32],recent:[u32],guide:Option<(page:u32,window:u64,ahead:bool)>,stack:Stack{scroll:{pos:f32,vel:f32},target:f32,sections:[Shelf{row,pop},Shelf{row,pop},Shelf{row,pop}]},handoff:Handoff{tucked:bool,chrome:f32,capsule:f32},left:Option<(u32,str,str)>}";
+    pub const SHAPE: &'static str = "LiveTvScreen{entry:u32,status:u32,scope:u32,filter:u32,channels:[{sid:u32,rk:str}],airings:[u32],recent:[u32],guide:Option<(page:u32,window:u64,ahead:bool)>,stack:Stack{scroll:{pos:f32,vel:f32},target:f32,sections:[Shelf{row,pop},Shelf{row,pop},Shelf{row,pop},Grid{bands,pop}]},handoff:Handoff{tucked:bool,chrome:f32,capsule:f32},left:Option<(u32,str,str)>}";
 
     pub fn new(entry: EntryId) -> Self {
         Self {
@@ -923,9 +1232,11 @@ impl LiveTvScreen {
                 header_pop: plx_ui::widgets::CtlPop::new(),
                 handoff: plx_ui::scroll_chrome::Handoff::new(),
                 header_rows: SharedRow::new(),
+                header_swap: std::cell::RefCell::new(plx_ui::page_header::HeaderSwap::new()),
+                idents: Idents::default(),
+                ground: PageGround::new(),
             },
             stack: Stack::new(entry).home_when_unfocused(true),
-            ground: PageGround::new(),
             ground_seeded: false,
             seat: None,
             own_enters: 0,
@@ -939,6 +1250,12 @@ impl LiveTvScreen {
     /// elements, On now's poster on the odd ones); a Guide cell names its row's channel, and plays it only where it
     /// tunes ([`Board::tunes`]).
     fn press<H: LiveTvLike>(&self, elem: u32, cx: &Cx<'_, H>) -> Option<ContentReq> {
+        // a Browse card tunes the programme on air and nothing else: a later programme has nothing to tune
+        if let Some(set) = self.page.mode.browse_set() {
+            let pick = set.picks.get(*set.index.get(&elem)?)?;
+            let airing = matches!(browse::stand(pick.begins_at, pick.ends_at, H::instant(cx)?), browse::Stand::OnAir { .. });
+            return H::livetv(cx).channels.get(pick.channel).filter(|_| airing).map(Self::play);
+        }
         if let Some((board, cell)) = self.page.board().and_then(|board| Some((board, board.grid.locate(elem)?))) {
             let tunes = board.tunes(cell, H::instant(cx)?);
             return H::livetv(cx).channels.get(cell.row).filter(|_| tunes).map(Self::play);
@@ -961,11 +1278,23 @@ impl LiveTvScreen {
     /// row stays under focus, the page under it is rebuilt), a Guide cell tunes its channel where it tunes. `false`
     /// for any other element.
     fn commit<H: LiveTvLike>(&mut self, elem: u32, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> bool {
+        if elem == FILTER_ELEM && self.page.browsing() {
+            if let Some(filter) = self.page.scope.filter() {
+                if let Some(pill) = self.page.filter_pill(cx.measure) {
+                    let anchor = [pill.x, pill.y - self.stack.scroll(), pill.w, pill.h].map(f32::to_bits);
+                    let panel = ContentPanel::LiveTvFilter { chosen: filter, anchor, opener: (self.page.entry, FILTER_ELEM) };
+                    fx.push(Fx::App(AppFx::Content(ContentReq::Panel(panel))));
+                }
+                fx.invalidate(Provenance::Input);
+            }
+            return true;
+        }
         if let Some(scope) = Scope::of_elem(elem) {
-            if self.page.scope != scope {
+            // a press on the Browse stop while Browse shows keeps the filter in force
+            if !self.page.scope.same_page(scope) {
                 self.page.scope = scope;
                 // a page chosen opens on the live window (the board it leaves, if any, is dropped with its window)
-                self.page.sync(H::livetv(cx), H::instant(cx));
+                self.resync(cx);
                 self.reach(fx);
                 fx.invalidate(Provenance::Input);
             }
@@ -979,6 +1308,23 @@ impl LiveTvScreen {
             fx.invalidate(Provenance::Input);
         }
         true
+    }
+
+    /// Follow the store, the clock and the zone: [`Page::sync`] with what the frame holds.
+    fn resync<H: LiveTvLike>(&mut self, cx: &Cx<'_, H>) -> bool {
+        self.page.sync(H::livetv(cx), H::instant(cx), H::wall(cx).map(|w| w.utc_offset_s))
+    }
+
+    /// **The filter menu chose** ([`AppMsg::LiveTvFilterPicked`]): the one place Browse's filter changes. The set is rebuilt at once
+    /// for it, the focus stays on the control (the menu hands it back there), and the store is told what the new filter reads
+    /// ahead to ([`Self::reach`]). A pick while Browse is not showing (the page was left under the menu) is spent.
+    fn pick_filter<H: LiveTvLike>(&mut self, filter: Filter, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
+        let Scope::Browse(current) = self.page.scope else { return };
+        if current == filter { return; }
+        self.page.scope = Scope::Browse(filter);
+        self.resync(cx);
+        self.reach(fx);
+        fx.invalidate(Provenance::Input);
     }
 
     /// **CH+ and CH- on the Guide**: the page `step` pages over (+1 the next six channels), the focus on the cell of the
@@ -1046,13 +1392,14 @@ impl LiveTvScreen {
 
     fn tick<H: LiveTvLike>(&mut self, t: Tick, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
         self.page.header_row(cx.measure).step(self.page.entry, cx.focus.current, &mut self.page.header_capsules, &mut self.page.header_pop, t.dt());
+        self.page.header_swap.get_mut().step(t.dt());
         self.page.handoff.step(t.dt(), self.stack.scroll(), self.stack.target(), self.page.first_row_pitch(), false);
         // The page's own haze, fixed: it does not follow the focused tile.
         let haze = AmbientWash::target(theme::WASH_LIVE_TV, [theme::WASH_LIVE_TV_W; 4]);
         if self.ground_seeded {
-            self.ground.key_target(haze, t.dt());
+            self.page.ground.key_target(haze, t.dt());
         } else {
-            self.ground.jump_target(haze);
+            self.page.ground.jump_target(haze);
             self.ground_seeded = true;
         }
         // A programme's words and bar move with the minute, with no event to say so.
@@ -1087,11 +1434,11 @@ impl LiveTvScreen {
         }
     }
 
-    /// **The card of the channel the player left**: its Recent tile (a tuned channel joins Recent at admission), else the
+    /// **The card of the channel the player left**: on Browse its programme's card; else its Recent tile (a tuned channel joins Recent at admission), else the
     /// row it belongs to, On now's poster or the Channels shelf's tile; on the Guide its row's cell. `None` for a
     /// channel the lineup no longer lists.
     fn left_elem<H: LiveTvLike>(&mut self, left: &(plx_plex::plex::ServerId, String, String), cx: &Cx<'_, H>) -> Option<u32> {
-        self.page.sync(H::livetv(cx), H::instant(cx));
+        self.resync(cx);
         let index = H::livetv(cx).channels.iter().position(|c| c.sid == left.0 && c.dvr == left.1 && c.channel == left.2)?;
         // On the Guide the channel's own row: the cell of what was airing (the one the reader pressed), else its
         // first. That row's page is the one showing when focus lands.
@@ -1101,6 +1448,10 @@ impl LiveTvScreen {
             let elem = board.grid.elem(at)?;
             self.page.follow(elem);
             return Some(elem);
+        }
+        // On Browse the channel's programme: the one on air, else where it would stand ([`Browse::seat`])
+        if let Some(set) = self.page.mode.browse_set() {
+            return set.seat(index, H::instant(cx)?);
         }
         let base = FIRST_CARD_ELEM + index as u32 * 2;
         if self.page.recent.contains(&index) || self.page.rest.contains(&index) {
@@ -1173,13 +1524,20 @@ impl LiveTvScreen {
         self.stack.view(&self.page)
     }
 
+    /// **The filter control, lit above its menu's scrim** (the opener lift): painted as the focused control at its place on the row (which
+    /// rides the page), at the morph's alpha, since the row's pass leaves it out while the menu is up.
+    fn redraw_opener<H: LiveTvLike>(&self, f: &mut DrawFrame<'_, '_, H>) {
+        let p = f.painter.alpha(f.page_alpha);
+        self.page.header_row(f.measure).draw_opener_with(p, self.stack.scroll(), self.page.header_pop.scale_with(0, f.press), FILTER_ELEM, &self.page.header_swap.borrow());
+    }
+
     /// The page's top edge once the chrome has tucked away (the Watchlist's).
     fn draw_chrome<H: LiveTvLike>(&self, f: &mut DrawFrame<'_, '_, H>) {
         let tuck = self.page.handoff.tuck();
         if tuck <= 0.0 {
             return;
         }
-        let ground = self.ground.sample(Rect::FULL, SCR_W * 0.5, 0.0);
+        let ground = self.page.ground.sample(Rect::FULL, SCR_W * 0.5, 0.0);
         plx_ui::scroll_capsule::draw_top_fade(f.painter.alpha(f.page_alpha), SCR_W, ground, tuck, None);
     }
 }
@@ -1190,8 +1548,9 @@ impl LogicalState for LiveTvScreen {
     fn write(&self, c: &mut Canon) {
         c.u32(self.page.entry.0);
         // the store's status as the mode reads it: any row is `Ready` (1); a `Ready` store with no channel is the empty read-out (2)
-        c.u32(match self.page.mode { Mode::Loading => 0, Mode::Empty => 2, Mode::Failed => 3, _ => 1 });
-        c.u32(self.page.scope.code());
+        c.u32(match self.page.mode { Mode::Loading => 0, Mode::Empty => 2, Mode::Failed => 3, Mode::BrowseNone(_) => 4, _ => 1 });
+        let (page, filter) = self.page.scope.code();
+        c.u32(page).u32(filter);
         c.seq(self.page.channels.len());
         for (sid, rk) in &self.page.channels { c.u32(u32::from(sid.raw())).str(rk); }
         c.seq(self.page.airings.len());
@@ -1218,10 +1577,10 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
         let held = self.held(cx);
         let rebuilt = match ev {
-            ScreenEvent::Tick(_) | ScreenEvent::Enter(Enter::Fresh { .. }) => self.page.sync(H::livetv(cx), H::instant(cx)),
+            ScreenEvent::Tick(_) | ScreenEvent::Enter(Enter::Fresh { .. }) => self.resync(cx),
             ScreenEvent::StoreChanged(ord, _) if *ord == StoreId::LiveTv.ord() => {
                 self.page.synced = None;
-                self.page.sync(H::livetv(cx), H::instant(cx))
+                self.resync(cx)
             }
             // the board's page follows the focus, before the stack lays out for it
             ScreenEvent::FocusMoved { to, .. } if to.entry == self.page.entry => {
@@ -1286,6 +1645,10 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
                     }
                 }
                 fx.invalidate(Provenance::Nav);
+                Handled::Yes
+            }
+            ScreenEvent::App(AppMsg::LiveTvFilterPicked(filter)) => {
+                self.pick_filter(*filter, cx, fx);
                 Handled::Yes
             }
             ScreenEvent::App(AppMsg::LiveTvSeat { sid, dvr, channel }) => {
@@ -1364,10 +1727,13 @@ impl<H: LiveTvLike> Machine<H> for LiveTvScreen {
 
 impl<H: LiveTvLike> Screen<H> for LiveTvScreen {
     fn focused_card_rect(&self, cx: &Cx<'_, H>, focus: Option<FocusKey<u32>>, at: plx_ui::screen::At) -> Option<Rect> {
-        let key = focus.filter(|k| k.entry == self.page.entry && (FIRST_CARD_ELEM..GUIDE_FIRST_ELEM).contains(&k.elem))?;
+        let key = focus.filter(|k| k.entry == self.page.entry && ((FIRST_CARD_ELEM..GUIDE_FIRST_ELEM).contains(&k.elem) || (BROWSE_FIRST_ELEM..plx_ui::geom::NAMESPACE_FLOOR).contains(&k.elem)))?;
         Focusable::<H>::place(self, &key.elem, cx, at).map(|placed| placed.rect)
     }
     fn redraw_focused(&self, f: &mut DrawFrame<'_, '_, H>, focus: Option<FocusKey<u32>>) {
+        if self.page.browsing() && focus.is_some_and(|key| key.entry == self.page.entry && key.elem == FILTER_ELEM) {
+            return self.redraw_opener(f);
+        }
         self.stack.view(&self.page).redraw_focused(f, focus);
     }
     fn opener_departing(&self, key: FocusKey<u32>) -> bool {
@@ -1392,7 +1758,7 @@ impl<H: LiveTvLike> Screen<H> for LiveTvScreen {
     fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
         plx_gfx::gfx::frame_clear(theme::CLEAR_RGB.0, theme::CLEAR_RGB.1, theme::CLEAR_RGB.2);
         let p = f.painter.alpha(f.page_alpha);
-        self.ground.draw(p, Rect::FULL);
+        self.page.ground.draw(p, Rect::FULL);
         self.stack.view(&self.page).paint(f);
         self.draw_chrome(f);
     }

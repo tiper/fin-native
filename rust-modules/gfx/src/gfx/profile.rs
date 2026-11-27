@@ -138,6 +138,7 @@ mod imp {
         "lb.document",
         "lb.rail",
         "lb.menu",
+        "ltv.filter",
         "rc.clear",
         "rc.ground",
         "rc.rows",
