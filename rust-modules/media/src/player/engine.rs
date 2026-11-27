@@ -2417,7 +2417,7 @@ mod off_frame_release_tests {
         assert!(!pa.is_live());
         assert!(pa.has_pending_release(), "the Unload must run off the frame thread");
         finish_release_for_test(&mut pa);
-        assert_eq!(crate::player::error_now(&ps).kind, crate::player::FailureKind::ServerStopped);
+        assert_eq!(crate::player::error_for_test(&ps).kind, crate::player::FailureKind::ServerStopped);
     }
 
     #[test]
@@ -2654,25 +2654,29 @@ mod off_frame_release_tests {
         let t0 = t_stop;
         assert!(!poll_release(&mut ps, &mut pa, t0 + crate::player::release::RELEASE_DEADLINE - std::time::Duration::from_millis(1)));
         assert_ne!(
-            crate::player::error_now(&ps).kind,
+            crate::player::error_for_test(&ps).kind,
             crate::player::FailureKind::ReleaseTimeout,
             "the read-out appeared before the deadline"
         );
         assert!(!poll_release(&mut ps, &mut pa, t0 + crate::player::release::RELEASE_DEADLINE + std::time::Duration::from_secs(5)));
         assert_eq!(crate::player::state(&ps), crate::player::PlaybackState::Error);
-        let shape = crate::player::error_now(&ps);
+        let shape = crate::player::error_for_test(&ps);
         assert_eq!(shape.kind, crate::player::FailureKind::ReleaseTimeout);
         assert_eq!(shape.kind.code(), "release_timeout");
         let actions = crate::player::failure_actions(
-            shape.kind,
-            crate::player::FailureContext { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: false },
+            &crate::player::PlaybackFailure::for_test(
+                shape.kind,
+                plx_plex::plex::session::DirectPlayMode::Auto,
+                crate::player::FrozenOffers { can_retry: true, quality_carriable: true },
+            ),
+            crate::player::LiveOffers { repair_idle: true, tracks_available: false },
         );
         assert!(actions.contains(&crate::player::FailureAction::TryAgain), "{actions:?}");
 
         // A second start is refused with no new object; the leaked object was not D1'd.
         assert_eq!(start_bufferfeed_tracked(&mut ps, &mut pa), BufferfeedStartOutcome::Failed);
         assert!(!pa.is_live());
-        assert_eq!(crate::player::error_now(&ps).kind, crate::player::FailureKind::ReleaseTimeout);
+        assert_eq!(crate::player::error_for_test(&ps).kind, crate::player::FailureKind::ReleaseTimeout);
         assert_ne!(
             unsafe { crate::player::test_physical::raw_sink().ready(&MainThread::assume()) },
             0,
@@ -2696,7 +2700,7 @@ mod off_frame_release_tests {
             BufferfeedStartOutcome::Deferred,
             "the slot must be free again"
         );
-        assert_ne!(crate::player::error_now(&ps).kind, crate::player::FailureKind::ReleaseTimeout);
+        assert_ne!(crate::player::error_for_test(&ps).kind, crate::player::FailureKind::ReleaseTimeout);
     }
 
     /// A stop over a deferred start ends that playback: the queued start must not run after the tail.
@@ -2856,7 +2860,7 @@ mod off_frame_release_tests {
         let later = std::time::Instant::now() + crate::player::release::RELEASE_DEADLINE + std::time::Duration::from_secs(1);
         poll_release(&mut ps, &mut pa, later);
         assert_eq!(pa.take_queued_landing(), crate::player::adapter::QueuedLanding::Failed);
-        assert_eq!(crate::player::error_now(&ps).kind, crate::player::FailureKind::ReleaseTimeout);
+        assert_eq!(crate::player::error_for_test(&ps).kind, crate::player::FailureKind::ReleaseTimeout);
     }
 
     /// The exit with an `Unload` that never returns is bounded by the deadline and says a worker
@@ -3566,7 +3570,7 @@ mod load_in_flight_tests {
         }
         assert!(returned, "server stop blocked on the held native Load");
         assert!(parked, "the unfinished Load should be parked with its payload");
-        assert_eq!(crate::player::error_now(&ps).kind, crate::player::FailureKind::ServerStopped);
+        assert_eq!(crate::player::error_for_test(&ps).kind, crate::player::FailureKind::ServerStopped);
     }
 
     /// PR #105 review finding: the D.1.4 budget turns a `Load` that never returns into a
@@ -4016,7 +4020,7 @@ mod load_in_flight_tests {
             "the refused reload's Error must outlive the next pump frame, not fall back to Idle"
         );
         assert_eq!(
-            crate::player::error_now(&ps).kind,
+            crate::player::error_for_test(&ps).kind,
             crate::player::FailureKind::LoadTimeout,
             "the refusal must keep the timeout as its cause, not report `unspecified`"
         );
@@ -4058,11 +4062,15 @@ mod load_in_flight_tests {
             crate::player::PlaybackState::Error,
             "a refused fresh start left the player Idle: a black screen with no read-out"
         );
-        let shape = crate::player::error_now(&ps);
+        let shape = crate::player::error_for_test(&ps);
         assert_eq!(shape.kind, crate::player::FailureKind::LoadTimeout);
         let actions = crate::player::failure_actions(
-            shape.kind,
-            crate::player::FailureContext { forced: false, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: false },
+            &crate::player::PlaybackFailure::for_test(
+                shape.kind,
+                plx_plex::plex::session::DirectPlayMode::Auto,
+                crate::player::FrozenOffers { can_retry: true, quality_carriable: true },
+            ),
+            crate::player::LiveOffers { repair_idle: true, tracks_available: false },
         );
         assert!(
             actions.contains(&crate::player::FailureAction::TryAgain),
@@ -4885,7 +4893,7 @@ mod load_refusal_tests {
             "the pump must turn a refused Load into the Error state the read-out renders from"
         );
         assert_eq!(
-            super::super::error_now(&ps).kind,
+            super::super::error_for_test(&ps).kind,
             super::super::FailureKind::TvPipeline,
             "and the verdict must name the television's pipeline, not a generic stop"
         );

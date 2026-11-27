@@ -222,6 +222,15 @@ pub struct PlaybackSession {
     /// them; this keeps the cause. `player::state` derives `Error` from it, like the refusals
     /// above. Cleared with them, and by the next playback request.
     engine_failure: Option<crate::player::RuntimeFailure>,
+    /// **The failure the read-out and the report both name**, captured ONCE when the attempt entered
+    /// Error ([`crate::player::observe_failure`], the one place that builds it, through
+    /// [`record_failure`]): the cause, the settings in force and the offers the attempt's request and
+    /// composition made. Everything that shows or reports a failure reads THIS value
+    /// ([`failure`]); none derives one. It is not an input of [`crate::player::state`], which is
+    /// still derived from the fields above; it is what those fields said when the state became Error.
+    /// Cleared with them: by the next request, by a plan landing and by a stop ([`clear_play_verdict`]),
+    /// and by [`clear_failure`] when the state is no longer Error.
+    failure: Option<crate::player::PlaybackFailure>,
     /// The viewer left this item for the next one from its credits (Up Next, or Skip on a `final`
     /// credits marker). A stop BELOW the server's own watched threshold (PMS's is about 90 %,
     /// `docs/pms-api.md` §6; [`plx_data::viewstate::past_watched_threshold`]) then marks it watched
@@ -1156,7 +1165,7 @@ mod backend_offer_session_tests {
         session.cur_src = (20_000, 1920, 1080); // more than a 480p rung admits: the pick would re-transcode
         let (ceiling, delivery) = (cur_ceiling(&session), cur_delivery(&session));
         assert!(!session.quality_pick_carriable());
-        assert!(!crate::player::failure_context(&session, false).quality_carriable,
+        assert!(!crate::player::failure_for_test(&session).quality_carriable(),
             "the failure read-out reads the same question: no Change quality either");
         assert!(!set_quality(&mut session, Quality::P480), "a refused pick reports refusal");
         assert_eq!(quality(), Quality::Original, "a refused pick persists nothing");
@@ -1165,7 +1174,7 @@ mod backend_offer_session_tests {
         // A provider that can certify a converted output, or a Feed, carries the pick as before.
         session.install_uri_preflight_port(ResolvePort::new(evidence, std::sync::Arc::new(CarrierQualifier)));
         assert!(session.quality_pick_carriable());
-        assert!(crate::player::failure_context(&session, false).quality_carriable);
+        assert!(crate::player::failure_for_test(&session).quality_carriable());
         session.install_backends(plx_playback_contract::BackendSet::BOTH);
         session.install_uri_preflight_port(None);
         assert!(session.quality_pick_carriable());
@@ -1967,6 +1976,7 @@ impl PlaybackSession {
         jail_load_blocked: false,
         native_start_refused: None,
         engine_failure: None,
+        failure: None,
         finished: false,
         repair_status: plx_os::tv::native_video::State::Idle,
         request: None,
@@ -2082,6 +2092,9 @@ impl PlaybackSession {
             jail_load_blocked,
             native_start_refused,
             engine_failure,
+            // The presentation carries what a screen draws of a failure; the value itself is the
+            // loop's (the report and the capture read it there).
+            failure: _,
             finished,
             repair_status,
             request,
@@ -2179,6 +2192,7 @@ impl PlaybackSession {
             jail_load_blocked: *jail_load_blocked,
             native_start_refused: *native_start_refused,
             engine_failure: *engine_failure,
+            failure: None,
             finished: *finished,
             repair_status: *repair_status,
             request: request.clone(),
@@ -7480,6 +7494,33 @@ pub fn play_resolution_failed(ps: &PlaybackSession) -> bool {
 pub(crate) fn engine_failure(ps: &PlaybackSession) -> Option<crate::player::RuntimeFailure> {
     ps.engine_failure
 }
+/// **The failure value of this playback**, if one was captured ([`PlaybackSession::failure`]): the ONE thing the
+/// read-out, the report and the request metrics read. `None` until the attempt entered Error, and again once it
+/// left it. MAIN THREAD.
+pub fn failure(ps: &PlaybackSession) -> Option<&crate::player::PlaybackFailure> {
+    ps.failure.as_ref()
+}
+/// The writer of [`failure`]: record the value built for this attempt. Called only by
+/// [`crate::player::observe_failure`], which decides when.
+pub(crate) fn record_failure(ps: &mut PlaybackSession, failure: crate::player::PlaybackFailure) {
+    ps.failure = Some(failure);
+}
+/// The one refinement a standing failure takes: a later, better-informed cause for the SAME attempt (a server's
+/// stop note that arrived after the failure was captured). The settings and the offers stand; only the words and
+/// the kind are replaced.
+pub(crate) fn refine_failure(ps: &mut PlaybackSession, cause: crate::player::ErrorShape) {
+    if let Some(failure) = ps.failure.take() {
+        ps.failure = Some(failure.refined(cause));
+    }
+}
+/// The state is not Error (and no diagnostic forces a read-out): there is no failure to show.
+pub(crate) fn clear_failure(ps: &mut PlaybackSession) {
+    ps.failure = None;
+}
+/// The Direct Play mode this playback was resolved under (frozen for one logical playback).
+pub(crate) fn direct_play_mode_of(ps: &PlaybackSession) -> DirectPlayMode {
+    ps.direct_play_mode
+}
 /// Record that the Engine failed for good and is about to be released: its `cause`, and the
 /// position a retry resumes from (`resume_ns`, kept in the unpresented-resume slot a retry already
 /// reads, since the playhead goes with the Engine).
@@ -7505,7 +7546,7 @@ pub fn play_verdict(ps: &PlaybackSession) -> Option<std::borrow::Cow<'_, str>> {
     ps.play_verdict.as_ref().map(PlayVerdict::text)
 }
 /// The refusal as the TYPED verdict, for the one reader that must tell the app's own refusals from the
-/// server's (`player::error_captured`): [`play_verdict`] is the sentence, and a sentence cannot say whose
+/// server's (the failure derivation in `player::failure`): [`play_verdict`] is the sentence, and a sentence cannot say whose
 /// decision it was. `None` when nothing was refused. MAIN THREAD, like [`play_verdict`].
 pub(crate) fn play_verdict_typed(ps: &PlaybackSession) -> Option<&PlayVerdict> {
     ps.play_verdict.as_ref()
@@ -7549,6 +7590,7 @@ fn clear_play_verdict(ps: &mut PlaybackSession) {
         s.jail_load_blocked = false;
         s.native_start_refused = None;
         s.engine_failure = None;
+        s.failure = None;
         s.resolve_failed = false;
         s.requested_resume_ns = 0;
     } }
@@ -11759,6 +11801,7 @@ fn request_play_with_queue(
         s.jail_load_blocked = false;
         s.native_start_refused = None;
         s.engine_failure = None;
+        s.failure = None;
         s.resolve_failed = false;
         // A film request retires the previous trailer's mark: `resolved_as_preview` is otherwise
         // replaced only by a LANDING, so a film whose resolve never lands (a refused worker spawn)
@@ -12690,6 +12733,8 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             jail_load_blocked: false,
             native_start_refused: None,
             engine_failure: None,
+            // A landing starts a playback: the failure of the one before it is not this one's.
+            failure: None,
             finished: false,
             repair_status: plx_os::tv::native_video::State::Idle,
             request,

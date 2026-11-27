@@ -199,8 +199,9 @@ pub struct PlayerScreen {
     /// `player_hud::FailureReadout::actions`, reset to the primary each time a failure takes the
     /// frame. The screen owns it the way `HudNav` owns the transport's highlight.
     failure_sel: usize,
-    /// Did a failure own the frame at the last Tick — the edge that resets `failure_sel`.
-    failure_up: bool,
+    /// The attempt of the failure the read-out showed at the last Tick (`None`: none) — what a different value
+    /// resets `failure_sel` on: a failure appearing, or a second one after a retry (its attempt is new).
+    failure_seen: Option<i64>,
     /// The transport clocks' prewarm memo — a render resource, not logical state (`prepare`).
     clock_warm: plx_appkit::player_hud::motion::ClockWarm,
     /// **This frame's snapshot of everything the HUD's presentation reads from the player's
@@ -247,7 +248,7 @@ impl PlayerScreen {
             },
             repair_scroll: 0,
             failure_sel: 0,
-            failure_up: false,
+            failure_seen: None,
             clock_warm: Default::default(),
             model: HudModel::default(),
             compiled,
@@ -990,10 +991,11 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Machine<H> for PlayerScreen 
                 self.live_tick(H::session(cx), H::lineup(cx), tick.ms, fx);
                 self.hud.settle(plx_media::player::loading(H::session(cx)));
                 let failed = player_hud::readout_owns_frame(self.busy);
-                if failed && !self.failure_up {
+                let failure = self.presentation.failure.as_ref().map(|readout| readout.attempt());
+                if failure.is_some() && failure != self.failure_seen {
                     self.failure_sel = 0;
                 }
-                self.failure_up = failed;
+                self.failure_seen = failure;
                 if failed && self.hud.sections.any() {
                     // a failure owns the frame outright: the sections go with the picture they were over
                     self.hud.sections = Sections::NONE;
@@ -4870,7 +4872,7 @@ pub(crate) mod step_ladder_tests {
             let cx = cx_over(ps);
             let actions = vec![Fail::PlayAutomatically, Fail::TryAgain, Fail::ChangeQuality, Fail::Back];
             let readout = plx_appkit::player_hud::FailureReadout::captured(
-                plx_media::player::error_now(ps), actions, String::new(), ps.repair_status);
+                0, plx_media::player::error_for_test(ps), actions, String::new(), ps.repair_status);
             let busy = player_hud::Busy::Readout(plx_ui::widgets::StatusKind::Failed, c"Playback failed");
             page.busy = busy;
             page.presentation = player_hud::Presentation { busy, failure: Some(std::sync::Arc::new(readout)) };
@@ -4901,7 +4903,7 @@ pub(crate) mod step_ladder_tests {
         let mut page = PlayerScreen::new(ENTRY, plx_appkit::player_hud::loaded::classic_for_test());
         let actions = vec![Fail::TryAgain, Fail::ChangeQuality, Fail::ChangeTracks, Fail::Back];
         let readout = plx_appkit::player_hud::FailureReadout::captured(
-            plx_media::player::error_now(&ps), actions, String::new(), ps.repair_status);
+            0, plx_media::player::error_for_test(&ps), actions, String::new(), ps.repair_status);
         page.presentation = player_hud::Presentation {
             busy: player_hud::Busy::Readout(plx_ui::widgets::StatusKind::Failed, c"Playback failed"),
             failure: Some(std::sync::Arc::new(readout)),
@@ -4916,6 +4918,49 @@ pub(crate) mod step_ladder_tests {
         );
         assert_eq!(page.failure_sel, 2, "the row remembers where the viewer pressed");
         assert_eq!(plx_appkit::player_hud::failure_action_word(Fail::ChangeTracks), "change_tracks");
+    }
+
+    /// **A second failure reseats the row.** The row's focus is the viewer's own while one failure stands, and a failure
+    /// that follows a retry is a different value (its attempt is new), so the row starts at the primary again; a standing
+    /// failure's frames never move it. (The edge used to be "a failure took the frame", which a failure replacing another
+    /// between two frames would have missed.)
+    #[test]
+    fn a_second_failure_reseats_the_row() {
+        use plx_media::player::FailureAction as Fail;
+        let _g = plx_base::testlock::serial();
+        let ps = super::overlay_tests::middle_episode_session();
+        let mut page = PlayerScreen::new(ENTRY, plx_appkit::player_hud::loaded::classic_for_test());
+        let show = |attempt: i64| {
+            let actions = vec![Fail::TryAgain, Fail::ChangeQuality, Fail::ChangeTracks, Fail::Back];
+            let readout = plx_appkit::player_hud::FailureReadout::captured(
+                attempt, plx_media::player::error_for_test(&ps), actions, String::new(), ps.repair_status);
+            // the page reads its presentation from the frame's inputs on every step
+            super::overlay_tests::publish_presentation_fixture(player_hud::Presentation {
+                busy: player_hud::Busy::Readout(plx_ui::widgets::StatusKind::Failed, c"Playback failed"),
+                failure: Some(std::sync::Arc::new(readout)),
+            });
+        };
+        let frame = |page: &mut PlayerScreen, ms: u32| {
+            let mut out = Vec::new();
+            let mut present = plx_machine::present::Present::new();
+            page.step(
+                &ScreenEvent::<TestHost>::Tick(Tick { ms, dt_us: 16_000 }),
+                &cx_over(&ps),
+                &mut Effects::new(&mut out, MachineId::Instance(INST), &mut present),
+            );
+        };
+        show(1);
+        frame(&mut page, 16);
+        page.failure_sel = 2;
+        frame(&mut page, 32);
+        assert_eq!(page.failure_sel, 2, "a standing failure's frames leave the viewer's focus where it is");
+        show(2);
+        frame(&mut page, 48);
+        assert_eq!(page.failure_sel, 0, "the failure of a retry reseats the row on its primary");
+        page.failure_sel = 3;
+        show(2);
+        frame(&mut page, 64);
+        assert_eq!(page.failure_sel, 3, "the same attempt keeps the focus");
     }
 
     /// **The Info card's buttons are named by position, so each carries a subject**: From the beginning restarts
@@ -6179,7 +6224,7 @@ mod repair_confirmation_tests {
         let _g = plx_base::testlock::serial();
         // The `failtest` trigger is armed in a PRIVATE trigger root, never in the shared runtime
         // root: that is the bare `/tmp` on a host test run, and another process's player tests
-        // read `plxnative-failtest` there (`player_hud::busy`), so arming it for the length of this
+        // read `plxnative-failtest` there (`app::player_presentation::capture_failure`), so arming it for the length of this
         // test turned their click on the picture into a click on a failed playback.
         plx_base::devtrig::with_private_triggers(|| {
             let path = plx_base::devtrig::path("failtest");

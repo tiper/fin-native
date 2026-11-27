@@ -496,3 +496,5 @@ pub fn overscan_rects(out: &mut Vec<(&'static str, Rect)>) {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod failure_golden_tests;

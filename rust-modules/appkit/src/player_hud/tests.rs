@@ -42,10 +42,10 @@ use super::*;
 
 // Explicit fixture IO adapter; product helpers receive the already captured caption.
 fn busy_surface(ps: &plx_media::route::PlaybackSession, st: S, seen: bool) -> Busy {
-    super::busy_surface(plx_media::player::error_caption(ps), st, seen)
+    super::busy_surface(plx_media::player::error_for_test(ps).caption, st, seen)
 }
 fn busy_surface_with(ps: &plx_media::route::PlaybackSession, st: S, seen: bool, audio: bool) -> Busy {
-    super::busy_surface_with(plx_media::player::error_caption(ps), st, seen, audio)
+    super::busy_surface_with(plx_media::player::error_for_test(ps).caption, st, seen, audio)
 }
 use plx_ui::widgets::{StatusKind, StatusOverlay};
 use super::classic::*;
@@ -918,8 +918,10 @@ fn a_dead_producer_reads_out_whether_or_not_a_picture_was_up() {
 }
 
 fn readout_of(e: &plx_media::player::ErrorShape) -> FailureReadout {
-    let cx = plx_media::player::FailureContext { forced: true, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
-    FailureReadout::of(e, plx_media::player::failure_actions(e.kind, cx), "0.7.0 · webOS 4.5 · code".into())
+    let failure = plx_media::player::PlaybackFailure::for_test(e.kind, plx_plex::plex::session::DirectPlayMode::Forced,
+        plx_media::player::FrozenOffers { can_retry: true, quality_carriable: true });
+    let live = plx_media::player::LiveOffers { repair_idle: true, tracks_available: true };
+    FailureReadout::of(e, plx_media::player::failure_actions(&failure, live), "0.7.0 · webOS 4.5 · code".into())
 }
 
 /// **Say it once.** Under Force the reason IS the route's verdict (what happened and why), no
@@ -1073,16 +1075,21 @@ fn every_app_refusal_reason_fits_the_reason_slot_in_every_language() {
 fn the_app_refusal_readouts_name_the_policy_and_the_build_not_the_server() {
     use plx_media::player::FailureAction as A;
     let ps = plx_media::route::PlaybackSession::IDLE;
-    let cx = plx_media::player::FailureContext { forced: false, direct_play_disabled: true, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
+    let live = plx_media::player::LiveOffers { repair_idle: true, tracks_available: true };
+    // the words come from the arm's derivation; the offers are the ones a retryable Plex play makes, under Disabled
+    let readout = |arm: &str| {
+        let shape = plx_media::player::failure_under_for_test(&ps, Some(arm)).shape().clone();
+        let failure = plx_media::player::PlaybackFailure::for_test(shape.kind, plx_plex::plex::session::DirectPlayMode::Disabled,
+            plx_media::player::FrozenOffers { can_retry: true, quality_carriable: true });
+        FailureReadout::of(&shape, plx_media::player::failure_actions(&failure, live), String::new())
+    };
 
-    let disabled = plx_media::player::error_captured(&ps, Some("disabled"));
-    let r = FailureReadout::of(&disabled, plx_media::player::failure_actions(disabled.kind, cx), String::new());
+    let r = readout("disabled");
     assert_eq!(r.reason(), plx_media::route::PlayVerdict::DirectPlayDisabled.text());
     assert_eq!(r.note(), None, "the verdict already names the cause");
     assert_eq!(r.actions(), &[A::PlayAutomatically, A::Back]);
 
-    let none = plx_media::player::error_captured(&ps, Some("no_backend"));
-    let r = FailureReadout::of(&none, plx_media::player::failure_actions(none.kind, cx), String::new());
+    let r = readout("no_backend");
     assert_eq!(r.reason(), plx_os::i18n::msg::widgets_reason_no_backend());
     assert_eq!(r.note(), None);
     assert_eq!(r.actions(), &[A::Back]);

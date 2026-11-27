@@ -1691,7 +1691,7 @@ pub(crate) unsafe fn key_play(
 pub(crate) fn land_play_then_observe<S: ?Sized>(
     state: &mut S,
     land: impl FnOnce(&mut S),
-    observe: impl FnOnce(&S),
+    observe: impl FnOnce(&mut S),
 ) {
     land(state);
     observe(state);

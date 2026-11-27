@@ -1706,7 +1706,7 @@ player, transport and tracks auditors, and is counted once in the themes above.
 
 - **Server loss or a pipeline error mid-playback was a silent freeze** — `blocker` / `medium`
   The failure signals now enter a cause-aware Error read-out after playback too. The read-out offers OK quality/retry and BACK; retry performs a real stop plus fresh resolve from the retained position rather than attempting to keep driving the dead Engine.
-  *Where:* `player/pump.rs` owns terminal producer/Load failures, `player::error_now` maps the concrete cause, `ui/player_hud.rs::draw_failed_readout` renders it, and `app::retry_failed_playback` owns the main-thread restart.
+  *Where:* `player/pump.rs` owns terminal producer/Load failures, `player::observe_failure` captures the concrete cause as the session's `PlaybackFailure`, `ui/player_hud.rs::draw_failed_readout` renders it, and `app::retry_failed_playback` owns the main-thread restart.
   *Verified:* RESOLVED in the current tree; automatic retry policy remains intentionally narrower than detection and explicit recovery.
 
 - **~~No Playback Information / stats overlay exists at all~~ — RESOLVED 2026-08-31**

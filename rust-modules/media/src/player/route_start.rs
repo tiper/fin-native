@@ -1297,7 +1297,7 @@ pub(crate) fn finish_release_for_test(pa: &mut super::adapter::PlayerAdapter) {
 /// Releases them the frame after the Engine failed, the same teardown an app switch uses
 /// ([`suspend_bufferfeed`]: the session, URL and transcode session stay, nothing is reported as
 /// stopped). What the read-out and its actions need survives it, in the session: the cause
-/// ([`crate::route::note_engine_failure`], so `state()` and `error_now` still answer) and the
+/// ([`crate::route::note_engine_failure`], so `state()` and the failure derivation still answer) and the
 /// playhead a retry resumes from (the unpresented-resume slot `retry_failed_playback` reads).
 /// Try again, Play automatically and a quality pick start a new playback from scratch, and Back
 /// ends the session with a real stop, so none of them needs the loaded pipeline.

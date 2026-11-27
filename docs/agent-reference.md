@@ -2672,8 +2672,10 @@ path. Never run only this one before a release. `tests/README.md` has the tier t
   the table's for that setting); pair `audio` with
   `/tmp/plxnative-nopass` for the PLEX PASS capsule line. Every arm but `jail` feeds the real
   `player::error_shape` (`jail` is the one `ErrorShape` `error_shape` never produces, so it calls
-  the sibling `jail_error_shape` directly instead), and forces the STATE only at
-  `appkit::player_hud::busy` — never at `player::state()`, which the pump acts on),
+  the sibling `jail_error_shape` directly instead), and forces the read-out, not the
+  state: the app samples the arm each frame and hands it to `player::observe_failure`, which captures a
+  `PlaybackFailure` under that arm although `player::state()` is not `Error` (a different arm is a different
+  failure, a removed file clears it) — `player::state()`, which the pump acts on, is never forced),
   `/tmp/plxnative-testpat=<spec>` — **replace the page's picture with a SYNTHETIC ground**
   (`flat:<L*>`, `ramp`, `edge`, `checker:<px>`, `lines:<px>`, `hbars:<px>`, `hue[:L*]`, `rainbow[:L*]`,
   `solid:<deg>[:L*]`), drawn as page content so it is exactly what the tab track samples and what

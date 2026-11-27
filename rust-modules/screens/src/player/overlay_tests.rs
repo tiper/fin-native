@@ -133,10 +133,10 @@ pub(super) fn derive_state(ps: &mut plx_media::route::PlaybackSession, state: pl
 /// Test-host IO port, called before entering a machine window, never from a host getter.
 pub(super) fn failure_fixture(ps: &plx_media::route::PlaybackSession) -> plx_appkit::player_hud::FailureReadout {
     use plx_media::player;
-    let error = player::error_now(ps);
-    let actions = player::failure_actions(error.kind, player::failure_context(ps, false));
-    let support = player::support_line(error.kind);
-    plx_appkit::player_hud::FailureReadout::captured(error, actions, support, ps.repair_status)
+    let failure = player::failure_for_test(ps);
+    let actions = player::failure_actions(&failure, player::LiveOffers { repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle, tracks_available: false });
+    let support = player::support_line(failure.kind());
+    plx_appkit::player_hud::FailureReadout::captured(failure.attempt(), failure.shape().clone(), actions, support, ps.repair_status)
 }
 
 /// A session playing the middle episode `11` of a three-episode queue, `12` up next: the neighbours the accessibility
@@ -155,7 +155,7 @@ pub(super) fn presentation_fixture(ps: &plx_media::route::PlaybackSession) -> pl
     use plx_appkit::player_hud::{Busy, Presentation};
     let state = player::state(ps);
     if state == player::PlaybackState::Error || plx_base::devtrig::flag("failtest") {
-        Presentation { busy: Busy::Readout(plx_ui::widgets::StatusKind::Failed, player::error_caption(ps)),
+        Presentation { busy: Busy::Readout(plx_ui::widgets::StatusKind::Failed, player::error_for_test(ps).caption),
             failure: Some(std::sync::Arc::new(failure_fixture(ps))) }
     } else {
         Presentation { busy: plx_appkit::player_hud::busy_surface_with(c"", state,

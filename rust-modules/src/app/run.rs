@@ -817,6 +817,9 @@ fn hud_model(
 /// The frame publication phase: retained views (the native repair state is already on the session,
 /// copied by `poll_player_release`), then the player's input model.
 fn publish_product_frame(app: &mut App, was_player: bool) {
+    // The player's failure, captured ahead of every publication of it (the presentation below reads it, and the
+    // diagnostics panel after this phase): whatever ran earlier in the frame, this is the one that cannot be skipped.
+    super::player_presentation::capture_failure(app);
     if app.runtime.bridge(&mut app.bridge).publish_player_presentation(&app.player.session) {
         app.note_presentation_damage(plx_machine::present::Provenance::Lifecycle);
     }
@@ -2452,14 +2455,21 @@ pub(crate) unsafe fn playback_tick(app: &mut App, fr: &mut Frame) {
         // failure there is. It observes the value the HUD renders and reports only transitions,
         // so the steady-state cost is one atomic load.
         let terminal_source = app.adapters.player.terminal_failure_source(&app.player.session);
+        // The failure of this frame's state, captured ahead of both readers below (the report and the request metrics).
+        super::player_presentation::capture_failure(app);
         plx_media::player::report::tick_with_source(&app.player.session, terminal_source);
         if plx_media::player::state(&app.player.session)
             == plx_media::player::PlaybackState::Error {
-            app.player.session.finish_metric_request(
-                plx_media::player::attempt_metrics::RequestOutcome::Failed(
-                    plx_media::player::backend::handled_failure(
-                        plx_media::player::error_now(&app.player.session).kind)));
-            app.adapters.player.sync_request_metrics(&mut app.player.session);
+            if let Some(kind) = plx_media::route::failure(&app.player.session).map(plx_media::player::PlaybackFailure::kind) {
+                app.player.session.finish_metric_request(
+                    plx_media::player::attempt_metrics::RequestOutcome::Failed(
+                        plx_media::player::backend::handled_failure(kind)));
+                app.adapters.player.sync_request_metrics(&mut app.player.session);
+            } else {
+                // Unreachable: captured just above. Refused, not guessed at.
+                plx_media::player::log("request metrics: an Error with no captured failure");
+                debug_assert!(false, "the failure is captured ahead of the request metrics");
+            }
         }
         // end-of-stream: the pipeline drained at the credits → hand off to Up Next when the
         // show has another episode queued and the Next episode preference is not Off, else leave
@@ -3087,6 +3097,8 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
             // exact publication boundary; latches make a healthy/no-change frame idempotent.
             |app| {
                 let terminal_source = app.adapters.player.terminal_failure_source(&app.player.session);
+                // …and capture the refused plan's failure first: the report reads the captured value.
+                super::player_presentation::capture_failure(app);
                 plx_media::player::report::tick_with_source(&app.player.session, terminal_source);
             },
         );
@@ -6052,6 +6064,24 @@ pub(in crate::app) mod lifecycle_regression_tests {
         let mut fr = Frame::begin(&app.player.session, app.runtime.metadata_view());
         let _scope = plx_base::task::FrameScope::enter();
         assert!(unsafe { ingress_token(&mut app, &mut fr, "hang-raw:1") });
+    }
+
+    /// **The failure is captured before it is published.** A session in Error with nothing captured yet is captured by the
+    /// frame's publication itself, ahead of the presentation that reads it, so the frame carries the read-out of the failure
+    /// the session stands for, with the attempt the capture was made under.
+    #[test]
+    fn the_capture_precedes_publication() {
+        let _serial = plx_base::testlock::serial();
+        let mut app = app();
+        plx_media::route::refuse_for_test(&mut app.player.session, plx_media::route::PlayVerdict::DirectPlayDisabled);
+        assert!(plx_media::route::failure(&app.player.session).is_none(), "premise: nothing is captured before a frame");
+        publish_product_frame(&mut app, true);
+        let failure = plx_media::route::failure(&app.player.session).cloned().expect("the publication captured the failure");
+        assert_eq!(failure.attempt(), plx_media::player::report::attempt_id());
+        let readout = app.runtime.bridge(&mut app.bridge).views().inputs.player_presentation.failure.clone()
+            .expect("the frame's presentation carries the read-out");
+        assert_eq!(readout.attempt(), failure.attempt());
+        assert_eq!(readout.reason(), plx_media::route::PlayVerdict::DirectPlayDisabled.text());
     }
 
     /// **A settled screen that shows the bar owes its clock one frame a minute, and no more.** The loop's
@@ -9854,7 +9884,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
 
         assert!(!plx_media::route::play_pending());
         assert!(!rig.app.player.session.finished);
-        assert_eq!(plx_media::player::error_now(&rig.app.player.session).kind, plx_media::player::FailureKind::ServerStopped);
+        assert_eq!(plx_media::player::error_for_test(&rig.app.player.session).kind, plx_media::player::FailureKind::ServerStopped);
         assert_eq!(plx_media::route::up_next(&rig.app.player.session).unwrap().rk, "2");
     }
 

@@ -522,7 +522,7 @@ pub fn transport_mark(
 // What each block says is decided in ONE place per question:
 //  * the controls — `player::failure_actions`, the table that offers an action only if it can
 //    change the outcome;
-//  * the words — `player::error_now`'s `ErrorShape`, resolved to one reason sentence and at most
+//  * the words — the captured `PlaybackFailure`'s `ErrorShape`, resolved to one reason sentence and at most
 //    one quiet note here (`FailureReadout::of`);
 //  * the support facts (version · firmware · set · failure code) — one dim footer line at the
 //    foot of the screen, always; there is no *Details* control.
@@ -536,6 +536,10 @@ const PLEX_PASS: &str = "Plex Pass";
 /// row that was drawn.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FailureReadout {
+    /// The attempt this read-out is the failure of ([`plx_media::player::PlaybackFailure::attempt`]): its identity,
+    /// which a screen keys per-failure state on (the focused control) instead of watching for an edge. `0` for a
+    /// read-out built without a captured failure ([`Self::of`]).
+    attempt: i64,
     pub(super) glyph: plx_ui::icons::Icon,
     pub(super) reason: CString,
     pub(super) note: Option<CString>,
@@ -588,8 +592,10 @@ fn failure_glyph(kind: plx_media::player::FailureKind) -> plx_ui::icons::Icon {
 }
 
 impl FailureReadout {
-    /// Pure projection of the app's complete failure snapshot, including the repair status.
-    pub fn captured(mut e: plx_media::player::ErrorShape, actions: Vec<plx_media::player::FailureAction>,
+    /// Pure projection of the app's complete failure snapshot, including the repair status: the captured
+    /// failure's `attempt` and words, the row [`failure_actions`](plx_media::player::failure_actions) built from
+    /// it and the live offers, and the support line.
+    pub fn captured(attempt: i64, mut e: plx_media::player::ErrorShape, actions: Vec<plx_media::player::FailureAction>,
         support: String, repair_status: plx_os::tv::native_video::State) -> Self {
         if e.kind == plx_media::player::FailureKind::JailMissingRtkmem {
             use plx_os::tv::native_video::State;
@@ -609,7 +615,12 @@ impl FailureReadout {
                 }
             }
         }
-        Self::of(&e, actions, support)
+        Self { attempt, ..Self::of(&e, actions, support) }
+    }
+
+    /// The attempt this read-out is the failure of (see the field).
+    pub fn attempt(&self) -> i64 {
+        self.attempt
     }
 
     /// PURE: the read-out for one failure shape.
@@ -637,6 +648,7 @@ impl FailureReadout {
             Some(e.detail.to_string())
         };
         Self {
+            attempt: 0,
             glyph: failure_glyph(e.kind),
             reason: CString::new(reason).unwrap_or_default(),
             note: note.and_then(|n| CString::new(n).ok()),

@@ -1342,7 +1342,7 @@ fn pump_frame(ps: &mut crate::route::PlaybackSession, pa: &mut super::adapter::P
     // line raised the failure read-out on a stream that had been working. A failed recovery is
     // worth a second reload; it is not worth the playback.
     // A worker may publish a more specific terminal code immediately before this generic Release
-    // flag. Acquire is the matching hand-off; `error_now` can then report the transaction cause
+    // flag. Acquire is the matching hand-off; the failure derivation can then report the transaction cause
     // instead of racing it into the generic producer bucket.
     if ps.readout().raw().flags.demux_io_failed {
         if crate::route::preview_request(ps) {
@@ -3013,11 +3013,11 @@ mod flight_tests {
         assert_eq!(crate::player::state(&rig.ps), crate::player::PlaybackState::Error);
         rig.frame();
         assert!(!rig.pa.is_live(), "the Engine is released, with no recovery attempted");
-        let shape = crate::player::error_now(&rig.ps);
+        let shape = crate::player::error_for_test(&rig.ps);
         assert_eq!(shape.kind, crate::player::FailureKind::ServerStopped);
         assert_eq!(shape.detail, "stopped by the admin");
         assert_eq!(
-            crate::player::failure_actions(shape.kind, crate::player::failure_context(&rig.ps, false)),
+            crate::player::failure_actions(&crate::player::failure_for_test(&rig.ps), crate::player::LiveOffers { repair_idle: true, tracks_available: false }),
             vec![crate::player::FailureAction::Back]
         );
     }
@@ -3033,7 +3033,7 @@ mod flight_tests {
         rig.frame();
         assert!(!rig.pa.is_live(), "the stopped replacement still owns its engine");
         assert_eq!(crate::route::unpresented_resume_ns(&rig.ps), 10_000_000_000);
-        assert_eq!(crate::player::error_now(&rig.ps).kind, crate::player::FailureKind::ServerStopped);
+        assert_eq!(crate::player::error_for_test(&rig.ps).kind, crate::player::FailureKind::ServerStopped);
     }
 
     #[test]
@@ -3051,20 +3051,35 @@ mod flight_tests {
         crate::route::drain_scrobble();
     }
 
+    /// **A server's stop note that lands after the failure was captured refines it**: the interrupted stream is the
+    /// stop with its reason, and the settings and offers captured with it stand.
     #[test]
-    fn server_stop_replaces_the_retry_after_the_engine_is_already_released() {
+    fn a_server_stop_after_an_interrupted_capture_refines_it() {
+        use crate::player::{observe_failure, FailureKind, FailureTrigger};
         let mut rig = Rig::new(120);
         FEED_SHARED.frames.store(10, Relaxed);
         FEED_SHARED.demux_io_failed.store(true, Release);
         rig.frame();
         rig.frame();
         assert!(!rig.pa.is_live(), "premise: the interrupted engine was released");
-        assert_eq!(crate::player::error_now(&rig.ps).kind, crate::player::FailureKind::PlaybackInterrupted);
+        let attempt = crate::player::report::attempt_id();
+        observe_failure(&mut rig.ps, FailureTrigger::NONE, attempt);
+        let captured = crate::route::failure(&rig.ps).cloned().expect("the failure is captured once the state is Error");
+        assert_eq!(captured.kind(), FailureKind::PlaybackInterrupted);
 
         crate::player::note_server_stop(&crate::route::sess(&rig.ps), "rig-1", "late termination", 10_000);
-        let shape = crate::player::error_now(&rig.ps);
-        assert_eq!(shape.kind, crate::player::FailureKind::ServerStopped);
-        assert_eq!(shape.detail, "late termination");
+        observe_failure(&mut rig.ps, FailureTrigger::NONE, attempt);
+        let refined = crate::route::failure(&rig.ps).cloned().expect("still captured");
+        assert_eq!(refined.kind(), FailureKind::ServerStopped);
+        assert_eq!(refined.shape().detail, "late termination");
+        assert_eq!(
+            (refined.attempt(), refined.settings(), refined.can_retry(), refined.quality_carriable()),
+            (captured.attempt(), captured.settings(), captured.can_retry(), captured.quality_carriable()),
+            "only the cause is replaced",
+        );
+        // and a frame that changes nothing writes nothing
+        observe_failure(&mut rig.ps, FailureTrigger::NONE, attempt);
+        assert_eq!(crate::route::failure(&rig.ps), Some(&refined));
     }
 
     #[test]
@@ -3090,7 +3105,7 @@ mod flight_tests {
         rig.frames_until("the discarded replacement's stop", |r| replacement_stops(&r.flight) > stops);
         let now = engine_epoch(&mut rig);
         assert!(now.is_none() || now == epoch, "the rollback's landing reloads nothing");
-        assert_eq!(crate::player::error_now(&rig.ps).kind, crate::player::FailureKind::ServerStopped);
+        assert_eq!(crate::player::error_for_test(&rig.ps).kind, crate::player::FailureKind::ServerStopped);
     }
 
     #[test]
@@ -3115,13 +3130,13 @@ mod flight_tests {
         FEED_SHARED.seen_frame.store(true, Release);
         FEED_SHARED.demux_io_failed.store(true, Release);
         rig.pa.publish_feed_attempt_view(&mut rig.ps);
-        let cause_before = crate::player::error_now(&rig.ps).kind;
+        let cause_before = crate::player::error_for_test(&rig.ps).kind;
         rig.frame();
         assert_eq!(crate::player::state(&rig.ps), crate::player::PlaybackState::Error);
         rig.frame();
         assert!(!rig.pa.is_live(), "the failed Engine and its pipeline are released");
         assert_eq!(crate::player::state(&rig.ps), crate::player::PlaybackState::Error, "the read-out stands without an Engine");
-        assert_eq!(crate::player::error_now(&rig.ps).kind, cause_before, "and keeps its cause");
+        assert_eq!(crate::player::error_for_test(&rig.ps).kind, cause_before, "and keeps its cause");
         assert_eq!(
             crate::route::unpresented_resume_ns(&rig.ps),
             60_000_000_000,

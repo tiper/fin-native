@@ -1,0 +1,792 @@
+# the action table (kind, setting): rows by offers [r=can retry, q=quality carriable, t=tracks, i=repair idle]
+TunersBusy auto: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+TunersBusy auto: [try_again,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+TunersBusy forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+TunersBusy forced: [try_again,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+TunersBusy disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+TunersBusy disabled: [try_again,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+DecisionRefused auto: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1 r1q0t0i0 r1q0t0i1
+DecisionRefused auto: [change_tracks,back] <- r1q0t1i0 r1q0t1i1
+DecisionRefused auto: [change_quality,back] <- r1q1t0i0 r1q1t0i1
+DecisionRefused auto: [change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+DecisionRefused forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+DecisionRefused forced: [play_automatically,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+DecisionRefused disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+DecisionRefused disabled: [play_automatically,back] <- r1q0t0i0 r1q0t0i1
+DecisionRefused disabled: [play_automatically,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+DecisionRefused disabled: [play_automatically,change_quality,back] <- r1q1t0i0 r1q1t0i1
+DecisionRefused disabled: [play_automatically,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+PlaybackPolicy auto: [back] <- every offer
+PlaybackPolicy forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+PlaybackPolicy forced: [play_automatically,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+PlaybackPolicy disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+PlaybackPolicy disabled: [play_automatically,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+NoQualifiedBackend auto: [back] <- every offer
+NoQualifiedBackend forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+NoQualifiedBackend forced: [play_automatically,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+NoQualifiedBackend disabled: [back] <- every offer
+NoVideoTranscodeTarget auto: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1 r1q0t0i0 r1q0t0i1
+NoVideoTranscodeTarget auto: [change_tracks,back] <- r1q0t1i0 r1q0t1i1
+NoVideoTranscodeTarget auto: [change_quality,back] <- r1q1t0i0 r1q1t0i1
+NoVideoTranscodeTarget auto: [change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+NoVideoTranscodeTarget forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+NoVideoTranscodeTarget forced: [play_automatically,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+NoVideoTranscodeTarget disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+NoVideoTranscodeTarget disabled: [play_automatically,back] <- r1q0t0i0 r1q0t0i1
+NoVideoTranscodeTarget disabled: [play_automatically,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+NoVideoTranscodeTarget disabled: [play_automatically,change_quality,back] <- r1q1t0i0 r1q1t0i1
+NoVideoTranscodeTarget disabled: [play_automatically,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+NoVideoTrack auto: [back] <- every offer
+NoVideoTrack forced: [back] <- every offer
+NoVideoTrack disabled: [back] <- every offer
+MediaSource auto: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+MediaSource auto: [try_again,back] <- r1q0t0i0 r1q0t0i1
+MediaSource auto: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+MediaSource auto: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+MediaSource auto: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+MediaSource forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+MediaSource forced: [play_automatically,try_again,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+MediaSource disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+MediaSource disabled: [try_again,back] <- r1q0t0i0 r1q0t0i1
+MediaSource disabled: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+MediaSource disabled: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+MediaSource disabled: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+PlaybackInterrupted auto: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+PlaybackInterrupted auto: [try_again,back] <- r1q0t0i0 r1q0t0i1
+PlaybackInterrupted auto: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+PlaybackInterrupted auto: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+PlaybackInterrupted auto: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+PlaybackInterrupted forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+PlaybackInterrupted forced: [play_automatically,try_again,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+PlaybackInterrupted disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+PlaybackInterrupted disabled: [try_again,back] <- r1q0t0i0 r1q0t0i1
+PlaybackInterrupted disabled: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+PlaybackInterrupted disabled: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+PlaybackInterrupted disabled: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+TvPipeline auto: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1 r1q0t0i0 r1q0t0i1
+TvPipeline auto: [change_tracks,back] <- r1q0t1i0 r1q0t1i1
+TvPipeline auto: [change_quality,back] <- r1q1t0i0 r1q1t0i1
+TvPipeline auto: [change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+TvPipeline forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+TvPipeline forced: [play_automatically,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+TvPipeline disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+TvPipeline disabled: [play_automatically,back] <- r1q0t0i0 r1q0t0i1
+TvPipeline disabled: [play_automatically,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+TvPipeline disabled: [play_automatically,change_quality,back] <- r1q1t0i0 r1q1t0i1
+TvPipeline disabled: [play_automatically,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+LoadTimeout auto: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+LoadTimeout auto: [try_again,back] <- r1q0t0i0 r1q0t0i1
+LoadTimeout auto: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+LoadTimeout auto: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+LoadTimeout auto: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+LoadTimeout forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+LoadTimeout forced: [play_automatically,try_again,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+LoadTimeout disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+LoadTimeout disabled: [try_again,back] <- r1q0t0i0 r1q0t0i1
+LoadTimeout disabled: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+LoadTimeout disabled: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+LoadTimeout disabled: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+ReleaseTimeout auto: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+ReleaseTimeout auto: [try_again,back] <- r1q0t0i0 r1q0t0i1
+ReleaseTimeout auto: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+ReleaseTimeout auto: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+ReleaseTimeout auto: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+ReleaseTimeout forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+ReleaseTimeout forced: [play_automatically,try_again,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+ReleaseTimeout disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+ReleaseTimeout disabled: [try_again,back] <- r1q0t0i0 r1q0t0i1
+ReleaseTimeout disabled: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+ReleaseTimeout disabled: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+ReleaseTimeout disabled: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+JailMissingRtkmem auto: [back] <- r0q0t0i0 r0q0t1i0 r0q1t0i0 r0q1t1i0 r1q0t0i0 r1q0t1i0 r1q1t0i0 r1q1t1i0
+JailMissingRtkmem auto: [repair,back] <- r0q0t0i1 r0q0t1i1 r0q1t0i1 r0q1t1i1 r1q0t0i1 r1q0t1i1 r1q1t0i1 r1q1t1i1
+JailMissingRtkmem forced: [back] <- r0q0t0i0 r0q0t1i0 r0q1t0i0 r0q1t1i0 r1q0t0i0 r1q0t1i0 r1q1t0i0 r1q1t1i0
+JailMissingRtkmem forced: [repair,back] <- r0q0t0i1 r0q0t1i1 r0q1t0i1 r0q1t1i1 r1q0t0i1 r1q0t1i1 r1q1t0i1 r1q1t1i1
+JailMissingRtkmem disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q1t0i0 r0q1t1i0 r1q0t0i0 r1q0t1i0 r1q1t0i0 r1q1t1i0
+JailMissingRtkmem disabled: [repair,back] <- r0q0t0i1 r0q0t1i1 r0q1t0i1 r0q1t1i1 r1q0t0i1 r1q0t1i1 r1q1t0i1 r1q1t1i1
+ResolveFailed auto: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+ResolveFailed auto: [try_again,back] <- r1q0t0i0 r1q0t0i1
+ResolveFailed auto: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+ResolveFailed auto: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+ResolveFailed auto: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+ResolveFailed forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+ResolveFailed forced: [play_automatically,try_again,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+ResolveFailed disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+ResolveFailed disabled: [try_again,back] <- r1q0t0i0 r1q0t0i1
+ResolveFailed disabled: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+ResolveFailed disabled: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+ResolveFailed disabled: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+PreviewNotDirect auto: [back] <- every offer
+PreviewNotDirect forced: [back] <- every offer
+PreviewNotDirect disabled: [back] <- every offer
+ServerStopped auto: [back] <- every offer
+ServerStopped forced: [back] <- every offer
+ServerStopped disabled: [back] <- every offer
+Unspecified auto: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+Unspecified auto: [try_again,back] <- r1q0t0i0 r1q0t0i1
+Unspecified auto: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+Unspecified auto: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+Unspecified auto: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+Unspecified forced: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+Unspecified forced: [play_automatically,try_again,back] <- r1q0t0i0 r1q0t1i0 r1q0t0i1 r1q0t1i1 r1q1t0i0 r1q1t1i0 r1q1t0i1 r1q1t1i1
+Unspecified disabled: [back] <- r0q0t0i0 r0q0t1i0 r0q0t0i1 r0q0t1i1 r0q1t0i0 r0q1t1i0 r0q1t0i1 r0q1t1i1
+Unspecified disabled: [try_again,back] <- r1q0t0i0 r1q0t0i1
+Unspecified disabled: [try_again,change_tracks,back] <- r1q0t1i0 r1q0t1i1
+Unspecified disabled: [try_again,change_quality,back] <- r1q1t0i0 r1q1t0i1
+Unspecified disabled: [try_again,change_quality,change_tracks,back] <- r1q1t1i0 r1q1t1i1
+
+# the sessions (cause, setting)
+
+## arm:verdict / auto
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Cannot convert this item. Implementation for video encoder 'hevc' not found." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Cannot convert this item. Implementation for video encoder \'hevc\' not found.") | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:verdict / forced
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Cannot convert this item. Implementation for video encoder 'hevc' not found." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Cannot convert this item. Implementation for video encoder \'hevc\' not found.") | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:verdict / disabled
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Cannot convert this item. Implementation for video encoder 'hevc' not found." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Cannot convert this item. Implementation for video encoder \'hevc\' not found.") | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:audio / auto
+no_video_transcode_target | "Playback failed — server sent audio only" | "server sent audio only — it found no usable video transcode target" | "The server sent audio only — it found no usable video transcode target" | "" | NoVideoTranscodeTarget | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server sent audio only — it found no usable video transcode target" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:audio / forced
+no_video_transcode_target | "Playback failed — server sent audio only" | "server sent audio only — it found no usable video transcode target" | "The server sent audio only — it found no usable video transcode target" | "" | NoVideoTranscodeTarget | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server sent audio only — it found no usable video transcode target" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:audio / disabled
+no_video_transcode_target | "Playback failed — server sent audio only" | "server sent audio only — it found no usable video transcode target" | "The server sent audio only — it found no usable video transcode target" | "" | NoVideoTranscodeTarget | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server sent audio only — it found no usable video transcode target" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:novideo / auto
+no_video_track | "Playback failed — no video in the file" | "the stream carries no video track" | "This file has no video track" | "" | NoVideoTrack | pass=false | Failure { stage: Open, cause: Unsupported }
+row [back] <- every offer
+view Alert | "This file has no video track" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:novideo / forced
+no_video_track | "Playback failed — no video in the file" | "the stream carries no video track" | "This file has no video track" | "" | NoVideoTrack | pass=false | Failure { stage: Open, cause: Unsupported }
+row [back] <- every offer
+view Alert | "This file has no video track" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:novideo / disabled
+no_video_track | "Playback failed — no video in the file" | "the stream carries no video track" | "This file has no video track" | "" | NoVideoTrack | pass=false | Failure { stage: Open, cause: Unsupported }
+row [back] <- every offer
+view Alert | "This file has no video track" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:stream / auto
+media_source | "Playback failed — the media stream could not be opened" | "the media stream could not be opened or read" | "The media stream could not be opened" | "" | MediaSource | pass=false | Failure { stage: Open, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view Alert | "The media stream could not be opened" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:stream / forced
+media_source | "Playback failed — the media stream could not be opened" | "the media stream could not be opened or read" | "The media stream could not be opened" | "" | MediaSource | pass=false | Failure { stage: Open, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,try_again,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "The media stream could not be opened" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:stream / disabled
+media_source | "Playback failed — the media stream could not be opened" | "the media stream could not be opened or read" | "The media stream could not be opened" | "" | MediaSource | pass=false | Failure { stage: Open, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view Alert | "The media stream could not be opened" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:connection / auto
+playback_interrupted | "Playback failed — playback stopped after starting" | "the media producer stopped before playback completed" | "Playback stopped after it had started" | "" | PlaybackInterrupted | pass=false | Failure { stage: Presentation, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view Alert | "Playback stopped after it had started" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:connection / forced
+playback_interrupted | "Playback failed — playback stopped after starting" | "the media producer stopped before playback completed" | "Playback stopped after it had started" | "" | PlaybackInterrupted | pass=false | Failure { stage: Presentation, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,try_again,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Playback stopped after it had started" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:connection / disabled
+playback_interrupted | "Playback failed — playback stopped after starting" | "the media producer stopped before playback completed" | "Playback stopped after it had started" | "" | PlaybackInterrupted | pass=false | Failure { stage: Presentation, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view Alert | "Playback stopped after it had started" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:tv / auto
+tv_pipeline | "Playback failed — the TV rejected the stream" | "the television media pipeline rejected the stream" | "This TV could not start the video stream" | "" | TvPipeline | pass=false | Failure { stage: Decode, cause: Native }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view Alert | "This TV could not start the video stream" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:tv / forced
+tv_pipeline | "Playback failed — the TV rejected the stream" | "the television media pipeline rejected the stream" | "This TV could not start the video stream" | "" | TvPipeline | pass=false | Failure { stage: Decode, cause: Native }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "This TV could not start the video stream" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:tv / disabled
+tv_pipeline | "Playback failed — the TV rejected the stream" | "the television media pipeline rejected the stream" | "This TV could not start the video stream" | "" | TvPipeline | pass=false | Failure { stage: Decode, cause: Native }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view Alert | "This TV could not start the video stream" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:load_timeout / auto
+load_timeout | "Playback failed — the TV did not finish starting the stream" | "the television media pipeline did not finish starting the stream in time" | "This TV did not finish starting the video stream in time" | "" | LoadTimeout | pass=false | Failure { stage: Open, cause: Timeout }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ClockBadgeAlert | "This TV did not finish starting the video stream in time" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:load_timeout / forced
+load_timeout | "Playback failed — the TV did not finish starting the stream" | "the television media pipeline did not finish starting the stream in time" | "This TV did not finish starting the video stream in time" | "" | LoadTimeout | pass=false | Failure { stage: Open, cause: Timeout }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,try_again,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view ClockBadgeAlert | "This TV did not finish starting the video stream in time" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:load_timeout / disabled
+load_timeout | "Playback failed — the TV did not finish starting the stream" | "the television media pipeline did not finish starting the stream in time" | "This TV did not finish starting the video stream in time" | "" | LoadTimeout | pass=false | Failure { stage: Open, cause: Timeout }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ClockBadgeAlert | "This TV did not finish starting the video stream in time" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:jail / auto
+jail_missing_rtkmem | "Playback failed — this TV\'s sandbox blocks native video" | "this install's sandbox blocks access to /dev/rtkmem; PlxNative can offer a confirmed repair through rooted Homebrew Channel access" | "This set's sandbox does not give the app /dev/rtkmem" | "Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help." | JailMissingRtkmem | pass=false | Failure { stage: Open, cause: Unsupported }
+row [repair,back] <- r0l0t0i1 r0l0t1i1 r0l1t0i1 r0l1t1i1 r1l0t0i1 r1l0t1i1 r1l1t0i1 r1l1t1i1
+row [back] <- r0l0t0i0 r0l0t1i0 r0l1t0i0 r0l1t1i0 r1l0t0i0 r1l0t1i0 r1l1t0i0 r1l1t1i0
+view LockBadgeAlert | "This set\'s sandbox does not give the app /dev/rtkmem" | Some("Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help.") | footer carries the code=true <- idle
+view LockBadgeAlert | "Repairing this app’s sandbox…" | Some("Wait for the result before closing the app.") | footer carries the code=true <- running
+view LockBadgeAlert | "Sandbox repair completed" | Some("Close and reopen PlxNative before playing video.") | footer carries the code=true <- repaired
+view LockBadgeAlert | "Sandbox repair could not be confirmed" | Some("Repair outcome is unknown. Close and reopen the app to check again.") | footer carries the code=true <- failed
+
+## arm:jail / forced
+jail_missing_rtkmem | "Playback failed — this TV\'s sandbox blocks native video" | "this install's sandbox blocks access to /dev/rtkmem; PlxNative can offer a confirmed repair through rooted Homebrew Channel access" | "This set's sandbox does not give the app /dev/rtkmem" | "Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help." | JailMissingRtkmem | pass=false | Failure { stage: Open, cause: Unsupported }
+row [repair,back] <- r0l0t0i1 r0l0t1i1 r0l1t0i1 r0l1t1i1 r1l0t0i1 r1l0t1i1 r1l1t0i1 r1l1t1i1
+row [back] <- r0l0t0i0 r0l0t1i0 r0l1t0i0 r0l1t1i0 r1l0t0i0 r1l0t1i0 r1l1t0i0 r1l1t1i0
+view LockBadgeAlert | "This set\'s sandbox does not give the app /dev/rtkmem" | Some("Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help.") | footer carries the code=true <- idle
+view LockBadgeAlert | "Repairing this app’s sandbox…" | Some("Wait for the result before closing the app.") | footer carries the code=true <- running
+view LockBadgeAlert | "Sandbox repair completed" | Some("Close and reopen PlxNative before playing video.") | footer carries the code=true <- repaired
+view LockBadgeAlert | "Sandbox repair could not be confirmed" | Some("Repair outcome is unknown. Close and reopen the app to check again.") | footer carries the code=true <- failed
+
+## arm:jail / disabled
+jail_missing_rtkmem | "Playback failed — this TV\'s sandbox blocks native video" | "this install's sandbox blocks access to /dev/rtkmem; PlxNative can offer a confirmed repair through rooted Homebrew Channel access" | "This set's sandbox does not give the app /dev/rtkmem" | "Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help." | JailMissingRtkmem | pass=false | Failure { stage: Open, cause: Unsupported }
+row [repair,back] <- r0l0t0i1 r0l0t1i1 r0l1t0i1 r0l1t1i1 r1l0t0i1 r1l0t1i1 r1l1t0i1 r1l1t1i1
+row [back] <- r0l0t0i0 r0l0t1i0 r0l1t0i0 r0l1t1i0 r1l0t0i0 r1l0t1i0 r1l1t0i0 r1l1t1i0
+view LockBadgeAlert | "This set\'s sandbox does not give the app /dev/rtkmem" | Some("Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help.") | footer carries the code=true <- idle
+view LockBadgeAlert | "Repairing this app’s sandbox…" | Some("Wait for the result before closing the app.") | footer carries the code=true <- running
+view LockBadgeAlert | "Sandbox repair completed" | Some("Close and reopen PlxNative before playing video.") | footer carries the code=true <- repaired
+view LockBadgeAlert | "Sandbox repair could not be confirmed" | Some("Repair outcome is unknown. Close and reopen the app to check again.") | footer carries the code=true <- failed
+
+## arm:policy / auto
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "Force Direct Play is on, and this video format can’t play without conversion." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play is on, and this video format can’t play without conversion." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:policy / forced
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "Force Direct Play is on, and this video format can’t play without conversion." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play is on, and this video format can’t play without conversion." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:policy / disabled
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "Force Direct Play is on, and this video format can’t play without conversion." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play is on, and this video format can’t play without conversion." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:disabled / auto
+playback_policy | "Playback failed — Direct Play is disabled" | "Direct Play is disabled and this stream can only play as the original; the server was not asked to convert it" | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:disabled / forced
+playback_policy | "Playback failed — Direct Play is disabled" | "Direct Play is disabled and this stream can only play as the original; the server was not asked to convert it" | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:disabled / disabled
+playback_policy | "Playback failed — Direct Play is disabled" | "Direct Play is disabled and this stream can only play as the original; the server was not asked to convert it" | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:no_backend / auto
+no_qualified_backend | "Playback failed — this TV can’t play this file in PlxNative" | "no backend this build composes can play this item on this TV; the server was not asked" | "PlxNative can’t play this file on this TV yet" | "" | NoQualifiedBackend | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- every offer
+view Alert | "PlxNative can’t play this file on this TV yet" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:no_backend / forced
+no_qualified_backend | "Playback failed — this TV can’t play this file in PlxNative" | "no backend this build composes can play this item on this TV; the server was not asked" | "PlxNative can’t play this file on this TV yet" | "" | NoQualifiedBackend | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "PlxNative can’t play this file on this TV yet" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:no_backend / disabled
+no_qualified_backend | "Playback failed — this TV can’t play this file in PlxNative" | "no backend this build composes can play this item on this TV; the server was not asked" | "PlxNative can’t play this file on this TV yet" | "" | NoQualifiedBackend | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- every offer
+view Alert | "PlxNative can’t play this file on this TV yet" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:none / auto
+unspecified | "Playback failed" | "the player stopped without a reported cause" | "The player stopped before it could identify the problem" | "" | Unspecified | pass=false | Failure { stage: Unknown, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view Alert | "The player stopped before it could identify the problem" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:none / forced
+unspecified | "Playback failed" | "the player stopped without a reported cause" | "The player stopped before it could identify the problem" | "" | Unspecified | pass=false | Failure { stage: Unknown, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,try_again,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "The player stopped before it could identify the problem" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:none / disabled
+unspecified | "Playback failed" | "the player stopped without a reported cause" | "The player stopped before it could identify the problem" | "" | Unspecified | pass=false | Failure { stage: Unknown, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view Alert | "The player stopped before it could identify the problem" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:an-unknown-arm / auto
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Cannot convert this item. Implementation for video encoder 'hevc' not found." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Cannot convert this item. Implementation for video encoder \'hevc\' not found.") | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:an-unknown-arm / forced
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Cannot convert this item. Implementation for video encoder 'hevc' not found." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Cannot convert this item. Implementation for video encoder \'hevc\' not found.") | footer carries the code=true <- idle,running,repaired,failed
+
+## arm:an-unknown-arm / disabled
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Cannot convert this item. Implementation for video encoder 'hevc' not found." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Cannot convert this item. Implementation for video encoder \'hevc\' not found.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:server / auto
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Cannot convert this item." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Cannot convert this item.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:server / forced
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "Cannot convert this item." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Cannot convert this item." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:server / disabled
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Cannot convert this item." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Cannot convert this item.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:server-empty / auto
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "" | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:server-empty / forced
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "" | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play could not play this stream" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:server-empty / disabled
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "" | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-no-original / auto
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and this item has no original file to play." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and this item has no original file to play.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-no-original / forced
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "Force Direct Play is on, and this item has no original file to play." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play is on, and this item has no original file to play." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-no-original / disabled
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and this item has no original file to play." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and this item has no original file to play.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-container / auto
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and this file’s container can’t play without conversion." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and this file’s container can’t play without conversion.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-container / forced
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "Force Direct Play is on, and this file’s container can’t play without conversion." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play is on, and this file’s container can’t play without conversion." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-container / disabled
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and this file’s container can’t play without conversion." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and this file’s container can’t play without conversion.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-video / auto
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and this video format can’t play without conversion." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and this video format can’t play without conversion.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-video / forced
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "Force Direct Play is on, and this video format can’t play without conversion." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play is on, and this video format can’t play without conversion." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-video / disabled
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and this video format can’t play without conversion." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and this video format can’t play without conversion.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-audio / auto
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and DTS audio can’t play without conversion." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and DTS audio can’t play without conversion.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-audio / forced
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "Force Direct Play is on, and DTS audio can’t play without conversion." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play is on, and DTS audio can’t play without conversion." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-audio / disabled
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and DTS audio can’t play without conversion." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and DTS audio can’t play without conversion.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-unauthorized / auto
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and the server didn’t allow the original file to play." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and the server didn’t allow the original file to play.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-unauthorized / forced
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "Force Direct Play is on, and the server didn’t allow the original file to play." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play is on, and the server didn’t allow the original file to play." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-unauthorized / disabled
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and the server didn’t allow the original file to play." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and the server didn’t allow the original file to play.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-open-failed / auto
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and the original file couldn’t be opened." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and the original file couldn’t be opened.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-open-failed / forced
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "Force Direct Play is on, and the original file couldn’t be opened." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play is on, and the original file couldn’t be opened." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:forced-open-failed / disabled
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and the original file couldn’t be opened." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and the original file couldn’t be opened.") | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:disabled / auto
+playback_policy | "Playback failed — Direct Play is disabled" | "Direct Play is disabled and this stream can only play as the original; the server was not asked to convert it" | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- every offer
+view Alert | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:disabled / forced
+playback_policy | "Playback failed — Direct Play is disabled" | "Direct Play is disabled and this stream can only play as the original; the server was not asked to convert it" | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | "Force Direct Play is on, so the server couldn’t step in with a converted stream." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play is on, so the server couldn’t step in with a converted stream." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:disabled / disabled
+playback_policy | "Playback failed — Direct Play is disabled" | "Direct Play is disabled and this stream can only play as the original; the server was not asked to convert it" | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Direct Play is disabled. This original-only stream requires Direct Play to be set to Auto." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:no-backend / auto
+no_qualified_backend | "Playback failed — this TV can’t play this file in PlxNative" | "no backend this build composes can play this item on this TV; the server was not asked" | "PlxNative can’t play this file on this TV yet" | "" | NoQualifiedBackend | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- every offer
+view Alert | "PlxNative can’t play this file on this TV yet" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:no-backend / forced
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "" | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play could not play this stream" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:no-backend / disabled
+no_qualified_backend | "Playback failed — this TV can’t play this file in PlxNative" | "no backend this build composes can play this item on this TV; the server was not asked" | "PlxNative can’t play this file on this TV yet" | "" | NoQualifiedBackend | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- every offer
+view Alert | "PlxNative can’t play this file on this TV yet" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:preview / auto
+preview_not_direct | "Playback failed — the media stream could not be opened" | "the media stream could not be opened or read" | "The media stream could not be opened" | "" | PreviewNotDirect | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- every offer
+view Alert | "The media stream could not be opened" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:preview / forced
+preview_not_direct | "Playback failed — the media stream could not be opened" | "the media stream could not be opened or read" | "The media stream could not be opened" | "" | PreviewNotDirect | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- every offer
+view Alert | "The media stream could not be opened" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:preview / disabled
+preview_not_direct | "Playback failed — the media stream could not be opened" | "the media stream could not be opened or read" | "The media stream could not be opened" | "" | PreviewNotDirect | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- every offer
+view Alert | "The media stream could not be opened" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:tuners / auto
+tuners_busy | "All tuners are busy" | "All tuners are busy" | "All tuners are busy" | "" | TunersBusy | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "All tuners are busy" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:tuners / forced
+tuners_busy | "All tuners are busy" | "All tuners are busy" | "All tuners are busy" | "" | TunersBusy | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "All tuners are busy" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## verdict:tuners / disabled
+tuners_busy | "All tuners are busy" | "All tuners are busy" | "All tuners are busy" | "" | TunersBusy | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "All tuners are busy" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## forced-audio-after-load / auto
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and DTS audio can’t play without conversion." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0 r1l1t0i1 r1l1t0i0
+row [change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and DTS audio can’t play without conversion.") | footer carries the code=true <- idle,running,repaired,failed
+
+## forced-audio-after-load / forced
+playback_policy | "Playback failed — Force Direct Play could not play this stream" | "Force Direct Play could not use the original stream; automatic fallback is disabled" | "Force Direct Play could not play this stream" | "Force Direct Play is on, and DTS audio can’t play without conversion." | PlaybackPolicy | pass=false | Failure { stage: Planning, cause: Unsupported }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "Force Direct Play is on, and DTS audio can’t play without conversion." | None | footer carries the code=true <- idle,running,repaired,failed
+
+## forced-audio-after-load / disabled
+decision_refused | "Playback failed — the server cannot play or convert this file" | "the server refused the item at /decision — it can neither direct play nor convert it" | "The server cannot play or convert this file" | "Force Direct Play is on, and DTS audio can’t play without conversion." | DecisionRefused | pass=false | Failure { stage: Planning, cause: Refused }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [play_automatically,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [play_automatically,back] <- r1l1t0i1 r1l1t0i0
+row [play_automatically,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ServerBadgeXmark | "The server cannot play or convert this file" | Some("Force Direct Play is on, and DTS audio can’t play without conversion.") | footer carries the code=true <- idle,running,repaired,failed
+
+## jail / auto
+jail_missing_rtkmem | "Playback failed — this TV\'s sandbox blocks native video" | "this install's sandbox blocks access to /dev/rtkmem; PlxNative can offer a confirmed repair through rooted Homebrew Channel access" | "This set's sandbox does not give the app /dev/rtkmem" | "Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help." | JailMissingRtkmem | pass=false | Failure { stage: Open, cause: Unsupported }
+row [repair,back] <- r0l0t0i1 r0l0t1i1 r0l1t0i1 r0l1t1i1 r1l0t0i1 r1l0t1i1 r1l1t0i1 r1l1t1i1
+row [back] <- r0l0t0i0 r0l0t1i0 r0l1t0i0 r0l1t1i0 r1l0t0i0 r1l0t1i0 r1l1t0i0 r1l1t1i0
+view LockBadgeAlert | "This set\'s sandbox does not give the app /dev/rtkmem" | Some("Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help.") | footer carries the code=true <- idle
+view LockBadgeAlert | "Repairing this app’s sandbox…" | Some("Wait for the result before closing the app.") | footer carries the code=true <- running
+view LockBadgeAlert | "Sandbox repair completed" | Some("Close and reopen PlxNative before playing video.") | footer carries the code=true <- repaired
+view LockBadgeAlert | "Sandbox repair could not be confirmed" | Some("Repair outcome is unknown. Close and reopen the app to check again.") | footer carries the code=true <- failed
+
+## jail / forced
+jail_missing_rtkmem | "Playback failed — this TV\'s sandbox blocks native video" | "this install's sandbox blocks access to /dev/rtkmem; PlxNative can offer a confirmed repair through rooted Homebrew Channel access" | "This set's sandbox does not give the app /dev/rtkmem" | "Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help." | JailMissingRtkmem | pass=false | Failure { stage: Open, cause: Unsupported }
+row [repair,back] <- r0l0t0i1 r0l0t1i1 r0l1t0i1 r0l1t1i1 r1l0t0i1 r1l0t1i1 r1l1t0i1 r1l1t1i1
+row [back] <- r0l0t0i0 r0l0t1i0 r0l1t0i0 r0l1t1i0 r1l0t0i0 r1l0t1i0 r1l1t0i0 r1l1t1i0
+view LockBadgeAlert | "This set\'s sandbox does not give the app /dev/rtkmem" | Some("Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help.") | footer carries the code=true <- idle
+view LockBadgeAlert | "Repairing this app’s sandbox…" | Some("Wait for the result before closing the app.") | footer carries the code=true <- running
+view LockBadgeAlert | "Sandbox repair completed" | Some("Close and reopen PlxNative before playing video.") | footer carries the code=true <- repaired
+view LockBadgeAlert | "Sandbox repair could not be confirmed" | Some("Repair outcome is unknown. Close and reopen the app to check again.") | footer carries the code=true <- failed
+
+## jail / disabled
+jail_missing_rtkmem | "Playback failed — this TV\'s sandbox blocks native video" | "this install's sandbox blocks access to /dev/rtkmem; PlxNative can offer a confirmed repair through rooted Homebrew Channel access" | "This set's sandbox does not give the app /dev/rtkmem" | "Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help." | JailMissingRtkmem | pass=false | Failure { stage: Open, cause: Unsupported }
+row [repair,back] <- r0l0t0i1 r0l0t1i1 r0l1t0i1 r0l1t1i1 r1l0t0i1 r1l0t1i1 r1l1t0i1 r1l1t1i1
+row [back] <- r0l0t0i0 r0l0t1i0 r0l1t0i0 r0l1t1i0 r1l0t0i0 r1l0t1i0 r1l1t0i0 r1l1t1i0
+view LockBadgeAlert | "This set\'s sandbox does not give the app /dev/rtkmem" | Some("Repair requires a rooted TV and Homebrew Channel access. See plxnative.com/troubleshooting/#playback-reports-jail_missing_rtkmem for help.") | footer carries the code=true <- idle
+view LockBadgeAlert | "Repairing this app’s sandbox…" | Some("Wait for the result before closing the app.") | footer carries the code=true <- running
+view LockBadgeAlert | "Sandbox repair completed" | Some("Close and reopen PlxNative before playing video.") | footer carries the code=true <- repaired
+view LockBadgeAlert | "Sandbox repair could not be confirmed" | Some("Repair outcome is unknown. Close and reopen the app to check again.") | footer carries the code=true <- failed
+
+## start-refused:load / auto
+load_timeout | "Playback failed — the TV did not finish starting the stream" | "the television media pipeline did not finish starting the stream in time" | "This TV did not finish starting the video stream in time" | "" | LoadTimeout | pass=false | Failure { stage: Open, cause: Timeout }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ClockBadgeAlert | "This TV did not finish starting the video stream in time" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## start-refused:load / forced
+load_timeout | "Playback failed — the TV did not finish starting the stream" | "the television media pipeline did not finish starting the stream in time" | "This TV did not finish starting the video stream in time" | "Force Direct Play is on, so the server couldn’t step in with a converted stream." | LoadTimeout | pass=false | Failure { stage: Open, cause: Timeout }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,try_again,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view ClockBadgeAlert | "This TV did not finish starting the video stream in time" | Some("Force Direct Play is on, so the server couldn’t step in with a converted stream.") | footer carries the code=true <- idle,running,repaired,failed
+
+## start-refused:load / disabled
+load_timeout | "Playback failed — the TV did not finish starting the stream" | "the television media pipeline did not finish starting the stream in time" | "This TV did not finish starting the video stream in time" | "" | LoadTimeout | pass=false | Failure { stage: Open, cause: Timeout }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ClockBadgeAlert | "This TV did not finish starting the video stream in time" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## start-refused:release / auto
+release_timeout | "Playback failed — the TV did not finish starting the stream" | "the television media pipeline did not finish starting the stream in time" | "This TV did not finish starting the video stream in time" | "" | ReleaseTimeout | pass=false | Failure { stage: Release, cause: Timeout }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ClockBadgeAlert | "This TV did not finish starting the video stream in time" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## start-refused:release / forced
+release_timeout | "Playback failed — the TV did not finish starting the stream" | "the television media pipeline did not finish starting the stream in time" | "This TV did not finish starting the video stream in time" | "Force Direct Play is on, so the server couldn’t step in with a converted stream." | ReleaseTimeout | pass=false | Failure { stage: Release, cause: Timeout }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,try_again,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view ClockBadgeAlert | "This TV did not finish starting the video stream in time" | Some("Force Direct Play is on, so the server couldn’t step in with a converted stream.") | footer carries the code=true <- idle,running,repaired,failed
+
+## start-refused:release / disabled
+release_timeout | "Playback failed — the TV did not finish starting the stream" | "the television media pipeline did not finish starting the stream in time" | "This TV did not finish starting the video stream in time" | "" | ReleaseTimeout | pass=false | Failure { stage: Release, cause: Timeout }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view ClockBadgeAlert | "This TV did not finish starting the video stream in time" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## bare / auto
+unspecified | "Playback failed" | "the player stopped without a reported cause" | "The player stopped before it could identify the problem" | "" | Unspecified | pass=false | Failure { stage: Unknown, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view Alert | "The player stopped before it could identify the problem" | None | footer carries the code=true <- idle,running,repaired,failed
+
+## bare / forced
+unspecified | "Playback failed" | "the player stopped without a reported cause" | "The player stopped before it could identify the problem" | "Force Direct Play is on, so the server couldn’t step in with a converted stream." | Unspecified | pass=false | Failure { stage: Unknown, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [play_automatically,try_again,back] <- r1l0t0i1 r1l0t0i0 r1l0t1i1 r1l0t1i0 r1l1t0i1 r1l1t0i0 r1l1t1i1 r1l1t1i0
+view Alert | "The player stopped before it could identify the problem" | Some("Force Direct Play is on, so the server couldn’t step in with a converted stream.") | footer carries the code=true <- idle,running,repaired,failed
+
+## bare / disabled
+unspecified | "Playback failed" | "the player stopped without a reported cause" | "The player stopped before it could identify the problem" | "" | Unspecified | pass=false | Failure { stage: Unknown, cause: Unknown }
+row [back] <- r0l0t0i1 r0l0t0i0 r0l0t1i1 r0l0t1i0 r0l1t0i1 r0l1t0i0 r0l1t1i1 r0l1t1i0
+row [try_again,change_quality,back] <- r1l0t0i1 r1l0t0i0
+row [try_again,change_quality,change_tracks,back] <- r1l0t1i1 r1l0t1i0
+row [try_again,back] <- r1l1t0i1 r1l1t0i0
+row [try_again,change_tracks,back] <- r1l1t1i1 r1l1t1i0
+view Alert | "The player stopped before it could identify the problem" | None | footer carries the code=true <- idle,running,repaired,failed

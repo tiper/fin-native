@@ -1737,6 +1737,13 @@ impl Bridge<'_> {
         d.nav.tabs.strip_selected = self.retained.chrome.key_at(selected);
     }
 
+    /// Does this host sample the dev triggers (`failtest`) for the player's failure? A controlled one (replay, a tape)
+    /// publishes explicit neutral facts and performs no IO to find more: the same line `publish_player_presentation`
+    /// draws.
+    pub(crate) fn samples_dev_triggers(&self) -> bool {
+        self.retained.live_screen_inputs
+    }
+
     /// Capture registry facts once per publication boundary. Stable frames only clone Arcs or
     /// compare generation hints; consent hashing and vectors run only after a semantic source move.
     pub(crate) fn publish_player_presentation(&mut self, ps: &plx_media::route::PlaybackSession) -> bool {

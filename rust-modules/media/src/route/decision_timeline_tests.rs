@@ -846,7 +846,7 @@ fn a_termination_on_the_answer_ends_the_reporter_and_keeps_the_server_s_reason()
         "the reporter ends here, so no more `playing` reaches the server"
     );
     let lines = requests_until_quiet(&rx);
-    let shape = crate::player::error_now(&ps);
+    let shape = crate::player::error_for_test(&ps);
     leave_recording_pms_case(&mut ps);
     crate::player::SHARED.reset_session();
     assert_eq!(lines.len(), 2, "the report, then the stop that clears the row: {lines:#?}");
@@ -874,7 +874,7 @@ fn server_stop_is_visible_while_dashboard_cleanup_waits_and_retires_the_row_once
     });
     let first = rx.recv_timeout(Duration::from_secs(5)).expect("playing(A)");
     let parked = rx.recv_timeout(Duration::from_secs(5)).expect("continuing stop(A)");
-    let shape = crate::player::error_now(&ps);
+    let shape = crate::player::error_for_test(&ps);
     commit_hls_encoder("logical-1236-abr-2");
 
     release.send(()).unwrap();
