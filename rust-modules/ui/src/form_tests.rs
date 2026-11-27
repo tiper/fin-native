@@ -545,21 +545,36 @@ fn map_retypes_bindings_demotes_declined_rows_and_slots_read_the_layout() {
     let order: Vec<Option<Id>> = before.slots().into_iter().map(|b| b.map(|b| b.id.clone())).collect();
     assert_eq!(order, [Some(Id::A), Some(Id::B), None, Some(Id::C), None, Some(Id::D)]);
 
-    let mapped = sample(true).map(|b| {
-        (b.id != Id::B).then(|| Binding {
-            id: format!("{:?}", b.id),
-            key: RowKey(b.key.0 + 1),
-            kind: b.kind,
-            action: (),
-            disabled: b.disabled,
-        })
-    });
+    let mapped = sample(true).map(
+        |id| (*id != Id::B).then(|| format!("{id:?}")),
+        |old, _, kind, _| Rebind { key: RowKey(old.key().0 + 1), kind, action: () },
+    );
     let mut t: FormTable<String, (), Dest> = FormTable::new(100);
     t.set(mapped, None);
     assert_eq!(t.focusable_len(), 3, "A, C, D stay; B was demoted");
     assert_eq!(t.id_at(1), None, "B keeps its layout index but is never bound");
     assert_eq!(t.table.sections[0].rows[1].label, "Beta", "drawn exactly as declared");
     assert_eq!(t.index_of_key(RowKey(11)), Some(0), "the key the closure answered is the key bound");
+}
+
+/// **A re-typing carries the aliases through the one `id` mapping**: an alias between two rows the new alphabet
+/// has follows them; one naming a row the mapping refuses (a demoted row) is dropped, and a `disabled` row stays
+/// disabled.
+#[test]
+fn map_carries_aliases_through_the_id_mapping_and_drops_those_it_refuses() {
+    let form = || sample(true).alias(Id::A, Id::C).alias(Id::B, Id::D);
+    let mapped = form().map(
+        |id| (*id != Id::B).then(|| format!("{id:?}")),
+        |old, _, kind, _| Rebind { key: old.key(), kind, action: () },
+    );
+    assert_eq!(mapped.stands_for(&"A".to_string()), "C", "both ends are in the new alphabet");
+    assert_eq!(mapped.stands_for(&"D".to_string()), "D");
+    assert_eq!(mapped.stands_for(&"B".to_string()), "B", "B was refused: its alias is dropped, not carried to D");
+
+    let disabled = F::new().section(S::new("S").item(Id::A, RowKind::Button, Act::A, Row::new("Alpha")).disabled(true));
+    let mut t: FormTable<String, (), Dest> = FormTable::new(100);
+    t.set(disabled.map(|id| Some(format!("{id:?}")), |_, _, kind, _| Rebind { key: RowKey(1), kind, action: () }), None);
+    assert!(t.activate(0).is_none(), "a disabled row stays disabled across a re-typing");
 }
 
 /// A row id that names itself for the accessibility ids ([`FormId::a11y`]), or does not.
@@ -600,7 +615,7 @@ fn a_form_id_names_its_row_and_the_name_survives_a_retype() {
                 .item(Named(1, Some("alpha")), RowKind::Button, (), Row::new("Alpha"))
                 .item(Named(2, None), RowKind::Button, (), Row::new("Beta")),
         )
-        .map(|b| Some(Binding { id: b.id.0, key: b.key, kind: b.kind, action: (), disabled: b.disabled }));
+        .map(|id| Some(id.0), |old, _, kind, _| Rebind { key: old.key(), kind, action: () });
     let mut u: FormTable<u32, (), ()> = FormTable::new(100);
     u.set(retyped, None);
     assert_eq!((u.a11y_name(0), u.a11y_name(1)), (Some("alpha"), None), "the name rides along a re-type");

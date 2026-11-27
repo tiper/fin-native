@@ -2,19 +2,20 @@
 //! commit of the *Audio & Subtitles* panel, with no session and no screen.
 //!
 //! The Detail hero's disc, the `…` menu's row and the playback failure screen's entry all open the
-//! same two-level panel, so the rows live here once and each host owns only its surface. A host
+//! same page-stacked panel, so its pages are built once (`PickerCore::page`, over `crate::track_rows`) and each host owns only its surface. A host
 //! holds a [`PickerState`], whose `ui::menu::Menu` owns the form, the stack and the slide (one stack,
 //! one slide, one header with the back mark); the host feeds it the screen's events through
 //! [`PickerState::on_screen`], and when the menu answers `Out::Picked` resolves the row to a [`Pick`]
 //! ([`PickerState::pick`], [`pick_of`]) and commits with [`commit`]. BACK pops a page before it dismisses.
 //!
-//! **Not a second track list.** Audio rows are [`crate::track_menu::audio_track_row`], the
-//! in-player Audio tab's own row; the Subtitles page is `metadata::sub_layout::sub_sections`
-//! grouped the same way (Off, your languages, one section per multi-track language) with the
-//! Subtitles tab's own row builders. Differences, each forced by there being no playback yet: no
-//! Timing / Style / Forced only (they act on a drawn subtitle or on the audio that plays), no
-//! "converted by the server" sub-line (no route), and the Other languages drill-in is flattened
-//! into one trailing section, A-Z (a second slide level for a rarely used list).
+//! **Not a second track list.** The Audio, Subtitles, Other languages and language pages are
+//! [`crate::track_rows`]'s: the same builders the in-player Tracks menu uses, in its
+//! [`TrackCx::Preplay`] context (`metadata::sub_layout::sub_sections`' grouping: Off, your languages, one section
+//! per multi-track language, ONE Other languages drill-in to a page of languages A-Z, each a pick or a drill-in to
+//! its tracks). This module adapts them to its own row alphabet ([`PickRow`], [`PickPage`]) with
+//! [`plx_ui::form::Form::map`] and builds only what is Detail's alone: the two-row root. What there is no
+//! playback for is not declared by the builders: no Timing / Style / Forced only (they act on a drawn subtitle or
+//! on the audio that plays) and no "converted by the server" sub-line (no route).
 //!
 //! **A pick is the user pick the in-player menu makes**: [`commit`] is
 //! [`plx_media::route::commit_preplay_pick`], which queues `PUT /library/parts/{id}?audioStreamID=..
@@ -35,25 +36,30 @@
 //! which the panel carries forward; a host that rebuilds a panel seeds it from the stored pick, never
 //! from the server's flags.
 
-use plx_data::metadata::sub_layout::{self, SubHeader, SubRow};
+use plx_data::metadata::sub_layout::{self, LangId, SubModel};
 use plx_data::metadata::track_names::TrackNames;
 use plx_data::metadata::{PreplayPick, Stream, SubPick};
 use plx_plex::plex::session::prefs::{AudioMemo, SubtitleMemo};
 use plx_machine::machine::Measure;
-use plx_ui::form::{Form, FormId, FormSection, RowKey, RowKind};
+use plx_ui::form::{Form, FormId, FormSection, Rebind, RowKey, RowKind};
 use plx_ui::menu::{Class, Event, Host, Menu, Out, Page};
 use plx_ui::table::{Row, Section};
 use plx_ui::Rect;
 
 use plx_media::route::PreplayItem;
-use crate::track_menu::{audio_track_row, flat_row, in_lang_row};
+use crate::track_menu::{TrackPage, TrackRow};
+use crate::track_rows::{self, TrackCx, TrackPageOf};
 
-/// The panel's pages. The root is the two rows; the other two are pushed by OK on one.
+/// The panel's pages. The root is the two rows; Audio and Subtitles are pushed by OK on one, and Other languages
+/// (then one language's tracks) by OK on Subtitles' Other languages row.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PickPage {
     Root,
     Audio,
     Subtitles,
+    OtherLanguages,
+    /// One several-track language's tracks; the payload is the language's [`LangId::stream`].
+    Language(i64),
 }
 
 /// A row's identity: a family base plus the track's index in the item's list, never a list
@@ -62,6 +68,10 @@ pub enum PickPage {
 pub enum PickRow {
     OpenAudio,
     OpenSubtitles,
+    /// The Other languages drill-in on the Subtitles page.
+    OpenOther,
+    /// A several-track language's drill-in on the Other languages page.
+    OpenLang(LangId),
     Audio(usize),
     SubOff,
     Sub(usize),
@@ -73,6 +83,9 @@ impl FormId for PickRow {
             PickRow::OpenAudio => 1,
             PickRow::OpenSubtitles => 2,
             PickRow::SubOff => 3,
+            PickRow::OpenOther => 4,
+            // a language's slot on its page: far below the track families (1000+, 2000+), above the fixed rows
+            PickRow::OpenLang(lang) => 100 + (lang.slot as u32).min(899),
             PickRow::Audio(i) => 1000 + *i as u32,
             PickRow::Sub(i) => 2000 + *i as u32,
         })
@@ -118,7 +131,7 @@ pub fn chosen(set: TrackSet<'_>, pick: Option<&PreplayPick>) -> Chosen {
         .unwrap_or(0);
     // The server's selected subtitle, even a sidecar the app cannot draw: Off must not read as
     // checked while the server still has a track selected (the page then lists it, see
-    // `subtitle_form`).
+    // `PickerCore::model`).
     let sub = match pick.map_or(SubPick::Server, |p| p.sub) {
         SubPick::Server => set.subs.iter().position(|s| s.selected),
         SubPick::Off => None,
@@ -169,64 +182,57 @@ pub fn root_form(set: TrackSet<'_>, now: Chosen) -> PickForm {
     )
 }
 
-/// The Audio page: the in-player Audio tab's rows, the chosen one checked.
-pub fn audio_form(set: TrackSet<'_>, now: Chosen) -> PickForm {
-    let names = TrackNames::new();
-    let mut sec = FormSection::new(plx_os::i18n::msg::widgets_tracks_audio());
-    for i in 0..set.audio.len() {
-        sec = sec.item(PickRow::Audio(i), RowKind::Choice, (), audio_track_row(set.audio, i, i == now.audio, &names, |s| s));
-    }
-    Form::new().section(sec)
+/// A row of the shared builders' alphabet as this panel's: the rows a [`TrackCx::Preplay`] page declares. The rest
+/// (Boost, Loudness, Forced only, Timing, Style and the search rows) act on a session, are never declared for it
+/// and have no row here.
+fn pick_row(id: &TrackRow) -> Option<PickRow> {
+    Some(match *id {
+        TrackRow::Audio(i) => PickRow::Audio(i),
+        TrackRow::SubOff => PickRow::SubOff,
+        TrackRow::Sub(i) => PickRow::Sub(i),
+        TrackRow::OpenOther => PickRow::OpenOther,
+        TrackRow::OpenLang(lang) => PickRow::OpenLang(lang),
+        TrackRow::Boost
+        | TrackRow::Loudness
+        | TrackRow::SubForcedOnly
+        | TrackRow::Timing
+        | TrackRow::Style
+        | TrackRow::OpenField(_)
+        | TrackRow::Choice(..)
+        | TrackRow::OpenSearch
+        | TrackRow::SearchLang
+        | TrackRow::SearchRetry
+        | TrackRow::SearchHit(_)
+        | TrackRow::LangChoice(_) => return None,
+    })
 }
 
-/// The Subtitles page: `sub_layout::sub_sections`' grouping with the Subtitles tab's rows. `yours`
-/// is "your languages" in preference order (the plan's account preference, then the playing
-/// audio's language; callers pass what they know). The model's Timing / Style / Forced only rows
-/// and its Other languages drill-in are not drawn (see the module doc): the languages behind that
-/// row follow as one section, A-Z.
-pub fn subtitle_form(set: TrackSet<'_>, now: Chosen, yours: &[String]) -> PickForm {
-    let names = TrackNames::new();
-    let shown: Vec<usize> =
-        (0..set.subs.len()).filter(|i| offered(&set.subs[*i]) || now.sub == Some(*i)).collect();
-    let model = sub_layout::sub_sections(set.subs, &shown, &names, yours, false);
-    let active = now.sub.map_or(-1, |i| i as i32);
-    let mut form = Form::new();
-    for sec in &model.sections {
-        let head = match &sec.header {
-            // Kept on purpose: the in-player Subtitles tab draws the same `SubHeader::Subtitles` label under its
-            // own Subtitles tab, so the title band + label pair is the track menu's (parity, not a duplicate).
-            SubHeader::Subtitles => Section::new(plx_os::i18n::msg::widgets_tracks_subtitles()),
-            SubHeader::Language { name, tracks } => {
-                Section::new(name.clone()).accessory(plx_os::i18n::msg::widgets_tracks_count(*tracks as i64))
-            }
-            SubHeader::Bare => Section::new(""),
-        };
-        let mut out = FormSection::from_head(head);
-        for row in &sec.rows {
-            out = match row {
-                SubRow::Off => out.item(
-                    PickRow::SubOff,
-                    RowKind::Choice,
-                    (),
-                    Row::new(plx_os::i18n::msg::widgets_tracks_off()).checked(now.sub.is_none()),
-                ),
-                SubRow::Flat(t) => out.item(PickRow::Sub(t.i), RowKind::Choice, (), flat_row(t, active)),
-                SubRow::InLanguage(t) => out.item(PickRow::Sub(t.i), RowKind::Choice, (), in_lang_row(t, active)),
-                SubRow::ForcedOnly | SubRow::OtherLanguages { .. } | SubRow::Timing | SubRow::Style => out,
-            };
+/// A page a shared builder's drill-in names, as this panel's. The pages behind Style and the search are reached
+/// only by rows [`pick_row`] has no row for, so no page of this panel declares a drill-in to them.
+fn pick_page(page: TrackPage) -> PickPage {
+    match page {
+        TrackPage::OtherLanguages => PickPage::OtherLanguages,
+        TrackPage::Language(stream) => PickPage::Language(stream),
+        TrackPage::Style | TrackPage::Picker(_) | TrackPage::Search | TrackPage::SearchLanguage => {
+            unreachable!("a row that opens {page:?} has no row in this panel, so it is demoted before its kind is read")
         }
-        form = form.section(out);
     }
-    if !model.other.is_empty() {
-        let mut out = FormSection::new(plx_os::i18n::msg::widgets_tracks_other_languages());
-        for lang in &model.other {
-            for t in &lang.tracks {
-                out = out.item(PickRow::Sub(t.i), RowKind::Choice, (), flat_row(t, active));
-            }
-        }
-        form = form.section(out);
-    }
-    form
+}
+
+/// A shared page in this panel's alphabet: every row re-identified ([`pick_row`], its focus key this alphabet's
+/// own), the language aliases kept, the title and the opening row carried across.
+fn adapt(page: TrackPageOf) -> Page<PickRow, (), PickPage> {
+    let form = page.form.map(pick_row, |_, id, kind, ()| Rebind {
+        key: id.key(),
+        kind: match kind {
+            RowKind::Nav(page) => RowKind::Nav(pick_page(page)),
+            RowKind::Toggle => RowKind::Toggle,
+            RowKind::Choice => RowKind::Choice,
+            RowKind::Button => RowKind::Button,
+        },
+        action: (),
+    });
+    Page::new(form, page.title).initial(page.initial.as_ref().and_then(pick_row))
 }
 
 /// What a focused row means when OK lands on it.
@@ -244,6 +250,8 @@ pub fn pick_of(row: PickRow) -> Pick {
     match row {
         PickRow::OpenAudio => Pick::Open(PickPage::Audio),
         PickRow::OpenSubtitles => Pick::Open(PickPage::Subtitles),
+        PickRow::OpenOther => Pick::Open(PickPage::OtherLanguages),
+        PickRow::OpenLang(lang) => Pick::Open(PickPage::Language(lang.stream)),
         PickRow::Audio(i) => Pick::Audio(i),
         PickRow::SubOff => Pick::Subtitle(None),
         PickRow::Sub(i) => Pick::Subtitle(Some(i)),
@@ -356,31 +364,33 @@ impl PickerCore {
         self.tracks.audio.get(self.now().audio).map(|a| a.lang_code.clone()).filter(|c| !c.is_empty()).into_iter().collect()
     }
 
-    /// The rows of `page`, as the standalone panel and the menu both show them.
-    pub fn page_form(&self, page: PickPage) -> PickForm {
-        match page {
-            PickPage::Root => root_form(self.set(), self.now()),
-            PickPage::Audio => audio_form(self.set(), self.now()),
-            PickPage::Subtitles => subtitle_form(self.set(), self.now(), &self.yours()),
-        }
+    /// **The grouping behind the Subtitles page and the pages under it**: `sub_layout::sub_sections` over what
+    /// is offered before playback (the embedded tracks and the sidecars the app can draw itself, and the chosen
+    /// track whatever it is, so Off never reads as checked while the server still has one selected), with no
+    /// Timing and Style.
+    fn model(&self, now: Chosen) -> SubModel {
+        let set = self.set();
+        let shown: Vec<usize> = (0..set.subs.len()).filter(|i| offered(&set.subs[*i]) || now.sub == Some(*i)).collect();
+        sub_layout::sub_sections(set.subs, &shown, &TrackNames::new(), &self.yours(), false)
     }
 
-    /// Where focus opens on a page: the checked row, so the viewer sees what is chosen.
-    pub fn page_initial(&self, page: PickPage) -> Option<PickRow> {
-        match page {
-            PickPage::Root => None,
-            PickPage::Audio => Some(PickRow::Audio(self.now().audio)),
-            PickPage::Subtitles => Some(self.now().sub.map_or(PickRow::SubOff, PickRow::Sub)),
-        }
-    }
-
-    /// The page's title band (`None` for the root).
-    pub fn title_of(page: PickPage) -> Option<String> {
-        match page {
-            PickPage::Root => None,
-            PickPage::Audio => Some(plx_os::i18n::msg::widgets_tracks_audio().to_string()),
-            PickPage::Subtitles => Some(plx_os::i18n::msg::widgets_tracks_subtitles().to_string()),
-        }
+    /// **A page of the panel**, as the standalone panel and the menu both show it: its rows, its title band (the
+    /// root has none) and the row focus opens on (the checked one, so the viewer sees what is chosen). Audio,
+    /// Subtitles, Other languages and a language are [`crate::track_rows`]'s pages in [`TrackCx::Preplay`]. `None`
+    /// for a language that is no longer offered.
+    pub fn page(&self, page: PickPage) -> Option<Page<PickRow, (), PickPage>> {
+        let now = self.now();
+        let cx = TrackCx::Preplay { audio: now.audio, sub: now.sub };
+        Some(match page {
+            PickPage::Root => Page::root(root_form(self.set(), now)),
+            PickPage::Audio => adapt(track_rows::audio_page(&cx, &self.tracks.audio, &TrackNames::new(), None)),
+            PickPage::Subtitles => adapt(track_rows::subtitles_page(&cx, &self.model(now), None)),
+            PickPage::OtherLanguages => adapt(track_rows::other_languages_page(&cx, &self.model(now).other)),
+            PickPage::Language(stream) => {
+                let model = self.model(now);
+                model.other.iter().any(|o| o.id.stream == stream).then(|| adapt(track_rows::language_page(&cx, &model.other, stream)))?
+            }
+        })
     }
 
     /// A pick (not a drill-in): carry the choice forward as the standing pick and answer what it
@@ -402,8 +412,7 @@ pub struct PickerState {
 
 /// `page` (`None` asks for the root), built from the core: its rows, its header and the row focus opens on.
 fn page_of(core: &PickerCore, page: Option<PickPage>) -> Option<Page<PickRow, (), PickPage>> {
-    let page = page.unwrap_or(PickPage::Root);
-    Some(Page::new(core.page_form(page), PickerCore::title_of(page).unwrap_or_default()).initial(core.page_initial(page)))
+    core.page(page.unwrap_or(PickPage::Root))
 }
 
 impl PickerState {
@@ -523,14 +532,151 @@ mod tests {
         assert_eq!(subtitle_label(set, now.sub), plx_os::i18n::msg::widgets_tracks_off());
     }
 
+    /// A picker core over `audio` and `subs`, with no pick: the item the server's flags describe.
+    fn core_of(audio: &[Stream], subs: &[Stream]) -> PickerCore {
+        PickerCore::new(plx_data::metadata::PreplayTracks {
+            sid: plx_plex::plex::ServerId::from_raw(0),
+            rk: "m1".into(),
+            kind: "movie".into(),
+            show_rk: String::new(),
+            part: "/library/parts/9001/1/f.mkv".into(),
+            audio: audio.to_vec(),
+            subs: subs.to_vec(),
+            pick: None,
+        })
+    }
+
     #[test]
     fn the_pages_list_every_track_and_off() {
         let (audio, subs) = item();
-        let set = TrackSet { part_id: 9, audio: &audio, subs: &subs };
-        let now = chosen(set, None);
-        assert_eq!(rows(&audio_form(set, now)), 2);
-        // Off + the two subtitles
-        assert_eq!(rows(&subtitle_form(set, now, &[])), 3);
+        let core = core_of(&audio, &subs);
+        assert_eq!(rows(&core.page(PickPage::Audio).unwrap().form), 2);
+        // Off, the audio's language and the Other languages drill-in that holds the third
+        assert_eq!(rows(&core.page(PickPage::Subtitles).unwrap().form), 3);
+    }
+
+    /// A many-language item: English audio, English subs ("yours"), single-track Dutch, three-track French.
+    fn many_languages() -> (Vec<Stream>, Vec<Stream>) {
+        let mut sdh = stream(303, "French", "fra");
+        sdh.title = "SDH".into();
+        let mut commentary = stream(304, "French", "fra");
+        commentary.title = "Commentary".into();
+        (
+            vec![stream(101, "English", "eng")],
+            vec![stream(201, "English", "eng"), stream(301, "Dutch", "nld"), stream(302, "French", "fra"), sdh, commentary],
+        )
+    }
+
+    /// **Other languages is a drill-in on Detail, as in the player**: one row on the Subtitles page, a page of
+    /// one row per language A-Z (a single track is a pick, several a drill-in) and a page of the language's tracks.
+    #[test]
+    fn other_languages_is_a_drill_in_with_a_page_per_language() {
+        let (audio, subs) = many_languages();
+        let core = core_of(&audio, &subs);
+        let ids = |page: PickPage| -> Vec<PickRow> {
+            core.page(page).unwrap().form.slots().iter().flatten().map(|b| b.id).collect()
+        };
+        let lang = |stream: i64| match ids(PickPage::OtherLanguages).into_iter().find(|id| matches!(id, PickRow::OpenLang(l) if l.stream == stream)) {
+            Some(PickRow::OpenLang(l)) => l,
+            other => panic!("no drill-in for {stream}: {other:?}"),
+        };
+        assert_eq!(ids(PickPage::Subtitles), [PickRow::SubOff, PickRow::Sub(0), PickRow::OpenOther], "no flattened section");
+        // Dutch is one track: a direct pick; French holds three: a drill-in named by its first track
+        let french = lang(302);
+        assert_eq!(ids(PickPage::OtherLanguages), [PickRow::Sub(1), PickRow::OpenLang(french)]);
+        assert_eq!(pick_of(PickRow::OpenOther), Pick::Open(PickPage::OtherLanguages));
+        assert_eq!(pick_of(PickRow::OpenLang(french)), Pick::Open(PickPage::Language(302)));
+        // ranked full < SDH < commentary, titled by the language
+        let page = core.page(PickPage::Language(302)).unwrap();
+        assert_eq!(page.title, "French");
+        assert_eq!(page.form.slots().iter().flatten().map(|b| b.id).collect::<Vec<_>>(), [PickRow::Sub(2), PickRow::Sub(3), PickRow::Sub(4)]);
+        assert!(core.page(PickPage::Language(999)).is_none(), "a language that is not offered has no page");
+    }
+
+    /// The adapter demotes nothing: every row the shared builders declare for a viewer choosing before playback
+    /// is a row of this panel, so no page of it draws an inert row where a pick should be.
+    #[test]
+    fn the_preplay_builders_declare_only_rows_this_panel_has() {
+        let (audio, subs) = many_languages();
+        let core = core_of(&audio, &subs);
+        let now = core.now();
+        let cx = TrackCx::Preplay { audio: now.audio, sub: now.sub };
+        let model = core.model(now);
+        let pages = [
+            (PickPage::Audio, track_rows::audio_page(&cx, &audio, &TrackNames::new(), None)),
+            (PickPage::Subtitles, track_rows::subtitles_page(&cx, &model, None)),
+            (PickPage::OtherLanguages, track_rows::other_languages_page(&cx, &model.other)),
+            (PickPage::Language(302), track_rows::language_page(&cx, &model.other, 302)),
+        ];
+        for (page, shared) in pages {
+            let declared = shared.form.slots().iter().flatten().count();
+            assert!(declared > 0, "{page:?} has rows");
+            assert_eq!(rows(&core.page(page).unwrap().form), declared, "{page:?}: every declared row maps");
+        }
+    }
+
+    /// The chosen track opens its page on the row that stands for it: behind Other languages, that is the drill-in
+    /// on the Subtitles page, the language's row on the Other languages page and the track on its language page.
+    #[test]
+    fn a_page_opens_on_the_row_that_stands_for_the_chosen_track() {
+        let (audio, subs) = many_languages();
+        let mut core = core_of(&audio, &subs);
+        let initial = |core: &PickerCore, page| core.page(page).unwrap().initial;
+        assert_eq!(initial(&core, PickPage::Subtitles), Some(PickRow::SubOff));
+        assert_eq!(initial(&core, PickPage::OtherLanguages), Some(PickRow::Sub(1)), "no check: the first language");
+        core.select(Pick::Subtitle(Some(3))).expect("an SDH French track picks");
+        assert_eq!(initial(&core, PickPage::Subtitles), Some(PickRow::OpenOther));
+        let Some(PickRow::OpenLang(french)) = initial(&core, PickPage::OtherLanguages) else { panic!("the French drill-in") };
+        assert_eq!(french.stream, 302);
+        assert_eq!(initial(&core, PickPage::Language(302)), Some(PickRow::Sub(3)));
+        // the drill-in reads out the variant that is checked
+        let table = core.page(PickPage::OtherLanguages).unwrap().form;
+        let mut built = plx_ui::form::FormTable::new(plx_ui::table_screen::BAND_BASE);
+        built.set(table, None);
+        let row = built.table.sections.iter().flat_map(|sec| &sec.rows).find(|r| r.label == "French").expect("the French row");
+        assert!(row.checked, "the language holding the chosen track is checked");
+        assert_eq!(row.value.as_deref(), Some("SDH"));
+    }
+
+    /// **The keys are distinct and stay below the item menu's ceiling**: the fixed rows, a language's drill-in per
+    /// slot, and both track families, so no two rows of the panel (or, offset by `PICK_KEY_BASE`, of the item menu
+    /// it is hosted in) share a focus key.
+    #[test]
+    fn pick_row_keys_are_distinct_and_below_the_ceiling() {
+        let lang = |slot| PickRow::OpenLang(LangId { stream: 1000 + slot as i64, slot });
+        let mut ids = vec![PickRow::OpenAudio, PickRow::OpenSubtitles, PickRow::SubOff, PickRow::OpenOther];
+        ids.extend((0..899).map(lang));
+        ids.extend((0..200).flat_map(|i| [PickRow::Audio(i), PickRow::Sub(i)]));
+        let keys: Vec<u32> = ids.iter().map(|i| i.key().0).collect();
+        for (n, a) in keys.iter().enumerate() {
+            assert!(*a < 3000, "{a} is below the item menu's own keys");
+            assert!(!keys[n + 1..].contains(a), "duplicate key {a}");
+        }
+    }
+
+    /// A language that changes shape under a viewer: the chosen track is shown even when it is not offered (a
+    /// sidecar the app cannot draw), so picking its sibling inside the language page shrinks the language to one
+    /// track, and the drill-in the page was opened from is now the direct row. The pop lands on it (the alias the
+    /// shared builder declares survives the adapter).
+    #[test]
+    fn a_pop_lands_on_the_row_a_shrunk_language_became() {
+        let (audio, mut subs) = many_languages();
+        // the two extra French tracks: one embedded (offered), one external PGS the app cannot draw
+        subs.truncate(3);
+        let mut pgs = stream(303, "French", "fra");
+        pgs.external = true;
+        pgs.codec = "pgs".into();
+        subs.push(pgs);
+        let mut core = core_of(&audio, &subs);
+        core.select(Pick::Subtitle(Some(3))).expect("the PGS track is chosen");
+        let drill_in = |core: &PickerCore| {
+            core.page(PickPage::OtherLanguages).unwrap().form.slots().iter().flatten().map(|b| b.id).find(|id| matches!(id, PickRow::OpenLang(_)))
+        };
+        let Some(open) = drill_in(&core) else { panic!("two tracks while the PGS one is chosen") };
+        core.select(Pick::Subtitle(Some(2))).expect("the embedded track picks");
+        assert_eq!(drill_in(&core), None, "one track now: a direct row");
+        let form = core.page(PickPage::OtherLanguages).unwrap().form;
+        assert_eq!(form.stands_for(&open), PickRow::Sub(2), "the pop seats the cursor on the direct row");
     }
 
     #[test]
@@ -599,7 +745,7 @@ mod tests {
         assert_eq!((p.page(), p.depth()), (PickPage::Root, 0));
         assert_eq!(p.step(Event::Ok(PickRow::OpenSubtitles.key().0)), Out::Moved, "a drill-in pushes");
         assert_eq!((p.page(), p.depth()), (PickPage::Subtitles, 1));
-        assert_eq!(p.menu().form().focusable_len(), 3, "Off and the two tracks");
+        assert_eq!(p.menu().form().focusable_len(), 3, "Off, the track in the audio's language and the Other languages row");
         assert_eq!(p.step(Event::Back), Out::Moved, "BACK pops");
         assert_eq!((p.page(), p.depth()), (PickPage::Root, 0));
         assert_eq!(p.step(Event::Back), Out::Dismiss, "at the root BACK leaves the panel");

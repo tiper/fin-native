@@ -240,6 +240,8 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Focusable<H> for PreplayPan
             PickRow::OpenAudio => A11yPath::new().name("audio"),
             PickRow::OpenSubtitles => A11yPath::new().name("subtitles"),
             PickRow::SubOff => A11yPath::new().name("subtitle").name("off"),
+            PickRow::OpenOther => A11yPath::new().name("subtitle").name("other"),
+            PickRow::OpenLang(lang) => A11yPath::new().name("subtitle").name("lang").index(lang.slot),
             PickRow::Audio(i) => A11yPath::new().name("audio").index(i),
             PickRow::Sub(i) => A11yPath::new().name("subtitle").index(i),
         })

@@ -86,6 +86,14 @@ pub enum Activation<A, Dest> {
     Action(A),
 }
 
+/// What a re-typed row keeps of its binding ([`Form::map`]): the focus key and the kind and action in the new
+/// alphabet. Its identity is the one `map`'s `id` answered, and `disabled` carries over.
+pub struct Rebind<A, Dest> {
+    pub key: RowKey,
+    pub kind: RowKind<Dest>,
+    pub action: A,
+}
+
 /// A focusable row's non-visual half, kept parallel to the table by [`FormTable`] alone.
 #[derive(Clone, Debug)]
 pub struct Binding<Id, A, Dest> {
@@ -326,14 +334,22 @@ impl<Id, A, Dest> Form<Id, A, Dest> {
             })
             .collect()
     }
-    /// Re-type every focusable row (identity, action and the drill-in destination's type): `f` gets each binding and answers its replacement, or `None` to
-    /// demote the row to an inert slot — still DRAWN exactly as declared, but never focusable.
-    /// Sections, headers, accessories and every row's presentation pass through untouched, so a
-    /// shared builder (`appkit::source_list::form`) serves a surface that has its own row identities.
-    pub fn map<Id2, A2, Dest2>(self, mut f: impl FnMut(Binding<Id, A, Dest>) -> Option<Binding<Id2, A2, Dest2>>) -> Form<Id2, A2, Dest2> {
-        // the aliases name rows of the old identity: they do not survive a re-typing
+    /// **Re-type the form**: the ONE way a form moves to another row alphabet. `id` names each row's identity in
+    /// the new alphabet, once (`None` demotes the row to an inert slot: still DRAWN exactly as declared, never
+    /// focusable); `row` then gets the old identity, the new one, and the row's kind and action, and answers the new
+    /// [`Rebind`] (key, kind, action). The form's aliases ([`Self::alias`]) go through the same `id`, so what a
+    /// page declares about a pop survives the re-typing, and an alias naming a row `id` refuses is dropped. A
+    /// `disabled` row stays disabled. Sections, headers, accessories and every row's presentation pass through
+    /// untouched, so a shared builder (`appkit::source_list::form`, `appkit::track_rows`) serves a surface that has
+    /// its own row identities.
+    pub fn map<Id2, A2, Dest2>(
+        self,
+        mut id: impl FnMut(&Id) -> Option<Id2>,
+        mut row: impl FnMut(&Id, &Id2, RowKind<Dest>, A) -> Rebind<A2, Dest2>,
+    ) -> Form<Id2, A2, Dest2> {
+        let aliases = self.aliases.into_iter().filter_map(|(was, is)| Some((id(&was)?, id(&is)?))).collect();
         Form {
-            aliases: Vec::new(),
+            aliases,
             sections: self
                 .sections
                 .into_iter()
@@ -345,11 +361,14 @@ impl<Id, A, Dest> Form<Id, A, Dest> {
                         .slots
                         .into_iter()
                         .map(|slot| match slot {
-                            Slot::Item(b, row, name) => match f(b) {
-                                Some(b2) => Slot::Item(b2, row, name),
-                                None => Slot::Inert(row),
+                            Slot::Item(b, row_, name) => match id(&b.id) {
+                                Some(id2) => {
+                                    let Rebind { key, kind, action } = row(&b.id, &id2, b.kind, b.action);
+                                    Slot::Item(Binding { id: id2, key, kind, action, disabled: b.disabled }, row_, name)
+                                }
+                                None => Slot::Inert(row_),
                             },
-                            Slot::Inert(row) => Slot::Inert(row),
+                            Slot::Inert(row_) => Slot::Inert(row_),
                         })
                         .collect(),
                 })

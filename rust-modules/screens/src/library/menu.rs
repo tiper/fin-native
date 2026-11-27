@@ -17,7 +17,7 @@ use plx_machine::machine::{
 use plx_ui::a11y::{A11y, A11yPath};
 use plx_ui::menu::{Event, GrowWidth, Menu, Out, Page};
 use plx_ui::screen::{At, Dir, Focusable, GroupSpec, Placed, RenderStrategy, Screen, ScreenEvent, Step};
-use plx_ui::form::{Binding, Form, FormSection, FormTable, RowKey, RowKind};
+use plx_ui::form::{Form, FormSection, FormTable, Rebind, RowKey, RowKind};
 use plx_appkit::source_list::{self, SrcTarget, Tail};
 use plx_ui::page_stack;
 use plx_ui::table::{Row, TableView};
@@ -90,16 +90,19 @@ fn choice(section: MenuSection, identity: String, action: Action, row: Row) -> M
 /// Give every focusable row the key its identity owns in `identities` (an identity keeps its key
 /// for the menu's life, so focus follows a row across a reorder), interning new ones.
 fn number(form: MenuForm, identities: &mut Vec<String>) -> MenuForm {
-    form.map(|b| {
-        let key = match identities.iter().position(|old| old == &b.id) {
-            Some(i) => i as u32,
-            None => {
-                identities.push(b.id.clone());
-                (identities.len() - 1) as u32
-            }
-        };
-        Some(Binding { key: RowKey(key), ..b })
-    })
+    form.map(
+        |id| Some(id.clone()),
+        |_, id, kind, action| {
+            let key = match identities.iter().position(|old| old == id) {
+                Some(i) => i as u32,
+                None => {
+                    identities.push(id.clone());
+                    (identities.len() - 1) as u32
+                }
+            };
+            Rebind { key: RowKey(key), kind, action }
+        },
+    )
 }
 
 #[derive(Default)]
@@ -270,22 +273,21 @@ fn library_form(
             None => stamp.tag(6),
         }
     }
-    let form = source_form.map(|b| match b.action {
-        SrcTarget::Library(index) => addresses.remove(&index).map(|(identity, target)| Binding {
-            id: identity,
+    // a library the directory has no address for has no identity here: drawn, never focusable
+    let form = source_form.map(
+        |id| match id {
+            SrcTarget::Library(index) => addresses.get(index).map(|(identity, _)| identity.clone()),
+            SrcTarget::Recheck => Some("recheck".to_string()),
+        },
+        |old, _, kind, _| Rebind {
             key: RowKey(0),
-            kind: widen(b.kind),
-            action: Action::Select(target),
-            disabled: b.disabled,
-        }),
-        SrcTarget::Recheck => Some(Binding {
-            id: "recheck".into(),
-            key: RowKey(0),
-            kind: widen(b.kind),
-            action: Action::Recheck,
-            disabled: b.disabled,
-        }),
-    });
+            kind: widen(kind),
+            action: match old {
+                SrcTarget::Library(index) => Action::Select(addresses[index].1.clone()),
+                SrcTarget::Recheck => Action::Recheck,
+            },
+        },
+    );
     (form, selected)
 }
 

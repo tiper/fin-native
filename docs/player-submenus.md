@@ -11,7 +11,7 @@ state) and PR 3 (Other languages, the language pages, the image-subtitle badge) 
 panel resize and page slide for Tracks and More, `ui::panel_motion`, plus the device frame-time
 scene) and PR 5 (More -> Quality on the shared `ui::page_stack::PageStack`, the `more-quality-osc`
 scene) are what this repository has. (The Detail hosts' pages, the hero and tile `…` menus, Select Version
-and Audio & Subtitles, are on `PageStack` too, driven by `ui::menu::Menu` (one machine for the push, pop, slide, placement and stops)
+and Audio & Subtitles (with the same Other languages drill-in as here), are on `PageStack` too, driven by `ui::menu::Menu` (one machine for the push, pop, slide, placement and stops)
 instead of the per-popover code the Tracks and More menus still use; the player's menus move onto it in a later change.) The replay anchors were re-recorded for PR 2 and again for PR 5
 because the overlay's state shape changed on purpose.
 
@@ -120,8 +120,11 @@ re-recorded.
   back" want different scroll and pill behaviour.
 - **Page stack** (`TrackMenuState::pages`, `TrackPage`): one `FormTable` serves the active page;
   a push saves the opener's `TrackRow` and the scroll, a pop restores both. To add a page: a
-  `TrackPage` variant (with a `title` and a stable `code`), its form in `page_form`, its explicit
-  `page_initial`, a Nav row whose `Dest` is the variant, and the `TrackRow`s it needs.
+  `TrackPage` variant (with a stable `code`), its `Page` (rows, title, explicit initial id) in
+  `TrackCore::build_page`, a Nav row whose `Dest` is the variant, and the `TrackRow`s it needs. The
+  track pages (Audio, Subtitles, Other languages, a language) are not built there but in
+  `appkit::track_rows`, which Detail's Audio & Subtitles picker builds from too (`TrackCx::Preplay`,
+  adapted with `Form::map`, which carries the language aliases): one place turns an item's tracks into rows.
 - **Form extensions**, reusable by Settings PRs 3-5 (`docs/settings-form.md`): a Nav row gets the
   chevron from its kind; Choice rows derive `checked` from a current-value predicate; an item can be
   disabled (`Row::disabled`: focusable, ghost pill under focus, inert).

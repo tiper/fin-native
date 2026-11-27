@@ -64,8 +64,9 @@ true of the tree any more.
   key per set().
 - Three read/transform helpers on `Form` serve the dynamic menus (PR 5): `contains(&Id)` (is this
   focusable row in the built form — what a rebuild asks before naming a landing id), `slots()`
-  (the layout in order, `None` at inert slots) and `map(f)` (re-type every binding, or demote a row
-  to an inert slot that is still drawn). The Library menu builds its Sources rows from the shared
+  (the layout in order, `None` at inert slots) and `map(id, row)`, the ONE re-typing (`id` names each row's
+  identity in the new alphabet once, `None` demoting the row to an inert slot that is still drawn; `row` gets the old
+  id, the new id, kind and action and answers a `Rebind { key, kind, action }`; aliases and `disabled` ride along). The Library menu builds its Sources rows from the shared
   `source_list::form` this way and assigns interned keys afterwards.
 - Disappearing id on `set` (sign-out removes rows, a server vanishes): nearest surviving
   selectable row in the OLD order — prefer the next, else the previous; menus keep their existing
