@@ -1,6 +1,6 @@
 //! The hosted contract's logic (`docs/platform-ports.md`, Target shape 7), with no Ecore and no EGL in it.
 //!
-//! [`Hosted`] is everything behind the three C exports: the gate every host-bound callback enters through,
+//! [`Hosted`] is everything behind the header's `plx_host_*` C exports: the gate every host-bound callback enters through,
 //! the exactly-once completion, the bounded input queue, the copy of the host's callback table, and the
 //! start, post, stop and deliver steps. It is an instance (built by a `const fn`, held in one `static` by
 //! [`crate::exports`]) so a host test builds its own and drives it with a fake host table and injected
@@ -252,6 +252,34 @@ impl Hosted {
         self.player.accept(event).map_or_else(|code| code, |()| host_abi::OK)
     }
 
+    /// `plx_host_post_cue`: copy the host's subtitle cue and queue it (`plx_host.h`, PLAYER, CUE). Refused when the loop
+    /// is not running or a stop was requested, stale for an epoch that is not live, and dropped (counted) when the cue
+    /// queue is full. Never blocks.
+    pub fn post_cue(&self, cue: *const host_abi::PlxHostCue) -> i32 {
+        // SAFETY: `cue` is the host's, readable as far as its own `size` says, and its text as far as `len` says.
+        let cue = match unsafe { host_abi::read_cue(cue) } {
+            Ok(cue) => cue,
+            Err(code) => return code,
+        };
+        if self.gate.stopping() || !self.running.load(Ordering::SeqCst) {
+            return host_abi::E_STATE;
+        }
+        self.player.accept_cue(cue).map_or_else(|code| code, |()| host_abi::OK)
+    }
+
+    /// The cues the host posted since the last call, in order, and how many a full cue queue dropped. Loop thread.
+    #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))] // the Tizen URI driver (the `uri` feature) is its caller
+    pub fn drain_cues(&self, out: &mut Vec<host_abi::HostCue>) -> usize {
+        self.player.drain_cues(out)
+    }
+
+    /// Whether a host player is open: an epoch was opened and its `PLAYER_CLOSED` has not been accepted. The
+    /// packet-player probe refuses to START while one is; nothing stops a viewer opening a title during a run, when the
+    /// two contend for the decoder (the probe then logs the refusal it meets, and the viewer's start may fail).
+    pub fn player_live(&self) -> bool {
+        self.player.any_live()
+    }
+
     /// The host's media player, or why there is none. A table that does not offer one is not an error.
     pub fn player_support(&self) -> Result<(), NoPlayer> {
         match self.callbacks.get() {
@@ -350,6 +378,12 @@ impl Hosted {
     /// A stop was requested (`plx_host_stop` closed the gate).
     pub(crate) fn stopping(&self) -> bool {
         self.gate.stopping()
+    }
+
+    /// The app is in the background (a pause the loop delivered and no resume since) or stopping: the packet-player
+    /// probe's worker reads it between calls and tears its player down (`esprobe::run`).
+    pub(crate) fn backgrounded(&self) -> bool {
+        self.paused.load(Ordering::SeqCst) || self.gate.stopping()
     }
 
     /// Ask the host to run `job` on its main thread, through `run_on_host`, without waiting for it. `false`
@@ -957,13 +991,16 @@ mod tests {
             w.start(|_| Ok(()), move |_, ()| {
                 let mut rec = Rec::default();
                 let mut states = Vec::new();
+                let mut background = Vec::new();
                 // pause, then resume, then pause again: armed state after each is what is asserted.
                 for (phase, expected_len) in [(Input::Pause, 1usize), (Input::Resume, 2), (Input::Pause, 3)] {
                     hosted.push(phase).unwrap();
                     hosted.deliver(&mut rec);
                     assert_eq!(rec.seen.len(), expected_len, "{:?}", rec.seen);
                     states.push(plx_base::task::watchdog::is_armed());
+                    background.push(hosted.backgrounded());
                 }
+                assert_eq!(background, [true, false, true], "the probe's cancel flag follows the pause and the resume");
                 tx.send((states, rec.seen.clone())).unwrap();
                 while !rec.seen.iter().any(|e| e == "quit") {
                     hosted.deliver(&mut rec);
@@ -980,6 +1017,7 @@ mod tests {
             ["lifecycle DidBackground", "lifecycle DidForeground", "lifecycle DidBackground"]
         );
         hosted.stop(Duration::from_secs(30));
+        assert!(hosted.backgrounded(), "a stop cancels the probe too");
         w.wait_stopped(1);
         let armed_at_report = seen(|s| s.stopped[0].2);
         assert!(!armed_at_report, "the watchdog was disarmed when on_stopped ran");
@@ -1245,6 +1283,34 @@ mod tests {
         assert_eq!(post(host_abi::EVENT_PLAYER_PREPARED, 5, 1, 0), host_abi::OK);
         w.hosted.stop(Duration::from_secs(30));
         w.wait_stopped(1);
+    }
+
+    /// **A cue is copied, queued by epoch apart from the player's events, and refused outside a run.** The host's text
+    /// is copied at the call (the buffer is the host's again when `plx_host_post_cue` returns), an empty cue is the
+    /// player's "the cue ended" and is queued too, and a cue of an epoch that is not live is stale.
+    #[test]
+    fn cues_are_copied_and_queued_by_epoch_and_refused_outside_a_run() {
+        let w = World::new();
+        let text = b"Hello\nworld".to_vec();
+        let cue = |epoch: u32, position_ms: i64, text: &[u8]| host_abi::PlxHostCue {
+            size: std::mem::size_of::<host_abi::PlxHostCue>() as u32, epoch, position_ms, duration_ms: 1_500,
+            text: text.as_ptr().cast(), len: text.len() as u32, reserved: 0 };
+        assert_eq!(w.hosted.post_cue(&cue(4, 2_000, &text)), host_abi::E_STATE, "not running");
+        assert_eq!(idle_loop(&w), host_abi::OK);
+        assert_eq!(w.hosted.post_cue(&cue(4, 2_000, &text)), host_abi::E_STALE, "never opened");
+        assert_eq!(w.hosted.player_open(4, "http://h/a", AREA), Ok(()));
+        assert_eq!(w.hosted.post_cue(&cue(4, 2_003, &text)), host_abi::OK);
+        assert_eq!(w.hosted.post_cue(&cue(4, 3_501, b"")), host_abi::OK, "an empty cue ends the shown one");
+        let mut out = Vec::new();
+        assert_eq!(w.hosted.drain_cues(&mut out), 0, "nothing was dropped");
+        assert_eq!(out.iter().map(|c| (c.epoch, c.position_ms, c.duration_ms, c.text.as_str())).collect::<Vec<_>>(),
+            [(4, 2_003, 1_500, "Hello\nworld"), (4, 3_501, 1_500, "")]);
+        let mut events = Vec::new();
+        w.hosted.drain_player(&mut events);
+        assert!(events.is_empty(), "a cue is no player event");
+        w.hosted.stop(Duration::from_secs(30));
+        w.wait_stopped(1);
+        assert_eq!(w.hosted.post_cue(&cue(4, 5_000, &text)), host_abi::E_STATE, "after the stop");
     }
 
     /// **The player's events do not share the input queue**: with the key queue full (a burst of keys the loop

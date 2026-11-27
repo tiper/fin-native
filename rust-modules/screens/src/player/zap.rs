@@ -334,7 +334,7 @@ mod tests {
     fn ch(n: &str) -> Channel {
         Channel { sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: format!("C{n}"), vcn: n.into(),
             name: format!("Station {n}"), thumb: String::new(), now: format!("Show {n}"), now_thumb: String::new(),
-            now_summary: String::new(), begins_at: 0, ends_at: 0 }
+            now_summary: String::new(), begins_at: 0, ends_at: 0, later: Vec::new() }
     }
 
     fn lineup() -> Vec<Channel> { ["101", "102", "103", "104"].map(ch).to_vec() }

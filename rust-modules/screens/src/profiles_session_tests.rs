@@ -730,28 +730,31 @@ fn session_cmds(fx: &[Stamped<SessionHost>]) -> Vec<&'static str> {
 
 /// The owner's TV report: the refused-roster read-out showed ONE control, *Sign out*, focused —
 /// BACK did leave, but nothing on screen said so and the only visible way out was destructive.
-/// Both read-outs (refused and unreachable) now lead with a focused *Back* whose OK is exactly
-/// the BACK key, with *Sign out* secondary beside it on the read-out's own row.
+/// Both read-outs (refused and unreachable) offer a *Back* whose OK is exactly the BACK key, with
+/// *Sign out* beside it on the read-out's own row (and *Try again* leading both, see
+/// `a_roster_readout_offers_try_again_that_raises_the_picker_again`).
 #[test]
-fn a_roster_readout_offers_a_focused_back_whose_ok_is_the_back_key() {
+fn a_roster_readout_offers_a_back_whose_ok_is_the_back_key() {
     for reason in [auth::owner::roster_refused(), auth::owner::roster_unreachable()] {
         let read = readout(reason, true);
         let mut s = ProfilesScreen::new(EntryId(0), read.read());
+        let retry = FocusKey { entry: EntryId(0), elem: READOUT_RETRY };
         let back = FocusKey { entry: EntryId(0), elem: READOUT_BACK };
         let sign_out = FocusKey { entry: EntryId(0), elem: FOOTER };
         let c = cx_with(None, &read);
 
         let (_, fx) = step_ev_with(&mut s, &ScreenEvent::Tick(Tick::default()), None, &read, InstanceId(3));
         assert!(fx.iter().any(|st| matches!(&st.fx, Fx::Deliver(_, Delivery::Screen(ScreenEvent::Enter(
-            Enter::Fresh { focus: FocusTarget::Elem(k) }))) if *k == back)),
-            "{reason}: focus is seated on Back, not on Sign out");
+            Enter::Fresh { focus: FocusTarget::Elem(k) }))) if *k == retry)),
+            "{reason}: focus is seated on Try again, the primary, not on Sign out");
 
         let group = Focusable::<SessionHost>::group_of(&s, &back.elem, &c).expect("Back is focusable");
         assert_eq!(Focusable::<SessionHost>::group_of(&s, &sign_out.elem, &c), Some(group),
             "Back and Sign out are one row");
         let at = |k: FocusKey<u32>| Focusable::<SessionHost>::place(&s, &k.elem, &c, At::Drawn)
             .expect("placed").rect;
-        assert!(at(back).x < at(sign_out).x, "Back leads the row; Sign out is secondary");
+        assert!(at(retry).x < at(back).x, "Try again leads the row");
+        assert!(at(back).x < at(sign_out).x, "Back stands before Sign out");
         assert!(at(back).y >= StatusOverlay::FULL_ANCHOR_TOP, "the row stands under the verdict");
         assert_eq!(Focusable::<SessionHost>::reconcile(&s, sign_out, &c), sign_out,
             "Sign out stays reachable");
@@ -765,8 +768,73 @@ fn a_roster_readout_offers_a_focused_back_whose_ok_is_the_back_key() {
     }
 }
 
+/// **The read-out can be asked again.** "Can't change profile" offered *Back* and *Sign out*, and
+/// neither can change the outcome: the roster request failed (unreachable, refused), and the way
+/// to ask for it again was to leave and walk back to Change profile. *Try again* leads the row
+/// (the primary, where focus lands) and its OK asks the Session to raise the same picker again,
+/// the command Change profile itself sends.
+#[test]
+fn a_roster_readout_offers_try_again_that_raises_the_picker_again() {
+    let restarts = |fx: &[Stamped<SessionHost>]| fx.iter().filter(|st| matches!(&st.fx,
+        Fx::App(AppFx::Session(auth::SessionCmd::StartSwitch(_))))).count();
+    for reason in [auth::owner::roster_refused(), auth::owner::roster_unreachable()] {
+        for back_resumes in [true, false] {
+            let read = readout(reason, back_resumes);
+            let mut s = ProfilesScreen::new(EntryId(0), read.read());
+            let elems = readout_elems(back_resumes, true);
+            let at = format!("{reason} back_resumes={back_resumes}");
+
+            let (_, seated) = step_ev_with(&mut s, &ScreenEvent::Tick(Tick::default()), None, &read, InstanceId(3));
+            let first = FocusKey { entry: EntryId(0), elem: elems[0] };
+            assert!(seated.iter().any(|st| matches!(&st.fx, Fx::Deliver(_, Delivery::Screen(ScreenEvent::Enter(
+                Enter::Fresh { focus: FocusTarget::Elem(k) }))) if *k == first)), "{at}: focus is seated on the primary");
+
+            let pressed: Vec<usize> = elems.iter().map(|&elem| {
+                let key = FocusKey { entry: EntryId(0), elem };
+                let (_, fx) = step_ev_with(&mut s, &ScreenEvent::PressCommit(plx_machine::machine::PressId(1)),
+                    Some(key), &read, InstanceId(3));
+                restarts(&fx)
+            }).collect();
+            assert_eq!(pressed.iter().sum::<usize>(), 1, "{at}: exactly one control asks again: {pressed:?}");
+            assert_eq!(pressed[0], 1, "{at}: and it is the primary, ahead of Back and Sign out");
+        }
+    }
+}
+
+/// **A dev-token session's read-out offers no *Try again*.** Its Session answers `StartSwitch` by
+/// raising this same read-out again (it has no account to list a roster with), so a focused primary
+/// would be a control that does nothing, and every mock-server boot lands there. The row is the one
+/// it was before: *Back* (when BACK resumes) and *Sign out*, focus on the first of them.
+#[test]
+fn a_dev_token_readout_withholds_try_again() {
+    for back_resumes in [true, false] {
+        let mut read = readout(auth::owner::roster_refused(), back_resumes);
+        read.dev_session = true;
+        let mut s = ProfilesScreen::new(EntryId(0), read.read());
+        let c = cx_with(None, &read);
+        let elems = readout_elems(back_resumes, false);
+        assert!(!elems.contains(&READOUT_RETRY), "back_resumes={back_resumes}");
+        assert_eq!(Focusable::<SessionHost>::group_of(&s, &READOUT_RETRY, &c), None, "Try again is not a stop");
+        let (_, seated) = step_ev_with(&mut s, &ScreenEvent::Tick(Tick::default()), None, &read, InstanceId(3));
+        let first = FocusKey { entry: EntryId(0), elem: elems[0] };
+        assert!(seated.iter().any(|st| matches!(&st.fx, Fx::Deliver(_, Delivery::Screen(ScreenEvent::Enter(
+            Enter::Fresh { focus: FocusTarget::Elem(k) }))) if *k == first)),
+            "back_resumes={back_resumes}: focus seats on the first control left");
+        for &elem in elems {
+            let key = FocusKey { entry: EntryId(0), elem };
+            let (_, fx) = step_ev_with(&mut s, &ScreenEvent::PressCommit(plx_machine::machine::PressId(1)),
+                Some(key), &read, InstanceId(3));
+            assert!(!fx.iter().any(|st| matches!(&st.fx, Fx::App(AppFx::Session(auth::SessionCmd::StartSwitch(_))))),
+                "back_resumes={back_resumes}: nothing here asks for a roster again");
+        }
+        let find = Focusable::<SessionHost>::a11y_find(&s, &A11yPath::parse_relative("retry").unwrap(), &c);
+        assert_eq!(find, None);
+        plx_ui::a11y::conformance(&s, &c);
+    }
+}
+
 /// With no session behind the picker, BACK hands the screen to the television — a *Back* pill
-/// would claim otherwise, so none is offered and *Sign out* stays the read-out's one control.
+/// would claim otherwise, so none is offered: the row is *Try again* and *Sign out*.
 #[test]
 fn a_readout_whose_back_leaves_the_app_offers_no_back_pill() {
     let read = readout(auth::owner::roster_refused(), false);
@@ -776,14 +844,15 @@ fn a_readout_whose_back_leaves_the_app_offers_no_back_pill() {
     assert!(!fx.iter().any(|st| matches!(&st.fx, Fx::Deliver(_, Delivery::Screen(ScreenEvent::Enter(
         Enter::Fresh { focus: FocusTarget::Elem(k) }))) if k.elem == READOUT_BACK)));
     assert_eq!(Focusable::<SessionHost>::group_of(&s, &READOUT_BACK, &c), None);
+    assert!(Focusable::<SessionHost>::group_of(&s, &READOUT_RETRY, &c).is_some(), "Try again is offered");
     assert!(Focusable::<SessionHost>::group_of(&s, &FOOTER, &c).is_some(), "Sign out is still there");
 }
 
-/// **The read-out answers `back` and `sign_out`, and only while it is up**: *Back* only when BACK
-/// would resume a session, *Sign out* always; the footer's `sign_out` is the same id (the footer
+/// **The read-out answers `retry`, `back` and `sign_out`, and only while it is up**: *Try again*
+/// and *Sign out* always, *Back* only when BACK would resume a session; the footer's `sign_out` is the same id (the footer
 /// is not drawn under the read-out), and no `roster` or `pad` id exists beside either.
 #[test]
-fn the_readout_answers_ids_for_its_back_and_its_sign_out() {
+fn the_readout_answers_ids_for_its_retry_its_back_and_its_sign_out() {
     for back_resumes in [true, false] {
         let read = readout(auth::owner::roster_refused(), back_resumes);
         let s = ProfilesScreen::new(EntryId(0), read.read());
@@ -793,6 +862,7 @@ fn the_readout_answers_ids_for_its_back_and_its_sign_out() {
             Focusable::<SessionHost>::a11y_find(&s, &A11yPath::parse_relative(text).unwrap(), &c)
         };
         assert_eq!(find("sign_out"), Some(FOOTER), "back_resumes={back_resumes}");
+        assert_eq!(find("retry"), Some(READOUT_RETRY), "back_resumes={back_resumes}");
         assert_eq!(find("back"), back_resumes.then_some(READOUT_BACK), "back_resumes={back_resumes}");
         assert_eq!(find("roster.card.0"), None);
         assert_eq!(find("pad.digit.1"), None);

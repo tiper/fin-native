@@ -38,13 +38,17 @@ devtriggers = ["plxnative-modules?/devtriggers"]
 threadcheck = ["plxnative-modules?/threadcheck"]
 lab-diagnostics = ["plxnative-modules?/lab-diagnostics"]
 placeholder-sentinel = ["plxnative-modules?/placeholder-sentinel"]
-tizen = ["dep:plxnative-modules", "dep:plx_base", "dep:plx_os", "dep:serde_json", "dep:plx_media", "dep:plx_playback_contract"]
+# `tizen` also turns on `plx_media`'s `uri-captions`, the caption path this platform's URI driver draws its subtitles
+# through, which the webOS build leaves out. It is here rather than under `uri` so that `uri` stays a pure cfg gate; a
+# `tizen` build without `uri` composes no driver that hands cues over, so the path is inert there.
+tizen = ["dep:plxnative-modules", "dep:plx_base", "dep:plx_os", "dep:serde_json", "dep:plx_media", "dep:plx_playback_contract", "plx_media/uri-captions"]
 # `uri` is this crate's OWN second feature (W10 part B): the Tizen URI driver over the host's native media player and the
 # composition that installs it (`player`). Without it the platform keeps `host::NO_MEDIA` (`BackendSet::NONE`, no resolver, the
 # Play control's no-driver path) and the driver is not compiled. It enables no dependency (`plx_media` and
 # `plx_playback_contract` are `tizen`'s, and already in every build that has the application), so a `tizen` pass with no `uri`
-# links exactly what it did before. It is NOT the application's `play-uri`, which is the webOS ACB/LS2 driver and which a Tizen
-# build never turns on; the plan names it (`docs/platform-ports.md`, "Tizen: its own `uri` feature; `play-uri` never").
+# links exactly what it did before, apart from the inert caption path `tizen` turns on. It is NOT the application's
+# `play-uri`, which is the webOS ACB/LS2 driver and which a Tizen build never turns on; the plan names it
+# (`docs/platform-ports.md`, "Tizen: its own `uri` feature; `play-uri` never").
 uri = []
 
 [dependencies]

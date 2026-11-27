@@ -62,6 +62,10 @@ pub struct Scrim {
     /// The surface's OWN 0..1 ramp for the dim, when it has one: the container uses it in place of
     /// the surface's appear spring ([`Scrim::following`]). `None` = the appear spring.
     pub ramp: Option<f32>,
+    /// The dim exists only where the surface's host is a held page ([`Scrim::over_host`]): the
+    /// container answers it with no dim at all for a style that leaves its host live
+    /// ([`crate::containers::modal::style_caches_host`]).
+    pub host_only: bool,
 }
 
 /// **What a surface's dim inherits.** A dim here is not a black sheet: the container paints it
@@ -84,6 +88,7 @@ impl Scrim {
         alpha: 0.0,
         source: UnderlaySource::Page,
         ramp: None,
+        host_only: false,
     };
 
     /// A dim of `alpha`. `alpha` is a `theme::underlay::DIM_*`
@@ -93,6 +98,23 @@ impl Scrim {
             alpha,
             source: UnderlaySource::Page,
             ramp: None,
+            host_only: false,
+        }
+    }
+
+    /// A dim of `alpha` over the host PAGE, asked only where the host IS a held page: the glass
+    /// ground's own condition. A glass panel stands on the frozen host (`popover_glass`), and the
+    /// field it stands on latches only under a page-sourced dim, so a panel that is glass over a page
+    /// and the flat sheet over the video plane (Live TV's number entry) declares ONE dim, and the
+    /// container drops it for the style that has no page to hold (`Style::PlayerPanel`, host live):
+    /// there is then no latch, no dim on the picture and no glass. The answer follows the surface's
+    /// style, which is fixed for its life, never the plane's bound bit, which is not.
+    pub const fn over_host(alpha: f32) -> Scrim {
+        Scrim {
+            alpha,
+            source: UnderlaySource::Page,
+            ramp: None,
+            host_only: true,
         }
     }
 
@@ -104,6 +126,7 @@ impl Scrim {
             alpha,
             source: UnderlaySource::Flat,
             ramp: None,
+            host_only: false,
         }
     }
 
@@ -111,7 +134,7 @@ impl Scrim {
     /// morphing menu's dim follows its MORPH (`Popover::dim`), so the page dims as the glass grows
     /// and clears as the slab drains, not on a clock of its own.
     pub const fn following(self, ramp: f32) -> Scrim {
-        Scrim { alpha: self.alpha, source: self.source, ramp: Some(ramp) }
+        Scrim { ramp: Some(ramp), ..self }
     }
 }
 

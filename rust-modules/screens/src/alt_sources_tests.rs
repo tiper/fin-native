@@ -108,7 +108,7 @@ fn panel(host_sid: ServerId, rk: &str) -> AltSourcesScreen {
 
 /// The one section the screen draws for `list`, built through the same [`form_for`].
 fn section_for(list: &[AltRow]) -> plx_ui::table::Section {
-    let mut t = FormTable::<AltId, Action, std::convert::Infallible>::new(plx_ui::table_screen::BAND_BASE);
+    let mut t = plx_ui::form::FormTable::<AltId, Action, std::convert::Infallible>::new(plx_ui::table_screen::BAND_BASE);
     t.set(form_for(list, sid(0), "0"), None);
     t.table.sections.remove(0)
 }
@@ -116,7 +116,7 @@ fn section_for(list: &[AltRow]) -> plx_ui::table::Section {
 /// What the panel would DRAW — the materialised table, not `rows(alt_copies(..))`. The pure path
 /// passes without the rebuild and proves nothing about what is on screen.
 fn drawn(p: &AltSourcesScreen) -> Vec<String> {
-    p.form.table.sections[0]
+    p.form().table.sections[0]
         .rows
         .iter()
         .map(|r| r.detail.clone())
@@ -500,7 +500,7 @@ fn a_re_described_source_restamps_the_credit_on_an_open_page() {
     alt_restamp_owners();
     assert!(p.refresh(test_store().view()), "the correction reached the drawn table");
     assert_eq!(
-        p.form.table.n_rows(),
+        p.form().table.n_rows(),
         2,
         "the open panel is rebuilt, not emptied or duplicated"
     );
@@ -759,7 +759,7 @@ fn the_panel_hangs_off_its_button_and_stays_on_screen() {
         plx_data::stores::metadata::MetadataStore::default().view(),
     );
     let measure = plx_ui::fixture::FixtureMeasure;
-    let want = under_or_above(low, p.form.table.measured_width(&measure), p.form.table.measured_height());
+    let want = under_or_above(low, p.form().table.measured_width(&measure), p.form().table.measured_height());
     let got = p.frame(&measure);
     assert_eq!((got.x, got.y, got.w, got.h), (want.x, want.y, want.w, want.h));
 }
@@ -913,8 +913,8 @@ pub(crate) mod focus_and_hit {
             here,
             "4",
         );
-        p.form.table.compact = false;
-        p.form.set(form_for(&p.rows, here, "4"), None);
+        let held = p.rows.clone();
+        p.menu.step(Event::ReplaceRoot { slide: None }, &mut |page| page.is_none().then(|| Page::root(form_for(&held, here, "4"))));
         (p, here, there)
     }
 
@@ -931,9 +931,9 @@ pub(crate) mod focus_and_hit {
         );
     }
 
-    /// **One `Column` group of two `Bare` rows**, matching the two rows the panel built, with
-    /// `EdgeRule::Stop` on every side (there is nowhere else on this standalone surface to hand a
-    /// direction off to).
+    /// **One `Column` group of two `Bare` rows**, matching the two rows the panel built: UP and DOWN
+    /// stop at the ends, LEFT and RIGHT are re-delivered to the screen (the menu's, which swallows
+    /// them: a one-page menu has no page to pop and no row to enter).
     #[test]
     fn groups_is_one_column_sized_to_the_row_count() {
         let (p, ..) = two_row_panel();
@@ -945,7 +945,8 @@ pub(crate) mod focus_and_hit {
         assert_eq!(g.len, 2);
         assert!(matches!(g.kind, plx_ui::screen::GroupKind::Column));
         assert!(matches!(g.elem, plx_ui::screen::ElemKind::Bare));
-        assert!(g.edge.iter().all(|e| matches!(e, plx_ui::screen::EdgeRule::Stop)));
+        assert!(matches!(g.edge[..2], [plx_ui::screen::EdgeRule::Stop, plx_ui::screen::EdgeRule::Stop]));
+        assert!(matches!(g.edge[2..], [plx_ui::screen::EdgeRule::Screen, plx_ui::screen::EdgeRule::Screen]));
     }
 
     /// The *Also available* panel over two servers' rows, run through the id conformance
@@ -1007,7 +1008,7 @@ pub(crate) mod focus_and_hit {
     fn place_matches_the_tables_own_row_geometry() {
         let (p, ..) = two_row_panel();
         let cx = fixture_cx(None);
-        let want = p.form.table.row_frame(p.frame(&plx_ui::fixture::FixtureMeasure), 1).expect("row 1 is drawn");
+        let want = p.form().table.row_frame(p.frame(&plx_ui::fixture::FixtureMeasure), 1).expect("row 1 is drawn");
         let placed = Focusable::<HostFixture>::place(&p, &1, &cx, At::Drawn).expect("row 1 places");
         assert_eq!(
             (placed.rect.x, placed.rect.y, placed.rect.w, placed.rect.h),
@@ -1032,7 +1033,7 @@ pub(crate) mod focus_and_hit {
             by: plx_ui::screen::By::Dir,
         };
         assert_eq!(Machine::step(&mut p, &ev, &cx, &mut fx), Handled::Yes);
-        assert_eq!(p.form.table.sel, 1);
+        assert_eq!(p.form().table.sel, 1);
     }
 
     /// **`Activate` on the row you are NOT standing on navigates to it**, exactly what OK/click
@@ -1087,6 +1088,28 @@ pub(crate) mod focus_and_hit {
             &s.fx,
             plx_machine::machine::Fx::Deliver(.., plx_machine::machine::Delivery::Screen(ScreenEvent::App(_)))
         )));
+    }
+
+    /// **LEFT and RIGHT at the root are inert**: the engine re-delivers them (`EdgeRule::Screen`), the
+    /// screen answers them (an unhandled one is a dead press) and neither closes the panel; BACK alone does.
+    #[test]
+    fn left_and_right_never_close_the_panel() {
+        for key in [Key::Left, Key::Right] {
+            for edge in [Edge::Down, Edge::Up] {
+                let (mut p, ..) = two_row_panel();
+                let cx = fixture_cx(Some(FocusKey { entry: p.entry, elem: 0 }));
+                let mut buf = Vec::new();
+                let mut present = plx_machine::present::Present::default();
+                let mut fx = plx_machine::machine::Effects::new(&mut buf, plx_machine::machine::MachineId::Input, &mut present);
+                let ev = ScreenEvent::Input(InputEvent {
+                    at: Tick::default(),
+                    source: Source::Script,
+                    kind: InputKind::Key { key, sym: 0, wcode: 0, edge, at_edge: true },
+                });
+                assert_eq!(Machine::step(&mut p, &ev, &cx, &mut fx), Handled::Yes, "{key:?} {edge:?} is answered");
+                assert!(buf.is_empty(), "{key:?} {edge:?} closes nothing and reports nothing");
+            }
+        }
     }
 
     #[test]

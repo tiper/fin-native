@@ -528,6 +528,7 @@ mod tests {
                 container: true },
             audio_codec: "aac".to_owned(), audio_ordinal, has_multiple_audio_tracks: false, audio_language: String::new(),
             subtitle_source: None,
+            subtitle_streams: Default::default(),
             subtitle_choice: TrackChoice::Unspecified,
             source_kbps: Some(4000), raster: Some((1280, 720)),
             requested_rate_permille: plx_playback_contract::RATE_NORMAL, resume_ns: 0,

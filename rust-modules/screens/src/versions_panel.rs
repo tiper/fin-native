@@ -12,6 +12,13 @@
 //! draws, captured when the panel opens: a refetch landing behind an open list does not move a
 //! row under the cursor. It opens on the row that wears the check mark, the version Play takes now
 //! (the viewer's choice, else what plays unasked).
+//!
+//! **It grows out of the hero control that opened it** (`menu::Host::Grows`, built by
+//! `detail_layout::hero_host`, the path every header menu takes) when the argument names that control
+//! ([`VersionsArg::opener`]): the page leaves the control out of its own pass and the opener lift draws it at
+//! the morph's `opener_alpha`, so the panel covers it and BACK or a pick drains the glass back into it. A
+//! panel with no opener is a `Host::Sheet` that keeps the fade. The panel is a one-page `ui::menu::Menu`: the
+//! placement, the ground, the radius, the stops and the dim are the menu's.
 
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -20,22 +27,21 @@ use plx_data::pms::MediaVersion;
 use plx_plex::plex::{MediaId, ServerId};
 use crate::registry::{AppLike, AppMsg, MetadataLike, PageMemory};
 use plx_ui::a11y::{A11y, A11yPath};
-use plx_ui::frame::Budget;
 use plx_machine::machine::{
-    Canon, Cx, Delivery, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind,
-    InstanceId, Key, LogicalState, Machine, MachineId, NavOp,
+    Canon, Cx, Delivery, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InstanceId, LogicalState, Machine,
+    MachineId, NavOp,
 };
+use plx_ui::menu::{no_pages, Class, Event, Host, Menu, Out, Page};
 use plx_ui::screen::{
-    Activate, At, AxisMask, Dir, DrawFrame, EdgeRule, ElemKind, FocusSource, Focusable, GroupKind,
-    GroupSpec, Hover, HitSource, Placed, RenderStrategy, Screen, ScreenEvent, Scrim, Seat, Step,
-    Stop,
+    At, Dir, FocusSource, Focusable, GroupSpec, HitSource, Placed, RenderStrategy, Screen, ScreenEvent,
+    Step,
 };
-use plx_ui::form::{Form, FormId, FormTable, RowKey};
+use plx_ui::form::{Form, FormId, RowKey};
 use plx_ui::Rect;
 
 /// The fields [`VersionsPanelScreen::write`] canonicalises, for the recorder's shape pin (§5.4).
 pub const SHAPE: &str =
-    "VersionsPanel{arg:VersionsArg{host:u32,sid:u32,rk:str,anchor:[u32;4]},versions:[i64],sel:i32,table:TableViewMotion}";
+    "VersionsPanel{arg:VersionsArg{host:u32,sid:u32,rk:str,anchor:[u32;4],opener:Option<{entry:u32,elem:u32}>},versions:[i64],sel:i32,table:TableViewMotion}";
 
 /// What the container is asked to present: the Detail instance the choice is reported to, the item
 /// whose versions these are, and the drawn rect of the disc it hangs off (bit-preserving, so a
@@ -46,6 +52,10 @@ pub struct VersionsArg {
     pub sid: ServerId,
     pub rk: String,
     pub anchor: [u32; 4],
+    /// The page's entry and the hero control the panel grows out of and drains back into (the `…`
+    /// button when the menu handed the row over, the disc itself otherwise): the page leaves it out
+    /// of its own pass and the opener lift draws it at the morph's alpha ([`Screen::opener`]).
+    pub opener: Option<(EntryId, u32)>,
 }
 
 impl LogicalState for VersionsArg {
@@ -54,6 +64,7 @@ impl LogicalState for VersionsArg {
         for value in self.anchor {
             c.u32(value);
         }
+        c.option(self.opener, |c, (entry, elem)| { c.u32(entry.0).u32(elem); });
     }
     fn probe(&self, out: &mut String) {
         out.push_str("versions_arg");
@@ -70,16 +81,17 @@ impl FormId for VersionRow {
     }
 }
 
-/// The pinned ~20px corner radius, the item menu's and *Also available*'s.
-const PANEL_RAD: f32 = 20.0;
-const RISE: f32 = plx_ui::popover::Popover::RISE;
+/// A page-less menu: the version list is its only page.
+type VersionsMenu = Menu<Infallible, VersionRow, MediaId>;
 
 pub struct VersionsPanelScreen {
     entry: EntryId,
     arg: VersionsArg,
     /// The versions the rows were built from, in the server's order.
     versions: Vec<MediaId>,
-    pub form: FormTable<VersionRow, MediaId, Infallible>,
+    /// The panel: the glass of the hero control it grows out of (`Host::Grows`) when the argument names that
+    /// control, else a sheet under or above the disc; one root page, the shared version list.
+    menu: VersionsMenu,
 }
 
 impl VersionsPanelScreen {
@@ -88,40 +100,49 @@ impl VersionsPanelScreen {
     /// (`ScreenInputs::can_play`): without one every row is disabled and says why, and presses
     /// nothing.
     pub fn new(entry: EntryId, arg: VersionsArg, versions: &[MediaVersion], checked: Option<MediaId>, can_play: bool) -> Self {
-        let mut form = FormTable::new(plx_ui::table_screen::BAND_BASE);
-        // rows carry a sub-line: the track menu's size class
-        form.table.compact = false;
+        // over the control when it morphs out of one; under the disc when there is room and above it when
+        // there is not for a panel with no opener. Rows carry a sub-line: the track menu's size class.
+        let host = match arg.opener {
+            Some(_) => plx_ui::detail_layout::hero_host(arg.anchor),
+            None => Host::Sheet { anchor: arg.anchor },
+        };
+        let mut menu = Menu::new(host, Class::Picker, plx_ui::table_screen::BAND_BASE);
         let unavailable = (!can_play).then(plx_os::i18n::msg::browse_detail_no_playback);
         let opening = checked.and_then(|id| versions.iter().position(|v| v.id == id)).unwrap_or(0);
-        form.set(
-            Form::new().section(plx_appkit::version_list::section(versions, VersionRow, |v| v.id, checked, unavailable)),
-            Some(&VersionRow(opening as u16)),
+        menu.step(
+            Event::ReplaceRoot { slide: None },
+            &mut |page| {
+                page.is_none().then(|| {
+                    let form = Form::new().section(plx_appkit::version_list::section(plx_appkit::version_list::title(), versions, VersionRow, |v| v.id, checked, unavailable));
+                    Page::root(form).initial(Some(VersionRow(opening as u16)))
+                })
+            },
         );
-        Self { entry, arg, versions: versions.iter().map(|v| v.id).collect(), form }
+        Self { entry, arg, versions: versions.iter().map(|v| v.id).collect(), menu }
     }
 
-    /// Under the disc when there is room, above it when there is not.
+    /// The panel's table and cursor.
+    pub fn form(&self) -> &plx_ui::form::FormTable<VersionRow, MediaId, Infallible> {
+        self.menu.form()
+    }
+
+    /// Where the panel stands (the menu's one placement rule for its host).
     pub fn frame(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
-        let [x, y, w, h] = self.arg.anchor.map(f32::from_bits);
-        plx_ui::popover::under_or_above(Rect::new(x, y, w, h), self.form.table.measured_width(measure), self.form.table.measured_height())
+        self.menu.panel_rect(measure)
     }
 
     fn dismiss<H: AppLike>(&self, fx: &mut Effects<'_, H>) {
         fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
     }
 
-    /// Close, and report row `elem`'s version to the page, which selects it. Takes the elem, not the cursor: a click
-    /// names the stop it hit (`AltSourcesScreen::commit`). OK on a DISABLED row (no playback driver
-    /// composed) does nothing and the panel stays up, as on every disabled row (`ui/CLAUDE.md`: "OK
-    /// does nothing"); BACK still closes it.
-    fn commit<H: AppLike>(&mut self, elem: u32, fx: &mut Effects<'_, H>) {
-        let activation = self.form.index_of_key(RowKey(elem)).map(|i| self.form.activate(i));
-        if matches!(activation, Some(None)) {
-            return;
-        }
-        let media = match activation.flatten() {
-            Some(plx_ui::form::Activation::Action(media)) => Some(media),
-            _ => None,
+    /// What the menu answered: a dismissal closes the panel, and a pick closes it and reports the row's version to
+    /// the page, which selects it. OK on a DISABLED row (no playback driver composed) does nothing and the panel
+    /// stays up, as on every disabled row (`ui/CLAUDE.md`: "OK does nothing"); BACK still closes it.
+    fn run<H: AppLike>(&mut self, out: Out<MediaId>, fx: &mut Effects<'_, H>) {
+        let media = match out {
+            Out::Stay | Out::Moved => return,
+            Out::Picked(media) => Some(media),
+            Out::Dismiss => None,
         };
         self.dismiss(fx);
         if let Some(media) = media {
@@ -136,91 +157,48 @@ impl VersionsPanelScreen {
 impl<H: AppLike<Memory = PageMemory>> Machine<H> for VersionsPanelScreen {
     type Ev = ScreenEvent<H>;
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
-        match ev {
-            ScreenEvent::Tick(tick) => {
-                self.form.table.sel = cx
-                    .focus
-                    .current
-                    .filter(|key| key.entry == self.entry)
-                    .and_then(|key| self.form.index_of_key(RowKey(key.elem)))
-                    .map_or(self.form.table.sel, |i| i as i32);
-                self.form.table.update(tick.dt(), self.frame(cx.measure).h);
-                Handled::Yes
+        // all of it the menu's (`Menu::on_screen`): BACK at its one page closes it, LEFT is inert here, never a close
+        match self.menu.on_screen(ev, cx, self.entry, fx, &mut no_pages) {
+            Some(glued) => {
+                self.run(glued.out, fx);
+                glued.handled
             }
-            ScreenEvent::FocusMoved { to, .. } => {
-                if let Some(i) = self.form.index_of_key(RowKey(to.elem)) {
-                    self.form.table.sel = i as i32;
-                }
-                fx.invalidate(plx_machine::present::Provenance::Input);
-                Handled::Yes
-            }
-            ScreenEvent::Activate(elem) => {
-                self.commit(*elem, fx);
-                Handled::Yes
-            }
-            ScreenEvent::PressCommit(_) => {
-                if let Some(key) = cx.focus.current {
-                    self.commit(key.elem, fx);
-                }
-                Handled::Yes
-            }
-            ScreenEvent::Input(input) => match input.kind {
-                InputKind::Key { key: Key::Back, edge: Edge::Down, .. } => {
-                    self.dismiss(fx);
-                    Handled::Yes
-                }
-                _ => Handled::No,
-            },
-            _ => Handled::No,
+            None => Handled::No,
         }
+    }
+}
+
+impl plx_ui::menu::HasMenu for VersionsPanelScreen {
+    type Page = Infallible;
+    type Row = VersionRow;
+    type Act = MediaId;
+    fn menu(&self) -> &VersionsMenu {
+        &self.menu
+    }
+    fn menu_entry(&self) -> EntryId {
+        self.entry
     }
 }
 
 /// One column of `Bare` rows over the table's own cursor, *Also available*'s `Focusable`.
 impl<H: AppLike<Memory = PageMemory> + MetadataLike> Focusable<H> for VersionsPanelScreen {
     fn groups(&self, cx: &Cx<'_, H>, out: &mut Vec<GroupSpec>) {
-        out.push(GroupSpec {
-            id: GroupId(0),
-            kind: GroupKind::Column,
-            seat: Seat::Remembered,
-            reachable: AxisMask::BOTH,
-            edge: [EdgeRule::Stop; 4],
-            extent: self.frame(cx.measure),
-            len: self.form.focusable_len(),
-            elem: ElemKind::Bare,
-        });
+        self.menu.groups(GroupId(0), cx.measure, out);
     }
     fn group_of(&self, elem: &u32, _cx: &Cx<'_, H>) -> Option<GroupId> {
-        self.form.index_of_key(RowKey(*elem)).map(|_| GroupId(0))
+        self.menu.group_of(elem, GroupId(0))
     }
     fn neighbour(&self, key: FocusKey<u32>, dir: Dir, _cx: &Cx<'_, H>) -> Step<u32> {
-        let delta = match dir {
-            Dir::Up => -1,
-            Dir::Down => 1,
-            _ => return Step::Edge,
-        };
-        match self.form.step_key(RowKey(key.elem), delta) {
-            Some(next) => Step::Move(FocusKey { entry: self.entry, elem: next.0 }),
-            None => Step::Edge,
-        }
+        self.menu.neighbour(self.entry, key, dir)
     }
     fn place(&self, elem: &u32, cx: &Cx<'_, H>, _at: At) -> Option<Placed> {
-        let index = self.form.index_of_key(RowKey(*elem))?;
-        let rect = self.form.table.row_frame(self.frame(cx.measure), index as i32)?;
-        Some(Placed { rect, rest_rect: rect, clip: self.frame(cx.measure), index: Some(index as u32) })
+        self.menu.place(elem, cx.measure)
     }
-    fn reconcile(&self, want: FocusKey<u32>, cx: &Cx<'_, H>) -> FocusKey<u32> {
-        if self.group_of(&want.elem, cx).is_some() {
-            want
-        } else {
-            FocusKey { entry: self.entry, elem: self.form.opening_key().map_or(0, |k| k.0) }
-        }
+    fn reconcile(&self, want: FocusKey<u32>, _cx: &Cx<'_, H>) -> FocusKey<u32> {
+        self.menu.reconcile(self.entry, want, GroupId(0))
     }
     fn seat(&self, _g: GroupId, _from: Placed, _cx: &Cx<'_, H>) -> FocusKey<u32> {
-        FocusKey {
-            entry: self.entry,
-            elem: self.form.selected_key().or_else(|| self.form.opening_key()).map_or(0, |k| k.0),
-        }
+        self.menu.seat(self.entry)
     }
 
     /// **Row `n` is `row.<n>`**, the shared table convention
@@ -234,8 +212,9 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Focusable<H> for VersionsPa
     /// versions), so `versions.row.<n>` needs a press that names the title. The key is derived from `cx`, not kept on the
     /// screen: it is no part of the screen's recorded state (`SHAPE`).
     fn a11y(&self, elem: &u32, cx: &Cx<'_, H>) -> Option<A11y<'_>> {
-        let slot = self.form.index_of_key(RowKey(*elem))?;
-        let row = plx_ui::geom::table_a11y(&self.form.table, Some(&self.form), slot)?;
+        let form = self.menu.form();
+        let slot = form.index_of_key(RowKey(*elem))?;
+        let row = plx_ui::geom::table_a11y(&form.table, Some(form), slot)?;
         Some(match crate::registry::versions_subject(cx, &self.arg) {
             Some(rk) => row.with_subject(rk),
             None => row,
@@ -243,16 +222,18 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Focusable<H> for VersionsPa
     }
     fn a11y_elems(&self, g: GroupId, _cx: &Cx<'_, H>, out: &mut Vec<u32>) {
         if g == GroupId(0) {
+            let form = self.menu.form();
             out.extend(
-                plx_ui::geom::table_elems(&self.form.table, Some(&self.form))
-                    .filter_map(|i| self.form.key_at(i))
+                plx_ui::geom::table_elems(&form.table, Some(form))
+                    .filter_map(|i| form.key_at(i))
                     .map(|k| k.0),
             );
         }
     }
     fn a11y_find(&self, path: &A11yPath, _cx: &Cx<'_, H>) -> Option<u32> {
-        let slot = plx_ui::geom::table_a11y_find(&self.form.table, Some(&self.form), path)?;
-        self.form.key_at(slot).map(|k| k.0)
+        let form = self.menu.form();
+        let slot = plx_ui::geom::table_a11y_find(&form.table, Some(form), path)?;
+        form.key_at(slot).map(|k| k.0)
     }
 }
 
@@ -263,8 +244,9 @@ impl LogicalState for VersionsPanelScreen {
         for id in &self.versions {
             c.u64(id.0 as u64);
         }
-        c.u32(self.form.table.sel as u32);
-        self.form.table.write_motion(c);
+        let table = &self.menu.form().table;
+        c.u32(table.sel as u32);
+        table.write_motion(c);
     }
     fn probe(&self, out: &mut String) {
         out.push_str("versions");
@@ -275,45 +257,20 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Screen<H> for VersionsPanel
     fn name(&self) -> &'static str {
         "versions"
     }
+    /// The hero control the glass grew out of: the page leaves it out of its pass
+    /// (`DrawFrame::lifted`) and the dispatcher's lift draws it above the scrim and the panel.
+    fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
+        self.arg.opener.map(|(entry, elem)| (entry, Some(FocusKey { entry, elem })))
+    }
+    // The menu's own (`plx_ui::menu_screen_methods!`): the opener is CONSUMED by the morph (gone while the panel
+    // stands, back as the droplet drains into it; whole for a panel with no morph), the hand-back, the panel's own
+    // dim weight (a morphing panel's FOLLOWS the morph), the prewarm, the pointer hold and the draw.
+    plx_ui::menu_screen_methods!(H, "dt.versions");
     fn state(&self) -> &dyn LogicalState {
         self
     }
     fn crumb(&self, _cx: &Cx<'_, H>) -> Option<Cow<'_, str>> {
         None
-    }
-    fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, H>) {}
-    fn scrim(&self) -> Scrim {
-        Scrim::dim(plx_ui::theme::underlay::DIM_PANEL)
-    }
-    fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
-        let appear = f.page_alpha;
-        let r = self.frame(f.measure);
-        let p = f.painter.alpha(appear).translate(0.0, RISE * (1.0 - appear));
-        let measure = f.measure;
-        let field = f.underlay;
-        plx_ui::profile::phase("dt.versions", || {
-            plx_ui::widgets::panel_ground(p, r, PANEL_RAD, field, plx_ui::widgets::Ground::Sheet);
-            self.form.table.draw(p, r, measure);
-        });
-        let hit_p = f.painter.alpha(appear);
-        for index in 0..self.form.table.n_rows() as usize {
-            let Some(elem) = self.form.key_at(index).map(|k| k.0) else {
-                continue;
-            };
-            if let Some(placed) = <Self as Focusable<H>>::place(self, &elem, f.cx, At::Drawn) {
-                f.stop(
-                    hit_p,
-                    Stop {
-                        key: FocusKey { entry: self.entry, elem },
-                        rect: placed.rect,
-                        rest_rect: placed.rest_rect,
-                        clip: placed.clip,
-                        hover: Hover::Focus,
-                        activate: Activate::Immediate,
-                    },
-                );
-            }
-        }
     }
     fn render(&self) -> RenderStrategy {
         RenderStrategy::Page
@@ -334,8 +291,9 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Screen<H> for VersionsPanel
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use plx_ui::screen::DrawFrame;
     use super::*;
-    use plx_machine::machine::Host;
+    use plx_machine::machine::{Edge, Host, InputKind, Key};
     use plx_ui::screen::ScreenArg;
 
     #[derive(Clone)]
@@ -393,7 +351,7 @@ pub(crate) mod tests {
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
         VersionsPanelScreen::new(
             EntryId(3),
-            VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor },
+            VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None },
             &plx_appkit::version_list::sample(),
             None,
             true,
@@ -472,21 +430,30 @@ pub(crate) mod tests {
         assert_eq!(row_subject(&p, 0), None, "no page loaded");
     }
 
+    /// **The standalone Select Version panel is a picker: HEADLINE bold rows** (one size class per glass;
+    /// the same list pushed into an action menu takes the menu's compact class).
+    #[test]
+    fn the_panel_is_headline_bold() {
+        let _guard = plx_base::testlock::serial();
+        let p = morphing_panel(None);
+        assert_eq!(p.form().table.label_style(), (plx_ui::theme::size::HEADLINE, true));
+    }
+
     /// The version Play takes now wears the check mark and the list opens on it; with none named
     /// the list opens on its first row and no row is marked.
     #[test]
     fn the_taken_version_wears_the_check_and_the_list_opens_on_it() {
         let versions = plx_appkit::version_list::sample();
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
-        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor };
+        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None };
         for (checked, marked, opening) in [(None, None, 0), (Some(versions[0].id), Some(0), 0), (Some(versions[1].id), Some(1), 1)] {
             let p = VersionsPanelScreen::new(EntryId(3), arg.clone(), &versions, checked, true);
-            let rows: Vec<_> = p.form.table.sections.iter().flat_map(|s| s.rows.iter()).filter(|r| !r.is_note()).collect();
+            let rows: Vec<_> = p.form().table.sections.iter().flat_map(|s| s.rows.iter()).filter(|r| !r.is_note()).collect();
             assert_eq!(rows.iter().position(|r| r.checked), marked, "{checked:?}");
-            assert_eq!(p.form.selected_key().map(|k| k.0), Some(opening), "{checked:?}: opens on the marked row");
+            assert_eq!(p.form().selected_key().map(|k| k.0), Some(opening), "{checked:?}: opens on the marked row");
         }
         let gone = VersionsPanelScreen::new(EntryId(3), arg, &versions, Some(MediaId(99)), true);
-        assert_eq!(gone.form.selected_key().map(|k| k.0), Some(0), "a version the list lacks opens on the first row");
+        assert_eq!(gone.form().selected_key().map(|k| k.0), Some(0), "a version the list lacks opens on the first row");
     }
 
     /// OK on a row closes the panel and reports THAT version to the page that opened it.
@@ -497,7 +464,7 @@ pub(crate) mod tests {
         let mut present = plx_machine::present::Present::new();
         let mut fx: Effects<'_, HostFixture> =
             Effects::new(&mut out, MachineId::Instance(InstanceId(4)), &mut present);
-        p.commit(1, &mut fx);
+        <VersionsPanelScreen as Machine<HostFixture>>::step(&mut p, &ScreenEvent::Activate(1), &cx(), &mut fx);
         let fx: Vec<_> = out.into_iter().map(|e| e.fx).collect();
         assert!(matches!(fx.first(), Some(Fx::Nav(NavOp::Dismiss(EntryId(3))))), "the panel closes");
         let played = fx.iter().find_map(|f| match f {
@@ -517,7 +484,7 @@ pub(crate) mod tests {
         let _lang = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
         let why = plx_os::i18n::msg::browse_detail_no_playback();
         let anchor = [500.0f32, 600.0, 64.0, 64.0].map(f32::to_bits);
-        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor };
+        let arg = VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener: None };
         // What one event does to a panel: the effects it pushes.
         let drive = |p: &mut VersionsPanelScreen, ev: ScreenEvent<HostFixture>| {
             let mut out = Vec::new();
@@ -532,7 +499,7 @@ pub(crate) mod tests {
             Fx::Deliver(_, Delivery::Screen(ScreenEvent::App(AppMsg::SelectVersion(_))))));
         for (can_play, disabled) in [(true, false), (false, true)] {
             let mut p = VersionsPanelScreen::new(EntryId(3), arg.clone(), &plx_appkit::version_list::sample(), None, can_play);
-            let rows: Vec<_> = p.form.table.sections.iter().flat_map(|s| s.rows.iter()).collect();
+            let rows: Vec<_> = p.form().table.sections.iter().flat_map(|s| s.rows.iter()).collect();
             let versions: Vec<_> = rows.iter().filter(|row| !row.is_note()).collect();
             let notes: Vec<_> = rows.iter().filter(|row| row.is_note()).collect();
             assert_eq!(versions.len(), 2);
@@ -556,5 +523,139 @@ pub(crate) mod tests {
             }));
             assert!(closes(&back) && !reports(&back), "can_play={can_play}: BACK closes the panel and plays nothing");
         }
+    }
+
+    /// **LEFT and RIGHT at a one-page menu are inert**, never a close: LEFT has no page to pop and RIGHT no
+    /// Nav row to enter. They are re-delivered to the screen (`EdgeRule::Screen`), so the screen must
+    /// answer them (an unhandled one is a dead press), and only the down edge of BACK closes.
+    #[test]
+    fn left_and_right_never_close_the_panel_and_only_back_down_does() {
+        use plx_machine::machine::{InputEvent, Source, Tick};
+        let key = |key: Key, edge: Edge| {
+            ScreenEvent::<HostFixture>::Input(InputEvent {
+                at: Tick::default(),
+                source: Source::Script,
+                kind: InputKind::Key { key, sym: 0, wcode: 0, edge, at_edge: true },
+            })
+        };
+        let drive = |ev: ScreenEvent<HostFixture>| {
+            let mut p = panel();
+            let mut out = Vec::new();
+            let mut present = plx_machine::present::Present::new();
+            let mut fx: Effects<'_, HostFixture> = Effects::new(&mut out, MachineId::Instance(InstanceId(4)), &mut present);
+            let handled = Machine::<HostFixture>::step(&mut p, &ev, &cx(), &mut fx);
+            (handled, out.len())
+        };
+        for k in [Key::Left, Key::Right] {
+            for edge in [Edge::Down, Edge::Up] {
+                assert_eq!(drive(key(k, edge)), (Handled::Yes, 0), "{k:?} {edge:?}: answered, closes nothing");
+            }
+        }
+        assert_eq!(drive(key(Key::Back, Edge::Down)), (Handled::Yes, 1), "BACK down closes");
+        assert_eq!(drive(key(Key::Back, Edge::Up)), (Handled::No, 0), "BACK up is not the menu's");
+    }
+
+    // ---- the hero control's morph ------------------------------------------------------------
+
+    /// The panel over a hero control at `(500, 700)`: the page's entry 1 and the control's elem 9.
+    fn morphing_panel(opener: Option<(EntryId, u32)>) -> VersionsPanelScreen {
+        let anchor = [500.0f32, 700.0, 64.0, 64.0].map(f32::to_bits);
+        VersionsPanelScreen::new(
+            EntryId(3),
+            VersionsArg { host: InstanceId(9), sid: ServerId::from_raw(1), rk: "42".into(), anchor, opener },
+            &plx_appkit::version_list::sample(),
+            None,
+            true,
+        )
+    }
+
+    fn step(p: &mut VersionsPanelScreen, ev: ScreenEvent<HostFixture>) {
+        let mut out = Vec::new();
+        let mut present = plx_machine::present::Present::new();
+        let mut fx: Effects<'_, HostFixture> = Effects::new(&mut out, MachineId::Instance(InstanceId(4)), &mut present);
+        Machine::<HostFixture>::step(p, &ev, &cx(), &mut fx);
+    }
+
+    fn tick(p: &mut VersionsPanelScreen, ms: &mut u32, n: usize) {
+        for _ in 0..n {
+            *ms += 16;
+            step(p, ScreenEvent::Tick(plx_machine::machine::Tick { ms: *ms, dt_us: 16_667 }));
+        }
+    }
+
+    /// The glass this frame: the panel ground (a `rect_rimmed`, tag 8, on a host with no frozen field).
+    fn glass(p: &mut VersionsPanelScreen) -> Rect {
+        plx_ui::draw_census::capture(|| {
+            let cx = cx();
+            let mut f = DrawFrame::new(&cx, plx_ui::Painter::recording());
+            Screen::<HostFixture>::draw(p, &mut f);
+        })
+        .into_iter()
+        .find_map(|(tag, r)| (tag == 8).then_some(r))
+        .unwrap_or_default()
+    }
+
+    /// **Select Version GROWS out of the hero control that opened it**, as every header menu does
+    /// (`Popover::morphing` + `open_from`): the control is the surface's `opener` (the page leaves it
+    /// out of its pass; the lift draws it at the morph's `opener_alpha`), the panel covers it, three
+    /// frames in the glass is still the control's size or a little over, the settled panel is exactly
+    /// `frame()`, and BACK (or a pick) runs the morph home into the control.
+    #[test]
+    fn the_panel_grows_out_of_its_control_settles_on_its_frame_and_runs_home_on_back() {
+        let _guard = plx_base::testlock::serial();
+        let mut p = morphing_panel(Some((EntryId(1), 9)));
+        assert_eq!(
+            Screen::<HostFixture>::opener(&p),
+            Some((EntryId(1), Some(FocusKey { entry: EntryId(1), elem: 9 }))),
+            "the opener is the hero control, on the page"
+        );
+        step(&mut p, ScreenEvent::Mount);
+        let settled = p.frame(&plx_ui::fixture::FixtureMeasure);
+        let pill = plx_ui::detail_layout::hero_pill(p.arg.anchor);
+        assert!(
+            settled.x <= pill.x && settled.y <= pill.y && settled.x + settled.w >= pill.x + pill.w && settled.y + settled.h >= pill.y + pill.h,
+            "the settled panel {settled:?} covers the control {pill:?}, which the morph consumes"
+        );
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 1.0, "frame 0 is the control whole");
+        assert!(Screen::<HostFixture>::scrim(&p).ramp.is_some(), "the dim follows the morph");
+        let mut ms = 0;
+        tick(&mut p, &mut ms, 3);
+        let early = glass(&mut p);
+        assert!(
+            early.w < settled.w - 20.0 && early.h < settled.h - 20.0,
+            "three frames in the glass is still growing out of the control ({early:?}), not laid at {settled:?}"
+        );
+        tick(&mut p, &mut ms, 96);
+        let end = glass(&mut p);
+        assert!(
+            (end.x - settled.x).abs() < 0.5 && (end.y - settled.y).abs() < 0.5
+                && (end.w - settled.w).abs() < 0.5 && (end.h - settled.h).abs() < 0.5,
+            "the settled panel is the frame {settled:?}, drew {end:?}"
+        );
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 0.0, "the control stays consumed while the panel stands");
+        step(&mut p, ScreenEvent::Closing);
+        tick(&mut p, &mut ms, 3);
+        assert!(glass(&mut p).w < settled.w - 20.0, "three frames into the close the glass is narrowing into the control");
+        assert!(!Screen::<HostFixture>::handed_back(&p));
+        tick(&mut p, &mut ms, 60);
+        assert!(Screen::<HostFixture>::handed_back(&p), "the droplet has drained into the control");
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 1.0);
+    }
+
+    /// A panel with no opener (every test rig, and any host that names none) draws as it always did:
+    /// under the disc, no morph, the opener whole, no handback of its own.
+    #[test]
+    fn a_panel_with_no_opener_keeps_the_fade() {
+        let _guard = plx_base::testlock::serial();
+        let mut p = morphing_panel(None);
+        step(&mut p, ScreenEvent::Mount);
+        step(&mut p, ScreenEvent::Closing);
+        assert_eq!(Screen::<HostFixture>::opener(&p), None);
+        assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 1.0);
+        assert!(!Screen::<HostFixture>::handed_back(&p));
+        assert!(Screen::<HostFixture>::scrim(&p).ramp.is_none());
+        let [x, y, w, h] = [500.0f32, 700.0, 64.0, 64.0];
+        let under = plx_ui::popover::under_or_above(Rect::new(x, y, w, h), p.form().table.measured_width(&plx_ui::fixture::FixtureMeasure), p.form().table.measured_height());
+        assert_eq!(p.frame(&plx_ui::fixture::FixtureMeasure), under);
     }
 }

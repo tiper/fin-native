@@ -611,3 +611,48 @@ fn still_line_label_baseline_is_where_it_always_stood() {
     assert_eq!(alone.len(), 1);
     assert_eq!(alone[0].at.y, sub.at.y);
 }
+
+/// Home's Resume pill is floored at `theme::hero::PLAY_MIN_W`: the slack goes to the RAIL, so the
+/// glyph, rail and time fill the capsule and its ends keep `BTN_PROGRESS_AIR` / 2 each, measured to
+/// the Play glyph's INK and the label's advance (not to the glyph's empty box margin).
+#[test]
+fn a_floored_progress_pill_hands_its_slack_to_the_rail() {
+    use crate::icons::Icon;
+    let label = c"8m";
+    let sz = theme::size::BODY;
+    let natural = Button::progress_pill_width(&LegacyMeasure, label, sz, Icon::Play);
+    let w = natural.max(theme::hero::PLAY_MIN_W);
+    assert!(w > natural, "the case under test is a pill the floor widens: {natural} -> {w}");
+    let frame = Rect::new(100.0, 200.0, w, 60.0);
+    let draw = || Button::new(label.as_ptr(), sz, frame).icon(Icon::Play).inline_progress(0.5)
+        .draw(&Env::inert(), Painter::recording());
+    let icons = crate::draw_census::capture_icons(&draw);
+    let runs = crate::draw_census::capture_runs(&draw);
+    let rects = crate::draw_census::capture(&draw);
+    let (icon, boxr) = icons[0];
+    assert_eq!(icon, Icon::Play);
+    let (l, _) = crate::icons::ink_x(icon);
+    let lead = boxr.x + l * boxr.w - frame.x;
+    let text = runs.iter().find(|r| r.text == "8m").expect("the time label");
+    let tw = LegacyMeasure.width(label, sz, true);
+    let trail = frame.x + frame.w - (text.at.x + tw);
+    let half = BTN_PROGRESS_AIR * 0.5;
+    assert!((lead - half).abs() < 0.5, "ink-to-edge on the left is the air: {lead}");
+    assert!((trail - half).abs() < 0.5, "label-to-edge on the right is the air: {trail}");
+    let rail = rects.iter().map(|(_, r)| *r).find(|r| r.h == BTN_RAIL_H).expect("the rail track");
+    assert!((rail.w - (BTN_RAIL_W + (w - natural))).abs() < 0.5, "the rail took the slack: {}", rail.w);
+}
+
+/// A pill whose natural width needs no floor keeps the least rail and the same air.
+#[test]
+fn an_unfloored_progress_pill_keeps_the_least_rail() {
+    use crate::icons::Icon;
+    let label = c"1h 52m left";
+    let sz = theme::size::BODY;
+    let w = Button::progress_pill_width(&LegacyMeasure, label, sz, Icon::Play);
+    let frame = Rect::new(0.0, 0.0, w, 60.0);
+    let rects = crate::draw_census::capture(|| Button::new(label.as_ptr(), sz, frame).icon(Icon::Play)
+        .inline_progress(0.25).draw(&Env::inert(), Painter::recording()));
+    let rail = rects.iter().map(|(_, r)| *r).find(|r| r.h == BTN_RAIL_H).expect("the rail track");
+    assert!((rail.w - BTN_RAIL_W).abs() < 1e-3, "{}", rail.w);
+}

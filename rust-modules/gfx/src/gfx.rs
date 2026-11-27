@@ -11367,7 +11367,7 @@ mod tests {
     /// The tap geometry, against an independent statement of it: a texel is `dims / region` per
     /// authored px, counted from the region's origin, and from its bottom edge when the image is
     /// stored bottom-up. Both parities, at the two widths the bar takes (679 px at Home's narrower
-    /// tab sets, 1544 px at the widest).
+    /// tab sets, 1404 px at the widest, `widgets::TAB_VIEW_MAX` plus the track's inset).
     #[test]
     fn the_taps_land_in_the_band_image_at_its_own_scale() {
         for (x, w) in [(620.5f32, 679.0f32), (188.0, 1544.0)] {

@@ -313,7 +313,6 @@ impl PanelMotion {
     }
 
     /// Is a page slide running (as distinct from only the card resizing)?
-    #[cfg(any(test, feature = "test-support"))]
     pub fn sliding(&self) -> bool {
         self.slide.is_some()
     }

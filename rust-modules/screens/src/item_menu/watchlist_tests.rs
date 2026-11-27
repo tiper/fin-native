@@ -12,7 +12,7 @@ fn face(member: Membership, kind: Kind, from_episode: bool) -> Face {
     Face { hex: HEX, member, kind, from_episode }
 }
 
-struct Menu(FormTable<ItemRow, Action, Infallible>);
+struct Menu(FormTable<ItemRow, Action, MenuPage>);
 fn menu(form: ItemForm) -> Menu {
     let mut t = FormTable::new(crate::registry::BAND);
     t.set(form, None);

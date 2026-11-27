@@ -7559,6 +7559,13 @@ pub fn set_subtitle(ps: &mut PlaybackSession, sid: i64) {
 pub fn cur_sub_sid(ps: &PlaybackSession) -> i64 {
     ps.cur_sub_sid
 }
+/// **The embedded subtitle the app draws, as `(stream id, render ordinal)`**: the selected stream when the session
+/// says the app's own renderer draws it from an embedded track (`metadata::sub_render_ordinal`'s ordinal, never a
+/// sidecar). A URI driver's captions are kept only for this stream, and drawn at this ordinal.
+pub fn embedded_subtitle_drawn_by_app(ps: &PlaybackSession) -> Option<(i64, i32)> {
+    (ps.cur_sub_sid > 0 && ps.cur_sub_client_drawable && !ps.cur_sub_sidecar && ps.cur_sub_ordinal >= 0)
+        .then_some((ps.cur_sub_sid, ps.cur_sub_ordinal))
+}
 /// The subtitle-language preference this play resolved under (show pref, else account pref), as
 /// a BCP-47 code — `metadata::sub_layout::sub_sections`'s "yours" grouping reads this, never a Plex
 /// account type.
@@ -9858,6 +9865,11 @@ pub fn available_quality_ladder() -> &'static [Quality] {
 
 pub fn forced_direct_play(ps: &PlaybackSession) -> bool {
     ps.direct_play_mode == DirectPlayMode::Forced
+}
+
+/// Direct Play is set to **Disabled** for this session: every rung asks the server to convert.
+pub fn direct_play_disabled(ps: &PlaybackSession) -> bool {
+    ps.direct_play_mode == DirectPlayMode::Disabled
 }
 
 pub fn audio_track_direct_plays(ps: &PlaybackSession, codec: &str, channels: i64, sample_rate: i64) -> bool {

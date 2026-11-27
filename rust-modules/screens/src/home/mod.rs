@@ -4248,7 +4248,7 @@ fn hero_rects(measure: &dyn Measure, item: &PmsMovie, label: &std::ffi::CStr, in
     let has_disc = disc_hex(item).is_some();
     let items = [
         Item::new(if inline_progress {
-            Button::progress_pill_width(measure, label, theme::size::BODY).max(theme::hero::PLAY_MIN_W)
+            Button::progress_pill_width(measure, label, theme::size::BODY, Icon::Play).max(theme::hero::PLAY_MIN_W)
         } else {
             plx_appkit::hero_layout::play_width(measure, label)
         }),

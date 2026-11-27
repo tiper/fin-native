@@ -52,6 +52,8 @@ thread_local! {
     static OFFSET_AT: Cell<Option<(i64, Option<i32>)>> = const { Cell::new(None) };
     /// A wall-clock Unix sample and its monotonic frame tick; advanced between five-second refreshes.
     static UNIX: Cell<Option<(u32, Option<i64>)>> = const { Cell::new(None) };
+    /// Set while a controlled recording runs: the session has no wall clock, as its replay has none.
+    static NO_WALL: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The date every replay frame answers: a recording has no calendar of its own, and a fixed one keeps
@@ -69,6 +71,14 @@ pub(crate) fn now() -> u32 {
     unsafe { SDL_GetTicks() }
 }
 
+/// **A controlled recording has no wall clock**, exactly as its replay has none ([`unix_ms`]): the bar's clock face
+/// and every other word of the time of day would otherwise be measured into the recording at whatever minute it was
+/// taken (a recorded text measure of the face), which no replay could reproduce and no fixture could commit.
+pub(crate) fn hold_no_wall() {
+    NO_WALL.with(|c| c.set(true));
+    UNIX.with(|c| c.set(None));
+}
+
 /// The replay driver sets the frame's time before the frame reads it, and with it the date
 /// ([`REPLAY_DATE`]).
 pub(crate) fn set_replay(ms: u32) {
@@ -81,7 +91,7 @@ pub(crate) fn set_replay(ms: u32) {
 /// clock is sampled at most every five seconds and advanced with monotonic frame ticks between samples.
 pub(crate) fn unix_ms() -> Option<i64> {
     plx_base::step::assert_io_allowed("app::clock::unix_ms");
-    if REPLAY.with(|c| c.get().is_some()) {
+    if REPLAY.with(|c| c.get().is_some()) || NO_WALL.with(Cell::get) {
         UNIX.with(|c| c.set(None));
         return None;
     }
@@ -173,6 +183,22 @@ pub(crate) fn reading() -> Option<Reading> {
     plx_base::step::assert_io_allowed("app::clock::reading");
     let unix_ms = unix_ms()?;
     Some(Reading { unix_ms, utc_offset_s: zone(unix_ms.div_euclid(1_000)).utc_offset_s })
+}
+
+/// Pin the wall clock and the zone this thread reads (the host suite's stand-in for the platform): the
+/// instant `unix_ms` at `utc_offset_s`, until [`unpin_for_test`].
+#[cfg(test)]
+pub(crate) fn pin_for_test(unix_ms: i64, utc_offset_s: i32) {
+    REPLAY.with(|c| c.set(None));
+    UNIX.with(|c| c.set(Some((now(), Some(unix_ms)))));
+    ZONE.with(|c| c.set(Some((now() / 60_000, Zone { today: None, utc_offset_s: Some(utc_offset_s) }))));
+}
+
+/// Forget a [`pin_for_test`].
+#[cfg(test)]
+pub(crate) fn unpin_for_test() {
+    UNIX.with(|c| c.set(None));
+    ZONE.with(|c| c.set(None));
 }
 
 /// Advance a sampled wall-clock timestamp by monotonic frame time, or ask for a fresh sample once
@@ -346,6 +372,32 @@ mod tests {
         super::REPLAY.with(|c| c.set(None));
         super::ZONE.with(|c| c.set(None));
         super::UNIX.with(|c| c.set(None));
+    }
+
+    /// **The minute edge reaches the bar's clock through the one publication**: the loop's reading is
+    /// published once per frame, the face changes only when the Unix minute (or the zone) does, and
+    /// `publish_clock` says so, so a settled screen is asked for exactly one frame a minute.
+    #[test]
+    fn the_published_reading_changes_the_bars_clock_only_at_the_minute_edge() {
+        use crate::app::bridge::Bridge;
+        const AT: i64 = 1_795_649_400;
+        let mut owner = crate::app::runtime_owners::Harness::new(|| 0);
+        let mut bridge = owner.bridge();
+        let publish = |bridge: &mut Bridge| bridge.publish_clock(super::reading());
+        super::pin_for_test(AT * 1_000, 3_600);
+        assert!(publish(&mut bridge), "the first reading: a face to show");
+        for ms in [1, 999, 30_000, 59_999] {
+            super::pin_for_test(AT * 1_000 + ms, 3_600);
+            assert!(!publish(&mut bridge), "{ms} ms into the minute: the same face, no frame owed");
+        }
+        super::pin_for_test((AT + 60) * 1_000, 3_600);
+        assert!(publish(&mut bridge), "the next minute begins: one frame owed");
+        assert!(!publish(&mut bridge), "and published again within it, none");
+        super::set_replay(100);
+        assert!(publish(&mut bridge), "a replay has no clock, which takes the face away");
+        assert!(!publish(&mut bridge), "and nothing more is owed after that");
+        super::REPLAY.with(|c| c.set(None));
+        super::unpin_for_test();
     }
 
     #[test]

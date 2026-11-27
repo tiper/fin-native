@@ -5,6 +5,7 @@ pub mod device;
 pub mod home;
 pub mod launch;
 pub mod native_video;
+pub mod packet_probe;
 pub mod plane;
 pub mod secure;
 pub mod sink;
@@ -59,6 +60,9 @@ pub struct IdentityHooks {
     /// platform that has one. `None` is a platform with nothing to repair: the repair then answers
     /// [`native_video::Failure::Unsupported`].
     pub repair_native_video: Option<fn() -> Result<(), native_video::Failure>>,
+    /// The packet-player probe ([`packet_probe::command`]), for a platform that offers one. `None` is a platform
+    /// without it: the probe answers [`packet_probe::Status::Unavailable`] and Settings shows no row for it.
+    pub packet_probe: Option<fn(packet_probe::Command) -> packet_probe::Status>,
     /// The files the capability probe parses, read the platform's way ([`device::files`]).
     pub device_files: device::Files,
     pub system_locale: fn() -> LocaleReply,
@@ -102,6 +106,7 @@ impl IdentityHooks {
         probe_device: nothing,
         start_capability_probe: nothing,
         repair_native_video: None,
+        packet_probe: None,
         device_files: device::Files::NONE,
         system_locale: || LocaleReply::NoPlatform,
         sound_output: || sound::Reply::NoPlatform,
@@ -180,7 +185,7 @@ mod tests {
     #[test]
     fn the_host_test_services_answer_nothing_and_say_so() {
         let Services {
-            identity: IdentityHooks { probe_device, start_capability_probe, repair_native_video, device_files, system_locale, sound_output },
+            identity: IdentityHooks { probe_device, start_capability_probe, repair_native_video, packet_probe, device_files, system_locale, sound_output },
             secure: SecureHooks { seal, open, remove, mode },
             system: SystemHooks { go_home, poll_home, deliver_toast },
             storage: StorageHooks { authority },
@@ -199,6 +204,8 @@ mod tests {
         probe_device();
         start_capability_probe();
         assert!(repair_native_video.is_none(), "a platform with nothing to repair states no hook");
+        assert!(packet_probe.is_none(), "no packet-player probe");
+        assert_eq!(packet_probe::command(packet_probe::Command::Status), packet_probe::Status::Unavailable);
         assert_eq!(native_video::repair(), Err(native_video::Failure::Unsupported));
         assert_eq!(
             (device_files.read)("/etc/umediaserver/device_codec_capability_config.json").unwrap_err().kind(),

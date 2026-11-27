@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Stage and package the Tizen build (`make PLATFORM=tizen tizen-stage | tizen-signing | tizen-tpk`; docs/tizen.md).
 
-    python3 tizen/package.py stage         --so PATH [--mock-host HOST:PORT] [--log-host IPV4:PORT]
+    python3 tizen/package.py stage         --so PATH --ass PATH [--mock-host HOST:PORT] [--log-host IPV4:PORT]
     python3 tizen/package.py check-signing
-    python3 tizen/package.py tpk           --so PATH [--mock-host HOST:PORT] [--log-host IPV4:PORT]
+    python3 tizen/package.py tpk           --so PATH --ass PATH [--mock-host HOST:PORT] [--log-host IPV4:PORT]
 
 `stage` fills the .NET host project (tizen/host/PlxHost/) with everything the package carries that is not source: the library, the
-font and its licence, the icon, and the two dev-boot inputs. A dev-boot input that was not asked for is NOT written and a stale copy
+subtitle renderer (`--ass`, `libass-plx`, staged as `res/<its name>` because the application opens it from its application directory,
+which is `res/`), the fonts and their licence, the notices, the icon, and the two dev-boot inputs. A dev-boot input that was not asked for is NOT written and a stale copy
 from an earlier run is removed, so the package is exactly what the command line named (the log channel is off and there is no dev
 boot unless the builder asked). `tpk` stages, builds with `dotnet`, signs, and checks the package it got.
 
@@ -58,12 +59,34 @@ SIGNING_VARS = ("PLX_TIZEN_AUTHOR_P12", "PLX_TIZEN_AUTHOR_PASS", "PLX_TIZEN_DIST
 # real is ever put here. A real credential in this file would be published with the package.
 DEV_BOOT_TOKEN = "plxnative-emulator-placeholder-token"
 
+# The fonts are the application directory's (`res/`, `DirectoryInfo.Resource`): every face of the UI text chain (rust-modules/gfx/src/text.rs:
+# Inter, CJK, emoji, Arabic, Hebrew; ci/test_shipped_faces.py holds this list to it), which the subtitle renderer reads too. `appfont-cjk.ttf` is
+# the renderer's default face (`plx_ass_create`) as well as the UI's CJK fallback; the Arabic and Hebrew faces are what the right-to-left text
+# path shapes with the renderer's library (rust-modules/gfx/src/rtl.rs); the per-script subtitle faces are SUBS_FONT_DIR's.
+# The probe's clip names: `CLIPS` in rust-modules/platform-tizen/src/esprobe/mod.rs (a test holds the two lists equal).
+ESPROBE_CLIPS = ("h264", "aac", "hevc", "hevc10", "av1", "vp9", "ac3", "eac3")
 PAYLOAD = (
     ("pkg/appfont.ttf", "res/appfont.ttf"),
     ("pkg/appfont-bold.ttf", "res/appfont-bold.ttf"),
+    ("pkg/appfont-cjk.ttf", "res/appfont-cjk.ttf"),
+    ("pkg/appfont-emoji.ttf", "res/appfont-emoji.ttf"),
+    ("pkg/appfont-arabic.ttf", "res/appfont-arabic.ttf"),
+    ("pkg/appfont-arabic-bold.ttf", "res/appfont-arabic-bold.ttf"),
+    ("pkg/appfont-hebrew.ttf", "res/appfont-hebrew.ttf"),
+    ("pkg/appfont-hebrew-bold.ttf", "res/appfont-hebrew-bold.ttf"),
     ("pkg/OFL.txt", "res/OFL.txt"),
     ("pkg/dev/largeIcon.png", f"shared/res/{PACKAGE_ID}.png"),
+    # The packet-player probe's clips (tools/make-esprobe-clips.py; rust-modules/platform-tizen/src/esprobe/): synthetic test patterns and
+    # tones, read from `res/esprobe/` (docs/tizen.md, "The packet player").
+    *((f"tizen/esprobe/{name}.plxes", f"res/esprobe/{name}.plxes") for name in ESPROBE_CLIPS),
 )
+# The subtitle faces (tools/cut-noto-subs.py) and their manifest, which the renderer reads from `fonts/subs/` under the application directory
+# (rust-modules/media/src/player/ass/fonts.rs) in the manifest's order. The whole directory is staged, as the .ipk stages it (Makefile,
+# SUBS_FONT_FILES), and `verify_tpk` checks every face the packaged manifest names is in the package.
+SUBS_FONT_DIR = "fonts/subs"
+SUBS_MANIFEST = "manifest.json"
+# The renderer's names, one per architecture (ci/check-tizen-so.py, ASS_SONAMES; both are in the candidate list `dynlib!` tries).
+ASS_NAMES = ("libass-plx.so.0", "libass-plx-host.so.0")
 # The notices travel WITH the package, as they do in the .ipk (Makefile, APP_FILES and LICENSE_FILES): this package statically links SDL2 and
 # SDL2_ttf (zlib) and FreeType (the FreeType License, which requires the credit to be shown in the documentation shipped with the product),
 # so a copy in the repository does not discharge it for someone who received only the .tpk. THIRD-PARTY-NOTICES.md names its licence texts
@@ -72,17 +95,20 @@ PAYLOAD = (
 NOTICES_FILE = "THIRD-PARTY-NOTICES.md"
 LICENSE_DOCS = ("LICENSE", "LICENSING.md", "TRADEMARKS.md")
 # The generated, gitignored files of the host project, removed before every staging.
-GENERATED = ("lib", "bin", "obj", "res/dev-boot.json", "res/log-host.txt", "res/appfont.ttf", "res/appfont-bold.ttf", "res/OFL.txt",
-             f"res/{NOTICES_FILE}", "res/licenses", f"shared/res/{PACKAGE_ID}.png")
+GENERATED = ("lib", "bin", "obj", "res/dev-boot.json", "res/log-host.txt", *(target for _, target in PAYLOAD), "res/fonts", "res/esprobe",
+             *(f"res/{name}" for name in ASS_NAMES), f"res/{NOTICES_FILE}", "res/licenses")
 # What bin/ and lib/ may hold: nothing but our own assembly (and its symbols) and the library. The four packages PlxHost.deps.json lists carry no
 # runtime or native assets into the package: Tizen.NET and Tizen.NET.API8 are referenced and provided by the device's runtime,
 # Tizen.NET.Sdk is build-time only, and Microsoft.NETCore.Platforms is a metadata package with no assemblies. THIRD-PARTY-NOTICES.md section 2.8
 # says so: a new assembly or native library needs an entry there FIRST.
 ALLOWED_BIN = ("bin/PlxHost.dll", "bin/PlxHost.pdb")
 ALLOWED_LIB = ("lib/libplx.so",)
-REQUIRED_IN_TPK = ("tizen-manifest.xml", "bin/PlxHost.dll", "lib/libplx.so", "res/appfont.ttf", "res/OFL.txt",
+# The renderer's licence texts (THIRD-PARTY-NOTICES.md 1.2): libass, HarfBuzz, libunibreak, FriBidi's LGPL; FreeType's and zlib's are above.
+REQUIRED_IN_TPK = ("tizen-manifest.xml", "bin/PlxHost.dll", "lib/libplx.so", *(target for _, target in PAYLOAD if target.startswith("res/")),
+                   f"res/{SUBS_FONT_DIR}/{SUBS_MANIFEST}",
                    f"res/{NOTICES_FILE}", "res/licenses/LICENSE", "res/licenses/Zlib.txt", "res/licenses/FreeType.txt",
-                   "author-signature.xml", "signature1.xml")
+                   "res/licenses/libass-ISC.txt", "res/licenses/HarfBuzz-Old-MIT.txt", "res/licenses/libunibreak-Zlib.txt",
+                   "res/licenses/LGPL-2.1.txt", "author-signature.xml", "signature1.xml")
 
 
 class PackageError(Exception):
@@ -167,12 +193,23 @@ def stage_notices(root: Path, host: Path) -> None:
         shutil.copyfile(src, target)
 
 
-def stage(root: Path, so: Path, mock: str | None, log: str | None, *,
+def check_ass(so: Path, ass: Path) -> None:
+    """The renderer is one of the names the application opens, and built for the same architecture as the library beside it."""
+    if ass.name not in ASS_NAMES:
+        raise PackageError(f"{ass.name} is not a renderer name the application opens ({', '.join(ASS_NAMES)})")
+    if not ass.is_file():
+        raise PackageError(f"{ass} is missing; build it first: make PLATFORM=tizen tizen-so tizen-verify")
+    if ass.parent.resolve() != so.parent.resolve():
+        raise PackageError(f"{ass} is not beside {so}: the renderer and the library are built for one architecture, into one directory")
+
+
+def stage(root: Path, so: Path, ass: Path, mock: str | None, log: str | None, *,
           host: Path | None = None, nightly: bool = False) -> Path:
     """Fill the host project. Returns the project directory."""
     host = host or root / HOST_DIR
     if not so.is_file():
         raise PackageError(f"{so} is missing; build it first: make PLATFORM=tizen tizen-so tizen-verify")
+    check_ass(so, ass)
     for name in GENERATED:
         target = host / name
         if target.is_dir() and not target.is_symlink():
@@ -189,6 +226,13 @@ def stage(root: Path, so: Path, mock: str | None, log: str | None, *,
             raise PackageError(f"{source} is missing from the checkout")
         (host / target).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, host / target)
+    shutil.copyfile(ass, host / "res" / ass.name)
+    subs = root / "pkg" / SUBS_FONT_DIR
+    if not (subs / SUBS_MANIFEST).is_file():
+        raise PackageError(f"pkg/{SUBS_FONT_DIR}/{SUBS_MANIFEST} is missing from the checkout")
+    (host / "res" / SUBS_FONT_DIR).mkdir(parents=True)
+    for src in sorted([*subs.glob("*.ttf"), subs / SUBS_MANIFEST]):
+        shutil.copyfile(src, host / "res" / SUBS_FONT_DIR / src.name)
     stage_notices(root, host)
     if mock is not None:
         (host / "res/dev-boot.json").write_text(dev_boot_json(mock_host(mock)))
@@ -231,14 +275,14 @@ def compile_tpk(host: Path, env: dict[str, str]) -> Path:
     return built[0]
 
 
-def build_tpk(root: Path, so: Path, mock: str | None, log: str | None, env: dict[str, str]) -> Path:
+def build_tpk(root: Path, so: Path, ass: Path, mock: str | None, log: str | None, env: dict[str, str]) -> Path:
     check_signing(env)
-    host = stage(root, so, mock, log)
+    host = stage(root, so, ass, mock, log)
     built = compile_tpk(host, env)
     out = root / "tizen/out"
     out.mkdir(parents=True, exist_ok=True)
     tpk = out / f"PlxNative-{so.parent.name}.tpk"
-    verify_tpk(built, so, mock, log)
+    verify_tpk(built, so, ass, mock, log)
     shutil.copyfile(built, tpk)
     return tpk
 
@@ -296,7 +340,7 @@ def verify_nightly(tpk: Path, version: str, author: bytes, distributor: bytes) -
                 raise PackageError(f"{name} does not use the certificate generated for this build")
 
 
-def build_nightly(root: Path, so: Path, label: str, env: dict[str, str]) -> Path:
+def build_nightly(root: Path, so: Path, ass: Path, label: str, env: dict[str, str]) -> Path:
     version = check_nightly(label, None, None, env)
     if so.parent.name not in {"armv7", "x86_64"}:
         raise PackageError("build the library under tizen/out/<arch> first")
@@ -308,7 +352,7 @@ def build_nightly(root: Path, so: Path, label: str, env: dict[str, str]) -> Path
         host.mkdir()
         for name in (PROJECT, "Program.cs", "PlxPlayer.cs", "PlayerNative.cs", MANIFEST):
             shutil.copyfile(root / HOST_DIR / name, host / name)
-        stage(root, so, None, None, host=host, nightly=True)
+        stage(root, so, ass, None, None, host=host, nightly=True)
         staged_so = host / "lib/libplx.so"
         if label.encode() not in staged_so.read_bytes():
             raise PackageError("the staged library does not report this night's label")
@@ -322,7 +366,7 @@ def build_nightly(root: Path, so: Path, label: str, env: dict[str, str]) -> Path
         distributor, distributor_der = throwaway_certificate(scratch, "distributor", password)
         signing = dict(zip(SIGNING_VARS, (str(author), password, str(distributor), password)))
         built = compile_tpk(host, {**env, **signing})
-        verify_tpk(built, staged_so, None, None)
+        verify_tpk(built, staged_so, host / "res" / ass.name, None, None)
         verify_nightly(built, version, author_der, distributor_der)
         output = out / f"plxnative-tizen-v{label}-{so.parent.name}.tpk"
         built.replace(output)
@@ -330,8 +374,8 @@ def build_nightly(root: Path, so: Path, label: str, env: dict[str, str]) -> Path
     return output
 
 
-def verify_tpk(tpk: Path, so: Path, mock: str | None, log: str | None) -> None:
-    """The package holds what it must, the dev-boot files exactly when asked for, and the library that was verified."""
+def verify_tpk(tpk: Path, so: Path, ass: Path, mock: str | None, log: str | None) -> None:
+    """The package holds what it must, the dev-boot files exactly when asked for, and the two libraries that were verified."""
     with zipfile.ZipFile(tpk) as package:
         names = set(package.namelist())
         for need in REQUIRED_IN_TPK:
@@ -348,6 +392,23 @@ def verify_tpk(tpk: Path, so: Path, mock: str | None, log: str | None) -> None:
                                    f"needs a THIRD-PARTY-NOTICES.md section 2.8 entry first (and an update of ALLOWED_BIN/ALLOWED_LIB)")
         if package.read("lib/libplx.so") != so.read_bytes():
             raise PackageError(f"the packaged libplx.so differs from {so}")
+        # The renderer: exactly one, the verified one, and no other native library anywhere outside lib/ (an ELF in res/ would be loaded
+        # by name as this one is, so it needs the same notices entry and allowlist as one under lib/).
+        renderer = f"res/{ass.name}"
+        elves = sorted(n for n in names if not n.endswith("/") and not n.startswith("lib/") and package.read(n)[:4] == b"\x7fELF")
+        if elves != [renderer]:
+            raise PackageError(f"{tpk.name} carries the native libraries {elves} outside lib/, not exactly {renderer}: a new native library "
+                               f"needs a THIRD-PARTY-NOTICES.md section 2.8 entry first (and an update of ASS_NAMES)")
+        if package.read(renderer) != ass.read_bytes():
+            raise PackageError(f"the packaged {ass.name} differs from {ass}")
+        try:
+            faces = json.loads(package.read(f"res/{SUBS_FONT_DIR}/{SUBS_MANIFEST}"))["faces"]
+            wanted = [f"res/{SUBS_FONT_DIR}/{face['file']}" for face in faces]
+        except (ValueError, KeyError, TypeError) as error:
+            raise PackageError(f"{tpk.name}: res/{SUBS_FONT_DIR}/{SUBS_MANIFEST} is not the subtitle face manifest ({error})") from error
+        lost = [name for name in wanted if name not in names]
+        if not wanted or lost:
+            raise PackageError(f"{tpk.name} lacks the subtitle faces its manifest names: {lost or 'the manifest names none'}")
     print(f"package: {tpk} ({tpk.stat().st_size} bytes)")
 
 
@@ -358,6 +419,7 @@ def main(argv: list[str]) -> int:
         p = sub.add_parser(name)
         if name != "check-nightly":
             p.add_argument("--so", required=True, type=Path)
+            p.add_argument("--ass", required=True, type=Path, help="the subtitle renderer (libass-plx) built beside the library")
         if name in ("tpk-nightly", "check-nightly"):
             p.add_argument("--label", required=True)
         p.add_argument("--mock-host")
@@ -369,13 +431,13 @@ def main(argv: list[str]) -> int:
             check_signing(dict(os.environ))
             print("signing: the four PLX_TIZEN_* variables are set")
         elif args.command == "stage":
-            stage(ROOT, args.so, args.mock_host, args.log_host)
+            stage(ROOT, args.so, args.ass, args.mock_host, args.log_host)
         elif args.command in ("check-nightly", "tpk-nightly"):
             check_nightly(args.label, args.mock_host, args.log_host, dict(os.environ))
             if args.command == "tpk-nightly":
-                build_nightly(ROOT, args.so, args.label, dict(os.environ))
+                build_nightly(ROOT, args.so, args.ass, args.label, dict(os.environ))
         else:
-            build_tpk(ROOT, args.so, args.mock_host, args.log_host, dict(os.environ))
+            build_tpk(ROOT, args.so, args.ass, args.mock_host, args.log_host, dict(os.environ))
     except (PackageError, OSError, ValueError, ET.ParseError, zipfile.BadZipFile, subprocess.CalledProcessError) as error:
         print(f"tizen/package.py: {error}", file=sys.stderr)
         return 1

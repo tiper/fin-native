@@ -2,8 +2,8 @@
 //!
 //! The header is the contract's single source (the .NET host's `DllImport`s and its export check are
 //! written from it); this file is its Rust twin, and `the_header_and_the_rust_types_agree` reads the
-//! header's text and pins every name, value and field order against the types below. The three exports
-//! (`plx_host_start`, `plx_host_post`, `plx_host_stop`) are in [`crate::exports`]; the logic behind them,
+//! header's text and pins every name, value and field order against the types below. The four exports
+//! (`plx_host_start`, `plx_host_post`, `plx_host_post_cue`, `plx_host_stop`) are in [`crate::exports`]; the logic behind them,
 //! which a host test drives with a fake host table and no Ecore, is [`crate::hosted`].
 use std::os::raw::c_void;
 
@@ -69,6 +69,13 @@ pub const EVENT_PLAYER_AUDIO_LANGUAGE: u32 = 29;
 /// `PLX_HOST_AUDIO_LANGUAGE_REPORTS`: the most native audio tracks whose `PLAYER_AUDIO_LANGUAGE` the host posts at one
 /// PREPARED; a report past it is dropped by the driver, so that track's language reads as unknown.
 pub const AUDIO_LANGUAGE_REPORTS: usize = 32;
+/// `PLX_HOST_EVENT_PLAYER_TEXT_LANGUAGE`: one native TEXT track's language, posted before PREPARED (a = the native text index,
+/// b = as [`EVENT_PLAYER_AUDIO_LANGUAGE`]).
+pub const EVENT_PLAYER_TEXT_LANGUAGE: u32 = 30;
+/// `PLX_HOST_TEXT_LANGUAGE_REPORTS`: the most native text tracks whose `PLAYER_TEXT_LANGUAGE` the host posts at one PREPARED.
+pub const TEXT_LANGUAGE_REPORTS: usize = 32;
+/// `PLX_HOST_CUE_TEXT_MAX`: the longest cue text, in bytes, `plx_host_post_cue` accepts.
+pub const CUE_TEXT_MAX: u32 = 4096;
 
 /// The language code a `PLAYER_AUDIO_LANGUAGE` word carries: two or three ASCII letters, first character in the lowest
 /// byte and zero-padded. Anything else (no code, a tag with a region, a byte that is not a letter) is `None`, which the
@@ -98,6 +105,10 @@ pub const VERB_CLOSE: u32 = 4;
 /// `PLAYER_TRACK`.
 #[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
 pub const VERB_AUDIO_TRACK: u32 = 5;
+/// `PLX_HOST_PLAYER_VERB_TEXT_TRACK`: select the TEXT track at native index arg0 and turn the epoch's cues on; arg1 is the
+/// command id, echoed in `PLAYER_TRACK`.
+#[cfg_attr(not(any(test, feature = "uri")), allow(dead_code))]
+pub const VERB_TEXT_TRACK: u32 = 6;
 
 /// What `on_stopped` is: the host's report sink, called exactly once with the process status and whether
 /// the host may release its callbacks and surfaces (`clean` 1) or releases nothing (`clean` 0).
@@ -145,6 +156,59 @@ pub struct PlxHostEvent {
     pub reserved: u32,
     pub a: i64,
     pub b: i64,
+}
+
+/// `PlxHostCue`: one subtitle cue the host hands over with `plx_host_post_cue` (`plx_host.h`, PLAYER, CUE).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PlxHostCue {
+    pub size: u32,
+    pub epoch: u32,
+    pub position_ms: i64,
+    pub duration_ms: i64,
+    pub text: *const std::os::raw::c_char,
+    pub len: u32,
+    pub reserved: u32,
+}
+
+/// One cue as the library queues it: copied out of the host's [`PlxHostCue`]. An empty `text` is the player's report that
+/// the cue on screen ended (it raises one after a seek as well).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostCue {
+    pub epoch: u32,
+    pub position_ms: i64,
+    pub duration_ms: i64,
+    pub text: String,
+}
+
+/// Read the cue at `cue`, or [`E_ARGS`]: NULL, a `size` below the struct, text NULL with a length, or a length above
+/// [`CUE_TEXT_MAX`]. Bytes that are not UTF-8 are replaced, never refused: a cue is shown or lost, it fails nothing.
+///
+/// # Safety
+/// `cue` is null or points at `size` readable bytes, `size` being its first word, and `text` (when `len` > 0) at `len`
+/// readable bytes.
+pub unsafe fn read_cue(cue: *const PlxHostCue) -> Result<HostCue, i32> {
+    if cue.is_null() {
+        return Err(E_ARGS);
+    }
+    // SAFETY: the first word is `size`, readable by the contract.
+    let size = unsafe { cue.cast::<u32>().read_unaligned() };
+    if (size as usize) < std::mem::size_of::<PlxHostCue>() {
+        return Err(E_ARGS);
+    }
+    // SAFETY: `size` covers the whole struct.
+    let raw = unsafe { cue.read_unaligned() };
+    if raw.len > CUE_TEXT_MAX || (raw.len > 0 && raw.text.is_null()) {
+        return Err(E_ARGS);
+    }
+    let text = if raw.len == 0 {
+        String::new()
+    } else {
+        // SAFETY: `text` points at `len` readable bytes by the contract, checked non-NULL above.
+        let bytes = unsafe { std::slice::from_raw_parts(raw.text.cast::<u8>(), raw.len as usize) };
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+    Ok(HostCue { epoch: raw.epoch, position_ms: raw.position_ms, duration_ms: raw.duration_ms, text })
 }
 
 /// What `size` must cover for a version-1 [`PlxHostApi`]: up to and including its last version-1 field.
@@ -276,6 +340,7 @@ pub enum PlayerKind {
     Stall,
     Track,
     AudioLanguage,
+    TextLanguage,
 }
 
 impl PlayerKind {
@@ -295,6 +360,7 @@ impl PlayerKind {
             EVENT_PLAYER_STALL => PlayerKind::Stall,
             EVENT_PLAYER_TRACK => PlayerKind::Track,
             EVENT_PLAYER_AUDIO_LANGUAGE => PlayerKind::AudioLanguage,
+            EVENT_PLAYER_TEXT_LANGUAGE => PlayerKind::TextLanguage,
             _ => return None,
         })
     }
@@ -434,12 +500,16 @@ mod tests {
             ("PLX_HOST_EVENT_PLAYER_TRACK", i64::from(EVENT_PLAYER_TRACK)),
             ("PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE", i64::from(EVENT_PLAYER_AUDIO_LANGUAGE)),
             ("PLX_HOST_AUDIO_LANGUAGE_REPORTS", AUDIO_LANGUAGE_REPORTS as i64),
+            ("PLX_HOST_EVENT_PLAYER_TEXT_LANGUAGE", i64::from(EVENT_PLAYER_TEXT_LANGUAGE)),
+            ("PLX_HOST_TEXT_LANGUAGE_REPORTS", TEXT_LANGUAGE_REPORTS as i64),
+            ("PLX_HOST_CUE_TEXT_MAX", i64::from(CUE_TEXT_MAX)),
             ("PLX_HOST_PLAYER_FAIL_BASE", PLAYER_FAIL_BASE),
             ("PLX_HOST_PLAYER_VERB_PLAY", i64::from(VERB_PLAY)),
             ("PLX_HOST_PLAYER_VERB_PAUSE", i64::from(VERB_PAUSE)),
             ("PLX_HOST_PLAYER_VERB_SEEK", i64::from(VERB_SEEK)),
             ("PLX_HOST_PLAYER_VERB_CLOSE", i64::from(VERB_CLOSE)),
             ("PLX_HOST_PLAYER_VERB_AUDIO_TRACK", i64::from(VERB_AUDIO_TRACK)),
+            ("PLX_HOST_PLAYER_VERB_TEXT_TRACK", i64::from(VERB_TEXT_TRACK)),
         ] {
             assert_eq!(define(name).parse::<i64>().unwrap(), value, "{name}");
         }
@@ -464,6 +534,20 @@ mod tests {
             ("b", offset_of!(PlxHostEvent, b)),
         ];
         assert_eq!(fields("PlxHostEvent"), event.map(|(n, _)| n), "PlxHostEvent's fields, in order");
+        let cue = [
+            ("size", offset_of!(PlxHostCue, size)),
+            ("epoch", offset_of!(PlxHostCue, epoch)),
+            ("position_ms", offset_of!(PlxHostCue, position_ms)),
+            ("duration_ms", offset_of!(PlxHostCue, duration_ms)),
+            ("text", offset_of!(PlxHostCue, text)),
+            ("len", offset_of!(PlxHostCue, len)),
+            ("reserved", offset_of!(PlxHostCue, reserved)),
+        ];
+        assert_eq!(fields("PlxHostCue"), cue.map(|(n, _)| n), "PlxHostCue's fields, in order");
+        assert!(cue.windows(2).all(|w| w[0].1 < w[1].1));
+        // The layout the host marshals: the pointer sits at 24 on both architectures and the struct is 40 bytes on both.
+        assert_eq!((offset_of!(PlxHostCue, position_ms), offset_of!(PlxHostCue, text)), (8, 24));
+        assert_eq!(std::mem::size_of::<PlxHostCue>(), 40, "36 bytes of fields on ARM, padded to the i64 alignment");
         assert!(event.windows(2).all(|w| w[0].1 < w[1].1));
         assert_eq!(API_V2_SIZE as usize, std::mem::size_of::<PlxHostApi>(), "version 2 ends at the last field");
         assert_eq!(EVENT_V2_SIZE as usize, std::mem::size_of::<PlxHostEvent>());
@@ -478,6 +562,7 @@ mod tests {
         for decl in [
             "int32_t plx_host_start(const PlxHostApi *api, const char *launch_json);",
             "int32_t plx_host_post(const PlxHostEvent *event);",
+            "int32_t plx_host_post_cue(const PlxHostCue *cue);",
             "void plx_host_stop(void);",
             "typedef void (*PlxHostTask)(void *arg);",
             "typedef void (*PlxOnStopped)(int32_t code, int32_t clean);",
@@ -608,7 +693,9 @@ mod tests {
         );
         assert_eq!(unsafe { read_event(&ev(EVENT_V1_SIZE, EVENT_PLAYER_COMPLETED, 3, 0, 0)) }, Err(E_ARGS), "short");
         assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE - 1, EVENT_PLAYER_POSITION, 3, 9, 0)) }, Err(E_ARGS), "short by one byte");
-        assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE, EVENT_PLAYER_AUDIO_LANGUAGE + 1, 3, 0, 0)) }, Err(E_ARGS), "an unknown kind");
+        assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE, EVENT_PLAYER_TEXT_LANGUAGE + 1, 3, 0, 0)) }, Err(E_ARGS), "an unknown kind");
+        assert_eq!(unsafe { read_event(&ev(EVENT_V2_SIZE, EVENT_PLAYER_TEXT_LANGUAGE, 3, 1, 0x6E65)) },
+            Ok(HostEvent::Player(PlayerEvent { epoch: 3, kind: PlayerKind::TextLanguage, a: 1, b: 0x6E65 })), "a text track's language");
         // A v1 host's pause is 8 bytes in memory: only 8 are readable and only 8 are read.
         let pause = [EVENT_V1_SIZE, EVENT_PAUSE];
         assert_eq!(unsafe { read_event(pause.as_ptr().cast()) }, Ok(HostEvent::Pause));

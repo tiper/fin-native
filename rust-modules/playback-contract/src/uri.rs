@@ -121,6 +121,19 @@ impl UriSource {
     }
 }
 
+/// One subtitle cue a URI driver's native player raised for the attempt's selected subtitle track, for the app to draw:
+/// `text` (UTF-8, already free of the source's markup, lines split by newlines) shows from `start` for `duration_ms`, in the
+/// attempt's content time (the clock its `Observation::Position` reports). Only a driver that [delivers
+/// captions](UriDriver::delivers_captions) hands any over, and only of the track it settled and has not turned off.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UriCaption {
+    pub attempt: AttemptId,
+    pub track: TrackSelection,
+    pub start: crate::ContentTime,
+    pub duration_ms: u64,
+    pub text: String,
+}
+
 /// What the player adapter needs of a URI driver beyond [`DriverSet`]: the escrow of an
 /// authorized source, and two ownership facts the route reads. The adapter holds one as
 /// `Box<dyn UriDriver<Context = MainThread>>`, so the product driver (`plx_play_uri`) and a
@@ -148,6 +161,13 @@ pub trait UriDriver: DriverSet {
     /// the offer and the play stays with Feed instead of failing at its Start. The Start re-checks
     /// whatever it needs. A driver with nothing to set up is always ready.
     fn ready_to_start(&mut self, _ctx: &Self::Context) -> Result<(), UriNotReady> { Ok(()) }
+    /// Whether this driver hands the selected subtitle's cues to the app ([`Self::drain_captions`]) instead of its
+    /// pipeline drawing them: the app then draws a selected subtitle with its own renderer, Style and Timing. A driver
+    /// whose platform draws subtitles itself (webOS) says no, the default.
+    fn delivers_captions(&self) -> bool { false }
+    /// Every cue the driver has for the app since the last call, in order, appended to `out` (see [`UriCaption`]).
+    /// Asked after each poll; the default has none.
+    fn drain_captions(&mut self, _out: &mut Vec<UriCaption>) {}
 }
 
 /// Why a [`UriDriver`] cannot take a Start ([`UriDriver::ready_to_start`]), or has no display path

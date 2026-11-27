@@ -33,11 +33,13 @@ jobs:
         if: inputs.arch == 'armv7'
         uses: ./.github/actions/webos-ndk
       - name: Install the emulator link dependencies
+        # cmake and pkg-config build the subtitle renderer's static font stack (ci/build-libass.py); the ARM runner image has both,
+        # as the webOS package job (build-package.yml) relies on for the same recipe.
         if: inputs.arch == 'x86_64'
         timeout-minutes: 15
         uses: ./.github/actions/apt-install
         with:
-          packages: libgles-dev binutils
+          packages: libgles-dev binutils cmake pkg-config
       - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
         timeout-minutes: 10
         with:

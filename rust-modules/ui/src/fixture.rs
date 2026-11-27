@@ -666,6 +666,8 @@ pub struct FixtureModal {
     pub scrim_alpha: f32,
     /// When set the dim is over the video plane (`Scrim::over_video`).
     pub scrim_over_video: bool,
+    /// When set the dim is asked only over a held host page (`Scrim::over_host`).
+    pub scrim_over_host: bool,
     /// Optional lifted element callback for exercising the dispatcher's borrowed frame context.
     /// The bar member this surface hangs from ([`Screen::bar_opener`]), and the rect the dispatcher
     /// last handed it ([`Screen::opener_rect`]).
@@ -756,6 +758,7 @@ impl FixtureModal {
             last_navigation: Default::default(),
             scrim_alpha: 0.0,
             scrim_over_video: false,
+            scrim_over_host: false,
             bar_opener: None,
             opener_seen: Vec::new(),
             opener_alpha: 1.0,
@@ -1015,6 +1018,9 @@ impl Screen<FixtureHost> for FixtureModal {
         self.scrim_at.set(draw_order());
         if self.scrim_over_video {
             return super::screen::Scrim::over_video(self.scrim_alpha);
+        }
+        if self.scrim_over_host {
+            return super::screen::Scrim::over_host(self.scrim_alpha);
         }
         super::screen::Scrim::dim(self.scrim_alpha)
     }
@@ -1417,6 +1423,7 @@ impl super::adapters::Adapters<FixtureHost> for FixtureRig {
                     h: 4,
                     rgba: vec![0; 64].into_boxed_slice(),
                     backdrop: None,
+                    ink: None,
                 }),
             }),
         }
@@ -1558,6 +1565,7 @@ fn the_spike_composes_boot_a_key_a_landing_and_a_poster_over_four_frames() {
             h: 4,
             rgba: vec![0; 64].into_boxed_slice(),
             backdrop: None,
+            ink: None,
         }),
     });
     d.budget.note_queued(rig.cache.has_pending());
@@ -2316,7 +2324,7 @@ fn a_poster_result_is_accepted_in_the_drain_and_uploaded_in_prepare() {
     // the plumbing. Accepting must not itself reach the cache's resolved/uploaded state.
     rig.cache.accept(PosterReady {
         key: PosterKey(11),
-        result: Ok(Decoded { w: 4, h: 4, rgba: vec![0; 64].into_boxed_slice(), backdrop: None }),
+        result: Ok(Decoded { w: 4, h: 4, rgba: vec![0; 64].into_boxed_slice(), backdrop: None, ink: None }),
     });
     assert!(rig.cache.resolve(PosterKey(11)).is_none(), "accepted, not yet uploaded — prepare has not run");
 
@@ -2351,7 +2359,7 @@ fn a_bare_cache_driven_past_capacity_does_not_latch_pending_forever() {
     for i in 0..9u32 {
         rig.cache.accept(PosterReady {
             key: PosterKey(100 + i),
-            result: Ok(Decoded { w: 4, h: 4, rgba: vec![0; 64].into_boxed_slice(), backdrop: None }),
+            result: Ok(Decoded { w: 4, h: 4, rgba: vec![0; 64].into_boxed_slice(), backdrop: None, ink: None }),
         });
         d.budget.note_queued(rig.cache.has_pending());
         let r = d.frame(&mut rig, tick(16 * (i + 1)), vec![], vec![], &mut NoTap);

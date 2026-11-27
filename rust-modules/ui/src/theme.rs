@@ -377,13 +377,19 @@ pub mod logo {
     pub const CARD_BOTTOM_INSET: f32 = 48.0;
     /// A Live TV channel's logo on its plate ([`CHANNEL_PLATE`](super::CHANNEL_PLATE), 250x140): the
     /// ink area an ordinary wordmark is sized to. Chosen so a 6.5:1 wordmark reaches the width limit
-    /// and a 2.6:1 mark stands 61 px tall, which is where the handoff's LTV-17 board puts them (its own
-    /// per-logo sizes follow an ink-area measure of each source, which a texture's full size is not).
+    /// and a 2.6:1 mark stands 61 px tall, which is where the handoff's LTV-17 board puts them. The
+    /// board's per-logo sizes follow an ink-area measure of each source, and so does the plate now: it is
+    /// fitted to the logo's INK box (`art_fit::ink_of`), not its canvas (`hero_logo::fit_ink`). The number
+    /// was chosen against the board's two sizes and is unchanged by that.
     pub const CHANNEL_AREA: f32 = 10_000.0;
     /// The channel logo's slot is this tall, and no mark is taller (the handoff's 218 x 84 box).
     pub const CHANNEL_H_MAX: f32 = 84.0;
     /// ...and this wide: the tile's 250 less 16 px on each side.
     pub const CHANNEL_W_MAX: f32 = 218.0;
+    /// A logo sized by its ink box ([`hero_logo::fit_ink`](crate::hero_logo::fit_ink)) is drawn at most this many
+    /// pixels per texel of the box: a mark only a few texels across stands as a small smear, not a slot-filling one.
+    /// A Pluto-size logo (576 x 288, decoded 436 wide) is drawn at no more than 0.65 px per texel (measured on 40 of them), far under it.
+    pub const INK_UPSCALE: f32 = 2.0;
 }
 
 // ── Accent / control ─────────────────────────────────────────────────────────
@@ -821,7 +827,7 @@ pub const CARD_ABSENT: [f32; 4] = COOL_850;
 /// transparent ground reads the same whatever the channel's brand colour is.
 pub const CHANNEL_PLATE: [f32; 4] = COOL_825;
 /// [`CHANNEL_PLATE`] as the bytes a one-texel ground texture carries (a poster tile that contains a
-/// picture with a transparent ground, [`crate::art_fit::BackdropSpec::ground`]). Pinned equal by a test.
+/// picture with a transparent ground, [`crate::art_fit::CopySpec::ground`]). Pinned equal by a test.
 pub const CHANNEL_PLATE_RGB8: [u8; 3] = [0x22, 0x27, 0x2d];
 /// Loading-skeleton gradient — top. The same `COOL_850` stop as [`CARD_PLACEHOLDER`]: a card whose
 /// artwork is on the way and one with none to load are the same object at rest. Both lean BLUE,
@@ -1394,6 +1400,17 @@ pub const TAB_PLATE_SELECTED: [f32; 4] = with_a(WHITE, 0.20);
 pub const TAB_PLATE_SELECTED_OVER: [f32; 4] = with_a(WHITE, 0.13);
 /// An unselected plated segment — present, but only just: it says "this is a control" and nothing more.
 pub const TAB_PLATE_IDLE: [f32; 4] = with_a(WHITE, 0.08);
+/// **The Guide's focused programme cell** (the Live TV handoff's `SPEC-3` item 7): white at .92, over the
+/// plate it replaces, with [`GUIDE_CELL_FOCUS_INK`] on it and the card shadow at its focused ceiling.
+pub const GUIDE_CELL_FOCUS: [f32; 4] = with_a(WHITE, 0.92);
+/// The ink on [`GUIDE_CELL_FOCUS`] and on the now chip: the cool 900 stop (`--color-cool-900`).
+pub const GUIDE_CELL_FOCUS_INK: [f32; 4] = COOL_900;
+/// A focused cell's time line, one step back from [`GUIDE_CELL_FOCUS_INK`].
+pub const GUIDE_CELL_FOCUS_INK_QUIET: [f32; 4] = with_a(COOL_900, 0.72);
+/// The Guide's now line and now chip (`SPEC-3` item 4): white at .95.
+pub const GUIDE_NOW: [f32; 4] = with_a(WHITE, 0.95);
+/// Time already aired, over the cells of every row (`SPEC-3` item 4): black at .22.
+pub const GUIDE_AIRED_SHADE: [f32; 4] = with_a(BLACK, 0.22);
 /// Softer selection panel — the lightest weight on the overlay ramp, and deliberately NOT
 /// [`TAB_PLATE_IDLE`]'s .08 one step up. The design project briefly resolved this role to that .08
 /// stop while its own specimen card and readme both said .07; holding the product at .07 was the
