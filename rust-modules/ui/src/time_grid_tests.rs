@@ -202,9 +202,12 @@ fn up_and_down_land_on_the_cell_sharing_the_most_time() {
 #[test]
 fn up_and_down_use_the_overlap_inside_the_window_for_a_cell_that_began_before_it() {
     // row 1's programme began 30 minutes before the window: only its 90 minutes inside count, so against
-    // [0,45) / [45,90) of row 0 the first (45 shared) wins on a tie by the earliest
+    // [0,45) / [45,90) of row 0 the first (45 shared) wins on a tie by the earliest. A window ahead (`now` before it):
+    // nothing in it has aired, so the whole window's overlap is the rule
     let g = board();
-    assert_eq!(g.step(cell(1, 0), Dir::Up, NOW), Some(cell(0, 0)));
+    assert_eq!(g.step(cell(1, 0), Dir::Up, START - MIN), Some(cell(0, 0)));
+    // with `now` ten minutes in, the part from now on ([10,90): 35 and 45 shared) decides: the later cell
+    assert_eq!(g.step(cell(1, 0), Dir::Up, NOW), Some(cell(0, 1)));
 }
 
 #[test]
@@ -647,4 +650,50 @@ fn a_frame_with_no_zone_offset_has_no_clock_words() {
     assert!(runs.iter().any(|run| run.text == WORDS.indicator));
     assert!(inks.iter().any(|(tag, r, a)| *tag == 2 && near(r.w, 2.0) && near(*a, 0.95) && r.h > 400.0), "the now line is the instant's");
     assert!(!inks.iter().any(|(tag, r, a)| *tag == 2 && near(r.h, 36.0) && near(*a, 0.95)), "and there is no chip");
+}
+
+/// Two rows: the one the focus stands on (`from`) and the row it moves to.
+fn pair(from: Span, to: Vec<Span>) -> TimeGrid {
+    TimeGrid::new(AXIS, vec![vec![from], to], 100)
+}
+
+/// **A move lands on what is on air or ahead, not on a programme that has aired**: while `now` is in the window the
+/// overlap with the cell left is measured over its part from `now` on, so a tie in the whole window is not a tie.
+#[test]
+fn a_move_into_a_row_prefers_the_cell_on_air_to_one_that_has_aired_when_they_tie() {
+    let now = START + 55 * MIN;
+    let g = pair(span(20, 80), vec![span(0, 50), span(50, 90)]);
+    assert_eq!(g.step(cell(0, 0), Dir::Down, now), Some(cell(1, 1)));
+    assert_eq!(g.land(1, Some(span(20, 80)), now), Some(cell(1, 1)));
+    // the same through a page turn
+    let rows = (0..PAGE_ROWS + 1).map(|r| if r == 0 { vec![span(20, 80)] } else { vec![span(0, 50), span(50, 90)] }).collect();
+    let g = TimeGrid::new(AXIS, rows, 100);
+    assert_eq!(g.turn(cell(0, 0), 1, now), Some(cell(PAGE_ROWS, 1)));
+}
+
+/// A programme that has aired and shares more of the whole window with the cell left than the one on air still loses
+/// to it.
+#[test]
+fn an_aired_cell_that_overlaps_more_of_the_window_does_not_beat_the_one_on_air() {
+    let now = START + 65 * MIN;
+    let g = pair(span(10, 80), vec![span(0, 60), span(60, 90)]);
+    assert_eq!(g.step(cell(0, 0), Dir::Down, now), Some(cell(1, 1)));
+}
+
+/// With nothing of the row on air or ahead of the cell left, the whole-window overlap decides, as it did.
+#[test]
+fn a_row_of_aired_cells_alone_lands_on_the_one_sharing_most_of_the_window() {
+    let now = START + 55 * MIN;
+    let g = pair(span(20, 80), vec![span(0, 30), span(30, 50)]);
+    assert_eq!(g.step(cell(0, 0), Dir::Down, now), Some(cell(1, 1)));
+    assert_eq!(g.land(1, Some(span(0, 30)), now), Some(cell(1, 0)));
+}
+
+/// With `now` before the window (a window ahead) nothing has aired in it: landing is the overlap of the whole window.
+#[test]
+fn landing_with_now_before_the_window_is_the_overlap_of_the_whole_window() {
+    let now = START - 10 * MIN;
+    let g = pair(span(20, 80), vec![span(0, 50), span(50, 90)]);
+    assert_eq!(g.step(cell(0, 0), Dir::Down, now), Some(cell(1, 0)), "a tie goes to the earlier cell");
+    assert_eq!(g.land(1, Some(span(40, 90)), now), Some(cell(1, 1)));
 }

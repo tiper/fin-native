@@ -560,10 +560,11 @@ pub(super) fn publish_live_banner(ps: &mut plx_media::route::PlaybackSession, ch
     };
     if plx_media::route::live_info(ps).is_some_and(|info| &info.channel == ch) { return; }
     plx_media::route::set_live_info(ps, Some(plx_media::route::LiveInfo { channel: ch.clone() }));
-    let context = match (ch.vcn.is_empty(), ch.now.is_empty()) {
-        (false, false) => plx_os::i18n::msg::widgets_live_channel_context(&ch.vcn, &ch.now),
+    let now = ch.airings.now_title();
+    let context = match (ch.vcn.is_empty(), now.is_empty()) {
+        (false, false) => plx_os::i18n::msg::widgets_live_channel_context(&ch.vcn, now),
         (false, true) => ch.vcn.clone(),
-        (true, _) => ch.now.clone(),
+        (true, _) => now.to_owned(),
     };
     plx_media::route::set_live_context(ps, &context);
 }

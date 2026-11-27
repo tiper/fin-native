@@ -178,6 +178,23 @@ class LiveTvMock(unittest.TestCase):
                         "a programme that ends inside the window is followed by one")
         self.assertTrue(any(len(airings) >= 3 for airings in by_channel.values()), "some rows hold three programmes")
 
+    def test_a_window_read_from_the_windows_start_answers_what_has_already_aired_in_it(self):
+        """The Guide's window starts at the half hour at or before now, so the client reads `endsAt>=` that, not now: a
+        programme that ended 5 minutes into the half hour is in the answer (a cell, fully aired), and the same read made
+        at `now` has none that ended before it. Two channels' programmes end exactly on the window's start: the `>=` bound
+        answers them, which is why the client keeps only what ends AFTER it."""
+        pms = make_live()
+        half = NOW - NOW % 1800
+        until = half + 5400
+        from_start = {(r["Media"][0]["channelVcn"], r["Media"][0]["beginsAt"]): r["Media"][0] for r in window_guide(pms, until, now=half)}
+        aired = {vcn: m for (vcn, _), m in from_start.items() if m["endsAt"] <= NOW}
+        self.assertEqual((aired["104"]["beginsAt"] < half, aired["104"]["endsAt"]), (True, half + 300),
+                         "104's programme ended five minutes into the window")
+        self.assertEqual({vcn for vcn, m in aired.items() if m["endsAt"] == half}, {"115", "116"}, "ended on the tick")
+        from_now = window_guide(pms, until, now=NOW)
+        self.assertTrue(all(r["Media"][0]["endsAt"] >= NOW for r in from_now), "read at now: nothing that has ended")
+        self.assertLess(len(from_now), len(from_start))
+
     def test_programme_lengths_are_varied(self):
         """Over the whole guide, programmes of 15, 30, 45, 60, 90 and 120 minutes all air."""
         pms = make_live()

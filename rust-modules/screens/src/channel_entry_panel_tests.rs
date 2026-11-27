@@ -62,12 +62,7 @@ fn channel(vcn: &str) -> Channel {
         vcn: vcn.into(),
         name: format!("Station {vcn}"),
         thumb: String::new(),
-        now: String::new(),
-        now_thumb: String::new(),
-        now_summary: String::new(),
-        begins_at: 0,
-        ends_at: 0,
-        later: Vec::new(),
+        airings: plx_data::livetv::Airings::default(),
     }
 }
 

@@ -591,7 +591,7 @@ impl PlayerScreen {
             // second: its stamp is the term, so no line is worded to compare. The clock face is the minute.
             mix(self.model.wall.map_or(0, |w| w.unix_s().div_euclid(60) as u64));
             if let (Some(info), Some(wall)) = (plx_media::route::live_info(ps), self.model.wall) {
-                mix(plx_ui::fmt::phase(info.channel.begins_at, info.channel.ends_at, wall.unix_s()).stamp());
+                mix(plx_ui::fmt::phase(info.channel.airings.begins_at(), info.channel.airings.ends_at(), wall.unix_s()).stamp());
                 mix(i64::from(wall.utc_offset_s) as u64);
             }
         }
@@ -3804,8 +3804,8 @@ pub(crate) mod step_ladder_tests {
         const BEGIN: i64 = 1_795_640_400;
         let channel = plx_data::livetv::Channel {
             sid: plx_plex::plex::ServerId::from_raw(0), dvr: "7".into(), channel: "C101.242.ersatztv.org".into(),
-            vcn: "101".into(), name: "Family Channel".into(), thumb: String::new(), now: "Family Show".into(),
-            now_thumb: String::new(), now_summary: String::new(), begins_at: BEGIN, ends_at: BEGIN + 3_600, later: Vec::new(),
+            vcn: "101".into(), name: "Family Channel".into(), thumb: String::new(),
+            airings: plx_data::livetv::Airings::on_then(plx_data::livetv::LiveAiring::new("Family Show", BEGIN, BEGIN + 3_600), Vec::new()),
         };
         let mut ps = plx_media::route::PlaybackSession::IDLE;
         plx_media::route::mark_live_channel_for_test(&mut ps, channel);

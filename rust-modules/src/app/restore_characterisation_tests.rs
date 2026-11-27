@@ -652,8 +652,8 @@ fn a_profile_publication_shows_the_stored_recent_row_with_no_tune() {
     seat_globally("");
     plx_media::route::restore_install_rows(&session::load());
     let channel = |n: &str| plx_data::livetv::Channel { sid, dvr: "7".into(), channel: format!("C{n}"), vcn: n.into(),
-        name: format!("Channel {n}"), thumb: String::new(), now: String::new(), now_thumb: String::new(),
-        now_summary: String::new(), begins_at: 0, ends_at: 0, later: Vec::new() };
+        name: format!("Channel {n}"), thumb: String::new(),
+        airings: plx_data::livetv::Airings::default() };
     crate::app::adapters::stores::refill_client_keys(&mut rig.retained.client_keys);
     // One step to register the roster's sources, then the lineup they would publish, then the step whose
     // input carries the list.

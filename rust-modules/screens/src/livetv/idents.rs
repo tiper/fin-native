@@ -140,7 +140,7 @@ mod tests {
     fn channel(key: &str) -> Channel {
         Channel {
             sid: ServerId::from_raw(1), dvr: "7".into(), channel: key.into(), vcn: "2".into(), name: "Name".into(), thumb: String::new(),
-            now: String::new(), now_thumb: String::new(), now_summary: String::new(), begins_at: 0, ends_at: 0, later: Vec::new(),
+            airings: plx_data::livetv::Airings::default(),
         }
     }
 

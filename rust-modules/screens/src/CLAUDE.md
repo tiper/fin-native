@@ -403,6 +403,16 @@ window); the store is told how far to read (`LiveTvCmd::Reach`, the window's end
 leaves. BACK first returns a scrolled window to the live one; a scope chosen and a restore from the player open on it too. A
 frame with the instant and no zone offset still lays the board out (`H::instant`) and only omits the clock words.
 
+**A channel's guide row is ONE list** (`plx_plex::plex::livetv::Airings`, `Channel::airings`): every programme the guide read kept in start order
+(those that ended after the window's earliest start, which is the half hour at or before now, the one on now, and those to come), with the one on
+now a position in that list, readable only through `on_air()` / `now_title()` / `begins_at()` / `ends_at()`; there is no second copy of it
+to disagree with the list. The board turns each programme in the window into a cell (`Board::cells` holds its place in the row), so a programme that
+has already ended but still overlaps the window is a cell the grid shades as aired. **OK on a cell tunes the channel when its programme is on
+by the wall clock** (`Board::tunes`, whichever of the row it is), so OK on an aired programme is spent while another is on, as on one not begun; the
+unscheduled cell tunes, and so does any cell of a row with nothing on air and nothing ahead (every cell aired: the stale-read and the
+aired-only rows), so no row is left that cannot be tuned. A programme the guide gives no end is a cell to the next one's start, else the window's end. Focus lands on what is airing: the board is entered, a move from an unscheduled row goes and the player's return seats
+(`left_elem`) the cell on now (`TimeGrid::entry` / `land`), never merely the row's first cell, which may have aired.
+
 ## Number entry (Live TV PR5)
 
 A digit typed on the What's on page, the Guide or over the live player opens **one registered surface**, `AppArg::ChannelEntry`
@@ -436,8 +446,8 @@ that disagrees with the set on show; the filter control's menu (`livetv/filter_m
 namespace `livetv_filter`, opened as `ContentPanel::LiveTvFilter`) REPORTS a pick (`AppMsg::LiveTvFilterPicked`) and the page changes the
 filter on that message alone (`LiveTvScreen::pick_filter`), rebuilding the set at once. The control is the row's last stop, drawn as the Library's sort
 control (`HeaderItem::sort_control`), with "3 of 16" (the Library's own `library_header.filtered_of`) before it while a filter narrows what is on.
-**A card is a programme**, not a channel: `browse::shown` lists one per programme (the airing on now, then each `Channel::later`, in channel then
-start order), and what a programme IS right now is `browse::stand` (the clock and its own times, never which list it came from). The rules:
+**A card is a programme**, not a channel: `browse::shown` lists one per programme of a channel's guide row (`Channel::airings`, in channel then
+start order; one that has aired is no card under any filter), and what a programme IS right now is `browse::stand` (the clock and its own times, never where the read put it). The rules:
 On now = begun and not over (an airing with no known end is on while it has begun); Just started = on and at most 10 whole minutes in; Ending soon =
 on and at most 15 minutes left (whole minutes, rounded up; an open-ended airing is never ending soon); Later today = not begun and before the end of the
 local day (`browse::day_end`: the next local midnight from the frame's zone offset, the UTC day without one). The count reads "shown of on now" for the

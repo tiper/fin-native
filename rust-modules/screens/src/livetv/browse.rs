@@ -3,11 +3,11 @@
 //! gone. Nothing here reads a clock, a focus or a store: the page hands in the lineup, the instant and the end of the
 //! local day, and the same input gives the same answer.
 //!
-//! **A card is a programme**, not a channel: one for the airing on now and one for each later programme the store has read
-//! (`Channel::later`), in channel order and then start order. What a programme IS right now is decided by the clock and
-//! its own times alone ([`stand`]), never by which list of the channel it came from: a `later` programme that has begun
-//! since the read is on now, and a `Channel::now` that has ended since it is over, exactly as the Guide's
-//! `Board::tunes` reads them.
+//! **A card is a programme**, not a channel: one for each programme of a channel's guide row the store has read
+//! (`Channel::airings`: the ones that have aired, the one on now and the later ones), in channel order and then start
+//! order. What a programme IS right now is decided by the clock and its own times alone ([`stand`]), never by where
+//! the read put it: a programme that has begun since the read is on now, and one that has ended since is over, exactly as
+//! the Guide's `Board::tunes` reads them. One that is over is no card under any filter.
 //!
 //! ```text
 //!   OnNow         begun and not over                       (an airing with no known end is on while it has begun)
@@ -24,8 +24,6 @@
 //! ten minutes after it, fifteen before the end, the end) or the day's end. The page rebuilds when the instant reaches it.
 use plx_data::livetv::Channel;
 use plx_ui::fmt::{self, AiringPhase};
-
-use super::CellSrc;
 
 /// How many minutes before its end a programme is "ending soon" (SPEC-6 default: 15).
 pub const ENDING_SOON_MINUTES: i64 = 15;
@@ -108,24 +106,21 @@ pub fn stand(begin: i64, end: i64, now: i64) -> Stand {
 }
 
 /// **One card of the grid**: a programme of a lineup channel. Its identity is the channel and the start, never its place in
-/// the shown list or in the channel's `later` (both shift when the head programme ends).
+/// the shown list or in the channel's airings (both shift when the head programme ends).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pick {
     /// The channel's index in the lineup.
     pub channel: usize,
-    /// Where its words come from: the channel's airing on now, or its n-th later programme.
-    pub src: CellSrc,
+    /// Where its words come from: its place in the channel's [`Airings`](plx_data::livetv::Airings).
+    pub airing: usize,
     pub begins_at: i64,
     pub ends_at: i64,
 }
 
-/// A channel's programmes in start order: the airing on now (when the channel has one), then the later ones.
+/// A channel's programmes in start order.
 fn programmes(channel: &Channel, index: usize) -> impl Iterator<Item = Pick> + '_ {
-    let now = (!channel.now.is_empty())
-        .then_some(Pick { channel: index, src: CellSrc::Now, begins_at: channel.begins_at, ends_at: channel.ends_at });
-    let later = channel.later.iter().enumerate()
-        .map(move |(i, a)| Pick { channel: index, src: CellSrc::Later(i), begins_at: a.begins_at, ends_at: a.ends_at });
-    now.into_iter().chain(later)
+    channel.airings.all().iter().enumerate()
+        .map(move |(i, a)| Pick { channel: index, airing: i, begins_at: a.begins_at, ends_at: a.ends_at })
 }
 
 /// **The cards `filter` shows at `now`**, in channel order and then start order (the lineup is in channel order).

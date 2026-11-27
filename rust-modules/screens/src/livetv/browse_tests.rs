@@ -1,28 +1,33 @@
 use super::*;
-use plx_data::livetv::LiveAiring;
+use plx_data::livetv::{Airings, LiveAiring};
 use plx_plex::plex::ServerId;
 
 const NOW: i64 = 1_795_638_600; // 2026-11-24 20:30:00 UTC
 const MIN: i64 = 60;
 
 fn airing(title: &str, from: i64, to: i64) -> LiveAiring {
-    LiveAiring { title: title.into(), begins_at: NOW + from * MIN, ends_at: NOW + to * MIN, thumb: String::new() }
+    LiveAiring::new(title, NOW + from * MIN, NOW + to * MIN)
 }
 
 /// A channel airing `now` from `from` to `to` minutes around the instant (`None`: nothing on), then `later`.
 fn channel(vcn: &str, now: Option<(&str, i64, i64)>, later: Vec<LiveAiring>) -> Channel {
-    let (title, begins_at, ends_at) = now.map_or(("", 0, 0), |(t, from, to)| (t, NOW + from * MIN, NOW + to * MIN));
+    let airings = match now {
+        Some((title, from, to)) => Airings::on_then(airing(title, from, to), later),
+        None => Airings::default().with_later(later),
+    };
     Channel {
         sid: ServerId::from_raw(1), dvr: "7".into(), channel: format!("C{vcn}"), vcn: vcn.into(), name: format!("Channel {vcn}"),
-        thumb: String::new(), now: title.into(), now_thumb: String::new(), now_summary: String::new(), begins_at, ends_at, later,
+        thumb: String::new(), airings,
     }
 }
 
+/// `channel` with the programme on now given other times.
+fn retimed(channel: Channel, begins_at: i64, ends_at: i64) -> Channel {
+    Channel { airings: channel.airings.clone().retimed(begins_at, ends_at), ..channel }
+}
+
 fn titles(channels: &[Channel], picks: &[Pick]) -> Vec<String> {
-    picks.iter().map(|p| match p.src {
-        CellSrc::Now => channels[p.channel].now.clone(),
-        CellSrc::Later(i) => channels[p.channel].later[i].title.clone(),
-    }).collect()
+    picks.iter().map(|p| channels[p.channel].airings.all()[p.airing].title.clone()).collect()
 }
 
 fn on(from: i64, to: i64) -> Vec<Channel> {
@@ -45,7 +50,7 @@ fn on_now_is_begun_and_not_over_at_both_edges() {
 
 #[test]
 fn a_programme_with_no_known_end_is_on_once_begun_but_never_ending_soon() {
-    let open = Channel { ends_at: 0, ..channel("1", Some(("A", -5, 0)), vec![]) };
+    let open = retimed(channel("1", Some(("A", -5, 0)), vec![]), NOW - 5 * MIN, 0);
     assert!(shows(Filter::OnNow, std::slice::from_ref(&open)));
     assert!(shows(Filter::JustStarted, std::slice::from_ref(&open)), "five minutes in");
     assert!(!shows(Filter::EndingSoon, std::slice::from_ref(&open)), "an end nobody knows is not soon");
@@ -53,7 +58,7 @@ fn a_programme_with_no_known_end_is_on_once_begun_but_never_ending_soon() {
 
 #[test]
 fn just_started_is_ten_whole_minutes_or_less_in() {
-    let started = |seconds_ago: i64| vec![Channel { begins_at: NOW - seconds_ago, ends_at: NOW + 3_600, ..channel("1", Some(("A", 0, 60)), vec![]) }];
+    let started = |seconds_ago: i64| vec![retimed(channel("1", Some(("A", 0, 60)), vec![]), NOW - seconds_ago, NOW + 3_600)];
     assert!(shows(Filter::JustStarted, &started(0)), "begins this second");
     assert!(shows(Filter::JustStarted, &started(10 * MIN)), "ten minutes ago");
     assert!(shows(Filter::JustStarted, &started(11 * MIN - 1)), "the tenth minute lasts until the eleventh begins");
@@ -63,7 +68,7 @@ fn just_started_is_ten_whole_minutes_or_less_in() {
 
 #[test]
 fn ending_soon_is_fifteen_minutes_or_less_left() {
-    let ends_in = |seconds: i64| vec![Channel { begins_at: NOW - 3_600, ends_at: NOW + seconds, ..channel("1", Some(("A", -60, 0)), vec![]) }];
+    let ends_in = |seconds: i64| vec![retimed(channel("1", Some(("A", -60, 0)), vec![]), NOW - 3_600, NOW + seconds)];
     assert!(shows(Filter::EndingSoon, &ends_in(1)), "one second left");
     assert!(shows(Filter::EndingSoon, &ends_in(15 * MIN)), "fifteen minutes left");
     assert!(!shows(Filter::EndingSoon, &ends_in(15 * MIN + 1)), "the sixteenth minute");
@@ -222,7 +227,7 @@ fn a_channel_with_an_airing_and_a_later_card_seats_the_airing() {
     let channels = vec![channel("1", Some(("on", -10, 20)), vec![airing("next", 20, 50)])];
     let end = day_end(NOW, Some(0));
     let (airing, later) = (shown(&channels, Filter::OnNow, NOW, end)[0], shown(&channels, Filter::LaterToday, NOW, end)[0]);
-    assert_eq!((airing.src, later.src), (CellSrc::Now, CellSrc::Later(0)));
+    assert_eq!((airing.airing, later.airing), (0, 1));
     assert_eq!(seat_for(&[later, airing], 0, NOW), Some(1));
 }
 
@@ -230,4 +235,22 @@ fn a_channel_with_an_airing_and_a_later_card_seats_the_airing() {
 fn filter_codes_round_trip_and_the_default_is_on_now() {
     for (row, f) in Filter::ALL.into_iter().enumerate() { assert_eq!(f.code() as usize, row); }
     assert_eq!(Filter::default(), Filter::OnNow);
+}
+
+/// **A programme that has aired is no card under any filter**, and the ones that are on or to come are what they were.
+#[test]
+fn a_programme_that_has_aired_is_no_card_under_any_filter() {
+    let aired = Channel {
+        airings: Airings::of(vec![airing("Aired", -50, -5), airing("On", -5, 30), airing("Next", 30, 60)], NOW),
+        ..channel("1", None, vec![])
+    };
+    let end = day_end(NOW, Some(0));
+    let all = [aired];
+    for filter in Filter::ALL {
+        let titles = titles(&all, &shown(&all, filter, NOW, end));
+        assert!(!titles.iter().any(|t| t == "Aired"), "{filter:?}: {titles:?}");
+    }
+    assert_eq!(titles(&all, &shown(&all, Filter::OnNow, NOW, end)), ["On"]);
+    assert_eq!(titles(&all, &shown(&all, Filter::LaterToday, NOW, end)), ["Next"]);
+    assert_eq!(on_now(&all, NOW), 1);
 }

@@ -320,8 +320,8 @@ impl Live {
         }
         if let Some(c) = shown {
             mix(c.channel.len() as u64);
-            mix(c.begins_at as u64);
-            mix(c.ends_at as u64);
+            mix(c.airings.begins_at() as u64);
+            mix(c.airings.ends_at() as u64);
         }
         h
     }
@@ -333,8 +333,8 @@ mod tests {
 
     fn ch(n: &str) -> Channel {
         Channel { sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: format!("C{n}"), vcn: n.into(),
-            name: format!("Station {n}"), thumb: String::new(), now: format!("Show {n}"), now_thumb: String::new(),
-            now_summary: String::new(), begins_at: 0, ends_at: 0, later: Vec::new() }
+            name: format!("Station {n}"), thumb: String::new(),
+            airings: plx_data::livetv::Airings::of(vec![plx_data::livetv::LiveAiring::new(format!("Show {n}"), 0, 0)], 0) }
     }
 
     fn lineup() -> Vec<Channel> { ["101", "102", "103", "104"].map(ch).to_vec() }

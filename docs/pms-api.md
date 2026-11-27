@@ -1872,9 +1872,12 @@ XMLTV guide. The app's reads live in `rust-modules/plex/src/plex/livetv.rs`.
   later window's end plus one more step; Browse's Later today sets it to the end of the local day), which only grows
   while the page is open and returns to the live window's end when it leaves. The far read is made when `Reach` grows
   and again every 30 minutes; the scheduled reads in between ask for the live window alone (`until` = 0, widened to the
-  window's end) and the store keeps the far programmes the last far read answered. The app sends no `beginsAt` / `endsAt` lower bound earlier than `now`, so a
-  programme that has already ended is never asked for (the Guide draws the aired part of the window shaded and
-  empty). A channel with no airing in the answer has no guide data for the window.
+  window's end) and the store keeps the far programmes the last far read answered. The Guide's window starts at the half hour at or before `now`, so a programme
+  that has already ended can still be in it: the app sends `endsAt%3E={window start}` (`livetv::window_start`), not `{now}`, and
+  keeps every airing that ends after it (an airing that ends exactly on it leaves no cell and is dropped), so such a programme is a
+  cell, shaded as aired, instead of a blank. The operator is the one measured above; a lower-bound value earlier than `now` is accepted
+  without error by the maintainer's local PMS (0.5, 2, 6 and 24 hours before `now`), but that guide holds no past airings (the earliest is the
+  airing on now), so it is unproven on real data (the mock honours it). A channel with no airing in the answer has no guide data for the window.
 
 ### Watching a channel (the official LG client's sequence, read from the server log 2026-10-21)
 
@@ -2004,7 +2007,7 @@ only `size`.
 | Key of `movie.topunwatched` and `movie.by.actor.or.director` (random hubs) | yes | not recorded | The listing came back in the same order on two calls; the windows (0,6) and (6,50) together equal the whole listing; every preview card is in it. The library held only 13 items, so large lists are not covered. |
 | `/playlists/all` (the key of the playlists hub in the Home hub list, `/hubs` and `/hubs/promoted`) | yes | yes | Measured on PMS 1.43: `X-Plex-Container-Start=2&X-Plex-Container-Size=2` answered `size` 2, `totalSize` 5, `offset` 2, items of type `playlist`. The app does not page it and no row shows it: a hub of type `playlist` is not listed (`pms::listable`), so it never reaches a shelf, and `is_pageable_hub_key` does not admit the key. |
 
-| `/livetv/dvrs`, `/{epg}/lineups/dvr/channels`, `/{epg}/grid?beginsAt%3C=…&endsAt%3E=…` (Live TV, §10) | no | no | Measured on PMS 1.43.3 with one DVR: the DVR list and the lineup come whole (one DVR, four mapped channels); the grid bounded to one instant returns one airing per channel, and to the Guide's window (`beginsAt<=window end`, `endsAt>=now`) the airing on now and the ones after it that begin inside it. |
+| `/livetv/dvrs`, `/{epg}/lineups/dvr/channels`, `/{epg}/grid?beginsAt%3C=…&endsAt%3E=…` (Live TV, §10) | no | no | Measured on PMS 1.43.3 with one DVR: the DVR list and the lineup come whole (one DVR, four mapped channels); the grid bounded to one instant returns one airing per channel, and to the Guide's window (`beginsAt<=window end`, `endsAt>=now`) the airing on now and the ones after it that begin inside it; the app now sends `endsAt>=window start` (up to half an hour before `now`) so the airings that ended inside the window come too (accepted, but unproven on real data: see the window form above). |
 
 ## App data-layer summary
 

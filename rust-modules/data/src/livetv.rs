@@ -4,7 +4,7 @@ use crate::stores::fanout::{Fanout, Standing};
 use plx_machine::job::{Job, Port};
 use plx_machine::machine::{Addr, MachineId, RequestId};
 use plx_plex::plex::livetv::{self, LiveChannel};
-pub use plx_plex::plex::livetv::LiveAiring;
+pub use plx_plex::plex::livetv::{Airings, LiveAiring};
 use plx_plex::plex::{Client, ClientKey, ClientKeys, ServerId};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
@@ -33,29 +33,23 @@ pub struct Channel {
     pub vcn: String,
     pub name: String,
     pub thumb: String,
-    pub now: String,
-    pub now_thumb: String,
-    pub now_summary: String,
-    pub begins_at: i64,
-    pub ends_at: i64,
-    /// The programmes after the current one that begin by the end the held reads asked for (the live window's, or
-    /// the far read's while a page reaches further: [`LiveTvCmd::Reach`]), earliest first (empty: the guide has
-    /// none, or no data at all).
-    pub later: Vec<LiveAiring>,
+    /// **Every programme the held reads kept** for the channel, in start order, the one on now among them: the ones
+    /// that have aired inside the Guide's earliest window, the one on now and the ones to come, up to the end the held
+    /// reads asked for (the live window's, or the far read's while a page reaches further: [`LiveTvCmd::Reach`]).
+    /// What is on now is read from it ([`Airings::on_air`]) and stored nowhere else. Empty: the guide has no data.
+    pub airings: Airings,
 }
 
 impl Channel {
     fn of(sid: ServerId, ch: &LiveChannel) -> Self {
         Self { sid, dvr: ch.dvr.clone(), channel: ch.channel.clone(), vcn: ch.vcn.clone(),
-            name: ch.name.clone(), thumb: ch.thumb.clone(), now: ch.now.clone(),
-            now_thumb: ch.now_thumb.clone(), now_summary: ch.now_summary.clone(), begins_at: ch.begins_at, ends_at: ch.ends_at,
-            later: ch.later.clone() }
+            name: ch.name.clone(), thumb: ch.thumb.clone(), airings: ch.airings.clone() }
     }
 }
 
 pub fn channel_tile(ch: &Channel) -> PmsMovie {
     PmsMovie { sid: ch.sid, kind: KIND_LIVE_CHANNEL, rk: format!("livetv:{}:{}", ch.dvr, ch.channel),
-        title: format!("{} {}", ch.vcn, ch.name).trim().to_owned(), show_title: ch.now.clone(),
+        title: format!("{} {}", ch.vcn, ch.name).trim().to_owned(), show_title: ch.airings.now_title().to_owned(),
         // The unnumbered identity is retained for Play, including a channel with no vcn.
         summary: ch.name.clone(), thumb: ch.thumb.clone(), still: ch.thumb.clone(), ..Default::default() }
 }
@@ -152,7 +146,7 @@ impl Guide {
     /// window's far end is asked for the half hour it does and not only when some airing happens to end.
     fn next_refresh(channels: &[LiveChannel], now: i64) -> i64 {
         let roll = livetv::window_start(now).saturating_add(livetv::WINDOW_STEP_SECONDS);
-        channels.iter().filter_map(|c| (c.ends_at > now).then_some(c.ends_at)).min()
+        channels.iter().filter_map(|c| (c.airings.ends_at() > now).then_some(c.airings.ends_at())).min()
             .unwrap_or_else(|| now.saturating_add(GUIDE_POLL_SECONDS)).min(roll)
     }
 }
@@ -194,7 +188,7 @@ fn merge_far(fresh: &mut Guide, held: &Guide, now: i64) {
     }
     let live_end = livetv::window_end(now);
     for (channel, old) in fresh.channels.iter_mut().zip(&held.channels) {
-        channel.later.extend(old.later.iter().filter(|airing| airing.begins_at > live_end).cloned());
+        channel.airings.extend_later(old.airings.all().iter().filter(|airing| airing.begins_at > live_end).cloned());
     }
     fresh.until = held.until;
     fresh.far_at = held.far_at;

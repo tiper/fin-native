@@ -11498,8 +11498,9 @@ pub fn live_request(ps: &PlaybackSession) -> Option<(ServerId, &LiveTune)> {
 }
 
 /// Guide facts the app publishes for the channel this player is tuned to. Raw facts only: the
-/// airing's clock times and "22m left" are worded at draw from `channel.begins_at` / `ends_at` and
-/// the HUD model's wall time (`plx_ui::fmt::airing_line`), never cached here.
+/// airing's clock times and "22m left" are worded at draw from `channel.airings.begins_at()` /
+/// `ends_at()` (the programme on now, read from the channel's one guide row) and the HUD model's
+/// wall time (`plx_ui::fmt::airing_line`), never cached here.
 pub struct LiveInfo {
     pub channel: plx_data::livetv::Channel,
 }

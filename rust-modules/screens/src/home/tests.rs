@@ -2491,12 +2491,7 @@ fn ok_on_a_live_tv_channel_tunes_it_and_holding_it_opens_no_item_menu() {
         vcn: "101".into(),
         name: "Family Channel".into(),
         thumb: String::new(),
-        now: "Family Show".into(),
-        now_thumb: String::new(),
-        now_summary: String::new(),
-        begins_at: 0,
-        ends_at: 0,
-        later: Vec::new(),
+        airings: plx_data::livetv::Airings::on_then(plx_data::livetv::LiveAiring::new("Family Show", 0, 0), Vec::new()),
     };
     plx_data::pms::seed_for_test(&mut state, &adapter, 0, plx_data::pms::HubState::Ready);
     let snapshot = plx_data::pms::hubs_snapshot(&state);

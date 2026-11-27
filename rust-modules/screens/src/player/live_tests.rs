@@ -24,12 +24,10 @@ fn ch(n: u32) -> Channel {
         vcn: n.to_string(),
         name: format!("Station {n}"),
         thumb: String::new(),
-        now: format!("Show {n}"),
-        now_thumb: format!("/art/{n}"),
-        now_summary: String::new(),
-        begins_at: 0,
-        ends_at: 3_600,
-        later: Vec::new(),
+        airings: plx_data::livetv::Airings::on_then(
+            plx_data::livetv::LiveAiring { thumb: format!("/art/{n}"), ..plx_data::livetv::LiveAiring::new(format!("Show {n}"), 0, 3_600) },
+            Vec::new(),
+        ),
     }
 }
 

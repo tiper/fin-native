@@ -21,8 +21,8 @@ fn take(stores: &mut Stores) -> (Job<LiveTvReq>, LiveTvPort) {
 fn guide(numbers: &[&str], end: i64) -> Guide {
     Guide { dvr: "7".into(), provider: "tv.plex.providers.epg.xmltv:7".into(), refresh_at: end, retry_cd: 0, strikes: 0, until: 0, far_at: 0, channels: numbers.iter()
         .map(|number| LiveChannel { dvr: "7".into(), channel: format!("C{number}"), vcn: number.to_string(),
-            name: "Channel".into(), thumb: "/logo".into(), now: "Show".into(),
-            now_thumb: "/show".into(), now_summary: String::new(), begins_at: 0, ends_at: end, later: Vec::new() }).collect() }
+            name: "Channel".into(), thumb: "/logo".into(),
+            airings: Airings::of(vec![LiveAiring { thumb: "/show".into(), ..LiveAiring::new("Show", 0, end) }], 0) }).collect() }
 }
 fn complete(guides: Vec<Guide>) -> ReadResult { ReadResult { guides, roster: None, complete: true, retry: false } }
 fn answer(stores: &mut Stores, result: Option<Vec<Guide>>) {
@@ -152,12 +152,12 @@ fn livetv_airing_end_emits_one_grid_only_refresh_and_failure_keeps_lineup() {
     let (job, port) = take(&mut stores);
     assert!(matches!(job.req.work, Work::Grid(_)));
     let mut next = guide(&["10", "2"], 300);
-    next.channels[0].now = "Next show".into();
+    next.channels[0].airings = Airings::of(vec![LiveAiring::new("Next show", 0, 300)], 0);
     finish_with(&port, job.addr, job.req, |_| Some(complete(vec![next])));
     assert!(pump(&mut stores, &keys, 211));
     assert!(stores.livetv_view().revision() > revision);
     assert_eq!(stores.livetv_view().channels.len(), 2);
-    assert!(stores.livetv_view().channels.iter().any(|c| c.now == "Next show"));
+    assert!(stores.livetv_view().channels.iter().any(|c| c.airings.now_title() == "Next show"));
 }
 
 /// **A grid that keeps failing is not asked every two seconds for ever.** A failed grid read was
@@ -261,11 +261,15 @@ struct Script {
     empty_lineup: bool,
     later: bool,
     far: bool,
+    aired: bool,
 }
 impl Script {
-    fn new() -> Self { Self { calls: Default::default(), second_dvr: false, fail_lineup: false.into(), fail_grid: false.into(), untils: Default::default(), empty_grid: false, empty_lineup: false, later: false, far: false } }
+    fn new() -> Self { Self { calls: Default::default(), second_dvr: false, fail_lineup: false.into(), fail_grid: false.into(), untils: Default::default(), empty_grid: false, empty_lineup: false, later: false, far: false, aired: false } }
     /// The grid answers a second airing after the one on now.
     fn with_later(mut self) -> Self { self.later = true; self }
+    /// The grid answers a programme that has already ended, inside the Guide's window (it starts at the half hour at or
+    /// before `now`).
+    fn with_aired(mut self) -> Self { self.aired = true; self }
     /// The grid answers a programme far past the live window when it is asked that far (`until` past the window's end).
     fn with_far(mut self) -> Self { self.later = true; self.far = true; self }
 }
@@ -288,8 +292,14 @@ impl LiveTvIo for Script {
         if self.fail_grid.get() { None }
         else if self.empty_grid { Some(Vec::new()) }
         else {
+            // with an aired programme before it, it begins after that one ended (otherwise the guide gives no start)
+            let begins = if self.aired { livetv::window_start(now) + 30 } else { 0 };
             let mut rows = vec![serde_json::from_value(serde_json::json!({"title":"Programme","thumb":"/programme",
-                "Media":[{"channelVcn":"2","channelIdentifier":"C2","endsAt":now + 50}]})).unwrap()];
+                "Media":[{"channelVcn":"2","channelIdentifier":"C2","beginsAt":begins,"endsAt":now + 50}]})).unwrap()];
+            if self.aired {
+                rows.push(serde_json::from_value(serde_json::json!({"title":"Aired",
+                    "Media":[{"channelVcn":"2","channelIdentifier":"C2","beginsAt":livetv::window_start(now) - 900,"endsAt":livetv::window_start(now) + 20}]})).unwrap());
+            }
             if self.later {
                 rows.push(serde_json::from_value(serde_json::json!({"title":"Next",
                     "Media":[{"channelVcn":"2","channelIdentifier":"C2","beginsAt":now + 50,"endsAt":now + 800}]})).unwrap());
@@ -315,15 +325,15 @@ fn livetv_missing_initial_grid_preserves_lineup_and_retries_only_the_grid() {
     execute(&mut stores, &io);
     pump(&mut stores, &keys, 100);
     assert_eq!(stores.livetv_view().status, LiveTvStatus::Ready);
-    assert_eq!(stores.livetv_view().channels[0].now, "");
-    assert_eq!(stores.livetv_view().channels[0].now_thumb, "/logo");
+    assert_eq!(stores.livetv_view().channels[0].airings.on_air(), None);
+    assert!(stores.livetv_view().channels[0].airings.all().is_empty());
     io.fail_grid.set(false); io.calls.borrow_mut().clear();
     for _ in 0..RETRY_FRAMES { pump(&mut stores, &keys, 101); }
     execute(&mut stores, &io);
     pump(&mut stores, &keys, 101);
     assert_eq!(io.calls.borrow().as_slice(), ["grid:tv.plex.providers.epg.xmltv:7:101"]);
-    assert_eq!(stores.livetv_view().channels[0].now, "Programme");
-    assert_eq!(stores.livetv_view().channels[0].now_thumb, "/programme");
+    assert_eq!(stores.livetv_view().channels[0].airings.now_title(), "Programme");
+    assert_eq!(stores.livetv_view().channels[0].airings.now_thumb(), "/programme");
 }
 
 #[test]
@@ -454,8 +464,40 @@ fn livetv_the_grid_read_publishes_the_programmes_after_the_one_on_now() {
     let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_later();
     pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
     let channel = &stores.livetv_view().channels[0];
-    assert_eq!(channel.now, "Programme");
-    assert_eq!(channel.later.iter().map(|a| (a.title.as_str(), a.begins_at, a.ends_at)).collect::<Vec<_>>(), [("Next", 150, 900)]);
+    assert_eq!(channel.airings.now_title(), "Programme");
+    assert_eq!(channel.airings.all().iter().map(|a| (a.title.as_str(), a.begins_at, a.ends_at)).collect::<Vec<_>>(),
+        [("Programme", 0, 150), ("Next", 150, 900)], "one list, the one on now first");
+}
+
+/// **A programme that has already aired inside the Guide's window is published with the rest**, ahead of the one on
+/// now, which is still what the channel reads as on; and the grid read it came from asked for the half hour the
+/// window starts at, not for now (the Script records the instant it was read at, and the path takes the window's
+/// start from it: `livetv::guide_path`).
+#[test]
+fn livetv_the_grid_read_publishes_what_has_aired_in_the_window_and_the_one_on_now_is_unchanged() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_aired().with_later();
+    pump(&mut stores, &keys, 1_000); execute(&mut stores, &io); pump(&mut stores, &keys, 1_000);
+    let channel = &stores.livetv_view().channels[0];
+    assert_eq!(channel.airings.all().iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), ["Aired", "Programme", "Next"]);
+    assert_eq!((channel.airings.now_title(), channel.airings.on_air_at()), ("Programme", Some(1)));
+    assert_eq!((channel.airings.begins_at(), channel.airings.ends_at()), (30, 1_050));
+    assert_eq!(stores.livetv_view().tiles[0].show_title, "Programme", "What's on reads the same on now");
+}
+
+/// Memory stays bounded across scheduled reads: when the window rolls, the aired programmes of the new window replace
+/// the old ones, which are not carried over (only the far programmes of a far read are).
+#[test]
+fn a_scheduled_read_after_the_window_rolls_holds_only_what_aired_in_the_new_window() {
+    let mut stores = Stores::default(); let keys = keys(1); let io = Script::new().with_aired();
+    pump(&mut stores, &keys, 1_000); execute(&mut stores, &io); pump(&mut stores, &keys, 1_000);
+    assert_eq!(stores.livetv_view().channels[0].airings.all()[0].begins_at, livetv::window_start(1_000) - 900);
+    // the window rolled to the half hour 1_800, and the airing on ended: the scheduled read is made at that window
+    pump(&mut stores, &keys, 1_900);
+    let (job, port) = take(&mut stores);
+    finish_with(&port, job.addr, job.req, |req| read(&io, req));
+    pump(&mut stores, &keys, 1_900);
+    assert_eq!(all_titles(&stores), ["Aired", "Programme"], "one aired programme, the new window's");
+    assert_eq!(stores.livetv_view().channels[0].airings.all()[0].begins_at, livetv::window_start(1_900) - 900);
 }
 
 #[test]
@@ -534,9 +576,9 @@ fn a_reach_set_before_the_first_read_is_carried_by_it() {
     assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty(), "read to the reach already");
 }
 
-/// The titles after the programme on now that the store publishes.
-fn later_titles(stores: &Stores) -> Vec<String> {
-    stores.livetv_view().channels[0].later.iter().map(|airing| airing.title.clone()).collect()
+/// The titles of every programme the store publishes for the first channel, in start order.
+fn all_titles(stores: &Stores) -> Vec<String> {
+    stores.livetv_view().channels[0].airings.all().iter().map(|airing| airing.title.clone()).collect()
 }
 
 /// **The far span is read once, not at every scheduled refresh** (Browse's Later today holds the reach at the end of the day):
@@ -548,14 +590,14 @@ fn a_scheduled_read_under_a_held_reach_asks_the_live_window_and_keeps_the_far_pr
     pump(&mut stores, &keys, 100); execute(&mut stores, &io); pump(&mut stores, &keys, 100);
     run(&mut stores, LiveTvCmd::Reach(20_000), &keys, 100);
     execute(&mut stores, &io); pump(&mut stores, &keys, 100);
-    assert_eq!(later_titles(&stores), ["Next", "Far"], "the far read answered the far programme");
+    assert_eq!(all_titles(&stores), ["Programme", "Next", "Far"], "the far read answered the far programme");
     // the airing ended: the scheduled read is due, with the reach still held and the far read current
     pump(&mut stores, &keys, 400);
     let (job, port) = take(&mut stores);
     assert_eq!(job.req.until, 0, "the scheduled refresh asks the live window alone");
     finish_with(&port, job.addr, job.req, |req| read(&io, req));
     pump(&mut stores, &keys, 400);
-    assert_eq!(later_titles(&stores), ["Next", "Far"], "the far programme stays while its read is current");
+    assert_eq!(all_titles(&stores), ["Programme", "Next", "Far"], "the far programme stays while its read is current");
     assert_eq!(io.untils.borrow().as_slice(), [0, 20_000, 0]);
 }
 
@@ -593,7 +635,7 @@ fn far_programmes_do_not_outlive_their_read_once_nothing_reaches_for_them() {
     assert_eq!(job.req.until, 0);
     finish_with(&port, job.addr, job.req, |req| read(&io, req));
     pump(&mut stores, &keys, later);
-    assert_eq!(later_titles(&stores), ["Next"], "the stale far programme is gone");
+    assert_eq!(all_titles(&stores), ["Programme", "Next"], "the stale far programme is gone");
     assert!(stores.take_jobs_of(StoreId::LiveTv).is_empty());
 }
 
@@ -630,5 +672,5 @@ fn a_failed_first_grid_read_under_a_reach_leaves_the_far_read_due() {
     assert_eq!(job.req.until, 20_000, "the far span is owed: the retry reads to the reach, not the live window");
     finish_with(&port, job.addr, job.req, |req| read(&io, req));
     pump(&mut stores, &keys, 101);
-    assert_eq!(later_titles(&stores), ["Next", "Far"]);
+    assert_eq!(all_titles(&stores), ["Programme", "Next", "Far"]);
 }

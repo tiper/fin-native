@@ -100,19 +100,20 @@ fn step_handled(s: &mut LiveTvScreen, view: LiveTvView<'_>, focus: Option<u32>, 
 
 fn channel(vcn: &str, name: &str) -> Channel {
     Channel { sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: format!("C{vcn}"),
-        vcn: vcn.into(), name: name.into(), thumb: format!("/logos/{vcn}.jpg"), now: "Family Show".into(),
-        now_thumb: format!("/programmes/{vcn}.jpg"), now_summary: String::new(), begins_at: 20, ends_at: 100, later: Vec::new() }
+        vcn: vcn.into(), name: name.into(), thumb: format!("/logos/{vcn}.jpg"),
+        airings: Airings::on_then(LiveAiring { thumb: format!("/programmes/{vcn}.jpg"), ..LiveAiring::new("Family Show", 20, 100) }, Vec::new()) }
 }
 
 /// A channel whose programme began `ago` minutes before [`NOW`] and runs `mins` minutes.
 fn airing(vcn: &str, name: &str, ago: i64, mins: i64) -> Channel {
-    Channel { begins_at: NOW - ago * MIN, ends_at: NOW - ago * MIN + mins * MIN, ..channel(vcn, name) }
+    let on = channel(vcn, name);
+    Channel { airings: on.airings.clone().retimed(NOW - ago * MIN, NOW - ago * MIN + mins * MIN), ..on }
 }
 
 fn seeded() -> (LiveTvStore, LiveTvScreen) {
     let mut store = LiveTvStore::default();
     let mut silent = channel("103", "Music");
-    silent.now.clear();
+    silent.airings = Airings::default();
     store.install_for_test(vec![channel("101", "Family Channel"), channel("102", "Cartoons"), silent]);
     let mut screen = LiveTvScreen::new(ENTRY);
     step(&mut screen, store.view(), None, &ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(RECENT_GROUP) }));
@@ -172,7 +173,7 @@ fn own_store_supplies_adjacent_recent_and_on_now_shelves_with_distinct_art() {
 fn on_now_lists_the_most_recent_start_first_and_a_tie_in_lineup_order() {
     let (mut store, mut screen) = seeded();
     let mut silent = channel("109", "Silent");
-    silent.now.clear();
+    silent.airings = Airings::default();
     store.install_for_test(vec![
         airing("101", "Old", 50, 60), airing("102", "Newest", 2, 60), airing("103", "Tie A", 20, 60),
         silent, airing("105", "Tie B", 20, 30), airing("106", "Mid", 35, 60),
@@ -197,9 +198,9 @@ fn recent_keeps_its_order_hides_while_empty_and_never_leaves_the_page_without_a_
     assert_eq!(screen.page.mode, Mode::NowOnly);
     // nothing recent and nothing on: still no Recent row; the lineup is the page's earlier Channels shelf
     let mut dark = channel("101", "Family Channel");
-    dark.now.clear();
+    dark.airings = Airings::default();
     let mut dark2 = channel("102", "Cartoons");
-    dark2.now.clear();
+    dark2.airings = Airings::default();
     store.install_for_test(vec![dark, dark2]);
     step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
     assert!(screen.page.recent.is_empty() && screen.page.airings.is_empty());
@@ -220,7 +221,7 @@ fn an_empty_recent_is_no_recent_shelf_with_programmes_on_with_a_bare_lineup_or_w
         let (mut store, mut screen) = seeded();
         let mut lineup = vec![channel("101", "Family Channel"), channel("102", "Cartoons")];
         lineup.truncate(channels);
-        if !programmes { for c in &mut lineup { c.now.clear(); } }
+        if !programmes { for c in &mut lineup { c.airings = Airings::default(); } }
         store.install_for_test(lineup);
         step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 1));
         let case = format!("programmes {programmes}, channels {channels}");
@@ -267,7 +268,7 @@ fn a_recent_tile_says_what_is_on_and_when_it_started_and_a_poster_says_which_cha
     let _language = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
     let (mut store, mut screen) = seeded();
     let mut silent = channel("103", "Music");
-    silent.now.clear();
+    silent.airings = Airings::default();
     // started 3 min ago; started 40 min ago (an hour long); no programme
     store.install_for_test(vec![airing("101", "Family Channel", 3, 60), airing("102", "Cartoons", 40, 60), silent]);
     let recent = store.view().channels.to_vec();
@@ -371,7 +372,7 @@ fn strip_and_profile_use_home_requests_and_back_at_the_top_selects_home() {
 fn store_revisions_and_notices_refresh_programmes_and_status_retry_targets_live_tv() {
     let (mut store, mut screen) = seeded();
     let mut changed = channel("101", "Family Channel");
-    changed.now.clear();
+    changed.airings = Airings::default();
     store.install_for_test(vec![changed]);
     step(&mut screen, store.view(), None, &ScreenEvent::Tick(Tick { ms: 16, dt_us: 16_667 }));
     assert!(screen.page.airings.is_empty(), "the store revision is read on Tick");
@@ -398,7 +399,7 @@ fn store_revisions_and_notices_refresh_programmes_and_status_retry_targets_live_
 
 /// A lineup of three channels, none with a programme: no guide data (the owner's Pluto channels).
 fn bare_lineup() -> Vec<Channel> {
-    ["101", "102", "103"].into_iter().map(|vcn| Channel { now: String::new(), ..channel(vcn, &format!("Channel {vcn}")) }).collect()
+    ["101", "102", "103"].into_iter().map(|vcn| Channel { airings: Airings::default(), ..channel(vcn, &format!("Channel {vcn}")) }).collect()
 }
 
 /// Where card `elem` is DRAWN once the page has been ticking a while (so the pop, the scroll and the
@@ -459,7 +460,7 @@ fn every_mode_lists_its_rows_and_every_channel_has_a_tile_somewhere() {
     // 101 and 102 have a programme on; 103 and 104 have none
     let lineup = |programmes: bool| -> Vec<Channel> {
         let mut lineup = vec![channel("101", "One"), channel("102", "Two"), channel("103", "Three"), channel("104", "Four")];
-        for (i, c) in lineup.iter_mut().enumerate() { if !programmes || i >= 2 { c.now.clear(); } }
+        for (i, c) in lineup.iter_mut().enumerate() { if !programmes || i >= 2 { c.airings = Airings::default(); } }
         lineup
     };
     // (programmes on, the Recent channels by lineup position, the mode, the rows)
@@ -562,7 +563,7 @@ fn a_recent_row_with_no_programme_on_is_one_row_of_plates() {
     let _policy = captions::PolicyPin::default_setting();
     let (mut store, mut screen) = seeded();
     let mut lineup = vec![channel("101", "Family Channel"), channel("102", "Cartoons")];
-    for c in &mut lineup { c.now.clear(); }
+    for c in &mut lineup { c.airings = Airings::default(); }
     store.install_for_test(lineup);
     let recent = store.view().channels.to_vec();
     let view = with_recent(&store, &recent);
@@ -774,7 +775,7 @@ fn the_chrome_tucks_at_the_channels_rest_under_a_plate_first_page_and_stands_at_
 
 // ---- the Guide (SPEC-3) ------------------------------------------------------------------------------------------
 
-use plx_data::livetv::LiveAiring;
+use plx_data::livetv::{Airings, LiveAiring};
 use plx_ui::screen::{By, Dir};
 
 /// The Guide's wall time: ten minutes into the half hour that starts at [`NOW`] (20:30), so the window is 20:30 to
@@ -782,12 +783,13 @@ use plx_ui::screen::{By, Dir};
 const GUIDE_NOW: i64 = NOW + 10 * MIN;
 
 fn later(title: &str, from: i64, to: i64) -> LiveAiring {
-    LiveAiring { title: title.into(), begins_at: NOW + from * MIN, ends_at: NOW + to * MIN, thumb: String::new() }
+    LiveAiring::new(title, NOW + from * MIN, NOW + to * MIN)
 }
 
 /// A channel airing `from`..`to` minutes after [`NOW`], with the programmes that follow it.
 fn guide_channel(vcn: &str, from: i64, to: i64, after: Vec<LiveAiring>) -> Channel {
-    Channel { begins_at: NOW + from * MIN, ends_at: NOW + to * MIN, later: after, ..channel(vcn, &format!("Station {vcn}")) }
+    let on = channel(vcn, &format!("Station {vcn}"));
+    Channel { airings: on.airings.clone().retimed(NOW + from * MIN, NOW + to * MIN).with_later(after), ..on }
 }
 
 /// Eight channels: 101 began before the window and has two programmes after it (the second runs past the window's
@@ -798,7 +800,7 @@ fn guide_lineup() -> Vec<Channel> {
         guide_channel("102", 0, 60, Vec::new()),
     ];
     let mut dark = guide_channel("103", 0, 0, Vec::new());
-    dark.now.clear();
+    dark.airings = Airings::default();
     lineup.push(dark);
     lineup.extend((4..=8).map(|n| guide_channel(&format!("10{n}"), 0, 30, vec![later("Second Half", 30, 90)])));
     lineup
@@ -813,7 +815,7 @@ fn guide() -> (LiveTvStore, LiveTvScreen) {
 /// scroll three half hours before the data ends.
 fn long_guide_lineup() -> Vec<Channel> {
     let mut lineup = guide_lineup();
-    lineup[0].later.push(later("Epilogue", 120, 180));
+    lineup[0].airings.extend_later([later("Epilogue", 120, 180)]);
     lineup
 }
 
@@ -1053,12 +1055,13 @@ fn ch_plus_and_ch_minus_turn_the_page_by_six() {
     let from = cell_elem(&screen, 1, 0);
     let (handled, out) = step_handled(&mut screen, view, Some(from), &ch_up);
     assert_eq!(handled, Handled::Yes);
-    // row 1 + 6 = 7, the last of 8 channels
-    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 7, 0)]);
+    // row 1 + 6 = 7, the last of 8 channels; row 1's programme has 50 minutes left (10 to 60), of which row 7's second half
+    // shares 30 and its first 20: a landing counts what is left of the programme, not what has aired of it
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 7, 1)]);
     assert_eq!(board(&screen).grid.page(), 1, "the page is showing before focus lands on it");
     assert_eq!(board(&screen).grid.indicator(), (7, 8, 8));
     // and back
-    let (_, out) = step_handled_at(&mut screen, view, 7, 0, &ch_down);
+    let (_, out) = step_handled_at(&mut screen, view, 7, 1, &ch_down);
     assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 1, 0)]);
     assert_eq!(board(&screen).grid.page(), 0);
     // the first page has none before it, the last none after it
@@ -1160,6 +1163,132 @@ fn the_restored_guide_seats_the_row_of_the_channel_the_player_left() {
     assert_eq!(board(&screen).grid.page(), 0);
 }
 
+/// Channel 101 has a programme that ended five minutes into the window (it began before it), the one on now and one after;
+/// 103 has no guide data. The channels' guide rows as a read at [`GUIDE_NOW`] leaves them.
+fn aired_guide_lineup() -> Vec<Channel> {
+    let aired = Channel {
+        airings: Airings::of(vec![later("Earlier", -50, 5), later("On now", 5, 60), later("Late Film", 60, 120)], GUIDE_NOW),
+        ..channel("101", "Station 101")
+    };
+    vec![aired, Channel { airings: Airings::default(), ..channel("103", "Station 103") }]
+}
+
+/// **A programme that has already ended but still overlaps the window is a cell**, from the window's left edge to where
+/// it ended, ahead of the one on now (the grid shades its aired part, which is all of it, `time_grid`).
+#[test]
+fn a_programme_that_has_aired_is_a_cell_over_the_part_of_the_window_it_covers() {
+    let (store, screen) = guide_over(aired_guide_lineup());
+    let view = store.view();
+    let px = 1_392.0 / 90.0;
+    assert_eq!(board(&screen).grid.cells(0), 3, "the aired programme, the one on now and the one after it");
+    let aired = rect_of(&screen, view, 0, 0);
+    assert!(near(aired.x, 432.0) && near(aired.w, 5.0 * px - 8.0), "over 20:30 to 20:35: {aired:?}");
+    let on = rect_of(&screen, view, 0, 1);
+    assert!(near(on.x, 432.0 + 5.0 * px) && near(on.w, 55.0 * px - 8.0), "{on:?}");
+    let titles: Vec<_> = (0..3).map(|i| board(&screen).title(view.channels, Cell { row: 0, index: i }).to_owned()).collect();
+    assert_eq!(titles, ["Earlier", "On now", "Late Film"]);
+}
+
+/// **Focus lands on what is airing, never on the cell that aired**: where the board is entered, where a move from a row with
+/// no programme goes, and where the player's return seats the channel.
+#[test]
+fn focus_lands_on_what_is_airing_and_not_on_the_programme_that_aired() {
+    let (store, mut screen) = guide_over(aired_guide_lineup());
+    let view = store.view();
+    let grid = &board(&screen).grid;
+    assert_eq!(grid.entry(GUIDE_NOW), Some(Cell { row: 0, index: 1 }), "DOWN from the header enters on the airing");
+    assert_eq!(grid.step(Cell { row: 1, index: 0 }, Dir::Up, GUIDE_NOW), Some(Cell { row: 0, index: 1 }), "from a row with nothing, the programme on now");
+    assert_eq!(grid.land(0, None, GUIDE_NOW), Some(Cell { row: 0, index: 1 }));
+    step(&mut screen, view, None, &left("C101"));
+    let out = step_at(&mut screen, view, 1, 0, &ScreenEvent::Enter(Enter::Restored));
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 0, 1)], "back from the player: the cell of what was airing");
+}
+
+/// **OK on a programme that has aired does what OK on one that has not begun does: nothing.** What is airing tunes.
+#[test]
+fn ok_on_a_programme_that_has_aired_is_spent_and_what_is_airing_still_tunes() {
+    let (store, mut screen) = guide_over(aired_guide_lineup());
+    let view = store.view();
+    let tune = PlayIntent::Live { sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: "C101".into(), title: "Station 101".into() };
+    assert!(asked_plays(&press_cell(&mut screen, view, 0, 0)).is_empty(), "it has aired: nothing of it to tune");
+    assert_eq!(asked_plays(&press_cell(&mut screen, view, 0, 1)), [tune.clone()]);
+    assert!(asked_plays(&press_cell(&mut screen, view, 0, 2)).is_empty(), "not begun");
+    // once the clock is past the one on now's end, it too has aired
+    WALL.with(|w| w.set(Some(Wall::from_secs(NOW + 61 * MIN, 0))));
+    assert!(asked_plays(&press_cell(&mut screen, view, 0, 1)).is_empty());
+    assert_eq!(asked_plays(&press_cell(&mut screen, view, 0, 2)), [tune]);
+}
+
+/// **A row nothing is on air in still tunes, as it did before aired programmes were cells.** One rule: a cell tunes
+/// when it is on air at the wall time, and when the row has nothing on air and nothing ahead (every cell has aired, or
+/// the guide's one airing has ended since the read) any of its cells tunes, as the unscheduled cell does.
+fn tune_of(channel: &str) -> PlayIntent {
+    PlayIntent::Live { sid: plx_plex::plex::ServerId::UNSET, dvr: "7".into(), channel: channel.into(), title: format!("Station {}", &channel[1..]) }
+}
+
+/// **A row of aired programmes alone (the guide has nothing after them in the window) tunes from any cell, and focus
+/// lands on a cell that tunes.**
+#[test]
+fn a_row_with_only_aired_programmes_tunes_from_its_cells_and_focus_lands_on_one() {
+    let lineup = vec![Channel { airings: Airings::of(vec![later("Earlier", -50, 5)], GUIDE_NOW), ..channel("101", "Station 101") },
+        Channel { airings: Airings::default(), ..channel("103", "Station 103") }];
+    let (store, mut screen) = guide_over(lineup);
+    let view = store.view();
+    assert_eq!(board(&screen).grid.cells(0), 1, "the aired cell is the row");
+    assert_eq!(asked_plays(&press_cell(&mut screen, view, 0, 0)), [tune_of("C101")], "OK on it tunes the channel");
+    let grid = &board(&screen).grid;
+    assert_eq!(grid.entry(GUIDE_NOW), Some(Cell { row: 0, index: 0 }));
+    step(&mut screen, view, None, &left("C101"));
+    let out = step_at(&mut screen, view, 1, 0, &ScreenEvent::Enter(Enter::Restored));
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 0, 0)]);
+}
+
+/// **An airing on now with no known end is a cell** (it runs to the next programme, else the window's end), beside the
+/// aired one, and it tunes.
+#[test]
+fn an_open_ended_airing_on_now_is_a_cell_beside_the_one_that_aired() {
+    let open = Airings::of(vec![later("Earlier", -50, 5), LiveAiring::new("Open", NOW + 5 * MIN, 0)], GUIDE_NOW);
+    assert_eq!(open.on_air_at(), Some(1));
+    let lineup = vec![Channel { airings: open, ..channel("101", "Station 101") }];
+    let (store, mut screen) = guide_over(lineup);
+    let view = store.view();
+    let px = 1_392.0 / 90.0;
+    assert_eq!(board(&screen).grid.cells(0), 2);
+    let on = rect_of(&screen, view, 0, 1);
+    assert!(near(on.x, 432.0 + 5.0 * px) && near(on.x + on.w + 8.0, 1_824.0), "to the window's end: {on:?}");
+    assert!(asked_plays(&press_cell(&mut screen, view, 0, 0)).is_empty(), "the aired one is spent while one is on");
+    assert_eq!(asked_plays(&press_cell(&mut screen, view, 0, 1)), [tune_of("C101")]);
+    assert_eq!(board(&screen).grid.entry(GUIDE_NOW), Some(Cell { row: 0, index: 1 }));
+}
+
+/// **A guide of current airings only, between the airing's end and the re-read landing, still tunes its channel**: the
+/// one cell has ended by the wall time and nothing is ahead.
+#[test]
+fn a_row_whose_only_airing_has_ended_since_the_read_still_tunes() {
+    let lineup = vec![Channel { airings: Airings::on_then(later("Over", -30, 5), Vec::new()), ..channel("101", "Station 101") }];
+    let (store, mut screen) = guide_over(lineup);
+    assert_eq!(asked_plays(&press_cell(&mut screen, store.view(), 0, 0)), [tune_of("C101")]);
+    // with a programme ahead the ended cell is spent again, as a gap in the guide always was
+    let lineup = vec![Channel { airings: Airings::on_then(later("Over", -30, 5), vec![later("Later", 20, 60)]), ..channel("101", "Station 101") }];
+    let (store, mut screen) = guide_over(lineup);
+    assert!(asked_plays(&press_cell(&mut screen, store.view(), 0, 0)).is_empty());
+    assert!(asked_plays(&press_cell(&mut screen, store.view(), 0, 1)).is_empty());
+}
+
+/// **A refresh that drops the programme that aired (the half hour rolled) keeps the focus on the programme it was on.** The
+/// cells are numbered by their place in the row, so the one on now moves from the second place to the first.
+#[test]
+fn a_refresh_that_drops_what_aired_keeps_the_focus_on_the_airing() {
+    let (mut store, mut screen) = guide_over(aired_guide_lineup());
+    let on = cell_elem(&screen, 0, 1);
+    let mut lineup = aired_guide_lineup();
+    lineup[0].airings = Airings::on_then(later("On now", 5, 60), vec![later("Late Film", 60, 120)]);
+    store.install_for_test(lineup);
+    let out = step(&mut screen, store.view(), Some(on), &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 2));
+    assert_eq!(board(&screen).title(store.view().channels, Cell { row: 0, index: 0 }), "On now");
+    assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 0, 0)], "the focus follows the programme to its new place");
+}
+
 /// **A refresh keeps the page and the focus on its channel**: the board is rebuilt from the store's revision keeping the
 /// page, and a focused cell the refresh took away goes to the last cell of its row.
 #[test]
@@ -1170,7 +1299,7 @@ fn a_refresh_keeps_the_page_and_the_focus_on_its_channel() {
     assert_eq!(board(&screen).grid.page(), 1);
     // 101 loses its programmes after the airing: a refresh
     let mut lineup = guide_lineup();
-    lineup[0].later.clear();
+    lineup[0].airings = lineup[0].airings.clone().with_later(Vec::new());
     store.install_for_test(lineup);
     step(&mut screen, store.view(), Some(seventh), &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 2));
     assert_eq!(board(&screen).grid.page(), 1, "the page the reader was on");
@@ -1312,7 +1441,7 @@ fn the_end_of_the_guide_data_stops_the_scroll() {
     let (mut store, mut screen) = guide();
     // nothing runs past the live window's end (90): "Late Film" now ends at 90 and no other channel is longer
     let mut lineup = guide_lineup();
-    lineup[0].later = vec![later("News at Nine", 30, 60), later("Late Film", 60, 90)];
+    lineup[0].airings = lineup[0].airings.clone().with_later(vec![later("News at Nine", 30, 60), later("Late Film", 60, 90)]);
     store.install_for_test(lineup);
     step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 2));
     let (handled, out) = step_handled_at(&mut screen, store.view(), 0, 2, &edge_key(Key::Right));
@@ -1321,7 +1450,7 @@ fn the_end_of_the_guide_data_stops_the_scroll() {
     assert!(seated_elems(&out).is_empty() && reaches(&out).is_empty());
     // one programme to 120: the window moves once, then the data has ended again
     let mut lineup = guide_lineup();
-    lineup[0].later = vec![later("News at Nine", 30, 60), later("Late Film", 60, 120)];
+    lineup[0].airings = lineup[0].airings.clone().with_later(vec![later("News at Nine", 30, 60), later("Late Film", 60, 120)]);
     store.install_for_test(lineup);
     step(&mut screen, store.view(), None, &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 3));
     step_handled_at(&mut screen, store.view(), 0, 2, &edge_key(Key::Right));
@@ -1437,7 +1566,7 @@ fn a_landing_read_keeps_the_focus_on_its_programme() {
     // the airing ended: the guide's answer has the programme that was next as the one on now, and the cells renumber
     let mut lineup = guide_lineup();
     lineup[0] = guide_channel("101", 30, 60, vec![later("Late Film", 60, 120)]);
-    lineup[0].now = "News at Nine".into();
+    lineup[0].airings = Airings::on_then(later("News at Nine", 30, 60), vec![later("Late Film", 60, 120)]);
     store.install_for_test(lineup);
     let out = step(&mut screen, store.view(), Some(elem), &ScreenEvent::StoreChanged(StoreId::LiveTv.ord(), 2));
     assert_eq!(seated_elems(&out), vec![cell_elem(&screen, 0, 0)], "News at Nine is now the first cell: the focus follows it");
@@ -1453,12 +1582,12 @@ use super::browse::Filter;
 /// 102 began 40 minutes ago and ends in 10 (ending soon); 103 began 20 minutes ago and ends in 40; 104 has nothing.
 fn browse_lineup() -> Vec<Channel> {
     let mut a = airing("101", "One", 5, 30);
-    a.later = vec![later("Next 101", 25, 85), later("Evening 101", 85, 145), later("Past midnight 101", 230, 260)];
+    a.airings = a.airings.clone().with_later(vec![later("Next 101", 25, 85), later("Evening 101", 85, 145), later("Past midnight 101", 230, 260)]);
     let b = airing("102", "Two", 40, 50);
     let mut c = airing("103", "Three", 20, 60);
-    c.later = vec![later("Next 103", 40, 100)];
+    c.airings = c.airings.clone().with_later(vec![later("Next 103", 40, 100)]);
     let mut d = channel("104", "Four");
-    d.now.clear();
+    d.airings = Airings::default();
     vec![a, b, c, d]
 }
 
@@ -1503,7 +1632,7 @@ fn shown_channels(screen: &LiveTvScreen) -> Vec<usize> {
 fn shown_titles(screen: &LiveTvScreen, view: LiveTvView<'_>) -> Vec<String> {
     browse_set(screen).picks.iter().map(|pick| {
         let channel = &view.channels[pick.channel];
-        match pick.src { CellSrc::Now => channel.now.clone(), CellSrc::Later(n) => channel.later[n].title.clone() }
+        channel.airings.all()[pick.airing].title.clone()
     }).collect()
 }
 
@@ -1866,7 +1995,7 @@ fn a_filter_pick_swaps_the_header_words_and_the_swap_runs_out() {
 fn a_programme_caption_is_one_composition_on_browse_and_on_now() {
     let _guards = browse_guards();
     let mut long = airing("2006", "Pluto TV Star Trek: The Next Generation", 49, 60);
-    long.now = "Star Trek: The Next Generation".into();
+    long.airings = Airings::on_then(LiveAiring::new("Star Trek: The Next Generation", NOW - 49 * MIN, NOW + 11 * MIN), Vec::new());
     let (store, mut screen) = browse_over(vec![long]);
     let view = store.view();
     WALL.with(|w| w.set(Some(Wall::from_secs(NOW, 0))));

@@ -379,26 +379,37 @@ impl TimeGrid {
     /// **Where a focus lands when the board under it is rebuilt or its window moves**: the cell of `row` that shares the
     /// most time with the cell the focus stood on (`from`, its span; the same programme where it is still there), or, for
     /// a focus that stood on an unscheduled row (`None`, which says nothing about where the reader was), the cell on `now`.
+    /// **Time that has aired does not count while `now` is in the window** (see [`TimeGrid::nearest`]), so a landing is on
+    /// what is on air or ahead, and not on a programme that has aired and ties with the live one. UP, DOWN and the page
+    /// turn land by the same rule.
     pub fn land(&self, row: usize, from: Option<Span>, now: i64) -> Option<Cell> {
-        self.nearest(row, from.unwrap_or_else(|| self.instant(now)))
+        self.nearest(row, from.unwrap_or_else(|| self.instant(now)), now)
     }
 
-    /// The cell of `row` that shares the most time with `from` (clipped to the window), the earliest on a tie; when
-    /// `from` shares none with any of them (a gap in the guide), the nearest in time.
-    fn nearest(&self, row: usize, from: Span) -> Option<Cell> {
+    /// **The one landing rule**: the cell of `row` that shares the most time with `from` (clipped to the window), the
+    /// earliest on a tie; when `from` shares none with any of them (a gap in the guide), the nearest in time. While `now`
+    /// is in the window the overlap is measured over the part of `from` from `now` on (the part before it has aired, and
+    /// nothing on it can be tuned), so a move lands on what is on air or ahead; only when nothing of the row overlaps
+    /// that part (every cell has aired, or the row has a gap there) is the whole window's overlap used, as before.
+    fn nearest(&self, row: usize, from: Span, now: i64) -> Option<Cell> {
         let window = self.axis.window();
         let from = Span::new(from.begins.max(window.begins), from.ends.min(window.ends));
-        (0..self.cells(row))
-            .filter_map(|index| {
-                let span = self.span(Cell { row, index })?;
-                Some((std::cmp::Reverse(from.overlap(span)), from.gap(span), index))
-            })
-            .min()
-            .map(|(_, _, index)| Cell { row, index })
+        let ahead = if window.contains(now) { Span::new(from.begins.max(now), from.ends) } else { from };
+        let best = |from: Span| {
+            (0..self.cells(row))
+                .filter_map(|index| {
+                    let span = self.span(Cell { row, index })?;
+                    Some((std::cmp::Reverse(from.overlap(span)), from.gap(span), index))
+                })
+                .min()
+        };
+        let onward = best(ahead).filter(|&(shared, ..)| shared.0 > 0);
+        onward.or_else(|| best(from)).map(|(_, _, index)| Cell { row, index })
     }
 
     /// **A move**: LEFT and RIGHT to the cell before or after in the row (`None` at its ends); UP and DOWN to the
-    /// cell of the row above or below that shares the most time with this one (from an unscheduled row, the one on
+    /// cell of the row above or below that shares the most time with what is left of this one ([`TimeGrid::land`]'s rule,
+    /// the time that has aired not counting while `now` is in the window; from an unscheduled row, the one on
     /// `now`). `None` at the first and last row.
     pub fn step(&self, at: Cell, dir: Dir, now: i64) -> Option<Cell> {
         match dir {
@@ -409,7 +420,7 @@ impl TimeGrid {
                 if row >= self.rows.len() {
                     return None;
                 }
-                self.nearest(row, self.leaving(at, now)?)
+                self.nearest(row, self.leaving(at, now)?, now)
             }
         }
     }
@@ -424,7 +435,7 @@ impl TimeGrid {
             return None;
         }
         let row = (want * PAGE_ROWS + at.row % PAGE_ROWS).min(self.rows.len() - 1);
-        self.nearest(row, self.leaving(at, now)?)
+        self.nearest(row, self.leaving(at, now)?, now)
     }
 
     /// **The cell a board is entered on** from outside it (DOWN from the header): the first row of the page showing, at

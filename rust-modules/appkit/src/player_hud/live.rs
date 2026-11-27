@@ -90,17 +90,18 @@ pub fn words(channel: Option<&Channel>, name: &str, wall: Option<Wall>) -> Words
     if let Some(ch) = channel {
         out.number.clone_from(&ch.vcn);
         out.station.clone_from(&ch.name);
-        out.title.clone_from(&ch.now);
+        out.title = ch.airings.now_title().to_owned();
     }
     let Some(wall) = wall else { return out };
     out.clock = fmt::clock_face(wall.unix_s(), i64::from(wall.utc_offset_s));
-    if let Some(ch) = channel.filter(|ch| !ch.now.is_empty()) {
-        out.time_line = fmt::airing_line(Airing::Banner, ch.begins_at, ch.ends_at, wall);
-        out.progress = fmt::frac(ch.begins_at, ch.ends_at, wall);
+    if let Some(ch) = channel.filter(|ch| ch.airings.on_air().is_some()) {
+        let (begins_at, ends_at) = (ch.airings.begins_at(), ch.airings.ends_at());
+        out.time_line = fmt::airing_line(Airing::Banner, begins_at, ends_at, wall);
+        out.progress = fmt::frac(begins_at, ends_at, wall);
         // "Next at": only while the airing is known, and only until it is over (a programme that is
         // over has no "next" until the guide re-reads)
         out.next = out.time_line.as_ref()
-            .and_then(|_| fmt::clock_face(ch.ends_at, i64::from(wall.utc_offset_s)))
+            .and_then(|_| fmt::clock_face(ends_at, i64::from(wall.utc_offset_s)))
             .filter(|_| out.progress.is_some_and(|f| f < 1.0))
             .map(|face| plx_os::i18n::msg::widgets_live_next_at(&face));
     }
@@ -216,12 +217,10 @@ mod tests {
             vcn: "101".into(),
             name: "Family Channel".into(),
             thumb: String::new(),
-            now: "The Long Programme".into(),
-            now_thumb: String::new(),
-            now_summary: String::new(),
-            begins_at: NINE + begin_min * MIN,
-            ends_at: NINE + end_min * MIN,
-            later: Vec::new(),
+            airings: plx_data::livetv::Airings::on_then(
+                plx_data::livetv::LiveAiring::new("The Long Programme", NINE + begin_min * MIN, NINE + end_min * MIN),
+                Vec::new(),
+            ),
         }
     }
 
@@ -255,7 +254,7 @@ mod tests {
         assert_eq!((w.time_line, w.next, w.progress, w.clock), (None, None, None, None));
         assert_eq!(w.title, "The Long Programme");
         let mut idle = channel(0, 60);
-        idle.now.clear();
+        idle.airings = plx_data::livetv::Airings::default();
         let w = words(Some(&idle), "", at(38));
         assert_eq!((w.title.as_str(), w.time_line, w.next, w.progress), ("", None, None, None));
         assert_eq!(w.clock.as_deref(), Some("9:38\u{202f}PM"), "the clock needs no programme");
