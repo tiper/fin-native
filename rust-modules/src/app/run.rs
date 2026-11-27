@@ -8713,7 +8713,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
             let meta = self.app.runtime.metadata_view();
             let mut menu = plx_appkit::track_menu::TrackMenuState::new(&self.app.player.session, meta, 1, Vec::new());
             assert!(menu.focus_id(plx_appkit::track_menu::TrackRow::SubForcedOnly), "the Forced only row is on the page");
-            let plx_appkit::track_menu::TrackOk::Commit { commit, .. } = menu.on_ok(meta) else {
+            let plx_appkit::track_menu::TrackOk::Commit { commit, .. } = menu.step(&self.app.player.session, meta, plx_ui::menu::Event::Ok(plx_ui::form::FormId::key(&plx_appkit::track_menu::TrackRow::SubForcedOnly).0)) else {
                 panic!("the menu committed nothing for Forced only");
             };
             super::super::playback::commit_track(&mut self.app.player.session,
@@ -8727,7 +8727,7 @@ pub(in crate::app) mod lifecycle_regression_tests {
             let index = playing.audio.iter().position(|s| s.id == id).unwrap_or_else(|| panic!("no audio {id}"));
             let mut menu = plx_appkit::track_menu::TrackMenuState::new(&self.app.player.session, meta, 0, Vec::new());
             assert!(menu.focus_id(plx_appkit::track_menu::TrackRow::Audio(index)), "the audio row is on the page");
-            let plx_appkit::track_menu::TrackOk::Commit { commit, .. } = menu.on_ok(meta) else {
+            let plx_appkit::track_menu::TrackOk::Commit { commit, .. } = menu.step(&self.app.player.session, meta, plx_ui::menu::Event::Ok(plx_ui::form::FormId::key(&plx_appkit::track_menu::TrackRow::Audio(index)).0)) else {
                 panic!("the menu committed nothing for audio {id}");
             };
             super::super::playback::commit_track(&mut self.app.player.session,

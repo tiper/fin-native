@@ -1046,7 +1046,7 @@ impl ItemMenuScreen {
     /// into its button), a pick acts.
     fn run<H: AppLike>(&mut self, out: Out<Action>, elem: Option<u32>, fx: &mut Effects<'_, H>) {
         match out {
-            Out::Stay | Out::Moved => {}
+            Out::Stay | Out::Moved | Out::Edge => {}
             Out::Dismiss => self.dismiss(fx),
             Out::Picked(act) if self.hero.is_some() => self.activate_hero_menu(act, elem, fx),
             Out::Picked(act) => self.commit(act, fx),
@@ -2011,10 +2011,18 @@ pub(crate) mod tests {
         let got =
             with_cx(|cx| <ItemMenuScreen as Focusable<HostFixture>>::reconcile(&screen, want, cx));
         assert_eq!(got.elem, ItemRow::GoToItem.key().0, "…the first real row is where it lands");
+        // the menu's own cursor is where focus belongs (a moved focus reaches it first, `Event::Focused`): a row it was
+        // never seated on is not kept
         let live = FocusKey { entry: EntryId(7), elem: ItemRow::MarkWatched.key().0 };
+        let unseated =
+            with_cx(|cx| <ItemMenuScreen as Focusable<HostFixture>>::reconcile(&screen, live, cx));
+        assert_eq!(unseated.elem, ItemRow::GoToItem.key().0, "the cursor wins over a live row the menu never saw");
+        let mut screen = screen;
+        screen.menu.step(Event::Focused(live.elem), &mut |_| None);
+        assert_eq!(screen.menu.form().selected_key().map(|k| k.0), Some(live.elem));
         let kept =
             with_cx(|cx| <ItemMenuScreen as Focusable<HostFixture>>::reconcile(&screen, live, cx));
-        assert_eq!(kept.elem, live.elem, "a live row is left where it is");
+        assert_eq!(kept.elem, live.elem, "a row the cursor is on is left where it is");
     }
 
     /// **The menu carries the row it was opened on**, and it is the ENTRY's argument now rather

@@ -230,7 +230,7 @@ not been measured on the TV. The menu-closed control on the same clip graded 25.
   from the playing item's UltraBlur corners, paid again on every open. That envelope has since been
   removed altogether: the player's menu dim is the flat neutral ink (`Scrim::over_video`), so there
   is nothing to latch. `navcommit` is ~6 ms, of which `tmnew` is under 1 ms. Then come the root
-  page's first strings, which the overlay's `prepare` queues on the mount frame (`warm_open`): the
+  page's first strings, which the overlay's `prepare` queues on the mount frame (`Menu::prepare`): the
   open frame measured 17.8-21.7 ms on the 2026-10-02 capture (below), the rest being `after_step`'s
   focus seat.
 - **Playback start.** The Play/ACB call and single Starfish `Feed()` calls block for 5–28 ms in

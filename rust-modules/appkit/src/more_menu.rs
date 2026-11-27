@@ -54,8 +54,8 @@
 //!
 //! `docs/parity-gaps.md`'s standing decision is that this app has **no full-screen menu sheets** —
 //! the reference clients put playback quality in one and we do not. Quality drills in INSIDE the
-//! popover instead, on the same [`plx_ui::page_stack::PageStack`] the Subtitles tab of
-//! [`crate::track_menu`] uses: BACK, LEFT and a click on the title band mean "up one page", and
+//! popover instead, on the same [`plx_ui::menu::Menu`] the Subtitles tab of
+//! [`crate::track_menu`] stands on: BACK, LEFT and a click on the title band mean "up one page", and
 //! only BACK on the root dismisses. Six rungs fit; when they stop fitting, the [`TableView`]
 //! scrolls, which is what it is for.
 //!
@@ -79,19 +79,14 @@
 //! adaptive one — nothing measures a link or moves a rung on its own.
 #![allow(non_upper_case_globals)]
 use plx_ui::a11y::{A11y, A11yPath};
-use plx_ui::frame::Budget;
 use plx_ui::geom::IndexElem;
-use plx_machine::machine::{Cx, EntryId, FocusKey, GroupId, Host, Measure};
-use plx_ui::screen::{At, Dir, DrawFrame, Focusable, GroupSpec, Part, Placed, Step};
-use plx_ui::form::{Activation, Form, FormId, FormSection, FormTable, RowKey, RowKind};
+use plx_machine::machine::GroupId;
+use plx_ui::form::{Form, FormId, FormSection, RowKey, RowKind};
 use crate::player_hud::command::HudCommand;
-use plx_ui::page_stack::{
-    self, popover_a11y, popover_a11y_elems, popover_group_of, popover_groups, popover_neighbour,
-    popover_place, popover_register_stops, popover_seat, PageStack, PopoverPanel,
-};
-use plx_ui::panel_motion::PanelMotion;
+use plx_ui::menu::{Class, Event, Host, Menu, Out, Page, Shade};
+use plx_ui::page_stack::{popover_a11y, popover_a11y_elems};
 use plx_ui::table::Row;
-use plx_ui::{theme, Rect};
+use plx_ui::Rect;
 
 /// What the highlighted row does on OK.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -196,36 +191,31 @@ pub enum MoreRow {
     Act(Action),
 }
 
-/// What OK on the highlighted row did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MoreOk {
-    /// Perform this action; the container dismisses the panel (a rung pick and the Options rows
-    /// close it, exactly as before the Quality page existed).
-    Action(Action),
-    /// A Nav row opened a page: the panel stays, with its rows replaced.
-    Navigated,
-}
-
 type MoreForm = Form<MoreRow, Action, MorePage>;
-type MoreTable = FormTable<MoreRow, Action, MorePage>;
 
 /// The menu's whole state, owned by the container that mounts this panel — the modal PHASE and the
-/// appear spring belong to `ui::containers::modal::ModalStack` now, not to this struct; `draw`
-/// takes the appear fraction as a parameter instead of stepping its own `Popover`.
+/// appear spring belong to `ui::containers::modal::ModalStack` now, not to this struct. The form, the stack of
+/// pages, the card and its motion are the one menu component's ([`plx_ui::menu::Menu`], `Host::Video`: flat over the
+/// picture); what stays here is what only this menu knows, the playback read-outs its pages are built from.
 /// The panel's width is the shared menu rule (`TableView::menu_panel_width`): it hugs the widest
 /// row, capped at `MENU_MAX_W`, and every row must fit the cap in every language
 /// (`every_row_fits_the_panel_in_every_language`).
-
 pub struct MoreMenuState {
-    /// The rows AND the action each one commits, declared together ([`root_form`],
-    /// [`quality_form`]) — the row SET varies (the Quality ladder is built from
-    /// `route::available_quality_ladder`, and Force Direct Play drops it), so a row is found by its
-    /// identity ([`MoreRow`]'s [`FormId`] key), never by a position. One table serves the page that
-    /// is showing. The table is main-thread-only, like every other panel's.
-    form: MoreTable,
+    /// What the pages are built from ([`MoreCore::build`]); apart from the menu so the builder borrows it while the
+    /// menu steps.
+    core: MoreCore,
+    /// The rows AND the action each one commits, declared together ([`root_form`], [`quality_form`]) — the row SET
+    /// varies (the Quality ladder is built from `route::available_quality_ladder`, and Force Direct Play drops it), so a
+    /// row is found by its identity ([`MoreRow`]'s [`FormId`] key), never by a position. One table serves the page that is
+    /// showing. The table is main-thread-only, like every other panel's.
+    menu: Menu<MorePage, MoreRow, Action>,
+}
+
+/// **What More's pages are built from.**
+struct MoreCore {
     /// The row set the form was last built from (what [`rows_for`] answered), so a live change to
     /// it — Auto's readiness gate opening, Force Direct Play flipping — is noticed and the panel
-    /// rebuilt and RESIZED ([`Self::refresh`]) rather than left showing a ladder that has moved.
+    /// rebuilt and RESIZED ([`MoreMenuState::refresh`]) rather than left showing a ladder that has moved.
     rows: Vec<Action>,
     forced: bool,
     /// The rung the root's Quality row reads out and the Quality page checks, as of the last build.
@@ -238,18 +228,6 @@ pub struct MoreMenuState {
     /// The folded rows listed between Speed and Options ([`folded_rows`]), fixed when the menu opened: a
     /// command's predicate holds for the item playing, which does not change under an open menu.
     folded: Vec<FoldedRow>,
-    /// The pages pushed above the root, outermost first (empty = the root): each remembers the row
-    /// that opened it and the scroll it was left at ([`page_stack`]).
-    pages: PageStack<MorePage, MoreRow>,
-    /// The card's resize and the page slide ([`plx_ui::panel_motion`]), the same one the track
-    /// menu uses: a row set that changes height animates the top edge, bottom and right stay on the
-    /// anchor, and a push or pop slides the two pages.
-    motion: PanelMotion,
-    /// The opener's rect, handed in when the menu opened ([`Self::with_anchor`]) and never read from
-    /// anywhere again: a stand-in taking the HUD row cannot move an open panel.
-    anchor: Rect,
-    /// The side of [`Self::anchor`] the panel took, as of the last placement: where its rise comes from.
-    side: std::cell::Cell<plx_ui::popover::Side>,
 }
 
 /// **The tallest page this menu shows with app-owned rows** — the Quality page, its title band,
@@ -257,7 +235,7 @@ pub struct MoreMenuState {
 /// opener the panel opens on (`plx_ui::popover::anchor_panel`'s `need_h`) for a root with up to three folded
 /// rows; [`need_h`] decides it beyond that. The number is the same on every page. 600 leaves room for a longer label that wraps. Classic's room above its row is 710,
 /// which this stays under, so classic opens upward. `pub(crate)` because the HUD lint places this
-/// menu with it (`hud_format::lint_menus`, M2), through [`place_panel`].
+/// menu with it (`hud_format::lint_menus`, M2), placed by the same placement ([`plx_ui::popover::Placement::PLAYER_MENU`]).
 pub(crate) const NEED_H: f32 = 600.0;
 
 /// **The height the root asks of its room when it lists `folded` rows**: the root at its tallest standard shape
@@ -278,20 +256,6 @@ const ROOT_BASE_H: f32 = 344.0;
 const FOLDED_ROW_H: f32 = 60.0;
 /// The gap the folded section adds between Speed and Options.
 const FOLDED_SECTION_H: f32 = 24.0;
-
-/// **The one call of the shared placer for this menu**: a panel of `size` beside `anchor`, on the side
-/// `need_h` ([`need_h`] of the folded rows, [`NEED_H`] for none) decides, `PLAYER_MENU_GAP` away, inside `SAFE`.
-/// The live panel ([`MoreMenuState::panel_rect`]), the overscan audit ([`overscan_rects`]) and the HUD lint
-/// (`hud_format::lint_menus`) all place through it, so none can drift from another.
-pub(crate) fn place_panel(anchor: Rect, size: (f32, f32), need_h: f32) -> plx_ui::popover::Anchored {
-    plx_ui::popover::anchor_panel(
-        anchor,
-        size,
-        need_h,
-        theme::layout::PLAYER_MENU_GAP,
-        plx_ui::popover::Placement::PLAYER_MENU,
-    )
-}
 
 /// The hand-assigned focus key of each row. `SetQuality` rungs are an exhaustive match, so a new
 /// rung cannot compile without claiming a key; none of these is a discriminant, a position or a
@@ -519,127 +483,111 @@ fn quality_form(
     Form::new().section(sec)
 }
 
+impl MoreCore {
+    /// **The page builder of the one menu component** ([`plx_ui::menu::Build`]): `None` asks for the root. A page that
+    /// is not offered for this playback (Quality under Force Direct Play or with an empty ladder, Speed when the playback
+    /// takes one speed only) cannot be built, which is how a live change that takes the page away under the viewer drops
+    /// it back to the root ([`Event::Refresh`]).
+    fn build(&self, ps: &plx_media::route::PlaybackSession, page: Option<MorePage>) -> Option<Page<MoreRow, Action, MorePage>> {
+        match page {
+            None => Some(Page::root(root_form(ps, &self.rows, self.forced, self.current, self.speed, &self.speeds, &self.folded))),
+            Some(MorePage::Quality) => quality_offered(&self.rows, self.forced).then(|| {
+                Page::new(quality_form(ps, &self.rows, self.current), MorePage::Quality.title())
+                    .initial(Some(MoreRow::Act(Action::SetQuality(self.current))))
+            }),
+            Some(MorePage::Speed) => (self.speeds.len() > 1).then(|| {
+                Page::new(speed_form(ps, self.speed, &self.speeds), MorePage::Speed.title())
+                    .initial(Some(MoreRow::Act(Action::SetSpeed(self.speed))))
+            }),
+        }
+    }
+}
+
+/// **The More menu's card over the video plane**: flat, hung from the control row by the player's placement, at the
+/// sheet's dim weight (the player's Tracks menu is darker). The anchor is the rect the host names, the segment's
+/// ([`MoreMenuState::new_folded_with_quality`]); every page opens on the side the root's tallest shape holds
+/// ([`need_h`] of the `folded` rows it lists).
+fn host(anchor: Rect, folded: usize) -> Host {
+    Host::Video {
+        anchor: bits(anchor),
+        placement: plx_ui::popover::Placement::PLAYER_MENU,
+        shade: Shade::Sheet,
+        need_h: Some(need_h(folded)),
+    }
+}
+
+fn bits(r: Rect) -> [u32; 4] {
+    [r.x, r.y, r.w, r.h].map(f32::to_bits)
+}
+
 impl MoreMenuState {
-    fn open_focused(ps: &plx_media::route::PlaybackSession, page: Option<MorePage>, folded: Vec<FoldedRow>, current: plx_media::route::Quality) -> Self {
+    fn open_focused(
+        ps: &plx_media::route::PlaybackSession,
+        page: Option<MorePage>,
+        folded: Vec<FoldedRow>,
+        current: plx_media::route::Quality,
+        anchor: Rect,
+    ) -> Self {
         let forced = quality_withheld(ps);
         let rows = rows_for(forced);
-
         let speed = plx_media::player::selected_rate(ps).unwrap_or(plx_media::player::RATE_NORMAL);
         let speeds = plx_media::player::speed_offer(ps);
-        let mut form = FormTable::new(plx_ui::table_screen::BAND_BASE);
-        form.table.compact = true; // a short action list — BODY labels, like the profile menu
-        form.table.min_panel_w = theme::layout::PLAYER_MENU_MIN_W;
-        form.set_or_open(root_form(ps, &rows, forced, current, speed, &speeds, &folded), None);
-        let mut st = MoreMenuState {
-            form,
-            rows,
-            forced,
-            current,
-            speed,
-            speeds,
-            folded,
-            pages: PageStack::new(),
-            motion: PanelMotion::new(),
-            anchor: crate::player_hud::classic::ctrl_row_hit_rect(),
-            side: std::cell::Cell::new(plx_ui::popover::Side::Above),
-        };
+        // a short action list: BODY labels, like the profile menu
+        let mut menu = Menu::new(host(anchor, folded.len()), Class::Action, plx_ui::table_screen::BAND_BASE);
+        let core = MoreCore { rows, forced, current, speed, speeds, folded };
+        menu.step(Event::ReplaceRoot { slide: None }, &mut |p| core.build(ps, p));
+        let mut st = MoreMenuState { core, menu };
         // A page entry opens straight on that page, no slide. Quality (the failure screen's OK)
         // lands on the active rung: the viewer is fixing a bad decision, not browsing. A page that
         // is not offered (no ladder under Force Direct Play, no choice of speed) is the ordinary
-        // root, as the page-vanished refresh below does.
-        let offered = match page {
-            None => false,
-            Some(MorePage::Quality) => quality_offered(&st.rows, st.forced),
-            Some(MorePage::Speed) => st.speeds.len() > 1,
-        };
-        if let Some(page) = page.filter(|_| offered) {
-            // the page is pushed from its opener's row, so BACK lands where a viewer would have
-            // pressed to get here
-            if page == MorePage::Speed {
-                st.focus_key(MoreRow::OpenSpeed.key().0);
-            }
-            st.push(ps, page);
-            st.motion.cancel_slide();
+        // root, as the page-vanished refresh does. The page is entered from its opener's row, so
+        // BACK lands where a viewer would have pressed to get here.
+        if let Some(page) = page {
+            st.step(ps, Event::Enter(match page {
+                MorePage::Quality => MoreRow::OpenQuality,
+                MorePage::Speed => MoreRow::OpenSpeed,
+            }));
         }
         st
+    }
+
+    /// **The one entry of a key, a click or a focus move** ([`Event`]): the screen feeds the panel what the viewer did and
+    /// acts on the answer ([`Out`]): OK (or a click) on a row picks its action or opens its page; BACK and LEFT pop a page
+    /// and BACK at the root asks to close; RIGHT enters a Nav row (any other answer is [`Out::Edge`], which this menu, with
+    /// no tabs to switch, leaves alone); the title band's key pops. The pages are built from the panel's own read-outs.
+    pub fn step(&mut self, ps: &plx_media::route::PlaybackSession, ev: Event<'_, MoreRow>) -> Out<Action> {
+        let core = &self.core;
+        self.menu.step(ev, &mut |p| core.build(ps, p))
+    }
+
+    /// **The one menu component** this panel is: the form, the stack of pages, the card and its motion
+    /// ([`plx_ui::menu::Menu`]), for the host to draw, to prewarm and to ask for focus.
+    pub fn menu(&self) -> &Menu<MorePage, MoreRow, Action> {
+        &self.menu
     }
 
     /// The page showing, `None` at the root.
     #[cfg(any(test, feature = "test-support"))]
     pub fn page(&self) -> Option<MorePage> {
-        self.pages.top()
+        self.menu.top()
     }
 
     /// The highlighted row's identity, for tests.
     #[cfg(any(test, feature = "test-support"))]
     pub fn sel_id(&self) -> Option<MoreRow> {
-        self.form.selected_id().copied()
-    }
-
-    /// The form of a pushed page, from the panel's own read-outs.
-    fn page_form(&self, ps: &plx_media::route::PlaybackSession, page: MorePage) -> MoreForm {
-        match page {
-            MorePage::Quality => quality_form(ps, &self.rows, self.current),
-            MorePage::Speed => speed_form(ps, self.speed, &self.speeds),
-        }
-    }
-
-    /// The explicit initial focus of a pushed page: the Quality page opens on its checked rung
-    /// (else the first row, [`FormTable::open`]'s fallback).
-    fn page_initial(&self, page: MorePage) -> Option<MoreRow> {
-        match page {
-            MorePage::Quality => Some(MoreRow::Act(Action::SetQuality(self.current))),
-            MorePage::Speed => Some(MoreRow::Act(Action::SetSpeed(self.speed))),
-        }
-    }
-
-    /// Open `page` above the current one: remember the opener and its scroll, install the page's
-    /// rows (the pill snaps, the scroll returns to the top, focus lands on [`Self::page_initial`])
-    /// and its title band, and start the slide.
-    fn push(&mut self, ps: &plx_media::route::PlaybackSession, page: MorePage) {
-        let Some(return_id) = self.form.selected_id().copied() else { return };
-        self.pages.push(page, return_id, self.form.table.scroll_pos());
-        let leaving = page_stack::leave_page(&mut self.form);
-        let form = self.page_form(ps, page);
-        self.form.open(form, self.page_initial(page).as_ref());
-        // after the sections: the band moves every row, so the pill is re-jumped onto the focused one
-        self.form.table.set_title(Some(page.title()));
-        self.motion.begin_slide(leaving, 1.0);
-    }
-
-    /// Pop the top page: the root comes back exactly as it was left — the opener focused by id, the
-    /// scroll reinstated ([`FormTable::restore`]). `false` at the root (nothing popped).
-    pub fn pop(&mut self, ps: &plx_media::route::PlaybackSession) -> bool {
-        let Some(saved) = self.pages.pop() else { return false };
-        let leaving = page_stack::leave_page(&mut self.form);
-        self.motion.begin_slide(leaving, -1.0);
-        let form = root_form(ps, &self.rows, self.forced, self.current, self.speed, &self.speeds, &self.folded);
-        self.form.restore(form, Some(&saved.return_id), saved.scroll);
-        self.form.table.set_title(None);
-        true
-    }
-
-    /// **RIGHT**: on a Nav row it enters — the same as OK; anywhere else nothing happens (this
-    /// popover has no tabs to switch).
-    pub fn on_right(&mut self, ps: &plx_media::route::PlaybackSession) {
-        let sel = self.form.table.sel.max(0) as usize;
-        if matches!(self.form.binding_at(sel).map(|b| &b.kind), Some(RowKind::Nav(_))) {
-            if let Some(Activation::Push(dest)) = self.form.activate(sel) {
-                self.push(ps, dest);
-            }
-        }
+        self.menu.form().selected_id().copied()
     }
 
     /// **The replay canon**: the page path (each pushed page and the row that opened it) and the
     /// selected row's [`RowKey`] — not its index, which two pages share.
     pub fn canon(&self, c: &mut plx_machine::machine::Canon) {
-        self.pages.canon(c, MorePage::code, |r| r.key().0);
-        c.u32(self.form.key_at(self.form.table.sel.max(0) as usize).map_or(u32::MAX, |k| k.0));
+        self.menu.stack_canon(c, MorePage::code, |r| r.key().0);
+        c.u32(self.menu.form().key_at(self.menu.form().table.sel.max(0) as usize).map_or(u32::MAX, |k| k.0));
     }
 
     /// What the `moreosc` trigger needs to choose its next key: how many pages are pushed.
     pub fn osc_depth(&self) -> usize {
-        self.pages.len()
+        self.menu.depth()
     }
 
     /// **Follow a live change of the row set or the current rung**: rebuild the page that is
@@ -649,7 +597,7 @@ impl MoreMenuState {
     /// pick), and the page pops to the root when Quality stops being offered. The panel's height
     /// follows, and the card animates to it ([`Self::update`]). Returns whether it rebuilt.
     pub fn refresh(&mut self, ps: &plx_media::route::PlaybackSession) -> bool {
-        self.refresh_with_quality(ps, self.current)
+        self.refresh_with_quality(ps, self.core.current)
     }
 
     pub fn refresh_with_quality(&mut self, ps: &plx_media::route::PlaybackSession, current: plx_media::route::Quality) -> bool {
@@ -675,63 +623,17 @@ impl MoreMenuState {
         speed: i32,
         speeds: Vec<i32>,
     ) -> bool {
-        if forced == self.forced
-            && rows == self.rows
-            && current == self.current
-            && speed == self.speed
-            && speeds == self.speeds
-        {
+        let core = &mut self.core;
+        if forced == core.forced && rows == core.rows && current == core.current && speed == core.speed && speeds == core.speeds {
             return false;
         }
-        self.speeds = speeds;
-        self.rows = rows;
-        self.forced = forced;
-        self.current = current;
-        self.speed = speed;
-        if let Some(first) = self.pages.first().copied() {
-            // either page can vanish under the viewer: Quality with its ladder, Speed with its offer
-            let still_offered = match first.page {
-                MorePage::Speed => self.speeds.len() > 1,
-                MorePage::Quality => quality_offered(&self.rows, self.forced),
-            };
-            if still_offered {
-                let page = self.pages.top().unwrap_or(first.page);
-                let fallback = self.page_initial(page);
-                let form = self.page_form(ps, page);
-                self.form.refresh_with(form, None, fallback.as_ref());
-            } else {
-                // the ladder is gone under the viewer: back to the root, restoring the opener and
-                // scroll the stack saved at its first push
-                self.pages.clear();
-                let form = root_form(ps, &self.rows, self.forced, self.current, self.speed, &self.speeds, &self.folded);
-                self.form.restore(form, Some(&first.return_id), first.scroll);
-                self.form.table.set_title(None);
-                self.motion.cancel_slide();
-            }
-        } else {
-            let keep = self.form.selected_id().copied();
-            self.form.set_or_open(root_form(ps, &self.rows, self.forced, self.current, self.speed, &self.speeds, &self.folded), keep.as_ref());
-        }
+        (core.speeds, core.rows, core.forced, core.current, core.speed) = (speeds, rows, forced, current, speed);
+        self.step(ps, Event::Refresh { keep: None });
         true
     }
 
     pub fn new(ps: &plx_media::route::PlaybackSession) -> Self {
         Self::new_on(ps, None)
-    }
-
-    /// Open beside `anchor`, the rect of the control (widened to the end of its segment) that
-    /// opened the menu, as the player screen hands it over. Without it the menu opens where classic
-    /// does: the control row's rect, whose right edge is `CTRL_RIGHT`. Called once, on the freshly
-    /// built menu and before its first frame: the placement is cached against the table's layout,
-    /// and the anchor is latched for the menu's whole life.
-    pub fn with_anchor(mut self, anchor: Rect) -> Self {
-        self.anchor = anchor;
-        self
-    }
-
-    /// The anchor the menu was opened with ([`Self::with_anchor`]).
-    pub fn anchor(&self) -> Rect {
-        self.anchor
     }
 
     /// The existing overflow menu, opened on the Quality page with the ACTIVE rung focused.
@@ -751,19 +653,20 @@ impl MoreMenuState {
     /// row. A page that is not offered for this playback (Quality under Force Direct Play, Speed
     /// when the playback takes only one) opens the root instead.
     pub fn new_on(ps: &plx_media::route::PlaybackSession, page: Option<MorePage>) -> Self {
-        Self::open_focused(ps, page, Vec::new(), plx_media::route::Quality::Original)
+        Self::open_focused(ps, page, Vec::new(), plx_media::route::Quality::Original, crate::player_hud::classic::ctrl_row_hit_rect())
     }
 
     /// [`Self::new_on`] with the folded rows ([`folded_rows`]) listed on the root between Speed and Options.
     /// A page opened directly still pops to that root, so its folded rows are there on BACK.
     pub fn new_folded(ps: &plx_media::route::PlaybackSession, page: Option<MorePage>, folded: Vec<FoldedRow>) -> Self {
-        Self::open_focused(ps, page, folded, plx_media::route::Quality::Original)
+        Self::open_focused(ps, page, folded, plx_media::route::Quality::Original, crate::player_hud::classic::ctrl_row_hit_rect())
     }
 
     /// Every row's focus key, in drawn order (for a test that walks the rows).
     #[cfg(any(test, feature = "test-support"))]
     pub fn keys(&self) -> Vec<u32> {
-        (0..self.form.table.n_rows() as usize).filter_map(|i| self.form.key_at(i).map(|k| k.0)).collect()
+        let form = self.menu.form();
+        (0..form.table.n_rows() as usize).filter_map(|i| form.key_at(i).map(|k| k.0)).collect()
     }
 
     /// The highlighted row, for the focus probe (`crate::focusprobe`) — a READ of the cursor the
@@ -771,77 +674,21 @@ impl MoreMenuState {
     /// nothing else, so without this the fingerprint records the panel opening and closing and
     /// nothing between.
     pub fn sel(&self) -> i32 {
-        self.form.table.sel
+        self.menu.form().table.sel
     }
 
-    /// **Write back the engine's own focus cursor** (restructure phase 12): the Column group
-    /// [`MoreMenuPart`] answers is the source of geometry, but the ENGINE owns the current element
-    /// (§7.3 step 5) — the owner's `step` is the only place that mutates in response to a
-    /// `FocusMoved`, and this is `screens::player::overlay::PlayerOverlayScreen::step`'s write.
-    /// Both a D-pad move AND a pointer hover reach here now — hover parks focus THROUGH the engine
-    /// (§7.5), replacing this menu's own `pointer_focus`.
-    /// Returns whether a row with that key is on the page showing.
-    pub fn focus_key(&mut self, elem: u32) -> bool {
-        let Some(i) = self.form.index_of_key(RowKey(elem)) else { return false };
-        self.form.table.sel = i as i32;
-        true
-    }
-
-    /// OK on the highlighted row: an action to perform (the container dismisses the panel
-    /// afterward), or a Nav row that opened its page.
-    pub fn on_ok(&mut self, ps: &plx_media::route::PlaybackSession) -> MoreOk {
-        match self.form.selected_id().and_then(|id| self.form.index_of(id)).and_then(|i| self.form.activate(i)) {
-            Some(Activation::Action(act)) => MoreOk::Action(act),
-            Some(Activation::Push(page)) => {
-                self.push(ps, page);
-                MoreOk::Navigated
-            }
-            None => MoreOk::Action(Action::None),
-        }
-    }
-
-    /// Beside the control that opened it, the way the track menu is: both are placed by the one
-    /// shared placer from the same kind of anchor, so the openers of one segment share the panel's
-    /// edge and opening one menu after the other does not make the panel hop. This is the NATURAL
-    /// (layout) rect, cached against the table's `layout_rev`; [`Self::shown_rect`] is what is on
-    /// screen while the card resizes.
-    ///
-    /// The height is the table's own, and the placer cuts it to the room on the side the panel took.
-    /// The Quality page is 536 tall with Auto's rung (its title band plus seven rungs AND the
-    /// table's own top/bottom padding): a 320 cap put four of nine rows on screen and silently
-    /// scrolled the rest, which is a picker whose options you cannot see, and a `bottom - <margin>`
-    /// literal put a later version 4px UNDER the content for the same reason. A cap that is the
-    /// room itself has no margin to forget. Past it the table scrolls, which is what `TableView` is for.
-    fn panel_rect(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
-        self.motion.natural(self.form.table.layout_rev(), || {
-            let pw = self.form.table.menu_panel_width(measure);
-            let ph = self.form.table.measured_height().max(120.0);
-            let placed = place_panel(self.anchor, (pw, ph), need_h(self.folded.len()));
-            self.side.set(placed.side);
-            placed.rect
-        })
-    }
-
-    /// The card as drawn this frame: top and left on their springs toward [`Self::panel_rect`].
-    fn shown_rect(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
-        self.motion.shown(self.panel_rect(measure))
-    }
-
-    /// Is the card still resizing? The player overlay holds the pointer while it is
-    /// (`Screen::pointer_held`).
-    pub fn transitioning(&self) -> bool {
-        self.motion.transitioning()
-    }
-
-    /// The opening page's strings (the root, or the Quality page for a quality entry), queued on
-    /// the frame the panel mounts — see `TrackMenuState::warm_open`, which this mirrors.
-    pub fn warm_open(&self, measure: &dyn plx_machine::machine::Measure) {
-        self.motion.warm_open(&self.form.table, || self.panel_rect(measure), measure);
-    }
-
-    /// Construction from the host's captured effective quality, never a process preference read.
-    pub fn new_folded_with_quality(ps: &plx_media::route::PlaybackSession, page: Option<MorePage>, folded: Vec<FoldedRow>, current: plx_media::route::Quality) -> Self {
-        Self::open_focused(ps, page, folded, current)
+    /// Construction from the host's captured effective quality, never a process preference read, and the rect `anchor`
+    /// of the control (widened to the end of its segment) the menu hangs from, as the player screen hands it over: the
+    /// openers of one segment share the panel's edge, and opening one menu after the other does not make the panel hop.
+    /// The anchor is the host's for the menu's whole life ([`Host::Video`]).
+    pub fn new_folded_with_quality(
+        ps: &plx_media::route::PlaybackSession,
+        page: Option<MorePage>,
+        folded: Vec<FoldedRow>,
+        current: plx_media::route::Quality,
+        anchor: Rect,
+    ) -> Self {
+        Self::open_focused(ps, page, folded, current, anchor)
     }
 
     pub fn update_with_quality(&mut self, dt: f32, measure: &dyn plx_machine::machine::Measure, ps: &plx_media::route::PlaybackSession, current: plx_media::route::Quality) {
@@ -851,136 +698,37 @@ impl MoreMenuState {
 
     pub fn update(&mut self, dt: f32, measure: &dyn plx_machine::machine::Measure, ps: &plx_media::route::PlaybackSession) {
         self.refresh(ps);
-        // `update` subtracts its own top/bottom padding now — pass the panel's raw height.
-        let natural = self.panel_rect(measure);
-        self.form.table.update(dt, natural.h);
-        self.motion.step(dt, natural);
-        self.motion.prewarm_text(natural, &self.form.table, measure);
-    }
-
-    pub fn draw(&mut self, appear: f32, measure: &dyn plx_machine::machine::Measure) {
-        // rises INTO place from the side of the disc that opened it, the shared entry distance. The
-        // dim under it is the container's (`PlayerOverlayScreen::scrim`, `theme::underlay::DIM_SHEET`),
-        // painted at the end of the player's page pass — not here.
-        let natural = self.panel_rect(measure);
-        let (dx, dy) = plx_ui::popover::Popover::rise_offset(self.side.get(), plx_ui::popover::Popover::RISE, appear);
-        let p = plx_ui::Painter::root().alpha(appear).translate(dx, dy);
-        self.motion.draw(p, natural, 24.0, &self.form.table, measure);
+        // the cursor is this panel's own: it is not read back from the focus engine here
+        self.step(ps, Event::Tick { dt, measure, focus: None });
     }
 }
 
-/// **The Engine-shaped view of this popover** (restructure phase 12): one `Column` focus group
-/// over the rows of the page showing (the root's Quality drill-in plus Options, or the Quality
-/// page's rungs), built fresh by
-/// `screens::player::overlay::PlayerOverlayScreen` each frame from a `&MoreMenuState` — the same
-/// borrowed-view shape `ui::table_screen::TablePart`/`ui::geom::Table` use for the other panels
-/// that are already a bare `TableView` in a frame, so this popover answers the same
-/// [`Focusable`]/[`Part`] query protocol they do. UP and DOWN `Stop` at the ends; LEFT and RIGHT
-/// are `EdgeRule::Screen`, re-delivered to `PlayerOverlayScreen::edge_key`, which pops a pushed
-/// page on LEFT and enters a Nav row (Quality) on RIGHT, and otherwise swallows the key so focus
-/// never leaves the modal surface.
-///
-/// **`state` is a SHARED reference** — every [`Focusable`] method here is a pure read (`&self`),
-/// and the owning screen's own `Focusable` impl only ever has `&self` too (§7.1: "the engine never
-/// mutates a screen"), so a mutable field would make this type unconstructable from there. The
-/// actual paint (`MoreMenuState::draw`) stays a direct call on the owned `Panel` from
-/// `PlayerOverlayScreen::draw`'s `&mut self`; [`Part::draw`] below only registers stops.
-pub struct MoreMenuPart<'a> {
-    pub state: &'a MoreMenuState,
-    pub entry: EntryId,
-    pub group: GroupId,
-}
-
-impl PopoverPanel for MoreMenuState {
-    type Id = MoreRow;
-    type Act = Action;
-    type Dest = MorePage;
-    fn form(&self) -> &FormTable<Self::Id, Self::Act, Self::Dest> {
-        &self.form
-    }
-    fn motion(&self) -> &PanelMotion {
-        &self.motion
-    }
-    fn panel_rect(&self, measure: &dyn Measure) -> Rect {
-        MoreMenuState::panel_rect(self, measure)
-    }
-    fn shown_rect(&self, measure: &dyn Measure) -> Rect {
-        MoreMenuState::shown_rect(self, measure)
-    }
-}
-
-impl<H: Host> Focusable<H> for MoreMenuPart<'_>
-where
-    H::Elem: IndexElem,
-{
-    fn groups(&self, cx: &Cx<'_, H>, out: &mut Vec<GroupSpec>) {
-        popover_groups(self.state, self.group, cx.measure, out);
-    }
-    fn group_of(&self, key: &H::Elem, _cx: &Cx<'_, H>) -> Option<GroupId> {
-        popover_group_of(self.state, key, self.group)
-    }
-    fn neighbour(&self, key: FocusKey<H::Elem>, dir: Dir, _cx: &Cx<'_, H>) -> Step<H::Elem> {
-        popover_neighbour(self.state, self.entry, key, dir)
-    }
-    fn place(&self, key: &H::Elem, cx: &Cx<'_, H>, _at: At) -> Option<Placed> {
-        popover_place(self.state, key, cx.measure)
-    }
-    fn reconcile(&self, want: FocusKey<H::Elem>, _cx: &Cx<'_, H>) -> FocusKey<H::Elem> {
-        // A live key stays where it is. One that names no row of the page now showing — the opener
-        // after a push, the rung after a pop, a row of a shorter set — settles on the panel's OWN
-        // cursor (where the push/pop/refresh already decided focus belongs), else the opening row.
-        let kept = want
-            .elem
-            .index()
-            .filter(|k| self.state.form.index_of_key(RowKey(*k)).is_some());
-        let key = kept
-            .or_else(|| self.state.form.selected_key().map(|k| k.0))
-            .or_else(|| self.state.form.opening_key().map(|k| k.0));
-        FocusKey { entry: self.entry, elem: H::Elem::of_index(key.unwrap_or(0)) }
-    }
-    fn seat(&self, _g: GroupId, _from: Placed, _cx: &Cx<'_, H>) -> FocusKey<H::Elem> {
-        popover_seat(self.state, self.entry)
-    }
-    /// A row is its [`MoreRow::a11y_path`], relative to the menu (the overlay screen that composes
-    /// this part places the menu under its own namespace). The inverse is the default walk: a page
-    /// of a popover is a handful of rows.
-    fn a11y(&self, key: &H::Elem, _cx: &Cx<'_, H>) -> Option<A11y<'_>> {
-        popover_a11y(&self.state.form, key, MoreRow::a11y_path)
-    }
-    fn a11y_elems(&self, g: GroupId, _cx: &Cx<'_, H>, out: &mut Vec<H::Elem>) {
-        popover_a11y_elems(&self.state.form, g, self.group, out)
-    }
-}
-
-impl MoreMenuPart<'_> {
+impl MoreMenuState {
     /// **What a press of the row `key` performs**, for a row that performs one (the Quality and Speed drill-ins
-    /// open a page and have none): the row's [`Action`], read off the form's binding the way `a11y` reads
-    /// its id. The overlay screen asks it to name the title a folded row plays.
+    /// open a page and have none): the row's [`Action`], read off the form's binding. The overlay screen asks it
+    /// to name the title a folded row plays.
     pub fn action_at<E: IndexElem>(&self, key: &E) -> Option<Action> {
-        let form = &self.state.form;
+        let form = self.menu.form();
         match form.binding_at(form.index_of_key(RowKey(key.index()?))?)?.id {
             MoreRow::Act(action) => Some(action),
             MoreRow::OpenQuality | MoreRow::OpenSpeed => None,
         }
     }
-}
 
-impl<H: Host> Part<H> for MoreMenuPart<'_>
-where
-    H::Elem: IndexElem,
-{
-    fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, H>) {}
-    /// Registers every selectable row's stop and the title band's ([`popover_register_stops`]); the
-    /// popover's own paint happens directly on the owned state from `PlayerOverlayScreen::draw`
-    /// (struct doc above).
-    fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>, _rect: Rect) {
-        popover_register_stops(self.state, self.entry, f);
+    /// A row is its [`MoreRow::a11y_path`], relative to the menu (the overlay screen that hosts the menu places it
+    /// under its own namespace). The inverse is the default walk: a page of a popover is a handful of rows.
+    pub fn a11y<E: IndexElem>(&self, key: &E) -> Option<A11y<'static>> {
+        popover_a11y(self.menu.form(), key, MoreRow::a11y_path)
+    }
+
+    /// Every row of the page showing, for the `a11y_elems` walk.
+    pub fn a11y_elems<E: IndexElem>(&self, g: GroupId, group: GroupId, out: &mut Vec<E>) {
+        popover_a11y_elems(self.menu.form(), g, group, out)
     }
 }
 
 /// Every row the menu can offer, in order and ACROSS SECTIONS. A free function (rather than a
-/// literal inside [`MoreMenuState::open_focused`]) so the index mapping [`MoreMenuState::on_ok`]
-/// relies on is one testable value.
+/// literal inside [`MoreMenuState::open_focused`]) so the index mapping a press relies on is one testable value.
 ///
 /// **The order here is the whole contract**, because [`TableView`]'s `sel` is a single flat index
 /// over every row of every section: this list must be built in exactly the order
@@ -1102,10 +850,11 @@ fn row_for(ps: &plx_media::route::PlaybackSession, a: Action) -> Row {
 /// the room fills (the track menu's audit asks the same).
 #[cfg(any(test, feature = "test-support"))]
 pub fn overscan_rects(out: &mut Vec<(&'static str, Rect)>) {
-    let placed = place_panel(
+    let placed = plx_ui::popover::anchor_panel(
         crate::player_hud::audit_geometry().row,
         (plx_ui::table::MENU_MAX_W, plx_ui::consts::SCR_H),
         NEED_H,
+        plx_ui::popover::Placement::PLAYER_MENU,
     );
     out.push(("… overflow menu panel", placed.rect));
 }
@@ -1116,6 +865,11 @@ pub fn overscan_rects(out: &mut Vec<(&'static str, Rect)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plx_ui::form::{Activation, FormTable};
+    use plx_ui::menu::Motion;
+    use plx_ui::page_stack;
+
+    type MoreTable = FormTable<MoreRow, Action, MorePage>;
 
     /// **The Original row says so when it cannot be Original.**
     ///
@@ -1184,11 +938,58 @@ mod tests {
         }
     }
 
+    impl MoreMenuState {
+        /// OK on the row the cursor is on, as the screen feeds it ([`MoreMenuState::step`]).
+        pub(super) fn on_ok(&mut self, ps: &plx_media::route::PlaybackSession) -> Out<Action> {
+            match self.menu.form().selected_key() {
+                Some(key) => self.step(ps, Event::Ok(key.0)),
+                None => Out::Stay,
+            }
+        }
+
+        /// The focus engine moved to the row `key` ([`Event::Focused`]); `false` when the page showing has no such row.
+        pub(super) fn focus_key(&mut self, key: u32) -> bool {
+            self.menu.step(Event::Focused(key), &mut |_| None);
+            self.menu.form().selected_key().is_some_and(|k| k.0 == key)
+        }
+
+        /// LEFT: pops the page; `false` at the root.
+        pub(super) fn pop(&mut self, ps: &plx_media::route::PlaybackSession) -> bool {
+            matches!(self.step(ps, Event::Left), Out::Moved)
+        }
+
+        /// RIGHT on the row the cursor is on: a Nav row opens, any other answer is left alone (this menu has no tabs).
+        pub(super) fn on_right(&mut self, ps: &plx_media::route::PlaybackSession) {
+            let key = self.menu.form().selected_key().map(|k| k.0);
+            self.step(ps, Event::Right(key));
+        }
+
+        /// Open `page` from its opener's row, as a press would (the slide runs).
+        pub(super) fn push_page(&mut self, ps: &plx_media::route::PlaybackSession, page: MorePage) {
+            self.step(ps, Event::Enter(match page {
+                MorePage::Quality => MoreRow::OpenQuality,
+                MorePage::Speed => MoreRow::OpenSpeed,
+            }));
+        }
+
+        /// Run the card's motion to rest (a slide or a resize), a frame at a time.
+        pub(super) fn settle(&mut self) {
+            let m = plx_base::fontcov::advances::ShippedMeasure;
+            for _ in 0..600 {
+                if self.menu.state().motion == Motion::Rest {
+                    return;
+                }
+                self.menu.step(Event::Tick { dt: 1.0 / 60.0, measure: &m, focus: None }, &mut |_| None);
+            }
+            panic!("the motion never settles");
+        }
+    }
+
     /// The actions of the rows showing, in table order, read back off a built menu by identity (the
     /// root's Quality drill-in commits nothing and is not one).
     fn order(st: &MoreMenuState) -> Vec<Action> {
-        (0..st.form.table.n_rows() as usize)
-            .filter_map(|i| match st.form.id_at(i) {
+        (0..st.menu.form().table.n_rows() as usize)
+            .filter_map(|i| match st.menu.form().id_at(i) {
                 Some(MoreRow::Act(a)) => Some(*a),
                 _ => None,
             })
@@ -1199,10 +1000,10 @@ mod tests {
     fn menu(forced: bool, current: plx_media::route::Quality) -> MoreMenuState {
         let ps = plx_media::route::PlaybackSession::default();
         let rows = rows_for(forced);
-        let mut form = FormTable::new(plx_ui::table_screen::BAND_BASE);
-        form.table.compact = true;
-        form.set_or_open(root_form(&ps, &rows, forced, current, plx_media::player::RATE_NORMAL, &plx_media::player::PLAY_RATES, &[]), None);
-        MoreMenuState { form, rows, forced, current, speed: plx_media::player::RATE_NORMAL, speeds: plx_media::player::PLAY_RATES.to_vec(), folded: Vec::new(), pages: PageStack::new(), motion: PanelMotion::new(), anchor: crate::player_hud::classic::ctrl_row_hit_rect(), side: std::cell::Cell::new(plx_ui::popover::Side::Above) }
+        let core = MoreCore { rows, forced, current, speed: plx_media::player::RATE_NORMAL, speeds: plx_media::player::PLAY_RATES.to_vec(), folded: Vec::new() };
+        let mut menu = Menu::new(host(crate::player_hud::classic::ctrl_row_hit_rect(), 0), Class::Action, plx_ui::table_screen::BAND_BASE);
+        menu.form_mut().set_or_open(root_form(&ps, &core.rows, forced, current, plx_media::player::RATE_NORMAL, &plx_media::player::PLAY_RATES, &[]), None);
+        MoreMenuState { core, menu }
     }
 
     /// The same menu with the Quality page pushed (and its slide skipped).
@@ -1210,21 +1011,21 @@ mod tests {
         let ps = plx_media::route::PlaybackSession::default();
         let mut st = menu(false, current);
         st.focus_key(MoreRow::OpenQuality.key().0);
-        assert_eq!(st.on_ok(&ps), MoreOk::Navigated);
-        st.motion.cancel_slide();
+        assert_eq!(st.on_ok(&ps), Out::Moved);
+        st.settle();
         st
     }
 
     /// The text a row reads out as its value (a Nav row's current setting).
     pub(super) fn value_of(st: &mut MoreMenuState, id: MoreRow) -> Option<String> {
-        let i = st.form.index_of(&id)?;
-        st.form.table.row_mut(i as i32).and_then(|r| r.value.clone())
+        let i = st.menu.form().index_of(&id)?;
+        st.menu.form_mut().table.row_mut(i as i32).and_then(|r| r.value.clone())
     }
 
     /// Is the row `id` drawn with the picker's leading check?
     fn checked(st: &mut MoreMenuState, id: MoreRow) -> bool {
-        let i = st.form.index_of(&id).expect("a row");
-        st.form.table.row_mut(i as i32).is_some_and(|r| r.checked)
+        let i = st.menu.form().index_of(&id).expect("a row");
+        st.menu.form_mut().table.row_mut(i as i32).is_some_and(|r| r.checked)
     }
 
     use plx_media::route::Quality;
@@ -1238,14 +1039,14 @@ mod tests {
         let mut st = menu(false, Quality::P1080);
         for a in rows_for(false).into_iter().filter(|a| !matches!(a, Action::SetQuality(_))) {
             st.focus_key(a.key().0);
-            assert_eq!(st.on_ok(&ps), MoreOk::Action(a));
+            assert_eq!(st.on_ok(&ps), Out::Picked(a));
         }
         let mut st = quality_page(Quality::P1080);
         for a in rows_for(false).into_iter().filter(|a| matches!(a, Action::SetQuality(_))) {
             st.focus_key(a.key().0);
             // exactly the action the flat ladder reported: `app::playback::apply_more_action` is
             // the one place a `SetQuality` is performed (`route::set_quality`)
-            assert_eq!(st.on_ok(&ps), MoreOk::Action(a), "{a:?}");
+            assert_eq!(st.on_ok(&ps), Out::Picked(a), "{a:?}");
         }
     }
 
@@ -1256,7 +1057,7 @@ mod tests {
         plx_media::speed_audio::force_speed_decoder_for_test(true); // a host test loads no FFmpeg
         let st = menu(false, Quality::Original);
         let ids: Vec<Option<MoreRow>> =
-            (0..st.form.table.n_rows() as usize).map(|i| st.form.id_at(i).copied()).collect();
+            (0..st.menu.form().table.n_rows() as usize).map(|i| st.menu.form().id_at(i).copied()).collect();
         assert_eq!(ids[0], Some(MoreRow::OpenQuality), "Quality leads");
         assert!(ids.contains(&Some(MoreRow::Act(Action::ToggleStats))));
         assert!(
@@ -1289,7 +1090,7 @@ mod tests {
             let mut st = quality_page(q);
             for rung in plx_media::route::QUALITY_LADDER {
                 let id = MoreRow::Act(Action::SetQuality(rung));
-                if st.form.index_of(&id).is_some() {
+                if st.menu.form().index_of(&id).is_some() {
                     assert_eq!(checked(&mut st, id), rung == q, "{rung:?} while {q:?} is current");
                 }
             }
@@ -1306,15 +1107,15 @@ mod tests {
             let mut st = menu(false, *q);
             assert!(!st.pop(&ps), "the root has nothing to pop");
             st.focus_key(MoreRow::OpenQuality.key().0);
-            assert_eq!(st.on_ok(&ps), MoreOk::Navigated);
+            assert_eq!(st.on_ok(&ps), Out::Moved);
             assert_eq!(st.page(), Some(MorePage::Quality));
-            assert_eq!(st.form.selected_id(), Some(&MoreRow::Act(Action::SetQuality(*q))), "initial focus = the checked rung");
-            assert_eq!(st.form.table.title(), Some("Quality"));
-            assert!(st.transitioning(), "a push slides");
+            assert_eq!(st.menu.form().selected_id(), Some(&MoreRow::Act(Action::SetQuality(*q))), "initial focus = the checked rung");
+            assert_eq!(st.menu.form().table.title(), Some("Quality"));
+            assert!(st.menu.pointer_held(), "a push slides");
             assert!(st.pop(&ps));
             assert_eq!(st.page(), None);
-            assert_eq!(st.form.selected_id(), Some(&MoreRow::OpenQuality), "pop restores focus on the Quality row");
-            assert_eq!(st.form.table.title(), None);
+            assert_eq!(st.menu.form().selected_id(), Some(&MoreRow::OpenQuality), "pop restores focus on the Quality row");
+            assert_eq!(st.menu.form().table.title(), None);
         }
     }
 
@@ -1335,20 +1136,20 @@ mod tests {
         assert_eq!(st.page(), Some(MorePage::Quality), "RIGHT on a rung does nothing");
     }
 
-    /// **`warm_open` queues the OPENING page's strings with no `update`, once** — the root for the
+    /// **`prepare` queues the OPENING page's strings with no `update`, once** — the root for the
     /// ordinary entry, the Quality page for a quality entry.
     #[test]
-    fn warm_open_queues_the_opening_page_once_without_an_update() {
+    fn prepare_queues_the_opening_page_once_without_an_update() {
         plx_media::speed_audio::force_speed_decoder_for_test(true); // a host test loads no FFmpeg
         use plx_ui::fixture::FixtureMeasure as M;
         let _serial = plx_base::testlock::serial();
         let ps = plx_media::route::PlaybackSession::default();
         for st in [MoreMenuState::new(&ps), MoreMenuState::new_quality(&ps)] {
             plx_gfx::text::reset_prewarm_for_test();
-            st.warm_open(&M);
-            assert!(plx_gfx::text::prewarm_pending(), "warm_open queued the opening page");
+            st.menu().prepare(&M);
+            assert!(plx_gfx::text::prewarm_pending(), "prepare queued the opening page");
             plx_gfx::text::clear_prewarm();
-            st.warm_open(&M);
+            st.menu().prepare(&M);
             assert!(!plx_gfx::text::prewarm_pending(), "an unchanged layout was walked again");
         }
     }
@@ -1364,11 +1165,11 @@ mod tests {
         assert_eq!(st.page(), None);
         let st = MoreMenuState::new_quality(&ps);
         assert_eq!(st.page(), Some(MorePage::Quality));
-        assert!(!st.transitioning(), "the entry is not a slide");
-        assert_eq!(st.form.table.title(), Some("Quality"));
+        assert!(!st.menu.pointer_held(), "the entry is not a slide");
+        assert_eq!(st.menu.form().table.title(), Some("Quality"));
         let active = MoreRow::Act(Action::SetQuality(plx_media::route::quality()));
-        if st.form.index_of(&active).is_some() {
-            assert_eq!(st.form.selected_id(), Some(&active), "the active rung is focused");
+        if st.menu.form().index_of(&active).is_some() {
+            assert_eq!(st.menu.form().selected_id(), Some(&active), "the active rung is focused");
         }
     }
 
@@ -1382,34 +1183,34 @@ mod tests {
         for forced in [false, true] {
             let mut root = MoreMenuState::new(&ps);
             let form = root_form(&ps, &rows_for(forced), forced, plx_media::route::Quality::Auto, 1000, &plx_media::player::PLAY_RATES, &[]);
-            root.form.set(form, None);
+            root.menu.form_mut().set(form, None);
             assert!(
-                root.form.index_of(&MoreRow::OpenSpeed).is_some(),
+                root.menu.form().index_of(&MoreRow::OpenSpeed).is_some(),
                 "the root offers Playback speed (forced={forced})"
             );
         }
         let mut st = MoreMenuState::new(&ps);
-        st.speed = 1500;
+        st.core.speed = 1500;
         st.focus_key(MoreRow::OpenSpeed.key().0);
-        st.push(&ps, MorePage::Speed);
+        st.push_page(&ps, MorePage::Speed);
         assert_eq!(st.page(), Some(MorePage::Speed));
-        assert_eq!(st.form.table.title(), Some("Playback speed"));
-        let ids: Vec<MoreRow> = (0..st.form.table.n_rows() as usize).filter_map(|i| st.form.id_at(i).copied()).collect();
+        assert_eq!(st.menu.form().table.title(), Some("Playback speed"));
+        let ids: Vec<MoreRow> = (0..st.menu.form().table.n_rows() as usize).filter_map(|i| st.menu.form().id_at(i).copied()).collect();
         let want: Vec<MoreRow> =
             plx_media::player::PLAY_RATES.iter().map(|r| MoreRow::Act(Action::SetSpeed(*r))).collect();
         assert_eq!(ids, want, "the seven speeds, slowest first");
         assert_eq!(
-            st.form.selected_id(),
+            st.menu.form().selected_id(),
             Some(&MoreRow::Act(Action::SetSpeed(1500))),
             "the page opens on the current speed"
         );
-        let i = st.form.index_of(&MoreRow::Act(Action::SetSpeed(750))).unwrap();
-        match st.form.activate(i) {
+        let i = st.menu.form().index_of(&MoreRow::Act(Action::SetSpeed(750))).unwrap();
+        match st.menu.form().activate(i) {
             Some(Activation::Action(got)) => assert_eq!(got, Action::SetSpeed(750)),
             _ => panic!("a speed row must commit its own speed"),
         }
         assert!(st.pop(&ps), "BACK returns to the root");
-        assert_eq!(st.form.selected_id(), Some(&MoreRow::OpenSpeed), "on the row that opened it");
+        assert_eq!(st.menu.form().selected_id(), Some(&MoreRow::OpenSpeed), "on the row that opened it");
     }
 
     /// **`open_more {page: speed}` opens the Speed page itself** — no drill-in press, no slide —
@@ -1421,16 +1222,16 @@ mod tests {
         plx_media::speed_audio::force_speed_decoder_for_test(true); // a host test loads no FFmpeg
         let ps = plx_media::route::PlaybackSession::default();
         let mut st = MoreMenuState::new_on(&ps, Some(MorePage::Speed));
-        assert_eq!(st.speeds.len(), plx_media::player::PLAY_RATES.len(), "the fixture offers every speed");
+        assert_eq!(st.core.speeds.len(), plx_media::player::PLAY_RATES.len(), "the fixture offers every speed");
         assert_eq!(st.page(), Some(MorePage::Speed));
-        assert_eq!(st.form.table.title(), Some("Playback speed"));
+        assert_eq!(st.menu.form().table.title(), Some("Playback speed"));
         assert_eq!(
-            st.form.selected_id(),
-            Some(&MoreRow::Act(Action::SetSpeed(st.speed))),
+            st.menu.form().selected_id(),
+            Some(&MoreRow::Act(Action::SetSpeed(st.core.speed))),
             "on the current speed"
         );
         assert!(st.pop(&ps), "BACK returns to the root");
-        assert_eq!(st.form.selected_id(), Some(&MoreRow::OpenSpeed), "on the row that opens Speed");
+        assert_eq!(st.menu.form().selected_id(), Some(&MoreRow::OpenSpeed), "on the row that opens Speed");
 
         assert_eq!(MoreMenuState::new_on(&ps, None).page(), None, "the root is the root");
     }
@@ -1445,17 +1246,17 @@ mod tests {
         let rows = rows_for(false);
         for offer in [vec![], vec![1000]] {
             let mut root = MoreMenuState::new(&ps);
-            root.form.set(root_form(&ps, &rows, false, Quality::Auto, 1000, &offer, &[]), None);
-            assert!(root.form.index_of(&MoreRow::OpenSpeed).is_none(), "offer {offer:?}");
+            root.menu.form_mut().set(root_form(&ps, &rows, false, Quality::Auto, 1000, &offer, &[]), None);
+            assert!(root.menu.form().index_of(&MoreRow::OpenSpeed).is_none(), "offer {offer:?}");
         }
         let mut st = MoreMenuState::new(&ps);
         st.focus_key(MoreRow::OpenSpeed.key().0);
-        st.push(&ps, MorePage::Speed);
+        st.push_page(&ps, MorePage::Speed);
         assert_eq!(st.page(), Some(MorePage::Speed));
-        let (forced, rows, q) = (st.forced, st.rows.clone(), st.current);
+        let (forced, rows, q) = (st.core.forced, st.core.rows.clone(), st.core.current);
         assert!(st.refresh_to(&ps, forced, rows, q, 1000, Vec::new()));
         assert_eq!(st.page(), None, "the page went with its offer");
-        assert!(st.form.index_of(&MoreRow::OpenSpeed).is_none());
+        assert!(st.menu.form().index_of(&MoreRow::OpenSpeed).is_none());
     }
 
     /// The names: Normal at 1x, the multiplier with no trailing zeros otherwise, the way Plex Web
@@ -1489,25 +1290,21 @@ mod tests {
         let ps = plx_media::route::PlaybackSession::default();
         let mut rows = rows_for(false);
         rows.reverse();
-        let mut form = FormTable::new(plx_ui::table_screen::BAND_BASE);
-        form.set(quality_form(&ps, &rows, Quality::Auto), None);
-        let st = MoreMenuState {
-            form,
+        let core = MoreCore {
             rows: rows.clone(),
             forced: false,
             current: Quality::Auto,
             speed: plx_media::player::RATE_NORMAL,
             speeds: plx_media::player::PLAY_RATES.to_vec(),
             folded: Vec::new(),
-            pages: PageStack::new(),
-            motion: PanelMotion::new(),
-            anchor: crate::player_hud::classic::ctrl_row_hit_rect(),
-            side: std::cell::Cell::new(plx_ui::popover::Side::Above),
         };
+        let mut menu = Menu::new(host(crate::player_hud::classic::ctrl_row_hit_rect(), 0), Class::Action, plx_ui::table_screen::BAND_BASE);
+        menu.form_mut().set(quality_form(&ps, &rows, Quality::Auto), None);
+        let st = MoreMenuState { core, menu };
         for a in rows_for(false).into_iter().filter(|a| matches!(a, Action::SetQuality(_))) {
-            let i = st.form.index_of_key(a.key()).expect("every row keeps its key");
-            assert_eq!(st.form.id_at(i), Some(&MoreRow::Act(a)));
-            match st.form.activate(i) {
+            let i = st.menu.form().index_of_key(a.key()).expect("every row keeps its key");
+            assert_eq!(st.menu.form().id_at(i), Some(&MoreRow::Act(a)));
+            match st.menu.form().activate(i) {
                 Some(Activation::Action(got)) => assert_eq!(got, a),
                 _ => panic!("{a:?} must commit its own action"),
             }
@@ -1545,11 +1342,11 @@ mod tests {
         let mut ps = plx_media::route::PlaybackSession::default();
         ps.install_backends(plx_media::route::BackendSet::URI);
         let st = MoreMenuState::new(&ps);
-        assert!(!st.rows.iter().any(|a| matches!(a, Action::SetQuality(_))), "{:?}", st.rows);
-        assert!(!quality_offered(&st.rows, st.forced));
+        assert!(!st.core.rows.iter().any(|a| matches!(a, Action::SetQuality(_))), "{:?}", st.core.rows);
+        assert!(!quality_offered(&st.core.rows, st.core.forced));
         ps.install_backends(plx_media::route::BackendSet::BOTH);
         let st = MoreMenuState::new(&ps);
-        assert!(quality_offered(&st.rows, st.forced), "a composition with a Feed keeps the ladder");
+        assert!(quality_offered(&st.core.rows, st.core.forced), "a composition with a Feed keeps the ladder");
     }
 
     /// **Force Direct Play leaves no Quality row and no page**: no rung can change what plays under
@@ -1569,11 +1366,11 @@ mod tests {
         assert!(quality_offered(&rows_for(false), false));
         for q in plx_media::route::QUALITY_LADDER {
             let mut st = menu(true, q);
-            assert!(st.form.index_of(&MoreRow::OpenQuality).is_none());
+            assert!(st.menu.form().index_of(&MoreRow::OpenQuality).is_none());
             assert_eq!(st.sel(), 0);
             // the root's first row is Playback speed, which Force Direct Play still offers
-            assert_eq!(st.form.selected_id(), Some(&MoreRow::OpenSpeed), "a vanished rung opens on the root's first row");
-            assert_eq!(st.on_ok(&ps), MoreOk::Navigated);
+            assert_eq!(st.menu.form().selected_id(), Some(&MoreRow::OpenSpeed), "a vanished rung opens on the root's first row");
+            assert_eq!(st.on_ok(&ps), Out::Moved);
             assert_eq!(st.page(), Some(MorePage::Speed));
         }
         // not forced: the ladder is unchanged, in order, ahead of Options
@@ -1600,23 +1397,23 @@ mod tests {
         let ps = plx_media::route::PlaybackSession::default();
         let mut st = quality_page(Quality::P1080);
         st.focus_key(Action::SetQuality(Quality::P720).key().0);
-        let before = st.form.table.sel;
+        let before = st.menu.form().table.sel;
         // the current rung moves: the check follows, focus stays on the row the viewer was on
-        let rows = st.rows.clone();
+        let rows = st.core.rows.clone();
         assert!(st.refresh_to(&ps, false, rows.clone(), Quality::P480, plx_media::player::RATE_NORMAL, plx_media::player::PLAY_RATES.to_vec()));
         assert!(!st.refresh_to(&ps, false, rows.clone(), Quality::P480, plx_media::player::RATE_NORMAL, plx_media::player::PLAY_RATES.to_vec()), "and only once");
         assert_eq!(st.page(), Some(MorePage::Quality), "still on the page");
-        assert_eq!(st.form.table.title(), Some("Quality"), "the title band stays");
-        assert_eq!(st.form.selected_id(), Some(&MoreRow::Act(Action::SetQuality(Quality::P720))));
-        assert_eq!(st.form.table.sel, before);
+        assert_eq!(st.menu.form().table.title(), Some("Quality"), "the title band stays");
+        assert_eq!(st.menu.form().selected_id(), Some(&MoreRow::Act(Action::SetQuality(Quality::P720))));
+        assert_eq!(st.menu.form().table.sel, before);
         assert!(checked(&mut st, MoreRow::Act(Action::SetQuality(Quality::P480))));
         assert!(!checked(&mut st, MoreRow::Act(Action::SetQuality(Quality::P1080))));
         // the focused rung leaves the ladder: focus falls back to the checked rung, page stays
         let without: Vec<Action> = rows.iter().copied().filter(|a| *a != Action::SetQuality(Quality::P720)).collect();
         assert!(st.refresh_to(&ps, false, without, Quality::P480, plx_media::player::RATE_NORMAL, plx_media::player::PLAY_RATES.to_vec()));
-        assert!(st.form.index_of(&MoreRow::Act(Action::SetQuality(Quality::P720))).is_none());
+        assert!(st.menu.form().index_of(&MoreRow::Act(Action::SetQuality(Quality::P720))).is_none());
         assert_eq!(st.page(), Some(MorePage::Quality));
-        assert_eq!(st.form.selected_id(), Some(&MoreRow::Act(Action::SetQuality(Quality::P480))));
+        assert_eq!(st.menu.form().selected_id(), Some(&MoreRow::Act(Action::SetQuality(Quality::P480))));
     }
 
     /// **Quality becoming unavailable pops to the root**: Force Direct Play arriving under the open
@@ -1629,11 +1426,11 @@ mod tests {
         let mut st = quality_page(Quality::P1080);
         assert!(st.refresh_to(&ps, true, rows_for(true), Quality::P1080, plx_media::player::RATE_NORMAL, plx_media::player::PLAY_RATES.to_vec()));
         assert_eq!(st.page(), None);
-        assert_eq!(st.form.table.title(), None);
-        assert!(!st.transitioning(), "a page that vanished does not slide away");
-        assert!(st.form.index_of(&MoreRow::OpenQuality).is_none());
+        assert_eq!(st.menu.form().table.title(), None);
+        assert!(!st.menu.pointer_held(), "a page that vanished does not slide away");
+        assert!(st.menu.form().index_of(&MoreRow::OpenQuality).is_none());
         // the root's first row, Playback speed (Force Direct Play keeps it)
-        assert_eq!(st.form.selected_id(), Some(&MoreRow::OpenSpeed));
+        assert_eq!(st.menu.form().selected_id(), Some(&MoreRow::OpenSpeed));
     }
 
     /// A key that names no row commits nothing, never a neighbour's action.
@@ -1698,30 +1495,34 @@ mod tests {
             plx_machine::motion::report::present_moving()
         };
         let mut st = menu(false, plx_media::route::quality());
-        st.motion.step(DT, st.panel_rect(&m));
+        st.update(DT, &m, &ps);
         assert!(!step(&mut st), "an opened menu is at rest");
         st.focus_key(MoreRow::OpenQuality.key().0);
-        assert_eq!(st.on_ok(&ps), MoreOk::Navigated);
-        assert!(st.motion.sliding());
+        assert_eq!(st.on_ok(&ps), Out::Moved);
+        assert_eq!(st.menu.state().motion, Motion::Sliding);
         assert!(step(&mut st), "the slide is motion");
-        assert!(st.motion.live_dx() > 0.0, "the arriving page comes in from the right");
+        assert!(st.menu.motion().live_dx() > 0.0, "the arriving page comes in from the right");
+        let (leaving, live) = st.menu.motion().alphas();
+        assert!(!leaving.is_empty() && live < 1.0, "the old page leaves while the new one fades in: {leaving:?} {live}");
         let mut n = 0;
         while step(&mut st) {
             n += 1;
             assert!(n < 240, "the push never settles");
         }
-        assert!(!st.motion.sliding() && !st.transitioning());
-        assert_eq!(st.motion.live_dx(), 0.0);
+        assert!(st.menu.state().motion == Motion::Rest && !st.menu.pointer_held());
+        assert_eq!(st.menu.motion().live_dx(), 0.0);
+        assert_eq!(st.menu.motion().alphas(), (Vec::new(), 1.0), "at rest the page is whole");
         assert!(!step(&mut st), "at rest: no frames requested");
         assert!(st.pop(&ps));
-        assert!(st.motion.sliding());
+        assert_eq!(st.menu.state().motion, Motion::Sliding);
         assert!(step(&mut st), "the pop is motion too");
+        assert!(st.menu.motion().live_dx() < 0.0, "the page returns from the left");
         n = 0;
         while step(&mut st) {
             n += 1;
             assert!(n < 240, "the pop never settles");
         }
-        assert!(!st.motion.sliding() && !st.transitioning());
+        assert!(st.menu.state().motion == Motion::Rest && !st.menu.pointer_held());
         assert!(!step(&mut st));
     }
 
@@ -1743,28 +1544,29 @@ mod tests {
         };
         // opened under Force Direct Play: no Quality row, a short panel
         let mut st = menu(true, plx_media::route::quality());
-        let short = st.panel_rect(&m);
-        st.motion.step(DT, short); // the open: the first step places the card AT its layout
-        assert!(!st.transitioning(), "a freshly opened panel is at rest");
-        assert_eq!(st.shown_rect(&m), short);
+        let short = st.menu.panel_rect(&m);
+        // the open: the first step places the card AT its layout
+        st.menu.step(Event::Tick { dt: DT, measure: &m, focus: None }, &mut |_| None);
+        assert!(!st.menu.pointer_held(), "a freshly opened panel is at rest");
+        assert_eq!(st.menu.shown_rect(&m), short);
 
         // Force Direct Play is switched off under the open panel: the Quality row appears, the panel grows
         assert!(st.refresh(&ps), "the row set moved");
         assert!(!st.refresh(&ps), "and only once");
-        let tall = st.panel_rect(&m);
+        let tall = st.menu.panel_rect(&m);
         assert!(tall.h > short.h, "the Quality row makes the panel taller: {} > {}", tall.h, short.h);
         assert_eq!((tall.x + tall.w, tall.y + tall.h), (short.x + short.w, short.y + short.h), "bottom and right are the anchor");
-        assert!(st.transitioning());
+        assert!(st.menu.pointer_held());
         assert!(step(&mut st), "the resize is motion");
-        let mid = st.shown_rect(&m);
+        let mid = st.menu.shown_rect(&m);
         assert!(mid.h > short.h && mid.h < tall.h, "mid-resize the card is between the heights: {mid:?}");
         let mut n = 0;
         while step(&mut st) {
             n += 1;
             assert!(n < 240, "the resize never settles");
         }
-        assert_eq!(st.shown_rect(&m), tall, "lands exactly on the new layout");
-        assert!(!st.transitioning());
+        assert_eq!(st.menu.shown_rect(&m), tall, "lands exactly on the new layout");
+        assert!(!st.menu.pointer_held());
         assert!(!step(&mut st), "at rest: no frames requested");
     }
 }
@@ -1773,10 +1575,49 @@ mod tests {
 mod focus_tests {
     use super::*;
     use plx_ui::a11y::Role;
-    use plx_machine::machine::{FocusRead, InputOwner, PressRead, Tick};
+    use plx_ui::form::FormTable;
+
+    type MoreTable = FormTable<MoreRow, Action, MorePage>;
+    use plx_machine::machine::{Cx, EntryId, FocusKey, FocusRead, GroupId, Host as MachineHost, InputOwner, PressRead, Tick};
+    use plx_ui::screen::{At, Dir, Focusable, GroupSpec, Placed, Step};
+
+    /// **The menu as the overlay screen answers the engine for it**: every query is the component's own
+    /// ([`plx_ui::menu::Menu`]), asked the way `PlayerOverlayScreen`'s `Focusable` asks it.
+    struct MoreMenuPart<'a> {
+        state: &'a MoreMenuState,
+        entry: EntryId,
+        group: GroupId,
+    }
+
+    impl Focusable<HostFixture> for MoreMenuPart<'_> {
+        fn groups(&self, cx: &Cx<'_, HostFixture>, out: &mut Vec<GroupSpec>) {
+            self.state.menu().groups(self.group, cx.measure, out);
+        }
+        fn group_of(&self, key: &u32, _cx: &Cx<'_, HostFixture>) -> Option<GroupId> {
+            self.state.menu().group_of(key, self.group)
+        }
+        fn neighbour(&self, key: FocusKey<u32>, dir: Dir, _cx: &Cx<'_, HostFixture>) -> Step<u32> {
+            self.state.menu().neighbour(self.entry, key, dir)
+        }
+        fn place(&self, key: &u32, cx: &Cx<'_, HostFixture>, _at: At) -> Option<Placed> {
+            self.state.menu().place(key, cx.measure)
+        }
+        fn reconcile(&self, want: FocusKey<u32>, _cx: &Cx<'_, HostFixture>) -> FocusKey<u32> {
+            self.state.menu().reconcile(self.entry, want, self.group)
+        }
+        fn seat(&self, _g: GroupId, _from: Placed, _cx: &Cx<'_, HostFixture>) -> FocusKey<u32> {
+            self.state.menu().seat(self.entry)
+        }
+        fn a11y(&self, key: &u32, _cx: &Cx<'_, HostFixture>) -> Option<plx_ui::a11y::A11y<'_>> {
+            self.state.a11y(key)
+        }
+        fn a11y_elems(&self, g: GroupId, _cx: &Cx<'_, HostFixture>, out: &mut Vec<u32>) {
+            self.state.a11y_elems(g, self.group, out)
+        }
+    }
 
     struct HostFixture;
-    impl Host for HostFixture {
+    impl MachineHost for HostFixture {
         type Arg = plx_ui::fixture::FixtureArg;
         type Fx = plx_ui::fixture::FixtureFx;
         type Msg = plx_ui::fixture::FixtureMsg;
@@ -1820,24 +1661,22 @@ mod focus_tests {
 
     /// A menu showing `form`, with nothing else about it asked of a playback.
     fn menu_of(form: MoreTable) -> MoreMenuState {
-        MoreMenuState {
-            form,
+        let core = MoreCore {
             rows: Vec::new(),
             forced: false,
             current: plx_media::route::Quality::Auto,
             speed: plx_media::player::RATE_NORMAL,
             speeds: plx_media::player::PLAY_RATES.to_vec(),
             folded: Vec::new(),
-            pages: PageStack::new(),
-            motion: PanelMotion::new(),
-            anchor: crate::player_hud::classic::ctrl_row_hit_rect(),
-            side: std::cell::Cell::new(plx_ui::popover::Side::Above),
-        }
+        };
+        let mut menu = Menu::new(host(crate::player_hud::classic::ctrl_row_hit_rect(), 0), Class::Action, plx_ui::table_screen::BAND_BASE);
+        *menu.form_mut() = form;
+        MoreMenuState { core, menu }
     }
 
     /// The focus element of the row at `index` — the keys are identities, not positions.
     fn elem(st: &MoreMenuState, index: usize) -> u32 {
-        st.form.key_at(index).expect("a bound row").0
+        st.menu.form().key_at(index).expect("a bound row").0
     }
 
     /// Every row of `form` as the menu projects it: `(id, role)` in row order, after the menu
@@ -1964,8 +1803,8 @@ mod focus_tests {
         plx_media::speed_audio::force_speed_decoder_for_test(true); // a host test loads no FFmpeg
         let e = EntryId(4);
         let st = three_row_menu();
-        let r = st.panel_rect(&plx_ui::fixture::FixtureMeasure);
-        let want = st.form.table.row_frame(r, 1);
+        let r = st.menu.panel_rect(&plx_ui::fixture::FixtureMeasure);
+        let want = st.menu.form().table.row_frame(r, 1);
         let part = MoreMenuPart { state: &st, entry: e, group: GroupId(0) };
         with_cx(e, |cx| {
             let placed = <MoreMenuPart as Focusable<HostFixture>>::place(&part, &elem(&st, 1), cx, At::Drawn);
@@ -1988,12 +1827,25 @@ mod focus_tests {
                 cx,
             );
             assert_eq!(got.elem, elem(&st, 0));
+            // the menu's own cursor is where focus belongs, whatever the engine last held (a moved focus reaches the
+            // cursor first, `Event::Focused`)
             let kept = <MoreMenuPart as Focusable<HostFixture>>::reconcile(
                 &part,
                 FocusKey { entry: e, elem: elem(&st, 2) },
                 cx,
             );
-            assert_eq!(kept.elem, elem(&st, 2), "a live key is left where it is");
+            assert_eq!(kept.elem, elem(&st, 0), "the cursor wins over a live key the menu never saw");
+        });
+        let mut st = st;
+        st.focus_key(elem(&st, 2));
+        let part = MoreMenuPart { state: &st, entry: e, group: GroupId(0) };
+        with_cx(e, |cx| {
+            let kept = <MoreMenuPart as Focusable<HostFixture>>::reconcile(
+                &part,
+                FocusKey { entry: e, elem: elem(&st, 2) },
+                cx,
+            );
+            assert_eq!(kept.elem, elem(&st, 2), "a row the cursor is on is left where it is");
         });
     }
 
@@ -2020,28 +1872,28 @@ mod focus_tests {
             let _guard = language_on_this_thread_for_test(language);
             for q in plx_media::route::QUALITY_LADDER {
                 let mut root = MoreMenuState::new(&ps);
-                root.form.set(root_form(&ps, &rows, false, q, plx_media::player::RATE_NORMAL, &plx_media::player::PLAY_RATES, &[]), None);
-                check(language.tag(), &root.form);
+                root.menu.form_mut().set(root_form(&ps, &rows, false, q, plx_media::player::RATE_NORMAL, &plx_media::player::PLAY_RATES, &[]), None);
+                check(language.tag(), root.menu.form());
                 let mut page = MoreMenuState::new(&ps);
-                page.current = q;
-                page.rows = rows.clone();
+                page.core.current = q;
+                page.core.rows = rows.clone();
                 page.focus_key(MoreRow::OpenQuality.key().0);
-                page.push(&ps, MorePage::Quality);
-                check(language.tag(), &page.form);
+                page.push_page(&ps, MorePage::Quality);
+                check(language.tag(), page.menu.form());
             }
             // the forced root (Options only)
             let forced = MoreMenuState::new(&ps);
-            check(language.tag(), &forced.form);
+            check(language.tag(), forced.menu.form());
             // the Speed page, and the root reading out the longest speed name
             for r in plx_media::player::PLAY_RATES {
                 let mut root = MoreMenuState::new(&ps);
-                root.form.set(root_form(&ps, &rows, false, plx_media::route::Quality::Auto, r, &plx_media::player::PLAY_RATES, &[]), None);
-                check(language.tag(), &root.form);
+                root.menu.form_mut().set(root_form(&ps, &rows, false, plx_media::route::Quality::Auto, r, &plx_media::player::PLAY_RATES, &[]), None);
+                check(language.tag(), root.menu.form());
             }
             let mut page = MoreMenuState::new(&ps);
             page.focus_key(MoreRow::OpenSpeed.key().0);
-            page.push(&ps, MorePage::Speed);
-            check(language.tag(), &page.form);
+            page.push_page(&ps, MorePage::Speed);
+            check(language.tag(), page.menu.form());
             // the root with every command folded, which no package can exceed, under both readings of Go to
             // (a show's and a movie's) and the longest quality readout
             let fold = |command, section| crate::hud_format::Fold { command, section };
@@ -2067,8 +1919,8 @@ mod focus_tests {
                 folded[6].label = go;
                 for q in plx_media::route::QUALITY_LADDER {
                     let mut root = MoreMenuState::new(&ps);
-                    root.form.set(root_form(&ps, &rows, false, q, plx_media::player::RATE_NORMAL, &plx_media::player::PLAY_RATES, &folded), None);
-                    check(language.tag(), &root.form);
+                    root.menu.form_mut().set(root_form(&ps, &rows, false, q, plx_media::player::RATE_NORMAL, &plx_media::player::PLAY_RATES, &folded), None);
+                    check(language.tag(), root.menu.form());
                 }
             }
         }
@@ -2076,20 +1928,20 @@ mod focus_tests {
     }
 
     fn detail_at(st: &mut MoreMenuState, id: MoreRow) -> String {
-        let i = st.form.index_of(&id).expect("a row");
-        st.form.table.row_mut(i as i32).map(|r| r.detail.clone()).unwrap()
+        let i = st.menu.form().index_of(&id).expect("a row");
+        st.menu.form_mut().table.row_mut(i as i32).map(|r| r.detail.clone()).unwrap()
     }
 
     /// The Quality row's value, and the sub-line under the checked entry on the page, for a fixture.
     fn quality_row(fixture: plx_media::route::EnhTestFixture, rung: Option<plx_media::abr::Rung>) -> (String, String) {
         let (ps, _) = plx_media::route::enhancement_test_session(plx_media::route::EnhTestFixture { rung, ..fixture });
         let current = plx_media::route::quality();
-        let mut root = MoreMenuState::new_folded_with_quality(&ps, None, Vec::new(), current);
+        let mut root = MoreMenuState::new_folded_with_quality(&ps, None, Vec::new(), current, crate::player_hud::classic::ctrl_row_hit_rect());
         let value = super::tests::value_of(&mut root, MoreRow::OpenQuality).expect("a value");
-        let mut page = MoreMenuState::new_folded_with_quality(&ps, None, Vec::new(), current);
-        page.rows = rows_for(false);
+        let mut page = MoreMenuState::new_folded_with_quality(&ps, None, Vec::new(), current, crate::player_hud::classic::ctrl_row_hit_rect());
+        page.core.rows = rows_for(false);
         page.focus_key(MoreRow::OpenQuality.key().0);
-        page.push(&ps, MorePage::Quality);
+        page.push_page(&ps, MorePage::Quality);
         let checked_row = MoreRow::Act(Action::SetQuality(current));
         let note = detail_at(&mut page, checked_row);
         plx_media::route::reset_player_control_for_test(&ps);
@@ -2171,10 +2023,10 @@ mod focus_tests {
             let _guard = language_on_this_thread_for_test(language);
             let root = MoreMenuState::new(&ps);
             let mut page = MoreMenuState::new(&ps);
-            page.rows = rows.clone();
+            page.core.rows = rows.clone();
             page.focus_key(MoreRow::OpenQuality.key().0);
-            page.push(&ps, MorePage::Quality);
-            for form in [&root.form, &page.form] {
+            page.push_page(&ps, MorePage::Quality);
+            for form in [root.menu.form(), page.menu.form()] {
                 out.extend(form.table.menu_cap_failure(&plx_base::fontcov::advances::ShippedMeasure, language.tag()));
                 out.extend(form.table.app_fit_failures(plx_ui::table::MENU_MAX_W, language.tag()));
                 out.extend(form.table.app_fit_failures_hugged(language.tag()));
@@ -2194,19 +2046,20 @@ mod focus_tests {
 mod classic_placement_tests {
     use super::*;
     use plx_base::fontcov::advances::ShippedMeasure;
+    use plx_ui::theme;
 
     fn settled() -> Vec<(&'static str, [f32; 4])> {
         plx_media::speed_audio::force_speed_decoder_for_test(true); // a host test loads no FFmpeg
         let _g = plx_base::testlock::serial();
         let ps = plx_media::route::PlaybackSession::IDLE;
         let rect = |st: &MoreMenuState| {
-            let r = st.panel_rect(&ShippedMeasure);
+            let r = st.menu.panel_rect(&ShippedMeasure);
             [r.x + r.w, r.y + r.h, r.w, r.h]
         };
         let mut root = MoreMenuState::new(&ps);
         let mut out = vec![("root", rect(&root))];
         root.focus_key(MoreRow::OpenQuality.key().0);
-        assert_eq!(root.on_ok(&ps), MoreOk::Navigated);
+        assert_eq!(root.on_ok(&ps), Out::Moved);
         out.push(("quality page", rect(&root)));
         out.push(("quality entry", rect(&MoreMenuState::new_quality(&ps))));
         out
@@ -2227,7 +2080,7 @@ mod classic_placement_tests {
 
     fn menu_at(anchor: Rect) -> MoreMenuState {
         plx_media::speed_audio::force_speed_decoder_for_test(true); // a host test loads no FFmpeg
-        MoreMenuState::new(&plx_media::route::PlaybackSession::IDLE).with_anchor(anchor)
+        MoreMenuState::new_folded_with_quality(&plx_media::route::PlaybackSession::IDLE, None, Vec::new(), plx_media::route::Quality::Original, anchor)
     }
 
     /// The panel opens beside the anchor it was handed, whichever side that is: the same placer and
@@ -2239,14 +2092,14 @@ mod classic_placement_tests {
         let gap = theme::layout::PLAYER_MENU_GAP;
         let high = Rect::new(1500.0, 120.0, 324.0, 64.0);
         let st = menu_at(high);
-        let r = st.panel_rect(&ShippedMeasure);
-        assert_eq!(st.side.get(), Side::Below);
+        let r = st.menu.panel_rect(&ShippedMeasure);
+        assert_eq!(st.menu.side().expect("a video card has a side"), Side::Below);
         assert_eq!((r.y, r.x + r.w), (high.y + high.h + gap, high.x + high.w));
 
         let mid = Rect::new(1700.0, 560.0, 64.0, 64.0);
         let st = menu_at(mid);
-        let r = st.panel_rect(&ShippedMeasure);
-        assert_eq!(st.side.get(), Side::Start, "neither 478 above nor 374 below holds NEED_H");
+        let r = st.menu.panel_rect(&ShippedMeasure);
+        assert_eq!(st.menu.side().expect("a video card has a side"), Side::Start, "neither 478 above nor 374 below holds NEED_H");
         assert_eq!(r.x + r.w, mid.x - gap);
     }
 
@@ -2257,14 +2110,14 @@ mod classic_placement_tests {
         let _g = plx_base::testlock::serial();
         let ps = plx_media::route::PlaybackSession::IDLE;
         let mut st = menu_at(Rect::new(1500.0, 300.0, 324.0, 64.0));
-        let first = st.panel_rect(&ShippedMeasure);
-        let side = st.side.get();
+        let first = st.menu.panel_rect(&ShippedMeasure);
+        let side = st.menu.side().expect("a video card has a side");
         assert_eq!(side, plx_ui::popover::Side::Below, "the opener is high: the panel hangs under it");
         st.focus_key(MoreRow::OpenQuality.key().0);
-        assert_eq!(st.on_ok(&ps), MoreOk::Navigated);
-        let pushed = st.panel_rect(&ShippedMeasure);
+        assert_eq!(st.on_ok(&ps), Out::Moved);
+        let pushed = st.menu.panel_rect(&ShippedMeasure);
         assert_ne!((pushed.w, pushed.h), (first.w, first.h), "the page changed the panel's size");
-        assert_eq!(st.side.get(), side);
+        assert_eq!(st.menu.side().expect("a video card has a side"), side);
         assert_eq!((pushed.x + pushed.w, pushed.y), (first.x + first.w, first.y));
     }
 
@@ -2280,8 +2133,8 @@ mod classic_placement_tests {
         let st = MoreMenuState::new_quality(&plx_media::route::PlaybackSession::IDLE);
         assert_eq!(st.page(), Some(MorePage::Quality));
         let auto = Action::SetQuality(plx_media::route::Quality::Auto);
-        assert!(st.form.index_of_key(auto.key()).is_some(), "the page measured has the Auto row");
-        let tallest = st.form.table.measured_height();
+        assert!(st.menu.form().index_of_key(auto.key()).is_some(), "the page measured has the Auto row");
+        let tallest = st.menu.form().table.measured_height();
         assert!(tallest > 400.0, "the Quality page was measured: {tallest}");
         assert!(tallest <= NEED_H, "the Quality page is {tallest} px, taller than NEED_H {NEED_H}");
         assert!(NEED_H <= 764.0 - plx_ui::consts::SAFE.y);
@@ -2304,6 +2157,7 @@ mod classic_placement_tests {
 #[cfg(test)]
 mod folded_tests {
     use super::*;
+    use plx_ui::form::FormTable;
     use crate::player_hud::command::{Section, TrackTab};
     use crate::player_hud::loaded::{classic_for_test, load, reference_for_test};
     use crate::player_hud::model::HudModel;
@@ -2333,8 +2187,8 @@ mod folded_tests {
 
     /// The commands of the Hud rows showing, in table order, off a built menu.
     fn hud_order(st: &MoreMenuState) -> Vec<HudCommand> {
-        (0..st.form.table.n_rows() as usize)
-            .filter_map(|i| match st.form.id_at(i) {
+        (0..st.menu.form().table.n_rows() as usize)
+            .filter_map(|i| match st.menu.form().id_at(i) {
                 Some(MoreRow::Act(Action::Hud(command))) => Some(*command),
                 _ => None,
             })
@@ -2356,9 +2210,9 @@ mod folded_tests {
             let mut without = MoreMenuState::new(&ps);
             assert_eq!(with.keys(), without.keys(), "the same rows in the same order");
             assert!(with.keys().iter().all(|k| !(30..=43).contains(k)), "no folded key on classic's root");
-            let labels = |st: &mut MoreMenuState| (0..st.form.table.n_rows()).map(|i| st.form.table.row_mut(i).map(|r| r.label.clone())).collect::<Vec<_>>();
+            let labels = |st: &mut MoreMenuState| (0..st.menu.form().table.n_rows()).map(|i| st.menu.form_mut().table.row_mut(i).map(|r| r.label.clone())).collect::<Vec<_>>();
             assert_eq!(labels(&mut with), labels(&mut without));
-            assert_eq!(with.form.table.measured_height(), without.form.table.measured_height());
+            assert_eq!(with.menu.form().table.measured_height(), without.menu.form().table.measured_height());
         }
     }
 
@@ -2422,7 +2276,7 @@ mod folded_tests {
         assert!(wanted.len() >= 5, "{wanted:?}");
         for command in wanted {
             assert!(st.focus_key(Action::Hud(command).key().0));
-            assert_eq!(st.on_ok(&ps), MoreOk::Action(Action::Hud(command)), "{command:?}");
+            assert_eq!(st.on_ok(&ps), Out::Picked(Action::Hud(command)), "{command:?}");
         }
     }
 
@@ -2480,13 +2334,13 @@ mod folded_tests {
     fn captured_preference_quality_opens_and_refreshes_from_owner_inputs() {
         use plx_media::route::{PlaybackSession, Quality};
         let ps = PlaybackSession::IDLE;
-        let mut a = MoreMenuState::new_folded_with_quality(&ps, None, Vec::new(), Quality::P720);
-        let b = MoreMenuState::new_folded_with_quality(&ps, None, Vec::new(), Quality::Original);
-        assert_eq!(a.current, Quality::P720);
-        assert_eq!(b.current, Quality::Original);
+        let mut a = MoreMenuState::new_folded_with_quality(&ps, None, Vec::new(), Quality::P720, crate::player_hud::classic::ctrl_row_hit_rect());
+        let b = MoreMenuState::new_folded_with_quality(&ps, None, Vec::new(), Quality::Original, crate::player_hud::classic::ctrl_row_hit_rect());
+        assert_eq!(a.core.current, Quality::P720);
+        assert_eq!(b.core.current, Quality::Original);
         assert!(a.refresh_with_quality(&ps, Quality::P1080));
-        assert_eq!(a.current, Quality::P1080);
-        assert_eq!(b.current, Quality::Original);
+        assert_eq!(a.core.current, Quality::P1080);
+        assert_eq!(b.core.current, Quality::Original);
         assert!(!a.refresh_with_quality(&ps, Quality::P1080));
     }
 

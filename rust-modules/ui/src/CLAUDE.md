@@ -473,14 +473,15 @@ presentation in a design pass.
    `opening_row` is also the focus fallback when a focused row disappears.
 
    **A menu with pages is `menu.rs`'s `Menu`, and a host only supplies rows.** The Detail hosts (the hero
-   and tile `…` menus, Select Version, Audio & Subtitles, Also available) build a `Menu<P, Id, A>` from a
+   and tile `…` menus, Select Version, Audio & Subtitles, Also available, and the player's Tracks and More menus, a
+   flat card over the video plane) build a `Menu<P, Id, A>` from a
    `Host` (grows out of its control / glass beside a card / a sheet under its opener / a card over the
    video plane: the legal combinations are the enum, so a morph with no opener or glass over the video is
    not a value) and a `Class` (Action: BODY rows, the lightest dim; Picker: HEADLINE rows, the panel dim).
    The stack, the card's resize and the page slide, the placement, the width rule, the 20 px radius, the
    ground, the stop registration, the pointer hold and the dim are the menu's, never a host's. A row that
-   opens a page is a `RowKind::Nav`: OK and RIGHT push it, BACK and LEFT pop it (LEFT at the root is
-   inert), and every pushed page wears the header with the back mark (there is no way to have none). The
+   opens a page is a `RowKind::Nav`: OK and RIGHT push it, BACK and LEFT pop it (LEFT at the root, and RIGHT
+   on a row that opens no page, answer `Out::Edge`, the host's own key: the player's tab switch), and every pushed page wears the header with the back mark (there is no way to have none). The
    host maps keys with `menu::keyed`, feeds `Event`s to `Menu::step`, and acts on the `Out` it answers.
 
    **Popover open styles.** Two exist. `Appear` (default) is the shared `K_APPEAR` fade+slide.

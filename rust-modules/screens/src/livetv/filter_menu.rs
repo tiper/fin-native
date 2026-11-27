@@ -142,7 +142,8 @@ impl LiveTvFilterScreen {
                 }
             }
             Out::Dismiss => fx.push(Fx::Nav(NavOp::Dismiss(self.entry))),
-            Out::Stay | Out::Moved => {}
+            // a key this menu has no meaning for (the player's tab switch) is swallowed: the menu stays up
+            Out::Stay | Out::Moved | Out::Edge => {}
         }
     }
 }

@@ -225,6 +225,9 @@ pub struct Placement {
     pub overflow: Overflow,
     /// The frame the panel must stay inside.
     pub keep: Rect,
+    /// The air between the anchor and the panel (a rung of the player's own, [`PLAYER_MENU_GAP`](crate::theme::layout::PLAYER_MENU_GAP),
+    /// or [`PANEL_GAP`]): the caller's rule, so every placement of one menu agrees on it.
+    pub gap: f32,
 }
 
 impl Placement {
@@ -240,6 +243,7 @@ impl Placement {
             crate::consts::SCR_W - 2.0 * PANEL_EDGE_X,
             crate::consts::SCR_H - 2.0 * PANEL_EDGE,
         ),
+        gap: PANEL_GAP,
     };
 
     /// [`under_or_above_fit`]'s: [`Self::UNDER_OR_ABOVE`]'s sides in its order, and a panel taller than the room either
@@ -253,6 +257,7 @@ impl Placement {
         cross: Cross::Hang,
         overflow: Overflow::ClampToRoom,
         keep: crate::consts::SAFE,
+        gap: crate::theme::layout::PLAYER_MENU_GAP,
     };
 
     /// A panel with no opener, in the safe frame's top-right corner ([`corner_panel`]): below the
@@ -262,6 +267,7 @@ impl Placement {
         cross: Cross::Hang,
         overflow: Overflow::ClampToRoom,
         keep: crate::consts::SAFE,
+        gap: 0.0,
     };
 }
 
@@ -271,7 +277,7 @@ impl Placement {
 /// is `Below`, so [`Popover::rise_offset`] settles it down into place.
 pub fn corner_panel(w: f32, h: f32) -> Anchored {
     let keep = Placement::CORNER.keep;
-    anchor_panel(Rect::new(keep.x + keep.w, keep.y, 0.0, 0.0), (w, h), h, 0.0, Placement::CORNER)
+    anchor_panel(Rect::new(keep.x + keep.w, keep.y, 0.0, 0.0), (w, h), h, Placement::CORNER)
 }
 
 /// [`anchor_panel`]'s answer: the panel's rect and the side of the anchor it took (which is where
@@ -285,7 +291,7 @@ pub struct Anchored {
 /// **The one placer of a panel beside the control that opened it.** `size` is the panel's own
 /// `(w, h)`; `need_h` is the height it must be able to show, which alone decides the SIDE (a menu
 /// whose pages differ in height passes the tallest, so the side does not change between pages); the
-/// height drawn is `size.1` cut to the chosen side's room only where `how.overflow` says so. `gap`
+/// height drawn is `size.1` cut to the chosen side's room only where `how.overflow` says so. `how.gap`
 /// is the air between anchor and panel.
 ///
 /// A side HOLDS the panel when, for `Above`/`Below`, the height between the anchor's edge plus
@@ -295,8 +301,9 @@ pub struct Anchored {
 ///
 /// Pure: the same anchor and size always give the same rect, so a caller that keeps the anchor it
 /// was opened with keeps its panel still.
-pub fn anchor_panel(anchor: Rect, size: (f32, f32), need_h: f32, gap: f32, how: Placement) -> Anchored {
+pub fn anchor_panel(anchor: Rect, size: (f32, f32), need_h: f32, how: Placement) -> Anchored {
     let (w, h) = size;
+    let gap = how.gap;
     let keep = how.keep;
     let (keep_r, keep_b) = (keep.x + keep.w, keep.y + keep.h);
     let (anchor_r, anchor_b) = (anchor.x + anchor.w, anchor.y + anchor.h);
@@ -374,7 +381,7 @@ pub fn under_or_above(a: Rect, content_w: f32, content_h: f32) -> Rect {
     use crate::consts::SCR_H;
     let width = content_w.clamp(crate::table::MENU_MIN_W, crate::table::MENU_MAX_W);
     let h = content_h.clamp(120.0, SCR_H - 2.0 * PANEL_EDGE);
-    anchor_panel(a, (width, h), h, PANEL_GAP, Placement::UNDER_OR_ABOVE).rect
+    anchor_panel(a, (width, h), h, Placement::UNDER_OR_ABOVE).rect
 }
 
 /// [`under_or_above`] for a panel that may be taller than the room either side of its opener (a pushed page
@@ -385,7 +392,7 @@ pub fn under_or_above_fit(a: Rect, content_w: f32, content_h: f32) -> Rect {
     use crate::consts::SCR_H;
     let width = content_w.clamp(crate::table::MENU_MIN_W, crate::table::MENU_MAX_W);
     let h = content_h.clamp(120.0, SCR_H - 2.0 * PANEL_EDGE);
-    anchor_panel(a, (width, h), h, PANEL_GAP, Placement::UNDER_OR_ABOVE_FIT).rect
+    anchor_panel(a, (width, h), h, Placement::UNDER_OR_ABOVE_FIT).rect
 }
 
 /// **Where a header menu's panel of width `w` starts across, hung from its opener `pill`** (the

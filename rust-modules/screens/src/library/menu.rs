@@ -703,7 +703,7 @@ impl LibraryMenu {
                 fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
             }
             // a drill-in is the menu's own push (`RowKind::Nav`), never a pick
-            Out::Picked(Action::Genre) | Out::Stay | Out::Moved => {}
+            Out::Picked(Action::Genre) | Out::Stay | Out::Moved | Out::Edge => {}
             Out::Dismiss => fx.push(Fx::Nav(NavOp::Dismiss(self.entry))),
         }
     }

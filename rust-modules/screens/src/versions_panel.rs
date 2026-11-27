@@ -140,7 +140,7 @@ impl VersionsPanelScreen {
     /// stays up, as on every disabled row (`ui/CLAUDE.md`: "OK does nothing"); BACK still closes it.
     fn run<H: AppLike>(&mut self, out: Out<MediaId>, fx: &mut Effects<'_, H>) {
         let media = match out {
-            Out::Stay | Out::Moved => return,
+            Out::Stay | Out::Moved | Out::Edge => return,
             Out::Picked(media) => Some(media),
             Out::Dismiss => None,
         };

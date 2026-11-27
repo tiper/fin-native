@@ -2,8 +2,8 @@
 //!
 //! Both player menus (the track menu, opened by `open_tracks`, and More, opened by `open_more`) are placed
 //! through ONE call of the shared placer, `plx_ui::popover::anchor_panel(.., Placement::PLAYER_MENU)` with
-//! `theme::layout::PLAYER_MENU_GAP`, which each menu exposes as `place_panel` (the live panel, the overscan
-//! audit and this lint all call it, so none can drift from another). This module asks it, for every opener
+//! `theme::layout::PLAYER_MENU_GAP` (the live panel is the menu component's, [`plx_ui::menu::Menu`], whose `Host::Video`
+//! carries that placement; the overscan audit and this lint call the same placer, so none can drift from another). This module asks it, for every opener
 //! of every compiled state, where the menu would open, and holds the answer to four invariants.
 //!
 //! **The anchor** (`CompiledState::menu_anchor`, the one derivation the player screen also hands to the menu it
@@ -119,12 +119,11 @@ impl Menu {
         }
     }
 
-    /// The menu's own call of the shared placer, deciding the side on `need_h`.
+    /// **The ONE call of the shared placer**, the player's placement ([`plx_ui::popover::Placement::PLAYER_MENU`]) deciding the side on
+    /// `need_h`: the same placement the live panels hand the menu component (`plx_ui::menu::Host::Video`), so the lint and
+    /// a menu on screen cannot place differently.
     fn place(self, anchor: Rect, size: (f32, f32), need_h: f32) -> Anchored {
-        match self {
-            Menu::Tracks => track_menu::place_panel(anchor, size),
-            Menu::More => more_menu::place_panel(anchor, size, need_h),
-        }
+        plx_ui::popover::anchor_panel(anchor, size, need_h, plx_ui::popover::Placement::PLAYER_MENU)
     }
 }
 

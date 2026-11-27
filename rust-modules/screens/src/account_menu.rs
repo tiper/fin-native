@@ -322,7 +322,7 @@ impl AccountMenuScreen {
                 fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
             }
             Out::Dismiss => fx.push(Fx::Nav(NavOp::Dismiss(self.entry))),
-            Out::Stay | Out::Moved => {}
+            Out::Stay | Out::Moved | Out::Edge => {}
         }
     }
 

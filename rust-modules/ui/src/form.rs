@@ -258,6 +258,9 @@ impl<Id: FormId, A, Dest> FormSection<Id, A, Dest> {
 /// An ordered list of sections, built by a PURE function of plain inputs.
 pub struct Form<Id, A, Dest> {
     sections: Vec<FormSection<Id, A, Dest>>,
+    /// Rows that have changed shape since a page above this one was opened from them: `(was, is)`
+    /// ([`Self::alias`]).
+    aliases: Vec<(Id, Id)>,
 }
 impl<Id, A, Dest> Default for Form<Id, A, Dest> {
     fn default() -> Self {
@@ -268,16 +271,33 @@ impl<Id, A, Dest> Form<Id, A, Dest> {
     pub fn new() -> Self {
         Self {
             sections: Vec::new(),
+            aliases: Vec::new(),
         }
     }
     pub fn section(mut self, s: FormSection<Id, A, Dest>) -> Self {
         self.sections.push(s);
         self
     }
+    /// **Say that the row `is` now stands for the row `was`**: a row can change shape under a viewer while a page
+    /// above it is open (a language that dropped to one track is a direct row now, and the reverse), and the page
+    /// above remembers the row it was opened from by its identity. A pop that lands on this form seats the cursor on
+    /// `is` where it would have sought `was` ([`Self::stands_for`]).
+    pub fn alias(mut self, was: Id, is: Id) -> Self {
+        self.aliases.push((was, is));
+        self
+    }
+    /// The row of this form that stands for the row `id` NOW: what [`Self::alias`] said, else `id` itself.
+    pub fn stands_for(&self, id: &Id) -> Id
+    where
+        Id: PartialEq + Clone,
+    {
+        self.aliases.iter().find(|(was, _)| was == id).map_or_else(|| id.clone(), |(_, is)| is.clone())
+    }
     /// `other`'s sections after this form's own: a page that embeds a list built elsewhere (the
     /// Library's Sort & Filter menu holds the Sources list) keeps that list's sections whole.
     pub fn then(mut self, other: Self) -> Self {
         self.sections.extend(other.sections);
+        self.aliases.extend(other.aliases);
         self
     }
     /// Does the built form hold a focusable row `id` (in a visible section)? What a rebuild asks
@@ -311,7 +331,9 @@ impl<Id, A, Dest> Form<Id, A, Dest> {
     /// Sections, headers, accessories and every row's presentation pass through untouched, so a
     /// shared builder (`appkit::source_list::form`) serves a surface that has its own row identities.
     pub fn map<Id2, A2, Dest2>(self, mut f: impl FnMut(Binding<Id, A, Dest>) -> Option<Binding<Id2, A2, Dest2>>) -> Form<Id2, A2, Dest2> {
+        // the aliases name rows of the old identity: they do not survive a re-typing
         Form {
+            aliases: Vec::new(),
             sections: self
                 .sections
                 .into_iter()
@@ -390,6 +412,19 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
             bindings: Vec::new(),
             names: Vec::new(),
             key_ceiling,
+            engine_key: None,
+            reseat: None,
+        }
+    }
+
+    /// **An empty form dressed like this one** ([`TableView::blank_like`]): the same key band and table class, no rows.
+    /// A page that is built to be measured or warmed without being shown ([`crate::menu::Menu::prewarm_aside`]) lives in it.
+    pub fn blank_like(&self) -> Self {
+        Self {
+            table: self.table.blank_like(),
+            bindings: Vec::new(),
+            names: Vec::new(),
+            key_ceiling: self.key_ceiling,
             engine_key: None,
             reseat: None,
         }
