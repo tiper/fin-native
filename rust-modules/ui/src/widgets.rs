@@ -5127,10 +5127,14 @@ impl<'a> StatusOverlay<'a> {
         self.focus = i;
         self
     }
-    /// The first two controls' focus pop, normally `[pop.scale(0), pop.scale(1)]`; any `extra`
-    /// control keeps 1.0.
-    pub fn scales(mut self, s: [f32; 2]) -> Self {
-        self.scales[..2].copy_from_slice(&s);
+    /// The first controls' focus pop, normally `[pop.scale(0), pop.scale(1), ..]` for a row whose
+    /// `CtlPop` has as many slots as the row has controls (at most [`STATUS_ROW_MAX`]); a control
+    /// past those given keeps 1.0.
+    pub fn scales<const N: usize>(mut self, s: [f32; N]) -> Self {
+        debug_assert!(N <= STATUS_ROW_MAX, "a read-out row holds at most {STATUS_ROW_MAX} controls");
+        for (slot, scale) in self.scales.iter_mut().zip(s) {
+            *slot = scale;
+        }
         self
     }
     /// How far the read-out's ink reaches ABOVE the frame centre: the spinner ring plus its dots

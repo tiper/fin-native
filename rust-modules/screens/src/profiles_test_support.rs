@@ -54,6 +54,8 @@ pub fn snapshot(phase: Phase, users: Vec<auth::UserTile>) -> auth::owner::Sessio
         discovery_retry: None,
         switch_refused: false,
         readout_back_resumes: false,
+        picker: auth::Picker::Boot,
+        dev_session: false,
     }
 }
 
@@ -111,6 +113,8 @@ pub fn bare(pad: Pad) -> ProfilesScreen {
         phase: Phase::Profiles,
         error: Arc::from(""),
         back_resumes: false,
+        picker: auth::Picker::Boot,
+        dev_session: false,
         readout_seated: false,
         pin_denied: false,
         flow_epoch: 0,

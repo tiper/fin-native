@@ -213,17 +213,17 @@ pub(crate) fn retry_failed_playback(
     }
 }
 
-/// **The failure read-out's fix for Force Direct Play** — `FailureAction::PlayAutomatically`.
+/// **The failure read-out's fix for Force or Disabled Direct Play** — `FailureAction::PlayAutomatically`.
 ///
-/// A PERSISTENT switch, deliberately, not a one-shot: Force is what made this play fail, and it
-/// would make the next unsupported file fail the same way. The preference moves to Auto now (the
+/// A PERSISTENT switch, deliberately, not a one-shot: Force (or Disabled) is what made this play
+/// fail, and it would make the next unsupported file fail the same way. The preference moves to Auto now (the
 /// in-memory value every later resolve reads) and is saved on the storage worker behind it, both
 /// by the one write door (`route::choose`, `How::Optimistic`), as the SEATED profile's own pick: it
 /// resets that profile's Direct Play mode and no other's, and with nobody seated the door refuses
 /// the save and the pick stands live only. The frame may not block on storage,
 /// the cell is published ONCE, and a failed save is logged by the door while the pick stands for
 /// this session. The retry resolves under Auto explicitly rather than inheriting the failed
-/// attempt's Force, which a plain retry keeps on purpose.
+/// attempt's Force or Disabled, which a plain retry keeps on purpose.
 pub(crate) fn play_automatically(
     ps: &mut plx_media::route::PlaybackSession,
     pa: &mut plx_media::player::adapter::PlayerAdapter,

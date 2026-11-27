@@ -82,6 +82,9 @@ use super::registry::{word, AppFx, AppLike, AppMsg, AuthLike};
 /// correction of its own.
 const CONTROL: u32 = 0;
 const DETAILS: u32 = 1;
+/// The read-out's second way out, between the primary and *Details*: *Use another account*, beside
+/// a *Try again* whose same token cannot be trusted to end differently ([`LoginScreen::alternate_kind`]).
+const ALTERNATE: u32 = 2;
 /// The alert's cancel slot: *Not now* on the question, *Close* on the Details card.
 const ALERT_CANCEL: u32 = 3;
 const ALERT_SEND: u32 = 4;
@@ -432,7 +435,8 @@ fn qr_layout(layout: RouteLayout, status: &CStr, measure: &dyn Measure) -> QrLay
 /// **The read-out, built ONCE for both its uses** — the draw, and the geometry the focus engine and
 /// the hit test read ([`status_row_rects`]), so the two can never disagree about where a control
 /// is (`ui/table_screen.rs`'s rule: "the DRAW reads the same formula"). `labels` is the row by
-/// slot — the primary, then *Details* — and `note` the report's one quiet status line under it.
+/// slot — the primary, the alternate (*Use another account*), then *Details*; an absent one leaves
+/// no gap — and `note` the report's one quiet status line under it.
 /// It fills the page, so a `Failed` one hangs from `StatusOverlay::FULL_ANCHOR_TOP` through
 /// `.page()`, the same as Home's and the Library's. `glyph` is discarded by `page()` for every
 /// kind but `Failed` — this function draws `Working` read-outs too (the QR wait), which is why
@@ -442,7 +446,7 @@ fn readout_overlay<'a>(
     caption: &'a CStr,
     kind: StatusKind,
     reason: Option<&'a CStr>,
-    labels: [Option<&'a CStr>; 2],
+    labels: [Option<&'a CStr>; 3],
     note: Option<&'a Note>,
     glyph: plx_ui::icons::Icon,
 ) -> StatusOverlay<'a> {
@@ -453,8 +457,16 @@ fn readout_overlay<'a>(
     if let Some(note) = note {
         o = o.note(Some(note.text.as_c_str())).note_busy(note.busy);
     }
-    if let Some(primary) = labels[0] {
-        o = o.action(primary).secondary(labels[1]);
+    // The row is the labels in order with the absent ones squeezed out; it exists only beside a
+    // primary (`StatusOverlay::row`'s first label), so a row with no primary draws nothing.
+    if labels[0].is_some() {
+        let mut row = [c""; 3];
+        let mut n = 0;
+        for label in labels.into_iter().flatten() {
+            row[n] = label;
+            n += 1;
+        }
+        o = o.row(&row[..n]);
     }
     o
 }
@@ -488,13 +500,13 @@ fn incident_icon(glyph: plx_telemetry::telemetry::incident::ReadoutGlyph) -> plx
 /// `Failed` reason is a two-line slot whatever it says).
 fn status_row_rects(
     measure: &dyn Measure,
-    labels: [Option<&CStr>; 2],
+    labels: [Option<&CStr>; 3],
     kind: StatusKind,
     has_reason: bool,
-) -> [Option<Rect>; 2] {
+) -> [Option<Rect>; plx_ui::widgets::STATUS_ROW_MAX] {
     // Geometry only — the glyph never moves the row, so any `Icon` measures identically.
     readout_overlay(c"", kind, has_reason.then_some(c""), labels, None, plx_ui::icons::Icon::ClockBadgeAlert)
-        .action_frames_measured(measure)
+        .row_frames_measured(measure)
 }
 
 /// Where a report note's text column stands in the narrative column `[x, x + w)`: the whole
@@ -516,7 +528,7 @@ fn status_action_rect(
     kind: StatusKind,
     has_reason: bool,
 ) -> Rect {
-    status_row_rects(measure, [Some(label), None], kind, has_reason)[0].unwrap_or(Rect::FULL)
+    status_row_rects(measure, [Some(label), None, None], kind, has_reason)[0].unwrap_or(Rect::FULL)
 }
 
 /// What the one control (when it exists at all) does when pressed.
@@ -543,6 +555,10 @@ enum ControlKind {
     /// the token that signed in is the account with nothing on it, and every retry would re-run
     /// discovery with that same token and land on this same read-out. Starts a whole fresh sign-in
     /// (the same command as [`ControlKind::StartLogin`]) so a different account can be used.
+    ///
+    /// Any other discovery failure offers it BESIDE *Try again* ([`LoginScreen::alternate_kind`]):
+    /// a refused or silent server may be the token's fault as readily as the network's, and the
+    /// person is the one who can tell.
     UseAnotherAccount,
 }
 
@@ -702,8 +718,9 @@ struct Report {
     /// The last `(id, revision)` this screen resolved, so a pending offer is resolved once rather
     /// than on every frame the owner has yet to answer.
     last_resolve: Option<(u32, u32)>,
-    /// The control group's focus pops, by slot (primary, Details).
-    pop: CtlPop<2>,
+    /// The control group's focus pops, by slot of the row (primary, then *Use another account*
+    /// when a discovery failure offers it, then Details: `LoginScreen::slot_of`).
+    pop: CtlPop<3>,
 }
 
 /// What the one [`DecisionAlert`] is showing: the report QUESTION the screen asks once per offer,
@@ -857,10 +874,10 @@ fn support_line(offer: &auth::owner::IncidentOffer) -> String {
     )
 }
 
-/// The control group's elements in walk order. At most two, so a fixed array.
+/// The control group's elements in walk order. At most three, so a fixed array.
 #[derive(Clone, Copy, Default)]
 struct Row {
-    elems: [u32; 2],
+    elems: [u32; 3],
     n: usize,
 }
 
@@ -877,14 +894,6 @@ impl Row {
     }
 }
 
-/// The pop/`StatusOverlay` slot an element draws in.
-fn slot_of(elem: u32) -> Option<usize> {
-    match elem {
-        CONTROL => Some(0),
-        DETAILS => Some(1),
-        _ => None,
-    }
-}
 
 pub struct LoginScreen {
     entry: EntryId,
@@ -1229,7 +1238,7 @@ impl LoginScreen {
             .focus
             .current
             .filter(|k| k.entry == self.entry)
-            .and_then(|k| slot_of(k.elem));
+            .and_then(|k| self.slot_of(k.elem));
         let pops = if self.report.alert.visible() { None } else { focused };
         self.report.pop.step(pops, t.dt());
     }
@@ -1257,6 +1266,35 @@ impl LoginScreen {
         self.phase == Phase::Error && self.report.offer.as_ref().is_some_and(|o| o.key.kind ==
             plx_telemetry::telemetry::incident::IncidentKind::Discovery(
                 plx_telemetry::telemetry::incident::DiscoveryClass::NoServers))
+    }
+
+    /// **The read-out's second way out**: *Use another account*, beside *Try again*, on a
+    /// discovery failure that is not the no-server verdict (which swaps its primary for it). A
+    /// retry re-runs discovery with the SAME token, so when the token is what the server refused,
+    /// or the server never answers that token, it can only meet the same read-out; the only way out
+    /// was a BACK press nothing on screen said. The plaintext question keeps its one primary (it is
+    /// a choice, not a fault, and the report says "never a third button"), and a failure that is not
+    /// discovery's has nothing to say about the account.
+    fn alternate_kind(&self) -> Option<ControlKind> {
+        use plx_telemetry::telemetry::incident::IncidentKind;
+        let discovery = self.report.offer.as_ref().is_some_and(|o| matches!(o.key.kind, IncidentKind::Discovery(_)));
+        (self.phase == Phase::Error
+            && self.persistence_warning.is_none()
+            && !self.plaintext_asks()
+            && !self.no_servers()
+            && discovery)
+            .then_some(ControlKind::UseAnotherAccount)
+    }
+
+    /// The pop/`StatusOverlay` slot an element draws in: the row's labels in order, with an absent
+    /// alternate leaving no gap ([`readout_overlay`]), so *Details* is slot 1 or 2.
+    fn slot_of(&self, elem: u32) -> Option<usize> {
+        match elem {
+            CONTROL => Some(0),
+            ALTERNATE => Some(1),
+            DETAILS => Some(1 + self.alternate_kind().is_some() as usize),
+            _ => None,
+        }
     }
 
     /// Whether the failure on screen is an eligible plaintext-only server — answered or not. Such
@@ -1304,7 +1342,7 @@ impl LoginScreen {
     }
 
     /// The control group in walk order. On the read-out the primary leads (it is the row's centre
-    /// of gravity); on the QR screen *Details* sits bottom-left in the narrative column and the
+    /// of gravity), then the alternate way out, then *Details*; on the QR screen *Details* sits bottom-left in the narrative column and the
     /// escape sentence in the content column, so the walk goes left to right.
     fn row(&self) -> Row {
         let mut row = Row::default();
@@ -1322,6 +1360,9 @@ impl LoginScreen {
         } else {
             if primary {
                 row.push(CONTROL);
+                if self.alternate_kind().is_some() {
+                    row.push(ALTERNATE);
+                }
             }
             report(&mut row);
         }
@@ -1382,12 +1423,12 @@ impl LoginScreen {
         Some(RouteLayout::screen().action_pair(w, 0.0).0)
     }
 
-    /// The read-out's control labels by slot (primary, *Details*), and whether the read-out
+    /// The read-out's control labels by slot (primary, alternate, *Details*), and whether the read-out
     /// carries a reason. How tall the reason is — one line, or a `Failed` read-out's
     /// two-line slot — is the widget's answer from the kind.
-    fn readout_labels(&self) -> ([Option<&'static CStr>; 2], bool) {
+    fn readout_labels(&self) -> ([Option<&'static CStr>; 3], bool) {
         let Some(kind) = self.control_kind() else {
-            return ([None; 2], false);
+            return ([None; 3], false);
         };
         let has_reason = match kind {
             ControlKind::RestartWait => true, // Working's own stall reason is unconditional once offered
@@ -1397,8 +1438,9 @@ impl LoginScreen {
             ControlKind::ConnectPlaintext => true, // `auth::insecure_only_copy` always states one
             ControlKind::UseAnotherAccount => true, // the no-server reason is always stated
         };
+        let alternate = self.alternate_kind().map(label_for);
         let details = self.details_offered().then_some(plx_os::i18n::msg::settings_login_details_c());
-        ([Some(label_for(kind)), details], has_reason)
+        ([Some(label_for(kind)), alternate, details], has_reason)
     }
 
     /// The read-out's treatment — the one answer `draw` and the control geometry both read: the
@@ -1456,7 +1498,7 @@ impl LoginScreen {
         }
         let (labels, has_reason) = self.readout_labels();
         let frames = status_row_rects(measure, labels, self.readout_kind(), has_reason);
-        frames[slot_of(elem)?]
+        frames[self.slot_of(elem)?]
     }
 
     /// The control, pressed. Every action is a typed Session command. Restart additionally records
@@ -1494,6 +1536,11 @@ impl LoginScreen {
         match elem {
             DETAILS => {
                 self.open_details(fx);
+                self.sync_state();
+            }
+            ALTERNATE => {
+                // The same fresh sign-in the no-server verdict's primary starts.
+                fx.push(Fx::App(AppFx::Session(auth::SessionCmd::StartLogin)));
                 self.sync_state();
             }
             _ => self.activate(fx),
@@ -1661,17 +1708,17 @@ impl LoginScreen {
         let pop = &self.report.pop;
         if o.action.is_some() {
             o = o
-                .focus(focus.and_then(slot_of))
-                .scales([0, 1].map(|i| pop.scale_with(i, press)));
+                .focus(focus.and_then(|e| self.slot_of(e)))
+                .scales([0, 1, 2].map(|i| pop.scale_with(i, press)));
         }
         o.draw_measured(env, p, f.measure);
         if self.report.alert.visible() {
             // The alert owns the pointer while it is up; nothing under it is a target.
             return;
         }
-        let frames = o.action_frames_measured(f.measure);
+        let frames = o.row_frames_measured(f.measure);
         for elem in self.row().as_slice() {
-            let Some(rect) = slot_of(*elem).and_then(|i| frames[i]) else {
+            let Some(rect) = self.slot_of(*elem).and_then(|i| frames[i]) else {
                 continue;
             };
             self.control_stop(f, p, *elem, rect);
@@ -2148,7 +2195,8 @@ impl<H: AppLike> Focusable<H> for LoginScreen {
         self.key(if row.n > 0 { row.elems[0] } else { CONTROL })
     }
     /// **The ids** (relative; the host qualifies them with `login`): `control` (the read-out's
-    /// primary, or the QR screen's escape sentence), `details`, and the open alert's answers,
+    /// primary, or the QR screen's escape sentence), `alternate` (*Use another account* beside a
+    /// discovery failure's *Try again*), `details`, and the open alert's answers,
     /// which are the SHEET's own ([`Self::alert_answers`]): `alert.not_now` / `alert.connect` on
     /// the plaintext question, `alert.cancel` / `alert.send` on the report's. An element that is
     /// not in the current group has no id.
@@ -2160,6 +2208,7 @@ impl<H: AppLike> Focusable<H> for LoginScreen {
         let path = A11yPath::new();
         let (path, label) = match *key {
             CONTROL => (path.name("control"), self.control_label()),
+            ALTERNATE => (path.name("alternate"), label_for(ControlKind::UseAnotherAccount).to_str().ok()),
             DETAILS => (
                 path.name("details"),
                 plx_os::i18n::msg::settings_login_details_c().to_str().ok(),
@@ -2186,6 +2235,7 @@ impl<H: AppLike> Focusable<H> for LoginScreen {
         let mut segs = path.segs();
         let elem = match (segs.next(), segs.next(), segs.next()) {
             (Some(Seg::Name("control")), None, _) => CONTROL,
+            (Some(Seg::Name("alternate")), None, _) => ALTERNATE,
             (Some(Seg::Name("details")), None, _) => DETAILS,
             _ => return None,
         };
@@ -2481,6 +2531,8 @@ impl AuthLike for SessionHost {
             plaintext: None,
             switch_refused: false,
             readout_back_resumes: false,
+            picker: auth::Picker::Boot,
+            dev_session: false,
         }
     }
 
@@ -3244,6 +3296,37 @@ impl AuthLike for SessionHost {
         assert!(fx.iter().any(|st| matches!(st.fx, Fx::App(AppFx::Session(auth::SessionCmd::Retry)))));
     }
 
+    /// **A discovery failure that is not the no-server verdict offers both ways out.** *Try again*
+    /// re-runs discovery with the same token (right when the server was merely asleep); *Use
+    /// another account* starts a fresh sign-in (right when the token is the problem: a refusal, a
+    /// server that never answers). With only *Try again* the same token met the same read-out, and
+    /// the one way out was a BACK press nothing on screen said. *Try again* leads; the plaintext
+    /// question and every non-discovery failure keep their one primary.
+    #[test]
+    fn a_discovery_failure_offers_try_again_and_use_another_account() {
+        use plx_telemetry::telemetry::incident::{DiscoveryClass, IncidentKind};
+        let commands = |kind: IncidentKind| -> Vec<&'static str> {
+            let probe = screen_with(Phase::Error, auth::owner::IncidentState::NotNow, kind);
+            let mut out = Vec::new();
+            for elem in probe.row().as_slice().to_vec() {
+                let mut s = screen_with(Phase::Error, auth::owner::IncidentState::NotNow, kind);
+                let (_, fx) = step_ev(&mut s, &ScreenEvent::Activate(elem));
+                out.extend(fx.iter().filter_map(|st| match st.fx {
+                    Fx::App(AppFx::Session(auth::SessionCmd::Retry)) => Some("Retry"),
+                    Fx::App(AppFx::Session(auth::SessionCmd::StartLogin)) => Some("StartLogin"),
+                    _ => None,
+                }));
+            }
+            out
+        };
+        for class in [DiscoveryClass::Refused, DiscoveryClass::Silent, DiscoveryClass::InsecureOnly] {
+            assert_eq!(commands(IncidentKind::Discovery(class)), ["Retry", "StartLogin"], "{class:?}: Try again leads");
+        }
+        assert_eq!(commands(IncidentKind::Discovery(DiscoveryClass::NoServers)), ["StartLogin"],
+            "the no-server verdict has no retry to offer");
+        assert_eq!(commands(IncidentKind::PinCreate), ["Retry"], "a failure that is not discovery's keeps its one primary");
+    }
+
     #[test]
     fn controls_emit_typed_session_commands_without_mutating_the_wait_clock() {
         let mut retry = bare_screen(Phase::Error, 0.0);
@@ -3963,7 +4046,7 @@ impl AuthLike for SessionHost {
         assert!(!enters_group(&fx, ALERT_GROUP), "the report question is not raised");
         assert!(!s.report.alert.is_open());
         assert_eq!(s.control_kind(), Some(ControlKind::ConnectPlaintext));
-        assert_eq!(s.readout_labels().0, [Some(connect()), Some(plx_os::i18n::msg::settings_login_details_c())]);
+        assert_eq!(s.readout_labels().0, [Some(connect()), None, Some(plx_os::i18n::msg::settings_login_details_c())]);
         assert_eq!(s.row().as_slice(), [CONTROL, DETAILS]);
         assert_eq!(s.state.plaintext, Some(false));
         assert!(answers(&fx).is_empty(), "nothing is answered for the person");

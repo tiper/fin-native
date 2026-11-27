@@ -178,11 +178,13 @@ const FOOTER: u32 = 0x1000_0000;
 /// The roster read-out's *Back* — the primary of its control row, with *Sign out* (still
 /// [`FOOTER`]) beside it. Offered only while BACK from the read-out would resume a session.
 const READOUT_BACK: u32 = 0x1000_0001;
+/// The read-out's *Try again* — the primary, ahead of [`READOUT_BACK`].
+const READOUT_RETRY: u32 = 0x1000_0002;
 /// Keypad cell `(r, c)` is `PAD_BASE + r * PAD_COLS + c`.
 const PAD_BASE: u32 = 0x2000_0000;
 
 // The screen's carved namespaces must stay above the plain-index range `reconcile` clamps in.
-const _: () = assert!(FOOTER >= geom::NAMESPACE_FLOOR && READOUT_BACK > FOOTER && PAD_BASE > READOUT_BACK);
+const _: () = assert!(FOOTER >= geom::NAMESPACE_FLOOR && READOUT_BACK > FOOTER && READOUT_RETRY > READOUT_BACK && PAD_BASE > READOUT_RETRY);
 
 const ROSTER_GROUP: GroupId = GroupId(1);
 
@@ -195,6 +197,8 @@ const ROSTER_GROUP: GroupId = GroupId(1);
 enum Commit {
     /// The read-out's *Back*: exactly the BACK key's request.
     Back,
+    /// The read-out's *Try again*: raise the picker again, which asks for the roster again.
+    Retry,
     SignOut,
     Select(usize),
     Nothing,
@@ -215,50 +219,61 @@ fn commit_action(pad_open: bool, elem: Option<u32>, roster_n: usize) -> Commit {
         None => Commit::Nothing,
         Some(FOOTER) => Commit::SignOut,
         Some(READOUT_BACK) => Commit::Back,
+        Some(READOUT_RETRY) => Commit::Retry,
         Some(e) if (e as usize) < roster_n => Commit::Select(e as usize),
         Some(_) => Commit::Nothing,
     }
 }
 const FOOTER_GROUP: GroupId = GroupId(2);
 const PAD_GROUP: GroupId = GroupId(3);
-/// The roster read-out's control row — *Back* then *Sign out*, or *Sign out* alone — in place of
-/// the footer while the read-out is up.
+/// The roster read-out's control row — *Try again*, then *Back* (when BACK resumes something) and
+/// *Sign out* — in place of the footer while the read-out is up.
 const READOUT_GROUP: GroupId = GroupId(4);
 
 /// **The roster read-out, built once for both its uses** — the draw, and the geometry the focus
 /// engine and the pointer read ([`readout_rects`]) — so the pills and their stops are one
 /// expression (`screens::login::readout_overlay`'s rule). It fills the page, so it hangs from
 /// `StatusOverlay::FULL_ANCHOR_TOP` with the reason and the row stacked under it, like every other
-/// failed page read-out. `back` puts *Back* first and *Sign out* second; without it *Sign out* is
-/// the row's one control.
-fn readout_overlay(reason: &std::ffi::CStr, back: bool) -> StatusOverlay<'_> {
+/// failed page read-out. *Try again* leads (the one control that can change the outcome); `back`
+/// puts *Back* between it and *Sign out*, and without it the row is *Try again* then *Sign out*.
+/// `retry` is false for a dev-token session, whose Session refuses the switch outright
+/// ([`ProfilesScreen::readout_retry`]): a focused primary that does nothing is withheld, and the row
+/// is the one it was before *Try again* existed.
+fn readout_overlay(reason: &std::ffi::CStr, back: bool, retry: bool) -> StatusOverlay<'_> {
     // A profile switch failing is `IncidentKind::ProfileSwitch` by construction — this screen
     // never draws the read-out for any other cause — so the glyph is the fixed one that kind maps
     // to rather than a re-derivation through an `IncidentContext` this screen doesn't hold.
     let o = StatusOverlay::new(Rect::FULL, plx_os::i18n::msg::settings_profiles_failed_c(), StatusKind::Failed)
         .page(plx_ui::icons::Icon::PeopleBadgeAlert)
         .reason(reason);
-    if back {
-        o.action(plx_os::i18n::msg::settings_back_c()).secondary(Some(plx_os::i18n::msg::settings_account_sign_out_c()))
-    } else {
-        o.action(plx_os::i18n::msg::settings_account_sign_out_c())
+    let (retry_label, back_label, sign_out) = (
+        plx_os::i18n::msg::browse_action_retry_c(),
+        plx_os::i18n::msg::settings_back_c(),
+        plx_os::i18n::msg::settings_account_sign_out_c(),
+    );
+    match (retry, back) {
+        (true, true) => o.row(&[retry_label, back_label, sign_out]),
+        (true, false) => o.row(&[retry_label, sign_out]),
+        (false, true) => o.row(&[back_label, sign_out]),
+        (false, false) => o.row(&[sign_out]),
     }
 }
 
 /// The read-out row's elements in walk (and slot) order.
-fn readout_elems(back: bool) -> &'static [u32] {
-    if back {
-        &[READOUT_BACK, FOOTER]
-    } else {
-        &[FOOTER]
+fn readout_elems(back: bool, retry: bool) -> &'static [u32] {
+    match (retry, back) {
+        (true, true) => &[READOUT_RETRY, READOUT_BACK, FOOTER],
+        (true, false) => &[READOUT_RETRY, FOOTER],
+        (false, true) => &[READOUT_BACK, FOOTER],
+        (false, false) => &[FOOTER],
     }
 }
 
 /// Each read-out element's rect, by slot — the widget's own placement through `Measure`. The
 /// reason TEXT does not move the row (a `Failed` reason is a reserved two-line slot), so an empty
 /// one places it exactly where the draw does.
-fn readout_rects(measure: &dyn Measure, back: bool) -> [Option<Rect>; 2] {
-    readout_overlay(c"", back).action_frames_measured(measure)
+fn readout_rects(measure: &dyn Measure, back: bool, retry: bool) -> [Option<Rect>; plx_ui::widgets::STATUS_ROW_MAX] {
+    readout_overlay(c"", back, retry).row_frames_measured(measure)
 }
 
 fn pad_rc(elem: u32) -> Option<(usize, usize)> {
@@ -715,9 +730,10 @@ pub struct ProfilesScreen {
     /// Its margin is this frame's centring offset (`row_geom`'s `start_x`), refreshed every
     /// `tick` and at construction.
     row: AvatarRow,
-    /// The controls' focus pop — slot 0 the footer (or the read-out's primary), slot 1 the
-    /// read-out's secondary — owned rather than `ui/profiles.rs`'s `static mut FOOTER_POP`.
-    footer_pop: CtlPop<2>,
+    /// The controls' focus pop — slot 0 the footer (or the read-out's primary), slots 1 and 2 the
+    /// read-out's second and third control (*Try again*, *Back*, *Sign out* in row order, or the
+    /// shorter row [`readout_elems`] answers) — owned rather than `ui/profiles.rs`'s `static mut FOOTER_POP`.
+    footer_pop: CtlPop<3>,
     /// Free-running rotation clock for the spinner (empty roster, PIN verification, a profile
     /// switch in flight), in ms — cached each tick from [`spin_phase`](Self::spin_phase)'s
     /// `advance`. Render-only, never hashed.
@@ -734,6 +750,12 @@ pub struct ProfilesScreen {
     /// The Session's [`readout_back_resumes`](auth::owner::SessionSnapshot::readout_back_resumes):
     /// whether the read-out's *Back* is offered at all.
     back_resumes: bool,
+    /// The Session's [`picker`](auth::owner::SessionSnapshot::picker): the kind the read-out's
+    /// *Try again* raises the picker as again.
+    picker: auth::Picker,
+    /// The Session's [`dev_session`](auth::owner::SessionSnapshot::dev_session): a dev-token
+    /// session, whose Session refuses *Try again*'s `StartSwitch`.
+    dev_session: bool,
     /// Focus has been seated on the read-out's row since it came up — cleared when it goes, so
     /// the next read-out seats again. The container's mount-time `Enter` ran against whatever
     /// `groups()` answered THEN; a read-out landing later has to ask for focus itself.
@@ -770,6 +792,8 @@ impl ProfilesScreen {
             phase: snapshot.phase,
             error: Arc::clone(&snapshot.error),
             back_resumes: snapshot.readout_back_resumes,
+            picker: snapshot.picker,
+            dev_session: snapshot.dev_session,
             readout_seated: false,
             // The mounter carries `DismissPinError` beside construction. The local first paint
             // must already be fresh while that command is still in the drain.
@@ -876,6 +900,8 @@ impl ProfilesScreen {
 
     fn resync(&mut self, auth: auth::SessionRead<'_>) {
         let snapshot = auth.0;
+        self.picker = snapshot.picker;
+        self.dev_session = snapshot.dev_session;
         self.users = Arc::clone(&snapshot.users);
         self.seated = Arc::clone(&snapshot.seated);
         self.phase = snapshot.phase;
@@ -899,12 +925,19 @@ impl ProfilesScreen {
         auth::owner::is_roster_readout(self.phase, &self.users, &self.error)
     }
 
-    /// **The read-out leads with *Back***, whose OK is the BACK key — the way out it used to leave
-    /// unsaid, with *Sign out* its only visible (and destructive) control. Offered only when the
+    /// **The read-out offers *Back***, whose OK is the BACK key, between *Try again* and *Sign out*
+    /// (the destructive one it used to be alone with). Offered only when the
     /// Session says BACK resumes something inside the app; otherwise the key hands the screen to
     /// the television, and a *Back* pill claiming to stay would be the lie.
     fn readout_back(&self) -> bool {
         self.roster_readout() && self.back_resumes
+    }
+
+    /// **Is *Try again* offered?** Not in a dev-token session: it has no account to list a roster
+    /// with, so the Session answers the `StartSwitch` by raising this same read-out again, and a
+    /// focused primary that changes nothing is the dead end this control exists to remove.
+    fn readout_retry(&self) -> bool {
+        !self.dev_session
     }
 
     /// The read-out row's position of `elem`, while the read-out is up.
@@ -912,7 +945,7 @@ impl ProfilesScreen {
         if !self.roster_readout() {
             return None;
         }
-        readout_elems(self.back_resumes).iter().position(|e| *e == elem)
+        readout_elems(self.back_resumes, self.readout_retry()).iter().position(|e| *e == elem)
     }
 
     fn tick<H: AuthLike>(&mut self, t: Tick, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) {
@@ -938,7 +971,7 @@ impl ProfilesScreen {
         // The read-out just came up: seat focus on its primary (see `readout_seated`).
         let readout = self.roster_readout() && !self.pad.open;
         if readout && !self.readout_seated {
-            let first = readout_elems(self.back_resumes)[0];
+            let first = readout_elems(self.back_resumes, self.readout_retry())[0];
             let me = fx.from();
             fx.push(Fx::Deliver(
                 me,
@@ -1250,6 +1283,16 @@ impl ProfilesScreen {
         self.sync_pin_state();
     }
 
+    /// **The read-out's *Try again***: raise the same picker again — `StartSwitch` is what Change
+    /// profile, the boot gate and the stored-session boot all send, and from a read-out it
+    /// re-opens the picker as the kind it already is ([`SessionSnapshot::picker`](auth::owner::SessionSnapshot::picker),
+    /// so BACK keeps skipping exactly what it did) with its error cleared and a fresh roster
+    /// request out. The screen stays mounted and shows the spinner until that request ends in a
+    /// roster or in this read-out again.
+    fn request_roster_again<H: AppLike>(&mut self, fx: &mut Effects<'_, H>) {
+        fx.push(Fx::App(AppFx::Session(auth::SessionCmd::StartSwitch(self.picker))));
+    }
+
     fn draw_name(
         p: Painter,
         u: &auth::UserTile,
@@ -1417,7 +1460,7 @@ impl<H: AppLike> Focusable<H> for ProfilesView<'_> {
         }
         if self.roster_readout() {
             // The read-out's row replaces the footer: *Sign out* moves onto it, beside *Back*.
-            let rects = readout_rects(cx.measure, self.back_resumes);
+            let rects = readout_rects(cx.measure, self.back_resumes, self.readout_retry());
             let extent = rects.iter().flatten().copied().reduce(|a, b| a.union(b));
             out.push(GroupSpec {
                 id: READOUT_GROUP,
@@ -1427,7 +1470,7 @@ impl<H: AppLike> Focusable<H> for ProfilesView<'_> {
                 // nothing else is focusable while the read-out is up
                 edge: [EdgeRule::Stop; 4],
                 extent: extent.unwrap_or(Rect::FULL),
-                len: readout_elems(self.back_resumes).len(),
+                len: readout_elems(self.back_resumes, self.readout_retry()).len(),
                 elem: ElemKind::Control,
             });
             return;
@@ -1463,7 +1506,7 @@ impl<H: AppLike> Focusable<H> for ProfilesView<'_> {
             return pad_neighbour(key.entry, key.elem, dir);
         }
         if let Some(at) = self.readout_slot(key.elem) {
-            let elems = readout_elems(self.back_resumes);
+            let elems = readout_elems(self.back_resumes, self.readout_retry());
             let next = match dir {
                 Dir::Left => at.checked_sub(1),
                 Dir::Right => Some(at + 1).filter(|&i| i < elems.len()),
@@ -1489,7 +1532,7 @@ impl<H: AppLike> Focusable<H> for ProfilesView<'_> {
             return pad_place(cx.measure, *key);
         }
         if let Some(slot) = self.readout_slot(*key) {
-            let r = readout_rects(cx.measure, self.back_resumes)[slot]?;
+            let r = readout_rects(cx.measure, self.back_resumes, self.readout_retry())[slot]?;
             return Some(Placed {
                 rect: r,
                 rest_rect: r,
@@ -1523,7 +1566,7 @@ impl<H: AppLike> Focusable<H> for ProfilesView<'_> {
             }
             return plx_machine::machine::FocusKey {
                 entry: self.entry,
-                elem: readout_elems(self.back_resumes)[0],
+                elem: readout_elems(self.back_resumes, self.readout_retry())[0],
             };
         }
         if want.elem == FOOTER {
@@ -1554,7 +1597,7 @@ impl<H: AppLike> Focusable<H> for ProfilesView<'_> {
         if g == READOUT_GROUP {
             return plx_machine::machine::FocusKey {
                 entry: self.entry,
-                elem: readout_elems(self.back_resumes)[0],
+                elem: readout_elems(self.back_resumes, self.readout_retry())[0],
             };
         }
         if g == FOOTER_GROUP {
@@ -1570,7 +1613,7 @@ impl<H: AppLike> Focusable<H> for ProfilesView<'_> {
     /// answers for now: the roster is `roster.<the shelf's id>` (the shared `geom::Shelf` names
     /// each tile; the screen only prefixes the collection and labels the tile with its profile's
     /// name), the footer and the read-out's *Sign out* are `sign_out`, the read-out's *Back* is
-    /// `back`, and the keypad is `pad.digit.<n>` / `pad.delete`. A key whose group the view is not
+    /// `back`, its *Try again* is `retry`, and the keypad is `pad.digit.<n>` / `pad.delete`. A key whose group the view is not
     /// answering for (the roster under the pad, a pad key with the pad shut) has no id.
     fn a11y(&self, key: &u32, cx: &Cx<'_, H>) -> Option<A11y<'_>> {
         let group = Focusable::<H>::group_of(self, key, cx)?;
@@ -1579,10 +1622,10 @@ impl<H: AppLike> Focusable<H> for ProfilesView<'_> {
             return Some(A11y::new(pad_a11y_path(r, c)?, Role::Button));
         }
         if group == READOUT_GROUP || group == FOOTER_GROUP {
-            let (name, label) = if *key == READOUT_BACK {
-                ("back", plx_os::i18n::msg::settings_back_c())
-            } else {
-                ("sign_out", plx_os::i18n::msg::settings_account_sign_out_c())
+            let (name, label) = match *key {
+                READOUT_RETRY => ("retry", plx_os::i18n::msg::browse_action_retry_c()),
+                READOUT_BACK => ("back", plx_os::i18n::msg::settings_back_c()),
+                _ => ("sign_out", plx_os::i18n::msg::settings_account_sign_out_c()),
             };
             let a = A11y::new(A11yPath::new().name(name), Role::Button);
             return Some(match label.to_str() {
@@ -1612,7 +1655,7 @@ impl<H: AppLike> Focusable<H> for ProfilesView<'_> {
             }
         } else if self.roster_readout() {
             if g == READOUT_GROUP {
-                out.extend_from_slice(readout_elems(self.back_resumes));
+                out.extend_from_slice(readout_elems(self.back_resumes, self.readout_retry()));
             }
         } else if g == FOOTER_GROUP {
             out.push(FOOTER);
@@ -1624,6 +1667,7 @@ impl<H: AppLike> Focusable<H> for ProfilesView<'_> {
         let elem = match path.segs().next()? {
             Seg::Name("pad") => pad_a11y_find(path)?,
             Seg::Name("sign_out") if path.len() == 1 => FOOTER,
+            Seg::Name("retry") if path.len() == 1 => READOUT_RETRY,
             Seg::Name("back") if path.len() == 1 => READOUT_BACK,
             Seg::Name("roster") => Focusable::<H>::a11y_find(&self.shelf(self.n), &path.tail(1), cx)?,
             _ => return None,
@@ -1723,6 +1767,7 @@ impl<H: AuthLike> Machine<H> for ProfilesScreen {
                 match commit_action(self.pad.open, elem, roster_n) {
                     // the same request the BACK key's arm below makes — one door, two ways in
                     Commit::Back => self.request_root_back(fx),
+                    Commit::Retry => self.request_roster_again(fx),
                     Commit::SignOut => {
                         fx.push(Fx::App(AppFx::Session(auth::SessionCmd::SignOut)));
                     }
@@ -1932,16 +1977,17 @@ impl<H: AuthLike> Screen<H> for ProfilesScreen {
         if readout {
             // Nobody to offer and nothing left to wait for: the shared failed read-out — the same
             // widget, placement and neutral ink as the sign-in screen's (never red) — with its
-            // controls on its own row: *Back* (what the BACK key does, focused) and *Sign out*
-            // beside it, or *Sign out* alone when BACK would leave the app (`readout_back`).
+            // controls on its own row: *Try again* (focused: the one that can change the outcome),
+            // *Back* (what the BACK key does) and *Sign out*, or no *Back* when BACK would leave
+            // the app (`readout_back`).
             let reason = CString::new(self.error.as_ref()).unwrap_or_default();
             let press = f.press;
-            let overlay = readout_overlay(&reason, self.back_resumes)
+            let overlay = readout_overlay(&reason, self.back_resumes, self.readout_retry())
                 .focus(cur.and_then(|e| self.readout_slot(e)))
-                .scales([0, 1].map(|i| self.footer_pop.scale_with(i, press)));
+                .scales([0, 1, 2].map(|i| self.footer_pop.scale_with(i, press)));
             overlay.draw_measured(&Env::inert(), p, f.measure);
-            let frames = overlay.action_frames_measured(f.measure);
-            for (elem, rect) in readout_elems(self.back_resumes).iter().zip(frames) {
+            let frames = overlay.row_frames_measured(f.measure);
+            for (elem, rect) in readout_elems(self.back_resumes, self.readout_retry()).iter().zip(frames) {
                 if let Some(rect) = rect {
                     stop(f, *elem, rect);
                 }

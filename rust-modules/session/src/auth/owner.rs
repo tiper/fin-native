@@ -1268,6 +1268,13 @@ pub struct SessionSnapshot {
     /// it is `false` the key hands the screen to the television, and a *Back* pill saying
     /// otherwise would lie.
     pub readout_back_resumes: bool,
+    /// **The kind the picker was raised as** ([`Picker`]) — what the roster read-out's *Try again*
+    /// raises it as again, so a retry changes nothing about what BACK may skip.
+    pub picker: Picker,
+    /// **A dev-token session** (`BootstrapAuthority::DevPms`): no account stands behind it, so
+    /// `StartSwitch` is refused by raising the read-out again. The roster read-out withholds its
+    /// *Try again* on it rather than focus a control that cannot change anything.
+    pub dev_session: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1329,6 +1336,8 @@ impl SessionSnapshot {
             && self.switch_refused == partition.switch_refused()
             && self.readout_back_resumes == (partition.roster_readout_up() && partition.roster_dead_end()
                 && partition.dead_end_resumes())
+            && self.picker == partition.attempt.picker_data().picker
+            && self.dev_session == partition.dev_session()
             && match (&self.profile, state.active_profile) {
                 (None, None) => true,
                 (Some(read), Some(profile)) => read.uuid == profile.uuid
@@ -1367,7 +1376,9 @@ impl SessionSnapshot {
             account: partition.readout_account().map(Arc::from),
             switch_refused: partition.switch_refused(),
             readout_back_resumes: partition.roster_readout_up() && partition.roster_dead_end()
-                && partition.dead_end_resumes() }
+                && partition.dead_end_resumes(),
+            picker: partition.attempt.picker_data().picker,
+            dev_session: partition.dev_session() }
     }
 }
 

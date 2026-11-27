@@ -918,7 +918,7 @@ fn a_dead_producer_reads_out_whether_or_not_a_picture_was_up() {
 }
 
 fn readout_of(e: &plx_media::player::ErrorShape) -> FailureReadout {
-    let cx = plx_media::player::FailureContext { forced: true, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
+    let cx = plx_media::player::FailureContext { forced: true, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
     FailureReadout::of(e, plx_media::player::failure_actions(e.kind, cx), "0.7.0 · webOS 4.5 · code".into())
 }
 
@@ -961,24 +961,27 @@ fn the_diagnostics_footer_sits_below_the_row_inside_the_safe_bottom_band() {
     assert!(FOOTER_TOP + line_box < SCR_H - theme::space::XL + 1.0);
 }
 
-/// **Every row fits the screen, in every shipped language**: the longest row each kind can
-/// draw, measured with the device's advances, stays inside the read-out's width.
+/// **Every row fits the screen, in every shipped language**: every distinct row the failure table
+/// can produce (`every_failure_row`), measured with the device's advances, stays inside the
+/// read-out's width.
 #[test]
 fn every_failure_row_fits_the_screen_in_every_language() {
     use plx_base::fontcov::advances::ShippedMeasure;
     use plx_ui::fit::HEADROOM;
     use plx_os::i18n::{language_on_this_thread_for_test};
     use plx_media::player::FailureAction as A;
-    let rows: [&[A]; 4] = [
-        &[A::PlayAutomatically, A::TryAgain, A::Back],
-        &[A::TryAgain, A::ChangeQuality, A::Back],
-        &[A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::Back],
-        &[A::Repair, A::Back],
-    ];
+    // Every row the table can produce (the distinct ones), so a change to `failure_actions` is width-checked.
+    let mut rows: Vec<Vec<A>> = Vec::new();
+    for (_, _, row) in plx_media::player::every_failure_row() {
+        if !rows.contains(&row) {
+            rows.push(row);
+        }
+    }
+    assert!(rows.contains(&vec![A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks, A::Back]), "the widest Disabled row is enumerated");
     let mut out = Vec::new();
     for language in plx_os::i18n::SHIPPED {
         let _guard = language_on_this_thread_for_test(language);
-        for row in rows {
+        for row in &rows {
             let labels: Vec<&'static std::ffi::CStr> = row.iter().map(|a| failure_action_label(*a)).collect();
             let o = StatusOverlay::new(Rect::FULL, c"", StatusKind::Failed).page(plx_ui::icons::Icon::Alert).reason(c"x").row(&labels);
             let frames = o.row_frames_measured(&ShippedMeasure);

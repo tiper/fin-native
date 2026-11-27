@@ -441,6 +441,63 @@ fn the_recents_cursor_stops_on_the_clear_control() {
     drop(session);
 }
 
+/// **A failed search has a way out of the failure.** The read-out used to be a statement with no
+/// control: the sources retry on their own backoff, but an empty roster never answers, and the
+/// person had nothing to press. Now *Try again* is a focusable region of its own (its own group,
+/// linked under the field, so ▼ reaches it), the pointer lands on the pill that is drawn, and
+/// pressing it asks the store to run the same query again (`SetQuery` of an unchanged string is a
+/// no-op, hence `SearchCmd::Retry`) and hands focus back to the field, which the pill leaves with
+/// the read-out it belonged to.
+#[test]
+fn a_failed_search_offers_try_again_that_asks_the_store_to_run_the_query_again() {
+    let _serial = plx_base::testlock::serial();
+    let session = plx_plex::plex::session::TempSession::new("owned-search-retry");
+    watching(&session, "owned-search-retry-who", &[]);
+    let mut fixture = Fixture::new();
+
+    // A query that has not failed draws no control: ▼ has nothing to reach.
+    fixture.query("wallace");
+    let mut screen = fixture.screen();
+    let mut engine = seated(&screen, &fixture);
+    assert_eq!(fixture.store.state(), plx_data::search::State::Searching);
+    assert_eq!(step_dir(&mut screen, &fixture, &mut engine, Dir::Down), Some(screen.key(FIELD)));
+    assert!(stop_of(&screen, &fixture, None, RETRY).is_none(), "no failure, no Try again");
+
+    // Every source has had its say and none answered.
+    fixture.store.pump(1.0);
+    fixture.capture();
+    assert_eq!(fixture.store.state(), plx_data::search::State::Failed, "an empty roster can never answer");
+    let mut screen = fixture.screen();
+    let mut engine = seated(&screen, &fixture);
+    let landed = step_dir(&mut screen, &fixture, &mut engine, Dir::Down);
+    assert_eq!(landed, Some(screen.key(RETRY)), "▼ from the field reaches Try again");
+    assert_eq!(step_dir(&mut screen, &fixture, &mut engine, Dir::Down), Some(screen.key(RETRY)),
+        "…and it is the last stop of the page");
+    assert_eq!(step_dir(&mut screen, &fixture, &mut engine, Dir::Up), Some(screen.key(FIELD)));
+
+    // The pointer lands on the pill the draw paints: one geometry for both.
+    let stop = stop_of(&screen, &fixture, None, RETRY).expect("a failure draws its control");
+    assert_eq!(stop.rect, render::fault_retry_rect(false, 0.0, &fixture.measure));
+    assert_eq!(hit(&screen, &fixture, &[RETRY], stop.rect.cx(), stop.rect.cy()), Some(RETRY));
+
+    // Pressing it is one store command and a seat back on the field.
+    let retry_key = screen.key(RETRY);
+    let (_, out, _) = deliver(&mut screen, &fixture, Some(retry_key), ScreenEvent::Activate(RETRY));
+    let asked = out.iter().filter(|effect| matches!(&effect.fx, Fx::App(AppFx::Store(StoreId::Search,
+        StoreCmd::Search(SearchCmd::Retry))))).count();
+    assert_eq!(asked, 1, "one press, one Retry");
+    assert!(out.iter().any(|effect| matches!(&effect.fx, Fx::Deliver(_, Delivery::Screen(
+        ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::Elem(key) }))) if key.elem == FIELD)));
+
+    // The store answers it with the working state, and the control goes with the failure.
+    fixture.store.run(SearchCmd::Retry);
+    fixture.capture();
+    assert_eq!(fixture.store.state(), plx_data::search::State::Searching);
+    let screen = fixture.screen();
+    assert!(stop_of(&screen, &fixture, None, RETRY).is_none(), "Try again is not a stop while it searches");
+    drop(session);
+}
+
 // ---- the document's geometry, as the pointer sees it ------------------------------------------
 
 /// Legacy `results.rs`'s `a_tile_scrolled_under_the_chrome_is_not_a_pointer_target`, on the owned

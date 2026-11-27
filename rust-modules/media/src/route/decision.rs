@@ -9796,6 +9796,11 @@ pub fn forced_direct_play(ps: &PlaybackSession) -> bool {
     ps.direct_play_mode == DirectPlayMode::Forced
 }
 
+/// Direct Play is set to **Disabled** for this session: every rung asks the server to convert.
+pub fn direct_play_disabled(ps: &PlaybackSession) -> bool {
+    ps.direct_play_mode == DirectPlayMode::Disabled
+}
+
 pub fn audio_track_direct_plays(ps: &PlaybackSession, codec: &str, channels: i64, sample_rate: i64) -> bool {
     audio_direct_plays_with(&ps.attempt_caps(), ps.direct_play_mode, codec, channels, sample_rate)
 }

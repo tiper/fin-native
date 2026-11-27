@@ -34,9 +34,12 @@ use draft::Draft;
 
 const FIELD: u32 = 1;
 const CLEAR: u32 = 2;
+/// The failed search's *Try again* (see [`SearchScreen::faulted`]).
+const RETRY: u32 = 3;
 const FIELD_GROUP: GroupId = GroupId(0x5345_4100);
 const RECENTS_GROUP: GroupId = GroupId(0x5345_4101);
 const CLEAR_GROUP: GroupId = GroupId(0x5345_4102);
+const RETRY_GROUP: GroupId = GroupId(0x5345_4103);
 const STRIP: GroupId = plx_ui::containers::tabs::STRIP;
 /// The alpha at or under which the owner annotation is invisible: the renderer draws no run
 /// below it, and the instance swaps the word it holds only there — so a handle never changes
@@ -68,7 +71,7 @@ struct Row { kind: Kind, group: GroupId, elems: Vec<u32> }
 /// The sections of the page, top to bottom. A result row's key carries the page's `rows_gen`: a
 /// row the page wiped and rebuilt is a new section with a new shelf, as a wiped row always was.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Sec { Head, Recents, Clear, Row(Kind, u32) }
+pub enum Sec { Head, Recents, Clear, Retry, Row(Kind, u32) }
 
 pub struct SearchScreen {
     entry: EntryId,
@@ -90,6 +93,11 @@ pub struct SearchScreen {
     query_gen: u32,
     recent_clear_pending: bool,
     publication: Option<plx_data::search::view::SearchSnapshot>,
+    /// The page says **the search failed** (every source has answered and none could): it draws the
+    /// failure read-out and, under it, the one control that can change that, *Try again*
+    /// ([`Sec::Retry`]). Read from the store's publication in [`Self::sync`], so the layout
+    /// (`sections`, which has no `cx` in `elem_of`) and the draw read one answer.
+    faulted: bool,
     content_dirty: bool,
     fade: plx_ui::xfade::Xfade,
     ground: plx_ui::widgets::PageGround,
@@ -119,7 +127,7 @@ impl SearchScreen {
         Self { entry, instance, draft: Draft::new(0, ""), mounted: false, editing: false,
             blink_us: 0, hot: Spring::at(1.0), stack: new_stack(entry), rows_gen: 0,
             keys: Vec::new(), next_elem: 10, rows: Vec::new(), recents: Vec::new(), query_gen: 0,
-            recent_clear_pending: false, publication: None, content_dirty: true,
+            recent_clear_pending: false, publication: None, faulted: false, content_dirty: true,
             fade: plx_ui::xfade::Xfade::new(), ground: plx_ui::widgets::PageGround::new(),
             owner_row: None, owner: String::new(), owner_alpha: Spring::at(0.0), restored: None, render: Default::default(),
             notices: 0, caption_policy: crate::registry::caption_policy_of(plx_plex::plex::session::UnderPosters::DEFAULT),
@@ -205,6 +213,11 @@ impl SearchScreen {
             self.recent_clear_pending = false;
             self.content_dirty = true;
         }
+        let faulted = !self.draft.pending() && self.real_query() && view.state() == plx_data::search::State::Failed;
+        if faulted != self.faulted {
+            self.faulted = faulted;
+            self.content_dirty = true;
+        }
         if let Some(memory) = &restored {
             self.keys = memory.keys.clone(); self.next_elem = memory.next_elem;
             self.stack.jump_to(memory.scroll);
@@ -285,6 +298,15 @@ impl SearchScreen {
         }
         if elem == FIELD {
             self.keyboard(!self.editing, true, fx);
+            return Handled::Yes;
+        }
+        if elem == RETRY && self.faulted {
+            // The failure ends the query's attempt, not the query: ask the store to run it again
+            // (`SetQuery` of the same string is a no-op by design). The failure read-out gives way to
+            // the working state, so focus goes back to the field it came from.
+            self.store(SearchCmd::Retry, fx);
+            self.content_dirty = true;
+            self.reseat(FocusTarget::Elem(self.key(FIELD)), fx);
             return Handled::Yes;
         }
         if elem == CLEAR && !self.recents.is_empty() {
@@ -543,6 +565,7 @@ impl SearchScreen {
         match elem {
             Some(FIELD) => ("Field", -1, -1, -1, false),
             Some(CLEAR) => ("Clear", -1, -1, -1, false),
+            Some(RETRY) => ("Retry", -1, -1, -1, false),
             Some(elem) if self.recents.contains(&elem) => {
                 let index = self.recents.iter().position(|e| *e == elem).unwrap_or(0);
                 ("Recents", -1, -1, index as i64, false)
@@ -576,7 +599,9 @@ impl SearchScreen {
     pub fn recents_shown(&self) -> usize { self.recents.len() }
 
     fn first_content(&self) -> Option<GroupId> {
-        if !self.recents.is_empty() { Some(RECENTS_GROUP) } else { self.rows.first().map(|row| row.group) }
+        if !self.recents.is_empty() { Some(RECENTS_GROUP) }
+        else if self.faulted { Some(RETRY_GROUP) }
+        else { self.rows.first().map(|row| row.group) }
     }
     /// The stack's key of result row `row`.
     fn section(&self, row: usize) -> Sec { Sec::Row(self.rows[row].kind, self.rows_gen) }
@@ -662,7 +687,7 @@ impl<H: SearchLike> StackPage<H> for SearchScreen {
     fn revision(&self, cx: &Cx<'_, H>) -> u64 {
         let view = H::search(cx);
         let mix = |h: u64, v: u64| (h ^ v).wrapping_mul(0x0100_0000_01b3);
-        let mut h = mix(mix(0xcbf2_9ce4_8422_2325, self.rows_gen as u64), self.recents.len() as u64);
+        let mut h = mix(mix(mix(0xcbf2_9ce4_8422_2325, self.rows_gen as u64), self.recents.len() as u64), self.faulted as u64);
         for (i, row) in self.rows.iter().enumerate() {
             let shown = view.shelves().get(i).map_or(0, |shelf| shelf.items.len()).min(row.elems.len());
             h = mix(mix(h, layout::ordinal(row.kind) as u64), shown as u64);
@@ -671,7 +696,7 @@ impl<H: SearchLike> StackPage<H> for SearchScreen {
     }
     fn sections(&self, _cx: &Cx<'_, H>, out: &mut Vec<SectionSpec<Sec>>) {
         // The sections are named for what they ARE (the accessibility ids: `field.0`, `recents.<n>`,
-        // `clear.0`, `movies.card.<i>`), not by position: the recents come and go, and a result row
+        // `clear.0`, `retry.0`, `movies.card.<i>`), not by position: the recents come and go, and a result row
         // is the page's one row of its kind (`layout::name`), wherever the results place it.
         out.push(SectionSpec::new(Sec::Head, plx_ui::cards::Kind::Custom { height: layout::CONTENT_TOP, focusable: true }, FIELD_GROUP).named("field"));
         if !self.recents.is_empty() {
@@ -679,6 +704,9 @@ impl<H: SearchLike> StackPage<H> for SearchScreen {
             out.push(SectionSpec::new(Sec::Recents, plx_ui::cards::Kind::Custom {
                 height: plx_ui::table::HDR_H + shown * plx_ui::table::ROW_H, focusable: true }, RECENTS_GROUP).named("recents"));
             out.push(SectionSpec::new(Sec::Clear, plx_ui::cards::Kind::Custom { height: 0.0, focusable: true }, CLEAR_GROUP).named("clear"));
+        }
+        if self.faulted {
+            out.push(SectionSpec::new(Sec::Retry, plx_ui::cards::Kind::Custom { height: 0.0, focusable: true }, RETRY_GROUP).named("retry"));
         }
         for row in &self.rows {
             let elem = if matches!(row.kind, Kind::Movie | Kind::Show | Kind::Episode) { ElemKind::Card } else { ElemKind::Bare };
@@ -709,10 +737,21 @@ impl<H: SearchLike> StackPage<H> for SearchScreen {
         matches!(self.selected_item(Some(key), cx), Some(Item::Media(media)) if crate::registry::item_has_menu(media))
     }
     fn elem_of(&self, k: Sec) -> Option<u32> {
-        match k { Sec::Head => Some(FIELD), Sec::Clear if !self.recents.is_empty() => Some(CLEAR), _ => None }
+        match k {
+            Sec::Head => Some(FIELD),
+            Sec::Clear if !self.recents.is_empty() => Some(CLEAR),
+            Sec::Retry if self.faulted => Some(RETRY),
+            _ => None,
+        }
     }
     fn plain_len(&self, k: Sec) -> usize {
-        match k { Sec::Recents => self.recents.len(), Sec::Head => 1, Sec::Clear => (!self.recents.is_empty()) as usize, Sec::Row(..) => 0 }
+        match k {
+            Sec::Recents => self.recents.len(),
+            Sec::Head => 1,
+            Sec::Clear => (!self.recents.is_empty()) as usize,
+            Sec::Retry => self.faulted as usize,
+            Sec::Row(..) => 0,
+        }
     }
     fn plain_elem(&self, k: Sec, n: usize) -> Option<u32> {
         match k { Sec::Recents => self.recents.get(n).copied(), _ => if n == 0 { StackPage::<H>::elem_of(self, k) } else { None } }
@@ -728,6 +767,7 @@ impl<H: SearchLike> StackPage<H> for SearchScreen {
         match k {
             Sec::Recents => layout::recent(0, layout::CONTENT_TOP - section.y),
             Sec::Clear => layout::clear_below(section.y, cx.measure),
+            Sec::Retry => render::fault_retry_rect(self.editing, layout::CONTENT_TOP - section.y, cx.measure),
             _ => Rect::new(layout::FIELD.x, layout::FIELD.y + section.y, layout::FIELD.w, layout::FIELD.h),
         }
     }
@@ -737,10 +777,10 @@ impl<H: SearchLike> StackPage<H> for SearchScreen {
     fn plain_group(&self, _cx: &Cx<'_, H>, k: Sec, id: GroupId, extent: Rect) -> GroupSpec {
         match k {
             Sec::Recents => group(id, GroupKind::Column, self.recents.len(), extent, ElemKind::Bare, Seat::Remembered),
-            Sec::Clear => {
-                let mut clear = group(id, GroupKind::Row { wrap: false }, 1, extent, ElemKind::Control, Seat::First);
-                clear.edge[1] = EdgeRule::Stop;
-                clear
+            Sec::Clear | Sec::Retry => {
+                let mut control = group(id, GroupKind::Row { wrap: false }, 1, extent, ElemKind::Control, Seat::First);
+                control.edge[1] = EdgeRule::Stop;
+                control
             }
             _ => group(id, GroupKind::Row { wrap: false }, 1, extent, ElemKind::Bare, Seat::First),
         }
@@ -748,7 +788,7 @@ impl<H: SearchLike> StackPage<H> for SearchScreen {
     /// Entered from the field, a group takes the card focus last left on in it, else its first.
     fn seat_override(&self, cx: &Cx<'_, H>, k: Sec, _from: Placed) -> Option<u32> {
         if !cx.focus.current.is_some_and(|key| key.elem == FIELD) { return None; }
-        let group = match k { Sec::Recents => RECENTS_GROUP, Sec::Clear => CLEAR_GROUP, Sec::Head => FIELD_GROUP, Sec::Row(kind, _) => layout::group(kind) };
+        let group = match k { Sec::Recents => RECENTS_GROUP, Sec::Clear => CLEAR_GROUP, Sec::Retry => RETRY_GROUP, Sec::Head => FIELD_GROUP, Sec::Row(kind, _) => layout::group(kind) };
         let valid = |elem: &u32| match k {
             Sec::Row(kind, _) => self.rows.iter().any(|row| row.kind == kind && row.elems.contains(elem)),
             _ => (0..StackPage::<H>::plain_len(self, k)).any(|n| StackPage::<H>::plain_elem(self, k, n) == Some(*elem)),
@@ -759,8 +799,9 @@ impl<H: SearchLike> StackPage<H> for SearchScreen {
         };
         Some(cx.focus.remembered(group).filter(valid).or(first).unwrap_or(FIELD))
     }
-    /// Recents and the Clear control are part of the head's block: the page rests at its top.
-    fn reveal_with(&self, k: Sec) -> Option<Sec> { matches!(k, Sec::Recents | Sec::Clear).then_some(Sec::Head) }
+    /// Recents, the Clear control and the failure's *Try again* are part of the head's block: the page
+    /// rests at its top.
+    fn reveal_with(&self, k: Sec) -> Option<Sec> { matches!(k, Sec::Recents | Sec::Clear | Sec::Retry).then_some(Sec::Head) }
     fn reveal_margin(&self, _k: Sec) -> f32 { layout::CONTENT_TOP }
     fn shelf_foot(&self, _cx: &Cx<'_, H>, _k: Sec) -> f32 { plx_ui::consts::UNDER_LABEL_AIR }
     fn wide_extent(&self, _k: Sec) -> bool { false }
@@ -834,7 +875,7 @@ impl LogicalState for SearchScreen {
         c.f32(self.hot.pos).f32(self.hot.vel);
         self.stack.write_scroll(c);
         c.u32(self.next_elem).u32(self.query_gen)
-            .bool(self.recent_clear_pending).bool(self.content_dirty);
+            .bool(self.recent_clear_pending).bool(self.faulted).bool(self.content_dirty);
         self.fade.write(c);
         self.ground.write_motion(c);
         c.option(self.owner_row, |c, row| { c.u64(row as u64); });
