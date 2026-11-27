@@ -194,6 +194,11 @@ pub trait Backend: Send + Sync {
     fn transcode_start_url(&self, spec: &TranscodeSpec<'_>) -> Option<StreamUrl> {
         None
     }
+    /// Whether a conversion started at an offset keeps the file's timestamps (its first keyframe
+    /// carries film time) rather than restarting them at 0 as Plex's does.
+    fn conversion_keeps_file_time(&self) -> bool {
+        false
+    }
     /// Stop the encoder for `session` (`Client::transcode_stop` and `transcode_stop_physical`).
     fn transcode_stop(&self, session: &str) -> bool {
         false

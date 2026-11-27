@@ -19,6 +19,11 @@ impl Transport for std::sync::Arc<Fake> {
         let (_, status, body) = self.routes.iter().find(|(p, ..)| path.starts_with(p))?;
         Some(Answer { status: *status, body: body.as_bytes().to_vec() })
     }
+    fn send_file(&self, url: &str, headers: &[String]) -> Option<Answer> {
+        let a = self.send(url, Verb::Get, headers, None);
+        self.log.lock().unwrap().last_mut().unwrap().2 = Some("(file)".into());
+        a
+    }
 }
 
 fn client(routes: Vec<(&'static str, u16, &'static str)>) -> (JfClient, std::sync::Arc<Fake>) {
@@ -977,6 +982,7 @@ fn subtitle_bytes_carry_the_token_and_report_why_not() {
     let (c, fake) = signed_in(vec![("/Videos/m1/ms/Subtitles/3/0/Stream.srt", 200, "1\n00:00:01,000 --> 00:00:02,000\nHi\n")]);
     assert!(c.get_bytes("/Videos/m1/ms/Subtitles/3/0/Stream.srt").unwrap().starts_with(b"1"));
     assert_eq!(fake.log.lock().unwrap()[0].0, "/Videos/m1/ms/Subtitles/3/0/Stream.srt?ApiKey=tok");
+    assert_eq!(fake.log.lock().unwrap()[0].2.as_deref(), Some("(file)"), "a file request may wait for the server to extract it");
     let (c, _) = signed_in(vec![("/Videos/", 404, "")]);
     assert_eq!(c.get_bytes("/Videos/x").unwrap_err(), "HTTP 404 (0 bytes)");
 }

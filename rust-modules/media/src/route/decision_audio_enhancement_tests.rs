@@ -4229,8 +4229,10 @@ fn part_over_30mbps_burns() {
     ps.cur_transport_kbps = 30_001;
     pick_embedded(&mut ps);
     assert_eq!(subtitle_presenter(&ps), SubtitlePresenter::ServerBurn(BurnReason::AudioConversion));
+    assert_eq!(side_reader_refusal(&ps), Some("part bitrate"), "the log names the refused term");
     ps.cur_transport_kbps = 30_000;
     assert_eq!(subtitle_presenter(&ps), SubtitlePresenter::ClientOverRemux, "the bound is inclusive");
+    assert_eq!(side_reader_refusal(&ps).filter(|why| !matches!(*why, "no session" | "no request part")), None);
     live.finish();
     cleanup(&mut ps);
 }

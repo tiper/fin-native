@@ -15,10 +15,10 @@
 //! Jellyfin's HLS is not offered: the player's segmented route is built for Plex's playlist shape
 //! and credential, so a request for it is refused and the player keeps to the progressive stream.
 
-use super::paths::Transcode;
+use super::paths::{append_param, without_param, Transcode};
 use super::playback_info::Encoders;
 use super::time::ms_to_ticks;
-use plx_plex::plex::{Ceiling, MediaContainer, Metadata, Stream, TranscodeDelivery, TranscodeOffset, TranscodeSource, TranscodeSpec};
+use plx_plex::plex::{Ceiling, Media, MediaContainer, Metadata, Stream, TranscodeDelivery, TranscodeOffset, TranscodeSource, TranscodeSpec};
 
 /// What the device takes, read once per request from its capability table.
 pub struct Device<'a> {
@@ -202,6 +202,36 @@ pub fn plan(mut m: Metadata, spec: &TranscodeSpec<'_>, dev: &Device<'_>) -> Opti
         decision: refusal.unwrap_or(MediaContainer { size: 1, total_size: 1, metadata: vec![m], ..Default::default() }),
         server_url: None,
     })
+}
+
+/// Does `dev` play `media` as it is: a container it pulls itself, a video codec it copies inside
+/// that codec's frame bound (`raster_bound`), and the default audio track (`pick_audio`) it
+/// decodes (the checks the device profile sends the server)?
+/// Where it does not, the server converts the version and the stream it sends carries no
+/// subtitle ([`super::translate::key_extracted_subtitles`]).
+pub fn plays_as_is(media: &Media, dev: &Device<'_>, raster_bound: &dyn Fn(&str) -> (u32, u32)) -> bool {
+    let Some(part) = media.part.first() else { return false };
+    let fits = |codec: &str| {
+        let (w, h) = raster_bound(codec);
+        media.width <= i64::from(w) && media.height <= i64::from(h)
+    };
+    super::playback_info::is_direct_container(&part.container)
+        && part.stream.iter().find(|s| s.stream_type == 1)
+            .is_some_and(|v| dev.video_copy.contains(&v.codec.as_str()) && fits(&v.codec))
+        && pick_audio(&part.stream, 0)
+            .is_none_or(|n| { let a = &part.stream[n]; (dev.audio_ok)(&a.codec, a.channels, a.sampling_rate) })
+}
+
+/// The server's own stream (`Verdict::url`) with its subtitle replaced by a burn of `burn_subtitle`,
+/// or none: the server names no burn for a profile that draws text subtitles, and a re-encode shows
+/// only the server's burn (#49).
+pub fn server_stream(url: &str, burn_subtitle: Option<i64>) -> String {
+    let mut url = without_param(&without_param(url, "SubtitleMethod"), "SubtitleStreamIndex");
+    if let Some(index) = burn_subtitle {
+        append_param(&mut url, "SubtitleStreamIndex", &index.to_string());
+        append_param(&mut url, "SubtitleMethod", "Encode");
+    }
+    url
 }
 
 /// The position of the audio track to carry: the one asked for, else the selected one, else the
@@ -404,6 +434,35 @@ mod tests {
         s.client_subtitles = true;
         s.subtitle_stream_id = 0;
         assert_eq!(plan(item("h264", &[("aac", 2)]), &s, &device()).unwrap().burn_subtitle, None);
+    }
+
+    #[test]
+    fn the_servers_stream_burns_the_planned_subtitle_and_nothing_else() {
+        let url = "/v/stream.mkv?MediaSourceId=s&SubtitleStreamIndex=3&SubtitleMethod=Embed&TranscodeReasons=VideoBitrateNotSupported";
+        assert_eq!(server_stream(url, Some(5)),
+                   "/v/stream.mkv?MediaSourceId=s&TranscodeReasons=VideoBitrateNotSupported&SubtitleStreamIndex=5&SubtitleMethod=Encode");
+        assert_eq!(server_stream("/v/stream.mkv?MediaSourceId=s", Some(2)),
+                   "/v/stream.mkv?MediaSourceId=s&SubtitleStreamIndex=2&SubtitleMethod=Encode");
+        assert_eq!(server_stream(url, None), "/v/stream.mkv?MediaSourceId=s&TranscodeReasons=VideoBitrateNotSupported");
+    }
+
+    #[test]
+    fn a_version_plays_as_it_is_only_with_a_container_video_and_audio_the_tv_takes() {
+        let d = device();
+        // HEVC to 4K, h264 to 1080p: each codec's own frame bound.
+        let bound = |c: &str| if c == "hevc" { (3840, 2160) } else { (1920, 1080) };
+        let plays = |m: Metadata| plays_as_is(&m.media[0], &d, &bound);
+        let mkv = |mut m: Metadata| { m.media[0].part[0].container = "mkv".into(); m };
+        assert!(plays(mkv(item("hevc", &[("aac", 6)]))), "6-channel AAC plays");
+        assert!(!plays(mkv(item("hevc", &[("aac", 8)]))), "8-channel AAC is converted (#49)");
+        assert!(!plays(mkv(item("vc1", &[("ac3", 6)]))), "a video the TV cannot decode");
+        assert!(!plays(item("hevc", &[("aac", 2)])), "an AVI is remuxed");
+        let mut big = mkv(item("hevc", &[("aac", 2)]));
+        big.media[0].width = 7680;
+        assert!(!plays(big), "a frame above the decoder's bound");
+        let mut uhd_h264 = mkv(item("h264", &[("aac", 2)]));
+        uhd_h264.media[0].width = 3840;
+        assert!(!plays(uhd_h264), "a 4K h264 is above h264's own bound");
     }
 
     // The model spells DTS Plex's way ("dca"); the server matches a copy against "dts".

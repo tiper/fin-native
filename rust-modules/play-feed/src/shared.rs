@@ -318,6 +318,9 @@ pub struct Shared {
     // the in-place seek's target content-ns, for the feed's rebase guard (drop stale drifted
     // keyframes). Distinct from seek_to_ns, which the demuxer consumes as it seeks. -1 = none.
     pub seek_target_ns: AtomicI64,
+    // main (M) -> the next Engine's first keyframe: anchor `disp_base` on it
+    // (`native_executor::anchored_disp_base`). Taken once, at that keyframe.
+    pub anchor_rebase: AtomicBool,
     // UI loading state: true from a seek request until playback resumes at the new position (prime→
     // Play). The HUD shows a spinner + freezes the playhead at `seek_display_ns` so it doesn't
     // wobble through the seek/rebase. -1 display = not loading.
@@ -768,6 +771,7 @@ impl Shared {
             pts_shift: AtomicI64::new(0),
             disp_base: AtomicI64::new(0),
             seek_to_ns: AtomicI64::new(-1),
+            anchor_rebase: AtomicBool::new(false),
             seek_target_ns: AtomicI64::new(-1),
             seeking: AtomicBool::new(false),
             seek_display_ns: AtomicI64::new(-1),
@@ -1007,10 +1011,12 @@ impl Shared {
     /// A transcode restarted at a content offset (`FeedCommand::Rebase`): the published position
     /// carries `disp_base` from the first frame and `playpos_ns` gives instant HUD feedback until
     /// frames land. No seek is armed (the encode is 0-based at the offset), and `pts_shift` is the
-    /// video lane's alone. Main thread only, like [`Self::arm_open`].
-    pub fn rebase(&self, playpos_ns: i64, disp_base: i64) {
+    /// video lane's alone. Main thread only, like [`Self::arm_open`]. `anchor` arms
+    /// [`Self::anchor_rebase`].
+    pub fn rebase(&self, playpos_ns: i64, disp_base: i64, anchor: bool) {
         self.disp_base.store(disp_base, Ordering::Relaxed);
         self.playpos_ns.store(playpos_ns, Ordering::Relaxed);
+        self.anchor_rebase.store(anchor, Ordering::Relaxed);
     }
 
     /// The audio stream the demuxer feeds from its next container open (`FeedCommand::SelectAudio`;
@@ -1153,6 +1159,7 @@ impl Shared {
         self.disp_base.store(0, Ordering::Relaxed);
         self.seek_to_ns.store(-1, Ordering::Relaxed);
         self.seek_target_ns.store(-1, Ordering::Relaxed);
+        self.anchor_rebase.store(false, Ordering::Relaxed);
         self.seeking.store(false, Ordering::Relaxed);
         self.seek_display_ns.store(-1, Ordering::Relaxed);
         self.seek_epoch.store(0, Ordering::Relaxed);

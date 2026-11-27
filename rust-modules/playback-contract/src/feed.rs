@@ -823,7 +823,9 @@ pub enum FeedCommand {
     /// `playpos_ns` until frames land. Unlike [`Self::ArmOpen`] nothing is armed to seek: the new
     /// stream starts at the offset by construction. `pts_shift` is not here: the feed's video lane
     /// alone writes it, when it rebases onto a landed keyframe.
-    Rebase { playpos_ns: i64, disp_base: i64 },
+    /// `anchor`: the server's conversion keeps the file's timestamps, so the feed reads the position
+    /// from the first keyframe's own time (`plx_play_feed::native_executor::anchored_disp_base`).
+    Rebase { playpos_ns: i64, disp_base: i64, anchor: bool },
     /// The audio stream the demuxer feeds, as the player's session holds it (`idx` is the 0-based
     /// audio stream index, `-1` the file's own default). The demuxer reads the feed's copy as it
     /// opens the container, so the player sends this before every start that spawns one.

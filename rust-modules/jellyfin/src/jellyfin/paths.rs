@@ -184,6 +184,12 @@ pub fn resume(user_id: &str, parent_id: Option<&str>, start: i64, limit: i64) ->
     p
 }
 
+/// `GET`: subtitle `index` of a media source as a file in `fmt`. For an embedded track the server
+/// extracts it from the file first.
+pub fn subtitle_file(item_id: &str, source_id: &str, index: i64, fmt: &str) -> String {
+    format!("/Videos/{}/{}/Subtitles/{index}/0/Stream.{fmt}", enc(item_id), enc(source_id))
+}
+
 /// `GET`: subtitle candidates for an item in one language (an ISO 639-2 code, `por`).
 pub fn remote_subtitles(item_id: &str, language: &str) -> String {
     format!("/Items/{}/RemoteSearch/Subtitles/{}?isPerfectMatch=false", enc(item_id), enc(language))
@@ -467,7 +473,7 @@ pub struct Transcode<'a> {
 pub fn transcode(t: &Transcode<'_>, token: &str) -> String {
     let mut p = format!(
         "/Videos/{}/stream.mkv?static=false&container=mkv&mediaSourceId={}&playSessionId={}&deviceId={}\
-         &videoCodec={}&audioCodec={}&allowVideoStreamCopy={}&allowAudioStreamCopy={}",
+         &videoCodec={}&audioCodec={}&allowVideoStreamCopy={}&allowAudioStreamCopy={}&copyTimestamps={}",
         enc(t.item_id),
         enc(t.media_source_id),
         enc(t.play_session_id),
@@ -476,6 +482,7 @@ pub fn transcode(t: &Transcode<'_>, token: &str) -> String {
         enc(t.audio_codecs),
         t.copy_video,
         t.copy_audio,
+        super::playback_info::COPY_TIMESTAMPS,
     );
     if let Some(i) = t.audio_index {
         p.push_str(&format!("&audioStreamIndex={i}"));
