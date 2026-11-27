@@ -12,7 +12,7 @@ panel resize and page slide for Tracks and More, `ui::panel_motion`, plus the de
 scene) and PR 5 (More -> Quality on the shared `ui::page_stack::PageStack`, the `more-quality-osc`
 scene) are what this repository has. (The Detail hosts' pages, the hero and tile `…` menus, Select Version
 and Audio & Subtitles (with the same Other languages drill-in as here), are on `PageStack` too, driven by `ui::menu::Menu` (one machine for the push, pop, slide, placement and stops)
-instead of the per-popover code the Tracks and More menus still use; the player's menus move onto it in a later change.) The replay anchors were re-recorded for PR 2 and again for PR 5
+and so are the player's Tracks and More menus: there is no per-popover code left.) The replay anchors were re-recorded for PR 2 and again for PR 5
 because the overlay's state shape changed on purpose.
 
 ## Behaviour
@@ -118,7 +118,7 @@ re-recorded.
   the id the table was on, then fallback, then the old-order neighbour) and `restore` (a pop: reinstate saved scroll and selection). `set` stays Settings'
   snap-and-reset. They differ because "the page changed", "its data changed" and "a page came
   back" want different scroll and pill behaviour.
-- **Page stack** (`TrackMenuState::pages`, `TrackPage`): one `FormTable` serves the active page;
+- **Page stack** (`TrackMenuState::menu`, a `ui::menu::Menu`, which owns the `PageStack`; `TrackPage`): one `FormTable` serves the active page;
   a push saves the opener's `TrackRow` and the scroll, a pop restores both. To add a page: a
   `TrackPage` variant (with a stable `code`), its `Page` (rows, title, explicit initial id) in
   `TrackCore::build_page`, a Nav row whose `Dest` is the variant, and the `TrackRow`s it needs. The
@@ -146,7 +146,7 @@ re-recorded.
   animates only the panel rect and the two content layers' x offset and alpha under the clip stack.
   One panel background, no backdrop capture or transition textures. Key presses act on the logical
   state immediately (a push during a push retargets; push then pop mid-slide reverses).
-  Built as `ui::panel_motion::PanelMotion`, owned by `TrackMenuState` and `MoreMenuState`: the
+  Built as `ui::panel_motion::PanelMotion`, owned by `ui::menu::Menu` (the Tracks and More menus each hold a `Menu`; `PanelMotion::new` is `pub(crate)`, so no host builds one): the
   natural layout is cached against `TableView::layout_rev` (re-stamped by every content change) and
   only recomputed then; springs animate the panel's top and left edges (bottom and right stay
   anchored, so the card grows and shrinks away from the HUD); a push or pop hands the OUTGOING page's

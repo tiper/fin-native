@@ -703,7 +703,6 @@ fn the_picture_is_captioned_by_the_same_policy() {
 fn the_root_row_opens_the_page() {
     let _guard = plx_base::testlock::serial();
     let mut form = FormTable::<RootId, Action, SettingsPage>::new(crate::registry::BAND);
-    form.table.compact = false;
     form.set(root_form(&text_fit_inputs()), None);
     let i = form.index_of_key(RootId::UnderPosters.key()).expect("the row is on a signed-in root");
     assert_eq!(form.activate(i), Some(plx_ui::form::Activation::Push(SettingsPage::UnderPosters)));
@@ -726,7 +725,6 @@ fn text_fit_inputs() -> RootInputs {
 /// The Under posters row of the Settings root as a viewer reads it: `(value, sub-line)`.
 fn root_row_text(inputs: &RootInputs) -> (Option<String>, String) {
     let mut form = FormTable::<RootId, Action, SettingsPage>::new(crate::registry::BAND);
-    form.table.compact = false;
     form.set(root_form(inputs), None);
     let i = form.index_of_key(RootId::UnderPosters.key()).expect("the row is on a signed-in root");
     let row = form.table.sections.iter().flat_map(|s| s.rows.iter()).nth(i).expect("the row exists");

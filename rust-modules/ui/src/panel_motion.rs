@@ -125,7 +125,8 @@ pub struct PanelMotion {
 }
 
 impl PanelMotion {
-    pub const fn new() -> Self {
+    /// Menus own their motion: only [`crate::menu::Menu`] builds one.
+    pub(crate) const fn new() -> Self {
         Self {
             left: Spring::at(0.0),
             top: Spring::at(0.0),

@@ -10341,6 +10341,28 @@ impl PersonOwnerGateFixture {
         self.assertEqual(r.returncode, 0, out)
         self.assertIn("ok — tmppath", out)
 
+    @_grades("menudoors")
+    def test_menudoors_gate_catches_a_menu_built_outside_the_component(self):
+        """Every menu goes through `plx_ui::menu::Menu`: `set_title(`, an assignment to `.compact`,
+        a `with_compact(` bool size class (the vocabulary is `menu::Class`), `PageStack::new` (turbofish too) and `PanelMotion::new` are spelled only in the component's own files.
+        RED: a ui-crate file (visibility cannot see one) that spells each fails `menudoors`; the
+        look-alikes `reset_title(`, a `.compact ==` comparison and `with_class(` (the sanctioned constructor) do not."""
+        r = self._plant(
+            "_check_deps_selftest_menudoors.rs",
+            "pub fn a(t: &mut X) { t.set_title(None); }\n"
+            "pub fn b(t: &mut X) { t.table.compact = true; }\n"
+            "pub fn c() { let _ = PageStack::new(); let _ = PanelMotion::new(); }\n"
+            "pub fn d() { let _ = PageStack::<u8, u8>::new(); }\n"
+            "pub fn e() -> TableView { TableView::with_compact(true) }\n"
+            "pub fn g() -> TableView { TableView::with_class(Class::Action) }\n"
+            "pub fn fine(t: &mut X) { t.reset_title(); if t.compact == true {} }\n",
+            crate_dir="ui",
+        )
+        out = r.stdout + r.stderr
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("menudoors: 5 line(s)", out)
+        self.assertIn("_check_deps_selftest_menudoors.rs", out)
+
     @_grades("cards")
     def test_cards_gate_catches_a_screen_assembling_its_own_strip(self):
         """Shared-card-sections L1: a screen draws card sections with `plx_ui::cards::{Shelf, Grid}`.

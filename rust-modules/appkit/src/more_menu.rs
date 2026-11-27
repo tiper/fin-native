@@ -1653,8 +1653,7 @@ mod focus_tests {
         ] {
             sec = sec.item(MoreRow::Act(a), RowKind::Button, a, Row::new(label));
         }
-        let mut form = FormTable::new(plx_ui::table_screen::BAND_BASE);
-        form.table.compact = true;
+        let mut form = FormTable::with_class(plx_ui::table_screen::BAND_BASE, Class::Action);
         form.set(Form::new().section(sec), None);
         menu_of(form)
     }
@@ -1685,8 +1684,7 @@ mod focus_tests {
     fn projected(form: MoreForm) -> Vec<(String, Role)> {
         plx_media::speed_audio::force_speed_decoder_for_test(true); // a host test loads no FFmpeg
         let e = EntryId(4);
-        let mut table = FormTable::new(plx_ui::table_screen::BAND_BASE);
-        table.table.compact = true;
+        let mut table = FormTable::with_class(plx_ui::table_screen::BAND_BASE, Class::Action);
         table.set(form, None);
         let st = menu_of(table);
         let part = MoreMenuPart { state: &st, entry: e, group: GroupId(0) };
@@ -2365,8 +2363,7 @@ mod folded_tests {
         ];
         for n in 0..=all.len() {
             let folded: Vec<FoldedRow> = all[..n].iter().map(|&command| FoldedRow { command, label: "Previous Episode" }).collect();
-            let mut form = FormTable::new(plx_ui::table_screen::BAND_BASE);
-            form.table.compact = true;
+            let mut form = FormTable::with_class(plx_ui::table_screen::BAND_BASE, Class::Action);
             let root = root_form(&ps, &rows, false, plx_media::route::Quality::Auto, plx_media::player::RATE_NORMAL, &plx_media::player::PLAY_RATES, &folded);
             form.set_or_open(root, None);
             let formula = if n == 0 { ROOT_BASE_H } else { ROOT_BASE_H + FOLDED_SECTION_H + FOLDED_ROW_H * n as f32 };

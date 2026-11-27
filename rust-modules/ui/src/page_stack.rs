@@ -49,7 +49,8 @@ pub struct PageStack<P, R> {
 }
 
 impl<P: Copy, R> PageStack<P, R> {
-    pub const fn new() -> Self {
+    /// Menus own their stack: only [`crate::menu::Menu`] builds one.
+    pub(crate) const fn new() -> Self {
         Self { saved: Vec::new() }
     }
 

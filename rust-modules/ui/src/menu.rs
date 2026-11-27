@@ -110,8 +110,8 @@ pub enum Class {
 }
 
 impl Class {
-    /// `TableView::compact`: the class as the table reads it.
-    const fn compact(self) -> bool {
+    /// `TableView::compact`: the class as the table reads it (only the table's own constructor asks).
+    pub(crate) const fn compact(self) -> bool {
         matches!(self, Class::Action)
     }
 
@@ -661,8 +661,7 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
     /// A menu of `class` standing at `host`, whose rows are keyed below `band` (the page's key ceiling),
     /// with an empty root: install it with [`Event::ReplaceRoot`].
     pub fn new(host: Host, class: Class, band: u32) -> Self {
-        let mut form = FormTable::new(band);
-        form.table.compact = class.compact();
+        let mut form = FormTable::with_class(band, class);
         form.table.min_panel_w = host.width_floor();
         Self { core: MenuCore::new(host, class), form, stack: PageStack::new() }
     }
@@ -831,12 +830,6 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
     #[cfg(any(test, feature = "test-support"))]
     pub fn motion(&self) -> &PanelMotion {
         &self.core.motion
-    }
-
-    /// The card's motion, for a test that settles or arranges it.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn motion_mut(&mut self) -> &mut PanelMotion {
-        &mut self.core.motion
     }
 
     /// The panel's natural (layout) rect; the cached measure.

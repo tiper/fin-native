@@ -426,8 +426,13 @@ pub struct FormTable<Id, A, Dest> {
 impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
     /// `key_ceiling`: every [`RowKey`] must be below it (the page's key band; debug-asserted).
     pub const fn new(key_ceiling: u32) -> Self {
+        Self::with_class(key_ceiling, crate::menu::Class::Picker)
+    }
+
+    /// [`Self::new`] whose table is of the size class `class` says ([`TableView::with_class`]), fixed here.
+    pub const fn with_class(key_ceiling: u32, class: crate::menu::Class) -> Self {
         Self {
-            table: TableView::new(),
+            table: TableView::with_class(class),
             bindings: Vec::new(),
             names: Vec::new(),
             key_ceiling,

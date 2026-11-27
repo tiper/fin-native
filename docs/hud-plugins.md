@@ -135,8 +135,8 @@ Menus and popovers
   `popover::cover_opener` (the placement of every growing menu, `Host::Grows` of `ui/src/menu.rs`: the Library's, the Watchlist's and the profile menu) and `anchor_panel`'s `Cross::Hang`; pinned by
   `screens/src/alt_sources_tests.rs:674-736` and `ui/src/popover_host_tests.rs:254-258`. `PANEL_GAP =
   space::MD` (`:276`), `PANEL_EDGE = space::XL`, `PANEL_EDGE_X = MARGIN_X` (`:280-281`). Open styles
-  `Appear` and `Morph` (`:266-273`), `open_from`/`track_opener` (`:448-458`), `Opener { rect, redraw }`
-  (`:254-263`). The spacing ladder is XS 8, SM 16, MD 24, LG 40, XL 64 (`ui/src/theme.rs:178-186`).
+  `Appear` and `Morph` (`:266-273`), `open_from`/`track_opener` (`:448-458`), `Opener { rect }`
+  (`popover.rs`; rect only, the element's lift is the dispatcher's `lifted_opener` pass, not a fn the popover carries). The spacing ladder is XS 8, SM 16, MD 24, LG 40, XL 64 (`ui/src/theme.rs:178-186`).
 - F22. Other HUD surfaces: the Timing capsule hides the HUD and sits at `CAPSULE_BOTTOM_Y` 836
   (`media/src/player/text_style.rs:70-72`, test `:295`); the scrub-preview card is centred over the knob,
   clamped to the bar and drawn above it, from arguments (`appkit/src/scrub_preview.rs:175-180`); the
@@ -1012,7 +1012,7 @@ opener, through ONE shared placer.
   language change, does not move an open panel. A menu opened by something that is not a HUD control has
   no HUD anchor, and takes the root state's `open_more` rest rect as its anchor: the failure read-out's
   `More { page: Some(Quality) }` (F18, formerly `More { quality: true }`) therefore opens where classic opens it today, `CTRL_RIGHT - pw`, bottom 764, and a
-  headless trigger is the same `Opener::NONE` case (`popover.rs:321`).
+  headless trigger is the same `Opener::NONE` case (`popover.rs`).
 - The gap. `theme::layout::PLAYER_MENU_GAP = 28.0`, named (it is 792 - 764 today, F20, and `PANEL_GAP` is
   24), replaces `PLAYER_MENU_BOTTOM`; classic's bottom edge stays 764.
 - The need. `need_h` is the tallest page the menu can show with app-owned rows (More: the Quality page with

@@ -1134,8 +1134,7 @@ impl AuthLike for MenuHost {
                 let (_, form) = account_form(&AccountInputs {
                     name: name.map(str::to_string), signed_in, can_switch: true, lab: true,
                 });
-                let mut form_table = FormTable::<Action, Action, Infallible>::new(crate::registry::BAND);
-                form_table.table.compact = true;
+                let mut form_table = FormTable::<Action, Action, Infallible>::with_class(crate::registry::BAND, Class::Action);
                 form_table.set(form, None);
                 let table = &form_table.table;
                 let what = format!("{} name={name:?} signed_in={signed_in}", language.tag());

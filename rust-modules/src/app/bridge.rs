@@ -1235,7 +1235,7 @@ impl Bridge<'_> {
         let cx = parts.cx::<AppHost>(self.views(), &self.retained.measure);
         let card = screen.focused_card(&cx, focus, Some(At::Drawn))?;
         let item = card.item.downcast_ref::<plx_data::search::Item>()?.clone();
-        Some((item, plx_ui::popover::Opener { rect: Some(card.rest_rect?), ..plx_ui::popover::Opener::NONE }))
+        Some((item, plx_ui::popover::Opener { rect: Some(card.rest_rect?) }))
     }
 
     pub(crate) fn search_tab_available(&self, tab: HomeTab) -> bool {
@@ -1259,7 +1259,7 @@ impl Bridge<'_> {
         let cx = parts.cx::<AppHost>(self.views(), &self.retained.measure);
         let card = screen.focused_card(&cx, focus, Some(At::Drawn))?;
         let item = card.item.downcast_ref::<plx_data::pms::PmsMovie>()?.clone();
-        Some((item, plx_ui::popover::Opener { rect: Some(card.rest_rect?), ..plx_ui::popover::Opener::NONE }))
+        Some((item, plx_ui::popover::Opener { rect: Some(card.rest_rect?) }))
     }
 
     pub(crate) fn library_command(d: &mut Dispatcher<AppHost>, command: plx_screens::registry::LibraryCmd) {
@@ -1440,7 +1440,7 @@ impl Bridge<'_> {
             let cx = parts.cx::<AppHost>(self.views(), &self.retained.measure);
             screen.focused_card_rect(&cx, Some(key), At::Drawn)
         });
-        plx_ui::popover::Opener { rect, ..plx_ui::popover::Opener::NONE }
+        plx_ui::popover::Opener { rect }
     }
 
     /// Restore a detail page that is about to mount to a `Spot` no `ReturnState` holds — see

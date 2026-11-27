@@ -104,7 +104,7 @@ fn first_run_consent_draws_the_settings_table() {
     let first = ConsentPage::first_run(EntryId(1), 0, &c, &mut mk_fx(&mut out, &mut present));
     for (what, table) in [("settings", &settings.form.table), ("first run", &first.form.table)] {
         assert!(table.is_board(), "{what}: board measures");
-        assert!(!table.compact, "{what}: full-height rows");
+        assert!(!table.is_compact(), "{what}: full-height rows");
         assert_eq!(table.header_ink, plx_ui::theme::TEXT_READING, "{what}: reading-ink headers");
     }
 }

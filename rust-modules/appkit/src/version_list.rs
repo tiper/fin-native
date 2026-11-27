@@ -154,7 +154,6 @@ mod tests {
                 let mut form: FormTable<Pos, plx_plex::plex::MediaId, Infallible> = FormTable::new(plx_ui::table_screen::BAND_BASE);
                 // The check mark takes the leading column, so the list is fitted with one shown.
                 form.set(Form::new().section(section(title(), &sample(), Pos, |v| v.id, Some(sample()[1].id), unavailable)), None);
-                form.table.compact = false;
                 let tag = format!("{} versions{}", language.tag(), if unavailable.is_some() { " (no playback)" } else { "" });
                 out.extend(form.table.menu_cap_failure(&measure, &tag));
                 out.extend(form.table.app_fit_failures(plx_ui::table::MENU_MAX_W, &tag));

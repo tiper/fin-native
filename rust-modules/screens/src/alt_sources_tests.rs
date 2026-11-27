@@ -1156,10 +1156,8 @@ fn every_app_owned_run_fits_the_panel_in_every_language() {
     for language in SHIPPED {
         let _guard = language_on_this_thread_for_test(language);
         let mut table = plx_ui::table::TableView::new();
-        table.compact = false;
         table.set_sections(vec![section_for(&built)], 0, false);
         let mut capped = plx_ui::table::TableView::new();
-        capped.compact = false;
         capped.set_sections(vec![section_for(&short_built)], 0, false);
         out.extend(capped.menu_cap_failure(&plx_base::fontcov::advances::ShippedMeasure, language.tag()));
         out.extend(table.app_fit_failures(MENU_MAX_W, language.tag()));

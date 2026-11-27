@@ -800,7 +800,7 @@ pub struct TableView {
     ///
     /// It no longer affects HEADERS: those are CAPS at CAPTION in both classes, because the caps
     /// are what make a header a label and a size that varied could tie with its own rows.
-    pub compact: bool,
+    compact: bool,
     /// see [`TableView::tall_rows`]
     tall: bool,
     /// see [`TableView::page`]. Layout configuration like `min_panel_w`, not motion.
@@ -950,6 +950,18 @@ impl TableView {
             ROW_H_TALL
         }
     }
+    /// **A table of the size class `class` says**, fixed at construction: `menu::Class` is the one size-class
+    /// vocabulary, and the class belongs to the surface, so nothing re-assigns it afterwards
+    /// (`crate::menu::Menu` builds its table from its own class; a table that is not a menu's names one).
+    pub const fn with_class(class: crate::menu::Class) -> Self {
+        let mut t = Self::new();
+        t.compact = class.compact();
+        t
+    }
+    /// The table's size class as it reads it ([`Self::with_class`]).
+    pub const fn is_compact(&self) -> bool {
+        self.compact
+    }
     pub const fn new() -> Self {
         Self {
             sections: Vec::new(),
@@ -1091,7 +1103,7 @@ impl TableView {
     /// the pill springs are re-jumped to the selected row's new place: installing the title after
     /// the sections must not leave the pill a band off until the spring catches up. The scroll is
     /// left alone (a [`Self::restore_sections`] puts its own back after).
-    pub fn set_title(&mut self, title: Option<String>) {
+    pub(crate) fn set_title(&mut self, title: Option<String>) {
         self.rev = next_rev();
         let moved = self.title.is_some() != title.is_some();
         self.title = title;

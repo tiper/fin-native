@@ -1342,7 +1342,8 @@ pub(crate) mod tests {
     /// screen does — by identity — instead of through a parallel vector.
     struct Built(FormTable<ItemRow, Action, MenuPage>);
     fn built(form: ItemForm) -> Built {
-        let mut table = FormTable::new(crate::registry::BAND);
+        // the item menus are action menus (the class `ItemMenu` builds its `Menu` with)
+        let mut table = FormTable::with_class(crate::registry::BAND, Class::Action);
         table.set(form, None);
         Built(table)
     }
@@ -2125,8 +2126,7 @@ pub(crate) mod tests {
         let measure = MenuMeasure;
         for preference in plx_os::i18n::SHIPPED {
             let locale = LocaleContext::resolve(preference, None, None, None, None);
-            let mut form: FormTable<ItemRow, Action, MenuPage> = FormTable::new(crate::registry::BAND);
-            form.table.compact = true;
+            let mut form: FormTable<ItemRow, Action, MenuPage> = FormTable::with_class(crate::registry::BAND, Class::Action);
             form.set(Form::new().section(FormSection::new("")
                 .item(ItemRow::MarkWatched, RowKind::Button, Action::MarkWatched("1".into()),
                     Row::new(plx_os::i18n::msg::widgets_action_mark_watched_in(&locale)).licon(Icon::CheckCircleFill))
@@ -2665,8 +2665,6 @@ pub(crate) mod tests {
         for language in SHIPPED {
             let _guard = language_on_this_thread_for_test(language);
             for (name, menu) in all_menus() {
-                let mut menu = menu;
-                menu.0.table.compact = true;
                 let table = &menu.0.table;
                 out.extend(table.menu_cap_failure(&measure, &format!("{} {name}", language.tag())));
                 out.extend(table.app_fit_failures(widest, &format!("{} {name}", language.tag())));
@@ -2810,8 +2808,7 @@ pub(crate) mod tests {
         for language in SHIPPED {
             let _guard = language_on_this_thread_for_test(language);
             for state in [TileState::Available, TileState::ComingSoon] {
-                let mut menu = built(super::build_catalog(state, plx_data::watchlist::model::Kind::Movie, "1", "g", plx_data::catalog::Membership::On));
-                menu.0.table.compact = true;
+                let menu = built(super::build_catalog(state, plx_data::watchlist::model::Kind::Movie, "1", "g", plx_data::catalog::Membership::On));
                 let name = format!("{} catalog {state:?}", language.tag());
                 let table = &menu.0.table;
                 out.extend(table.menu_cap_failure(&measure, &name));

@@ -463,8 +463,7 @@ fn the_menu_pill_and_readouts_fit_in_every_shipped_language() {
         {
             let mut state = default_state();
             (state.sort, state.descending) = (sort, descending);
-            let mut table = plx_ui::table::TableView::new();
-            table.compact = true;
+            let mut table = plx_ui::table::TableView::with_class(plx_ui::menu::Class::Action);
             table.open_sections(sections(&state));
             if let Some(f) = table.menu_cap_failure(&ShippedMeasure, &format!("{tag} sort & filter menu, {sort:?} desc {descending}")) {
                 bad.push(f);

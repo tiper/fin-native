@@ -328,12 +328,12 @@ fn every_host_derives_exactly_one_ground_and_glass_never_stands_on_video() {
 fn the_class_is_the_menus_and_a_pushed_page_takes_it() {
     for (class, compact) in [(Class::Action, true), (Class::Picker, false)] {
         let mut m = menu(grows(), class);
-        assert_eq!(m.form().table.compact, compact);
+        assert_eq!(m.form().table.is_compact(), compact);
         step(&mut m, Event::Ok(Id::Go.key().0));
-        assert_eq!(m.form().table.compact, compact, "a page has no class of its own");
+        assert_eq!(m.form().table.is_compact(), compact, "a page has no class of its own");
         assert_eq!(m.class(), class);
         step(&mut m, Event::Back);
-        assert_eq!(m.form().table.compact, compact);
+        assert_eq!(m.form().table.is_compact(), compact);
     }
 }
 
