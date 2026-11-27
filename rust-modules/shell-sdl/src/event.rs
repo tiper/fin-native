@@ -41,6 +41,11 @@ pub fn poll(ev: &mut [u8; 128]) -> bool {
     unsafe { sys::SDL_PollEvent(ev.as_mut_ptr() as *mut c_void) != 0 }
 }
 
+/// Pump the video driver's events into SDL's queue (`SDL_PumpEvents`), where the next [`poll`] reads them.
+pub fn pump() {
+    unsafe { sys::SDL_PumpEvents() }
+}
+
 /// Push one event onto SDL's own queue, so the existing poll loop consumes it as if it had come off
 /// the wayland input path. The only caller is `inject.rs`.
 pub(crate) fn push(ev: &[u8; 128]) {

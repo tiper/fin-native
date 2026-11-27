@@ -66,9 +66,10 @@ still take focus, and LEFT/RIGHT still walks between them, so the control looks 
    typed text arrives as an ordinary `SDL_TEXTINPUT`. So the half of this gap that was priced `large`
    did not exist; the cost is the screen, not the keys. `SDL_webOS.h` is what made that hard to see:
    it declares eight entry points and not one of them is a keyboard. **`docs/search.md` §3** records
-   the whole seam, including the three traps that make it non-obvious (a webOS-shifted
-   `SDL_TEXTINPUT` whose text is at +16, `SDL_WINDOW_INPUT_FOCUS` as a silent precondition, and a
-   reopen wedge we inherit) and the two dead ends nobody should retry.
+   the whole seam, including the four traps that make it non-obvious (a webOS-shifted
+   `SDL_TEXTINPUT` whose text is at +16, `SDL_WINDOW_INPUT_FOCUS` as a silent precondition, a
+   reopen wedge we inherit, and a first raise that crashes unless the Wayland connection is drained)
+   and the two dead ends nobody should retry.
 
    **What has landed, and what has not — do not read this entry as "done" without checking.**
    Landed: `Route::Search` as a **peer** of Home and the Library (`app.rs`), the strip's last pill,

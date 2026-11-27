@@ -196,6 +196,14 @@ impl Shell for WebosShell {
     fn clear_opaque_region(&self) {
         crate::system::clear_opaque_region();
     }
+    fn show_keyboard(&self) {
+        // LG's first raise fills its keyboard record from one Wayland dispatch and reads it unzeroed if
+        // that dispatch missed the compositor's reply (`docs/search.md`, trap 4). Two pumps leave the
+        // queue and the socket empty first: the first dispatches what is queued, the second what waits.
+        plx_shell_sdl::event::pump();
+        plx_shell_sdl::event::pump();
+        plx_shell_sdl::text::start_input();
+    }
     fn pump_bus(&self) {
         crate::system::ls2_pump();
     }
@@ -393,6 +401,34 @@ mod tests {
             assert!(plx_base::paths::session_candidates().contains(&migration), "the two spellings agree");
         }
         assert_ne!(SERVICES.libraries, plx_os::tv::Libraries::NONE, "a television has libcurl and EGL");
+    }
+
+    /// **The keyboard rises after two pumps** (`docs/search.md`, trap 4): LG's first raise reads its keyboard
+    /// record unzeroed unless the Wayland connection is drained. Reads the source, like the test below,
+    /// because no host test can run LG's SDL.
+    #[test]
+    fn the_webos_shell_drains_the_connection_before_raising_the_keyboard() {
+        let source = include_str!("port.rs");
+        let body = source
+            .split_once(concat!("fn show_", "keyboard(&self) {"))
+            .expect("the webOS shell raises the keyboard itself")
+            .1
+            .split_once("\n    }\n")
+            .expect("the end of the method")
+            .0;
+        let calls: Vec<&str> = body
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && !l.is_empty())
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                "plx_shell_sdl::event::pump();",
+                "plx_shell_sdl::event::pump();",
+                "plx_shell_sdl::text::start_input();"
+            ]
+        );
     }
 
     /// **The two LG hooks are the webOS platform's `SDL`, handed in the order SDL needs.** The shell crate
