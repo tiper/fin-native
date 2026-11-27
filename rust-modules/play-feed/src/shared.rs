@@ -318,9 +318,8 @@ pub struct Shared {
     // the in-place seek's target content-ns, for the feed's rebase guard (drop stale drifted
     // keyframes). Distinct from seek_to_ns, which the demuxer consumes as it seeks. -1 = none.
     pub seek_target_ns: AtomicI64,
-    // main (M) -> the next Engine: the transcode restart's first keyframe carries film time or 0
-    // (`FeedCommand::Rebase`'s `anchor`), so that Engine rebases onto it and anchors `disp_base`
-    // there ([`anchored_disp_base`]). Taken once, by the Engine it was armed for.
+    // main (M) -> the next Engine's first keyframe: anchor `disp_base` on it
+    // (`native_executor::anchored_disp_base`). Taken once, at that keyframe.
     pub anchor_rebase: AtomicBool,
     // UI loading state: true from a seek request until playback resumes at the new position (prime→
     // Play). The HUD shows a spinner + freezes the playhead at `seek_display_ns` so it doesn't
@@ -1013,7 +1012,7 @@ impl Shared {
     /// carries `disp_base` from the first frame and `playpos_ns` gives instant HUD feedback until
     /// frames land. No seek is armed (the encode is 0-based at the offset), and `pts_shift` is the
     /// video lane's alone. Main thread only, like [`Self::arm_open`]. `anchor` arms
-    /// [`Self::anchor_rebase`] for the next Engine (a conversion that keeps the file's timestamps).
+    /// [`Self::anchor_rebase`].
     pub fn rebase(&self, playpos_ns: i64, disp_base: i64, anchor: bool) {
         self.disp_base.store(disp_base, Ordering::Relaxed);
         self.playpos_ns.store(playpos_ns, Ordering::Relaxed);

@@ -764,15 +764,9 @@ fn stream(item_id: &str, src: &MediaSourceInfo, m: &MediaStream) -> Option<Strea
     // muxed into the container are demuxed by the player, so they keep an empty key here too.
     if stream_type == 3 && m.is_external {
         let fmt = if s.codec == "ass" { "ass" } else { "srt" };
-        s.key = subtitle_key(item_id, &plx_plex::plex::urlenc_str(&src.id), m.index, fmt);
+        s.key = paths::subtitle_file(&normalize(item_id), &src.id, m.index, fmt);
     }
     Some(s)
-}
-
-/// The route the server serves subtitle `index` of a media source on, as a file (`source` already
-/// URL-encoded). For an embedded track the server extracts it from the file first.
-fn subtitle_key(item_id: &str, source: &str, index: i64, fmt: &str) -> String {
-    format!("/Videos/{}/{source}/Subtitles/{index}/0/Stream.{fmt}", normalize(item_id))
 }
 
 /// Key every embedded plain-text subtitle of a version this device does not play as it is
@@ -782,14 +776,18 @@ fn subtitle_key(item_id: &str, source: &str, index: i64, fmt: &str) -> String {
 /// extraction reads the whole file once). ASS stays in the container, where its fonts are; a
 /// picture subtitle has no text to extract.
 pub fn key_extracted_subtitles(m: &mut Metadata, plays: impl Fn(&Media) -> bool) {
-    let item = m.rating_key.clone();
-    for media in m.media.iter_mut().filter(|md| !plays(md)) {
+    let extractable = |s: &Stream| {
+        s.stream_type == 3 && s.key.is_empty() && matches!(s.codec.as_str(), "srt" | "vtt" | "mov_text")
+    };
+    let item = normalize(&m.rating_key);
+    for media in m.media.iter_mut() {
+        if !media.part.iter().any(|p| p.stream.iter().any(extractable)) || plays(media) {
+            continue;
+        }
         for part in &mut media.part {
             let Some(source) = super::transcode::media_source_of(&part.key).map(str::to_owned) else { continue };
-            for s in part.stream.iter_mut()
-                .filter(|s| s.stream_type == 3 && s.key.is_empty() && matches!(s.codec.as_str(), "srt" | "vtt" | "mov_text"))
-            {
-                s.key = subtitle_key(&item, &source, s.index, "srt");
+            for s in part.stream.iter_mut().filter(|s| extractable(s)) {
+                s.key = paths::subtitle_file(&item, &source, s.index, "srt");
             }
         }
     }

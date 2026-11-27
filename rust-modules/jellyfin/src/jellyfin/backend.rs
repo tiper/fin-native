@@ -259,14 +259,12 @@ impl JfBackend {
         let held = self.verdict_for(item);
         let encoders = held.as_ref().map_or(playback_info::Encoders::ALL, |v| v.encoders);
         let server = held.filter(|v| !v.direct_play && spec.contract.ceiling.is_none());
-        let video_copy = plx_plex::plex::direct_play_video_codecs(spec.caps);
+        let (video_copy, audio_ok) = (plx_plex::plex::direct_play_video_codecs(spec.caps), dp_audio(spec.caps));
         let dev = transcode::Device {
-            video_copy: &video_copy,
-            audio_target: audio_encode_target(spec.caps),
-            audio_ok: &|codec: &str, channels: i64, rate: i64| plx_plex::plex::is_dp_audio_track_with(spec.caps, codec, channels, rate),
             force_video_encode: server.as_ref().is_some_and(|v| v.video_encode),
             force_audio_encode: server.as_ref().is_some_and(|v| v.audio_encode),
             encoders,
+            ..copy_device(spec.caps, &video_copy, &audio_ok)
         };
         let mut p = transcode::plan(m, spec, &dev)?;
         if let Some(v) = server {
@@ -439,6 +437,25 @@ fn prove_grant(
             Err(MintRefusal::Stale) if std::mem::take(&mut again) => {}
             other => return other.map_err(Unproved::Refused),
         }
+    }
+}
+
+/// The player's direct-play audio check over `caps`, as [`transcode::Device::audio_ok`] reads it.
+fn dp_audio(caps: &plx_os::devcaps::Caps) -> impl Fn(&str, i64, i64) -> bool + '_ {
+    move |codec, channels, rate| plx_plex::plex::is_dp_audio_track_with(caps, codec, channels, rate)
+}
+
+/// This device as [`transcode`] reads it: what it copies and decodes, the codec a server encodes
+/// its audio to, nothing forced and every encode allowed.
+fn copy_device<'a>(caps: &plx_os::devcaps::Caps, video_copy: &'a [&'a str],
+    audio_ok: &'a dyn Fn(&str, i64, i64) -> bool) -> transcode::Device<'a> {
+    transcode::Device {
+        video_copy,
+        audio_target: audio_encode_target(caps),
+        audio_ok,
+        force_video_encode: false,
+        force_audio_encode: false,
+        encoders: playback_info::Encoders::ALL,
     }
 }
 
@@ -929,10 +946,9 @@ impl Backend for Shared {
         let mut m = self.0.client()?.metadata(rating_key)?;
         // Which versions the server will convert, so their plain-text subtitles come as files.
         let caps = plx_os::devcaps::caps();
-        let video = plx_plex::plex::direct_play_video_codecs(&caps);
-        let max = (i64::from(caps.hevc_max.0), i64::from(caps.hevc_max.1));
-        let audio_ok = |codec: &str, channels: i64, rate: i64| plx_plex::plex::is_dp_audio_track_with(&caps, codec, channels, rate);
-        translate::key_extracted_subtitles(&mut m, |md| transcode::plays_as_is(md, &video, max, &audio_ok));
+        let (video_copy, audio_ok) = (plx_plex::plex::direct_play_video_codecs(&caps), dp_audio(&caps));
+        let dev = copy_device(&caps, &video_copy, &audio_ok);
+        translate::key_extracted_subtitles(&mut m, |md| transcode::plays_as_is(md, &dev, &|c| caps.raster_bound(c)));
         Some(m)
     }
     fn metadata_many(&self, rating_keys: &[&str]) -> Option<MediaContainer> {
@@ -1046,10 +1062,8 @@ impl Backend for Shared {
         }
         self.0.transcode_plan(spec).map(|(_, p)| p.decision)
     }
-    /// The profile asks for `CopyTimestamps` and the built URL for `copyTimestamps`, so a
-    /// conversion's first keyframe carries film time.
     fn conversion_keeps_file_time(&self) -> bool {
-        true
+        playback_info::COPY_TIMESTAMPS
     }
     fn transcode_start_url(&self, spec: &TranscodeSpec<'_>) -> Option<StreamUrl> {
         let (c, p) = self.0.transcode_plan(spec)?;

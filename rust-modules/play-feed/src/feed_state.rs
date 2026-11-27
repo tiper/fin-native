@@ -137,10 +137,6 @@ pub struct Engine {
     pub placed_src: (c_int, c_int),
     pub eos_pushed: bool, // Kodi VIDEO_DRAIN: pushEOS() sent once at true EOF
     pub rebase_pending: bool, // g_rebase_pending
-    /// The rebase above also anchors `disp_base` at the landed keyframe: this Engine plays a
-    /// conversion restarted at an offset whose first keyframe may carry film time or 0
-    /// (`Shared::anchor_rebase`, [`crate::native_executor::anchored_disp_base`]).
-    pub anchor_at_rebase: bool,
     // In-place seek only: keyframes this far AHEAD of the seek target are stale frames the demuxer
     // produced from its pre-flush read position before the reopen+av_seek won the race (playback
     // drifts forward during a long scrub) — reject them so the rebase anchors on the REAL post-seek

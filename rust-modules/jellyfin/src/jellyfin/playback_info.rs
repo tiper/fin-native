@@ -20,6 +20,11 @@ const PROFILE_MAX_BPS: i64 = 200_000_000;
 /// Containers the demuxer plays as they are.
 const DIRECT_CONTAINERS: &str = "mkv,mp4,m4v,mov,ts,m2ts,mpegts";
 
+/// A conversion keeps the file's timestamps, so its first keyframe carries film time and a
+/// subtitle in file time lines up with the picture. The profile, the built transcode URL
+/// (`paths::transcode`) and `Backend::conversion_keeps_file_time` all read this one value.
+pub const COPY_TIMESTAMPS: bool = true;
+
 /// Does the device profile let the server send a file in `container` (the model's name) as it is?
 pub fn is_direct_container(container: &str) -> bool {
     DIRECT_CONTAINERS.split(',').any(|c| c == container)
@@ -91,7 +96,7 @@ pub fn device_profile(d: &Device<'_>) -> Value {
         ],
         "TranscodingProfiles": [
             {"Type": "Video", "Container": "mkv", "Protocol": "http", "Context": "Streaming",
-             "VideoCodec": video, "AudioCodec": audio_targets.join(","), "CopyTimestamps": true,
+             "VideoCodec": video, "AudioCodec": audio_targets.join(","), "CopyTimestamps": COPY_TIMESTAMPS,
              "EnableSubtitlesInManifest": false}
         ],
         "CodecProfiles": codec_profiles(d),
@@ -267,9 +272,7 @@ mod tests {
         let t = &p["TranscodingProfiles"][0];
         assert_eq!((t["Container"].as_str(), t["Protocol"].as_str()), (Some("mkv"), Some("http")));
         assert_eq!(t["AudioCodec"], "aac,ac3,eac3");
-        // A conversion keeps the file's timestamps, so its first keyframe carries film time and a
-        // subtitle in file time lines up with the picture (`Backend::conversion_keeps_file_time`).
-        assert_eq!(t["CopyTimestamps"], true);
+        assert_eq!(t["CopyTimestamps"], COPY_TIMESTAMPS);
         assert_eq!(p["CodecProfiles"][0]["Conditions"][0]["Value"], "3840");
         let subs: Vec<&str> = p["SubtitleProfiles"].as_array().unwrap().iter().filter_map(|s| s["Format"].as_str()).collect();
         assert!(subs.contains(&"srt") && subs.contains(&"ass"));

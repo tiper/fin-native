@@ -823,9 +823,8 @@ pub(super) fn arm_open(pa: &mut adapter::PlayerAdapter, target_ns: i64) {
 /// encode is 0-based there, so the published position carries the offset as its display base from
 /// the first frame and the HUD reads it until frames land. Nothing is armed to seek, and the feed's
 /// video lane alone owns the pts shift. A server whose conversion keeps the file's timestamps
-/// (`plx_plex::plex::conversion_keeps_file_time`) starts on the keyframe at or before the offset
-/// in film time, so the feed anchors the position on that keyframe instead (`anchor`): the
-/// playhead is then the picture's time, and a subtitle in file time lines up without a measurement.
+/// (`plx_plex::plex::conversion_keeps_file_time`) is anchored on its first keyframe instead
+/// (`plx_play_feed::native_executor::anchored_disp_base`).
 pub(super) fn rebase_transcode(ps: &mut crate::route::PlaybackSession, pa: &mut adapter::PlayerAdapter, offset_ns: i64) {
     ps.step_readout(readout::ReadoutEvent::OpenRebased { disp_base: offset_ns });
     let anchor = plx_plex::plex::conversion_keeps_file_time();
