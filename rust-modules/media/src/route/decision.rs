@@ -674,6 +674,19 @@ struct CarriedLink {
 pub use super::plan::SourceSelection as UriSelection;
 
 #[cfg(test)]
+mod seek_offset_tests {
+    use plx_plex::plex::TranscodeOffset;
+
+    #[test]
+    fn only_a_conversion_in_file_time_is_asked_for_the_exact_target() {
+        assert_eq!(super::seek_offset(46_850_000_000, true), TranscodeOffset::from_micros(46_850_000));
+        assert_eq!(super::seek_offset(46_850_000_000, false), TranscodeOffset::from_seconds(46));
+        assert_eq!(super::seek_offset(-1, false), TranscodeOffset::from_seconds(0));
+        assert_eq!(super::seek_offset(-1, true), TranscodeOffset::from_micros(0));
+    }
+}
+
+#[cfg(test)]
 mod source_selection_tests {
     use super::*;
 
@@ -9443,7 +9456,9 @@ pub(super) struct RebasePlan {
     previous: String,
     /// The physical encoder the PMS half registers, minted on the frame thread.
     replacement: String,
-    offset_secs: i64,
+    /// The offset the server is asked to start at: the whole second, or a seek's exact target on
+    /// a server whose conversion keeps the file's timestamps ([`dispatch_transcode_seek`]).
+    offset: plx_plex::plex::TranscodeOffset,
     audio_sid: i64,
     subtitle_sid: i64,
     contract: plx_plex::plex::EncodeContract,
@@ -9619,7 +9634,7 @@ pub(super) fn plan_rebase(
         expected,
         previous,
         replacement,
-        offset_secs,
+        offset: plx_plex::plex::TranscodeOffset::from_seconds(offset_secs.max(0)),
         audio_sid: cur_audio_sid(ps),
         subtitle_sid: cur_sub_sid(ps),
         contract: ps.cur_contract,
@@ -9641,7 +9656,7 @@ pub(super) fn run_rebase(off: &plx_base::task::OffFrame, plan: &RebasePlan) -> R
         plan.media_index,
         &plan.replacement,
         &plan.replacement,
-        plx_plex::plex::TranscodeOffset::from_seconds(plan.offset_secs.max(0)),
+        plan.offset,
         plan.audio_sid,
         plan.subtitle_sid,
         plan.contract,
@@ -9777,16 +9792,29 @@ pub enum SeekDispatch {
     Refused,
 }
 
+/// The offset a seek's rebuild asks the server for. A conversion that keeps the file's timestamps
+/// is measured against the target itself (`player::readout::realign_target` restarts it on a
+/// keyframe, to the millisecond), so it is asked for exactly that; any other starts on the whole
+/// second, as it always has.
+fn seek_offset(target_ns: i64, keeps_file_time: bool) -> plx_plex::plex::TranscodeOffset {
+    if keeps_file_time {
+        plx_plex::plex::TranscodeOffset::from_micros(target_ns / 1_000)
+    } else {
+        plx_plex::plex::TranscodeOffset::from_seconds((target_ns / 1_000_000_000).max(0))
+    }
+}
+
 /// Start the flight for a seek on a live transcode: plan on the frame thread, hand the PMS half to
 /// a worker, and keep the reducer in `Preparing(serial)` — a start transaction this flight owns —
 /// until the landing installs or discards it. The caller (the pump) holds presentation for the
 /// flight.
 pub fn dispatch_transcode_seek(ps: &mut PlaybackSession, target_ns: i64) -> SeekDispatch {
-    let plan = match plan_rebase(ps, target_ns / 1_000_000_000, RebaseFor::Seek) {
+    let mut plan = match plan_rebase(ps, target_ns / 1_000_000_000, RebaseFor::Seek) {
         Ok(plan) => plan,
         Err(RebaseRefusal::Busy) => return SeekDispatch::Busy,
         Err(RebaseRefusal::Refused) => return SeekDispatch::Refused,
     };
+    plan.offset = seek_offset(target_ns, plx_plex::plex::conversion_keeps_file_time());
     let ticket = plan.route_start.expect("a seek flight owns its start transaction");
     begin_flight(ticket.serial);
     if spawn_flight(

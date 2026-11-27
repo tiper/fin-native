@@ -1665,6 +1665,7 @@ fn native_feed_raw(failure: FailureSample) -> FeedRaw {
         side_failures: crate::side_reader::failures(),
         seek_mode: crate::seek::seek_mode(),
         side_exact_delta_ns: crate::side_reader::exact_delta_ns(),
+        conversion_keyframe_ns: Some(FEED_SHARED.conversion_keyframe_ns.load(Relaxed)).filter(|&k| k >= 0),
         native_audio: crate::ff::native_audio::fed()
             .map(|(kind, channels)| plx_playback_contract::feed::NativeAudio { codec: kind.ffmpeg_name(), channels }),
     }
@@ -1801,10 +1802,14 @@ mod tests {
         assert_eq!(native_attempt_facts().position_ns, Some(120_000_000_000),
             "a transcode restarted at 120 s reads 120 s until its first frame");
         assert!(FEED_SHARED.anchor_rebase.load(Relaxed), "an anchored restart arms the next Engine");
+        FEED_SHARED.conversion_keyframe_ns.store(117_900_000_000, Relaxed);
+        assert_eq!(native_feed_raw(failure_sample()).conversion_keyframe_ns, Some(117_900_000_000),
+            "the keyframe the anchor landed on rides the sample");
 
         FEED_SHARED.reset_session_for_reload();
         assert_eq!(native_attempt_facts().position_ns, None, "a reload forgets the old seed");
         assert!(!FEED_SHARED.anchor_rebase.load(Relaxed), "and the anchor it armed");
+        assert_eq!(native_feed_raw(failure_sample()).conversion_keyframe_ns, None, "and the keyframe it landed on");
         arm_open(90_000_000_000, 0, 90_000_000_000);
         assert_eq!(native_attempt_facts().position_ns, Some(90_000_000_000),
             "a reload armed at 90 s reads 90 s until its first frame");

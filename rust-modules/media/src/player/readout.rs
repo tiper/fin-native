@@ -35,6 +35,26 @@ use std::sync::Arc;
 
 use super::attempt_view::PlaybackState;
 
+/// How far before the offset it was asked at a conversion's first keyframe may land before the
+/// conversion is restarted on that keyframe ([`realign_target`]).
+const REALIGN_MIN_GAP_NS: i64 = 250_000_000;
+/// How far past the keyframe the restart asks. ffmpeg opens a file whose video reorders frames
+/// 3/23 s before the time it is given (`fftools/ffmpeg_demux.c`, `dts_heuristic`), so a request at
+/// the keyframe itself would open on the one before it.
+const REALIGN_PAST_KEYFRAME_NS: i64 = 150_000_000;
+
+/// **Where a conversion restarts so its audio starts with its picture.**
+///
+/// A server that keeps the file's timestamps and copies the video starts the picture on the
+/// keyframe at or before the offset (`keyframe_ns`, in film time) and the converted audio at the
+/// offset itself (`offset_ns`): the stream is silent in between (0.7 s to 5.2 s measured). Asked
+/// again just past that keyframe, the same conversion starts both there. `None` when the picture
+/// leads by [`REALIGN_MIN_GAP_NS`] or less.
+pub fn realign_target(keyframe_ns: i64, offset_ns: i64) -> Option<i64> {
+    (offset_ns.saturating_sub(keyframe_ns) > REALIGN_MIN_GAP_NS)
+        .then(|| keyframe_ns.saturating_add(REALIGN_PAST_KEYFRAME_NS))
+}
+
 /// Everything the player knows about the playback on screen that the feed does not own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlayerReadout {
@@ -103,6 +123,13 @@ pub struct PlayerReadout {
     /// [`ReadoutEvent::SessionReset`]). A start's side subtitle reader is captured before the attempt
     /// exists to sample the feed's own `disp_base`, and the readout is idle then.
     open_disp_base_ns: i64,
+    /// A seek the player owes itself: a conversion's picture started this far before its audio
+    /// ([`realign_target`]), so the conversion restarts where the picture starts. One-shot: the
+    /// pump requests it and steps [`ReadoutEvent::RealignTaken`]. A session reset drops it.
+    realign_seek_ns: Option<i64>,
+    /// The offset the last such restart asked for. The Load that opens there is that restart, and
+    /// is never realigned again; it outlives the session reset the restart itself causes.
+    realigned_open_ns: Option<i64>,
     /// The adaptive worker's last photograph ([`ReadoutEvent::Abr`]): the Auto-quality
     /// measurements and decisions the diagnostics show. The worker is its only writer.
     abr: AbrReadout,
@@ -202,6 +229,8 @@ pub enum ReadoutEvent {
     /// feed's own request to redo a refused native `Seek` is not this event: it arrives in the
     /// ingested raw facts ([`ReadoutEvent::FactsIngested`]).
     SeekRequeued { target_ns: i64 },
+    /// The pump requested the seek [`PlayerReadout::realign_seek`] named.
+    RealignTaken,
     /// A seek moved to a fresh native Load after the previous session reset.
     ReloadSeek { target_ns: i64 },
     /// One session's facts are gone (its engine was torn down): back to Idle, nothing ended, no
@@ -303,6 +332,8 @@ impl PlayerReadout {
         side_reader_want: None,
         audio_choice: -1,
         open_disp_base_ns: 0,
+        realign_seek_ns: None,
+        realigned_open_ns: None,
         abr: AbrReadout::IDLE,
         abr_seed: None,
         original_failure: None,
@@ -346,6 +377,9 @@ impl PlayerReadout {
     pub fn audio_choice(&self) -> i32 { self.audio_choice }
     /// The display base the player last commanded the feed to open with (0 after any session reset).
     pub fn open_disp_base_ns(&self) -> i64 { self.open_disp_base_ns }
+    /// The restart the player owes a conversion whose picture started before its audio, until the
+    /// pump takes it ([`ReadoutEvent::RealignTaken`]).
+    pub fn realign_seek(&self) -> Option<i64> { self.realign_seek_ns }
     /// The epoch of the newest requested seek (the count of requests), 0 before any.
     pub fn seek_epoch(&self) -> u32 { self.seek_epoch }
     /// A seek is in flight: one was requested that neither landed (the feed's last ingested
@@ -426,6 +460,7 @@ impl PlayerReadout {
                 self.pending_seek_ns = (target_ns >= 0).then_some(target_ns);
                 self.seek_requests = 1;
             },
+            ReadoutEvent::RealignTaken => self.realign_seek_ns = None,
             ReadoutEvent::ReloadSeek { target_ns } => self.reload_seek_ns = Some(target_ns),
             ReadoutEvent::SessionReset => {
                 self.state = PlaybackState::Idle;
@@ -438,6 +473,7 @@ impl PlayerReadout {
                 self.seek_requests = 0;
                 self.seek_display_ns = None;
                 self.reload_seek_ns = None;
+                self.realign_seek_ns = None;
                 // The feed's own reset zeroed its counts at the same teardown.
                 self.taken_decoder_revocations = 0;
                 self.taken_native_audio_refusals = 0;
@@ -461,6 +497,8 @@ impl PlayerReadout {
             ReadoutEvent::NewItem => {
                 self.play_rate_permille = RATE_NORMAL;
                 self.rate_reload = false;
+                self.realign_seek_ns = None;
+                self.realigned_open_ns = None;
             }
             ReadoutEvent::ReleaseQueue { queued } => self.start_queued = queued,
             ReadoutEvent::RateSelected { permille } => self.play_rate_permille = permille,
@@ -480,6 +518,14 @@ impl PlayerReadout {
                 if asked.epoch != 0 && asked.epoch != self.raw.seek_requeue.epoch {
                     self.pending_seek_ns = (asked.target_ns >= 0).then_some(asked.target_ns);
                     self.seek_requests = 1;
+                }
+                // A conversion's first keyframe landed on this Load (the sample before had none):
+                // the Load a restart of ours opened is left alone, any other is measured.
+                if let Some(keyframe_ns) = raw.conversion_keyframe_ns.filter(|_| self.raw.conversion_keyframe_ns.is_none()) {
+                    if self.realigned_open_ns.take() != Some(self.open_disp_base_ns) {
+                        self.realign_seek_ns = realign_target(keyframe_ns, self.open_disp_base_ns);
+                        self.realigned_open_ns = self.realign_seek_ns;
+                    }
                 }
                 if raw.frames > 0 {
                     // The callback gate counts only the replacement Load here. A seeded
@@ -638,6 +684,61 @@ mod tests {
         assert_eq!(r.raw().disp_base, 0, "no sample has carried it yet");
         let r = stepped(&[ReadoutEvent::OpenRebased { disp_base: 600_000_000_000 }, ReadoutEvent::SessionReset]);
         assert_eq!(r.open_disp_base_ns(), 0);
+    }
+
+    fn keyframe_landed(keyframe_ns: i64) -> ReadoutEvent {
+        ReadoutEvent::FactsIngested(FeedRaw { conversion_keyframe_ns: Some(keyframe_ns), ..FeedRaw::IDLE })
+    }
+
+    /// Issue 49: a seek to 50 s landed the copied picture on the keyframe at 46.7 s while the
+    /// converted audio started at 50 s. The conversion restarts once, just past that keyframe.
+    #[test]
+    fn a_conversion_whose_picture_leads_its_audio_restarts_once_on_its_keyframe() {
+        const MS: i64 = 1_000_000;
+        let mut r = stepped(&[ReadoutEvent::OpenRebased { disp_base: 50_000 * MS }]);
+        assert_eq!(r.realign_seek(), None, "nothing landed yet");
+        r.step(keyframe_landed(46_700 * MS));
+        let target = r.realign_seek().expect("a 3.3 s lead restarts the conversion");
+        assert_eq!(target, 46_850 * MS, "past the keyframe by what ffmpeg opens early");
+        r.step(keyframe_landed(46_700 * MS));
+        assert_eq!(r.realign_seek(), Some(target), "the same sample again asks nothing new");
+        r.step(ReadoutEvent::RealignTaken);
+        assert_eq!(r.realign_seek(), None);
+        r.step(keyframe_landed(46_700 * MS));
+        assert_eq!(r.realign_seek(), None, "one landing, one restart");
+
+        // The restart: a reload at the target. Whatever keyframe it lands on, it is not restarted.
+        for keyframe in [46_700 * MS, 44_000 * MS] {
+            let mut again = r.clone();
+            again.step(ReadoutEvent::SessionReset);
+            again.step(ReadoutEvent::OpenRebased { disp_base: target });
+            again.step(keyframe_landed(keyframe));
+            assert_eq!(again.realign_seek(), None, "the restart is never restarted");
+            // The viewer's next seek is a seek like the first.
+            again.step(ReadoutEvent::SessionReset);
+            again.step(ReadoutEvent::OpenRebased { disp_base: 90_000 * MS });
+            again.step(keyframe_landed(88_000 * MS));
+            assert_eq!(again.realign_seek(), Some(88_150 * MS));
+        }
+    }
+
+    #[test]
+    fn a_keyframe_near_the_offset_and_a_reload_that_overtakes_the_restart_ask_nothing() {
+        const MS: i64 = 1_000_000;
+        let mut r = stepped(&[ReadoutEvent::OpenRebased { disp_base: 50_000 * MS }, keyframe_landed(49_750 * MS)]);
+        assert_eq!(r.realign_seek(), None, "a 250 ms lead is left alone");
+        r.step(ReadoutEvent::SessionReset);
+        r.step(ReadoutEvent::OpenRebased { disp_base: 50_000 * MS });
+        r.step(keyframe_landed(49_749 * MS));
+        assert!(r.realign_seek().is_some());
+        // The viewer seeks elsewhere before the pump takes it: the owed restart goes with the Load.
+        r.step(ReadoutEvent::SessionReset);
+        assert_eq!(r.realign_seek(), None);
+        r.step(ReadoutEvent::OpenRebased { disp_base: 300_000 * MS });
+        r.step(keyframe_landed(295_000 * MS));
+        assert_eq!(r.realign_seek(), Some(295_150 * MS), "and that seek is realigned on its own keyframe");
+        r.step(ReadoutEvent::NewItem);
+        assert_eq!(r.realign_seek(), None);
     }
 
     #[test]

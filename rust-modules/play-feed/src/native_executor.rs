@@ -1009,9 +1009,19 @@ const FILM_TIME_KEYFRAME_AHEAD_NS: i64 = 1_000_000_000;
 /// and film time is what the anchored request asked for. Armed per Load by `FeedCommand::Rebase`'s
 /// `anchor` (`Shared::anchor_rebase`).
 pub fn anchored_disp_base(pts: i64, offset_ns: i64) -> i64 {
-    let film_time = pts >= offset_ns.saturating_sub(SEEK_STALE_BEHIND_NS)
-        && pts <= offset_ns.saturating_add(FILM_TIME_KEYFRAME_AHEAD_NS);
-    if film_time { 0 } else { offset_ns.saturating_sub(pts) }
+    if keyframe_in_film_time(pts, offset_ns) { 0 } else { offset_ns.saturating_sub(pts) }
+}
+
+/// Does a conversion's first keyframe `pts` carry film time, for a restart asked at `offset_ns`?
+fn keyframe_in_film_time(pts: i64, offset_ns: i64) -> bool {
+    pts >= offset_ns.saturating_sub(SEEK_STALE_BEHIND_NS)
+        && pts <= offset_ns.saturating_add(FILM_TIME_KEYFRAME_AHEAD_NS)
+}
+
+/// What the player is told of the landed conversion keyframe (`FeedRaw::conversion_keyframe_ns`):
+/// its film time, or `-1` when it carries none.
+pub fn published_conversion_keyframe(pts: i64, offset_ns: i64) -> i64 {
+    if keyframe_in_film_time(pts, offset_ns) { pts.max(0) } else { -1 }
 }
 
 /// Re-anchor the landed conversion keyframe `pts` ([`anchored_disp_base`]) and log it.
@@ -1019,6 +1029,7 @@ fn anchor_disp_base(shared: &PhysicalShared, pts: i64) {
     let offset = shared.disp_base.load(Ordering::Relaxed);
     let base = anchored_disp_base(pts, offset);
     shared.disp_base.store(base, Ordering::Relaxed);
+    shared.conversion_keyframe_ns.store(published_conversion_keyframe(pts, offset), Ordering::Relaxed);
     plx_base::eventlog::log(&format!(
         "rebase: conversion keyframe pts={}ms at offset {}ms -> disp_base={}ms",
         pts / 1_000_000, offset / 1_000_000, base / 1_000_000
@@ -2634,7 +2645,7 @@ mod progressive_stall_tests {
 
 #[cfg(test)]
 mod anchored_disp_base_tests {
-    use super::anchored_disp_base;
+    use super::{anchored_disp_base, published_conversion_keyframe};
     const S: i64 = 1_000_000_000;
 
     #[test]
@@ -2655,5 +2666,13 @@ mod anchored_disp_base_tests {
         ] {
             assert_eq!(anchored_disp_base(pts, offset), base, "{why}");
         }
+    }
+
+    #[test]
+    fn only_a_keyframe_in_film_time_is_published_to_the_player() {
+        assert_eq!(published_conversion_keyframe(47_900_000_000, 50 * S), 47_900_000_000);
+        assert_eq!(published_conversion_keyframe(0, 4 * S), 0, "the start is film time");
+        assert_eq!(published_conversion_keyframe(0, 600 * S), -1, "a stream restarted at 0 names no film time");
+        assert_eq!(published_conversion_keyframe(269 * S, 300 * S), -1, "nor one too far below the offset");
     }
 }

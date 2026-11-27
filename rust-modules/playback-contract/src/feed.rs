@@ -38,7 +38,8 @@
 //! are the intents [`FeedCommand::Seek`], [`FeedCommand::SeekTaken`], [`FeedCommand::SeekRequeued`],
 //! [`FeedCommand::AbandonSeek`] and [`FeedCommand::ArmOpen`]. `disp_base` is raw too
 //! ([`FeedRaw::disp_base`]): the feed zeroes it on its own seek and on every reset, so the player reads it
-//! back from the sample, and a transcode restart's new base is the intent [`FeedCommand::Rebase`]. The
+//! back from the sample, and a transcode restart's new base is the intent [`FeedCommand::Rebase`]; the
+//! keyframe an anchored restart landed on is raw as well ([`FeedRaw::conversion_keyframe_ns`]). The
 //! feed-written diagnostics are [`FeedRaw::diag`] ([`FeedDiag`]) and the demux's Auto-quality facts are
 //! [`FeedRaw::abr`] ([`DemuxAbr`]); the adaptive worker's are not the feed's at all
 //! ([`AbrReadout`](crate::adaptive::AbrReadout), sent by its [`AdaptiveEffects`](crate::adaptive::AdaptiveEffects)).
@@ -584,6 +585,11 @@ pub struct FeedRaw {
     /// The clock delta the reader matched byte for byte for this engine run (Part time minus the
     /// playhead, ns); `None` while none has been measured.
     pub side_exact_delta_ns: Option<i64>,
+    /// The film time of the first keyframe of a conversion that keeps the file's timestamps, once
+    /// it landed on this Load (`FeedCommand::Rebase`'s `anchor`); `None` before that, for a
+    /// keyframe that is not in film time and for every other Load. The player measures how far it
+    /// landed before the offset it asked for.
+    pub conversion_keyframe_ns: Option<i64>,
     /// The audio the demuxer feeds the pipeline natively (the TV decodes the codec itself), once it
     /// has said so; `None` before that and for any track the TV decodes by name alone or the app
     /// decodes. The player reads it to tell a native audio refusal from any other.
@@ -754,7 +760,8 @@ impl FeedRaw {
         diag: FeedDiag::IDLE,
         vpres_gap_sum_ms: 0, vpres_gap_count: 0, disp_base: 0, load: LoadRaw::IDLE,
         abr: DemuxAbr::IDLE,
-        side_reader_active: false, side_failures: 0, side_exact_delta_ns: None, native_audio: None,
+        side_reader_active: false, side_failures: 0, side_exact_delta_ns: None, conversion_keyframe_ns: None,
+        native_audio: None,
         seek_mode: SeekMode::Segment,
     };
 }
