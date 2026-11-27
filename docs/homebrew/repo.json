@@ -1,0 +1,11 @@
+{
+  "packages": [
+    {
+      "id": "io.github.tiper.finnative",
+      "title": "FinNative",
+      "shortDescription": "A native Jellyfin client for LG webOS TVs, built on PlxNative",
+      "iconUri": "https://raw.githubusercontent.com/tiper/fin-native/main/pkg/icon160.png",
+      "manifestUrl": "https://github.com/tiper/fin-native/releases/latest/download/io.github.tiper.finnative.manifest.json"
+    }
+  ]
+}
