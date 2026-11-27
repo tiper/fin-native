@@ -31,6 +31,12 @@ impl JfClient {
             .ok()
     }
 
+    /// The guide's programmes from `now` to `until` (unix seconds) on every channel
+    /// ([`livetv::programs_path`]). `None` when the server could not be asked.
+    pub fn live_programs(&self, now: i64, until: i64) -> Option<Vec<BaseItemDto>> {
+        self.get::<QueryResult<BaseItemDto>>(&livetv::programs_path(self.user_id(), now, until)).map(|r| r.items)
+    }
+
     /// Tune `channel_id` for the play session `play_session_id`: the server opens its live stream
     /// and answers the playlist for `profile`, which [`Self::live_play`] hands back by the stream's
     /// id until [`Self::close_live_stream`]. The session is remembered as transcoding, so ending
