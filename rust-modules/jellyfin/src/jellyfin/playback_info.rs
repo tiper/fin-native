@@ -51,7 +51,9 @@ pub struct Device<'a> {
 }
 
 /// What "Convert audio: on the TV" converts (`devcaps::TV_CONVERTED_AUDIO_CODECS`), as Jellyfin
-/// names it: it spells PCM by sample layout, and its direct-play match is by exact name.
+/// names it: it spells PCM by sample layout, and its direct-play match is by exact name. DTS is
+/// left out: the set's own list already offers it, and the app converts a DTS track only after the
+/// set refuses it, which this profile cannot express.
 pub const CONVERTED_AUDIO: &str = "truehd,flac,alac,opus,vorbis,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,pcm_s32be,pcm_f32le,pcm_bluray,pcm_dvd";
 
 /// The audio codecs a server may be asked to encode to.

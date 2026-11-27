@@ -704,8 +704,8 @@ fn load_libraries() -> bool {
     // a bare SONAME there could open the television's copy instead of ours.
     let dir = Some(plx_base::paths::app_dir());
 
-    // DEPENDENCY ORDER, and it is load-bearing. libavformat NEEDs libavcodec NEEDs libavutil by
-    // SONAME, and these libraries carry no rpath (FFmpeg's configure evals its flags, so
+    // DEPENDENCY ORDER, and it is load-bearing. libavformat NEEDs libavcodec NEEDs libswresample and libavutil
+    // (libswresample NEEDs libavutil) by SONAME, and these libraries carry no rpath (FFmpeg's configure evals its flags, so
     // -Wl,-rpath,$ORIGIN does not survive — see ci/build-ffmpeg.sh). Loading a dependency FIRST
     // with RTLD_GLOBAL puts it in the global scope under its SONAME, so when the next library
     // names it the loader finds the one we just opened rather than searching the system paths and

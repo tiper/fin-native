@@ -1246,7 +1246,8 @@ fn auto_direct_plays_audio_the_app_converts_on_the_tv() {
     }
     assert!(!audio_direct_plays_or_converted(&caps, false, DirectPlayMode::Auto, "opus", 6, 0), "conversion off: the server converts");
     assert!(audio_direct_plays_or_converted(&caps, false, DirectPlayMode::Auto, "opus", 2, 0), "stereo Opus stays native");
-    assert!(!audio_direct_plays_or_converted(&caps, true, DirectPlayMode::Auto, "dts", 8, 0), "DTS is not one the app converts");
+    assert!(audio_direct_plays_or_converted(&caps, true, DirectPlayMode::Auto, "dts", 6, 0), "DTS the set has no row for is converted");
+    assert!(!audio_direct_plays_or_converted(&caps, false, DirectPlayMode::Auto, "dts", 6, 0), "conversion off: the server converts");
     assert!(audio_direct_plays_or_converted(&caps, true, DirectPlayMode::Auto, "truehd", 8, 0), "TrueHD is");
 }
 

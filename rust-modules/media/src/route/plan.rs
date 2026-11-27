@@ -2590,6 +2590,21 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             // The reasoning, and what is measured versus documented, is at `plex::link_policy`.
             let location = client.link();
             let link = plx_plex::plex::link_policy(location);
+            // One line that says what this play start decided from: the mode, the Convert audio
+            // choice, the quality, the audio track it picked and the link (no URL, no token).
+            let audio_pick = match &audio_sel {
+                Some((i, raw, _)) => {
+                    let channels = usize::try_from(*i).ok().and_then(|i| tracks.get(i)).map_or(0, |t| t.channels);
+                    format!("{raw}/{channels}ch")
+                }
+                None => "none".to_owned(),
+            };
+            crate::player::log(&format!(
+                "playback_policy: direct_play_mode={:?} convert_audio={} quality={:?} audio_pick={audio_pick} link={location:?}",
+                env.direct_play_mode,
+                if env.audio_conversion { "tv" } else { "server" },
+                playback_quality,
+            ));
             // …and what the USER has asked for, on top of what the link allows. Same two flags, composed
             // by AND, so the STRICTER of the two always wins: a relay link cannot be loosened by picking a
             // high rung, and a low rung is not rescued by a fast link. The reasoning — and why a ceiling
