@@ -1,6 +1,7 @@
 //! **`plx_ui::menu` — the one menu component**: the glass (or sheet, or flat card) a table of rows stands
 //! in, the stack of pages pushed into it, and the motion between them, as ONE machine the hosts
-//! (`screens::item_menu`, `versions_panel`, `preplay_panel`, `alt_sources`) take whole. It grew out of
+//! (`screens::item_menu`, `versions_panel`, `preplay_panel`, `alt_sources`, the Library's sort / filter / genre /
+//! sources menu, the account menu and the Watchlist's options) take whole. It grew out of
 //! [`crate::page_stack`] and stands on the same pieces the player's popovers do ([`PageStack`], the
 //! focus-stop functions and [`page_stack::register_stops`], the ONE stop registration), and replaces what
 //! every host wrote for itself: the push and the pop, BACK, the ground, the stop registration, the size
@@ -56,7 +57,9 @@
 //!
 //! The header (the top page's title, drawn with the back mark; the root has none; there is no way to
 //! push a page without one), the [`Class`], the radius ([`RADIUS`]), the width floor, the ground
-//! ([`Menu::surface`]), the pointer hold ([`Menu::pointer_held`]: the motion is not at rest) and the dim.
+//! ([`Menu::surface`]), the pointer hold ([`Menu::pointer_held`]: the motion is not at rest), the dim, and what
+//! a rebuild does when the row under the cursor is gone (an [`Class::Action`] menu opens the page afresh, a
+//! [`Class::Picker`] lands on the nearest survivor).
 //!
 //! # Unrepresentable
 //!
@@ -129,8 +132,15 @@ pub enum Host {
     /// morphing from `pill` and back into it (`Popover::morphing` + `open_from`), laid OVER it
     /// ([`popover::cover_opener`]; clear of `clear_y` when the panel fits below it). `Ground::Menu`.
     /// `fill` is the control's focused face, which the close's blob whitens toward (`None`: the control
-    /// is itself glass, as the profile chip is). `morph` says where the morph starts ([`Morph`]).
-    Grows { pill: Rect, clear_y: Option<f32>, fill: Option<[f32; 4]>, morph: Morph },
+    /// is itself glass, as the profile chip is). `morph` says where the morph starts ([`Morph`]); `width` is
+    /// the panel's width rule ([`GrowWidth`]).
+    ///
+    /// **Its height** is the table's, between 120 px and the room below the pill's top (to the foot of
+    /// [`crate::consts::SAFE`]) when there is no `clear_y`: a page taller than that SCROLLS in a panel that
+    /// stays top-flush with its pill, and never rides up over what stands above it (the tab bar, the page's
+    /// header). With a `clear_y` (the Detail hero's: text above the pill) a panel too tall for the room below
+    /// slides up inside the frame by its shortfall, as it always has.
+    Grows { pill: Rect, clear_y: Option<f32>, fill: Option<[f32; 4]>, morph: Morph, width: GrowWidth },
     /// **Glass beside a card** (the tile's hold menu): fades in beside `anchor`, the card whole above
     /// the dim. `Ground::Menu`.
     BesideGlass { anchor: [u32; 4] },
@@ -153,6 +163,17 @@ pub enum Host {
 pub enum Morph {
     FromPill,
     Fade,
+}
+
+/// **How wide a growing panel is**, a choice of its [`Host::Grows`] alone (no other host has a width rule to
+/// name). Both are never narrower than the pill ([`TableView::menu_panel_width_from`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum GrowWidth {
+    /// The table's own menu width, up to [`MENU_MAX_W`]: the localization catch for rows of OUR words.
+    Catch,
+    /// As wide as the widest row up to `ceiling`, so a name is read whole: for rows of USER-NAMED text (a list
+    /// of libraries), which no catch can bound ([`TableView::menu_panel_width_to`]).
+    Names { ceiling: f32 },
 }
 
 /// What a menu stands on, derived from its [`Host`] by one `match`.
@@ -345,7 +366,7 @@ fn grow_over(pill: Rect, clear_y: Option<f32>, size: (f32, f32)) -> Rect {
 /// A [`Host`] and the state that belongs to it alone: the glass of a [`Host::Grows`] is owned by that
 /// variant, so a morph without a popover cannot be built.
 enum Mount {
-    Grows { pill: Rect, clear_y: Option<f32>, morph: Morph, glass: Popover },
+    Grows { pill: Rect, clear_y: Option<f32>, morph: Morph, width: GrowWidth, glass: Popover },
     BesideGlass { anchor: [u32; 4] },
     Sheet { anchor: [u32; 4] },
     /// `side` is the side of the anchor the layout chose, kept for the rise: a card hung above its opener
@@ -357,13 +378,13 @@ impl MenuCore {
     fn new(host: Host, class: Class) -> Self {
         let motion = if host.springs_all_edges() { PanelMotion::new().spring_all_edges() } else { PanelMotion::new() };
         let mount = match host {
-            Host::Grows { pill, clear_y, fill, morph } => {
+            Host::Grows { pill, clear_y, fill, morph, width } => {
                 let glass = Popover::new().morphing();
                 let glass = match fill {
                     Some(fill) => glass.opener_fill(fill),
                     None => glass,
                 };
-                Mount::Grows { pill, clear_y, morph, glass }
+                Mount::Grows { pill, clear_y, morph, width, glass }
             }
             Host::BesideGlass { anchor } => Mount::BesideGlass { anchor },
             Host::Sheet { anchor } => Mount::Sheet { anchor },
@@ -399,13 +420,25 @@ impl MenuCore {
 
     /// **The ONE width rule**: the table's own menu width ([`TableView::menu_panel_width`], clamped between
     /// its floor and [`MENU_MAX_W`]); a panel that grows out of a control is never narrower than the control's
-    /// pill ([`TableView::menu_panel_width_from`]). The height is the table's, between 120 px and the
-    /// room the placement leaves.
+    /// pill ([`TableView::menu_panel_width_from`]), and its [`GrowWidth`] may let a list of names grow past the
+    /// catch. The height is the table's, between 120 px and the room the placement leaves; a growing panel's
+    /// room is what lies below its pill's top ([`Host::Grows`]).
     fn layout(&self, table: &TableView, measure: &dyn Measure) -> Rect {
         let h = table.measured_height();
         match &self.mount {
-            Mount::Grows { pill, clear_y, .. } => {
-                grow_over(*pill, *clear_y, (table.menu_panel_width_from(measure, *pill), h.clamp(120.0, crate::consts::SAFE.h)))
+            Mount::Grows { pill, clear_y, width, .. } => {
+                let w = match width {
+                    GrowWidth::Catch => table.menu_panel_width_from(measure, *pill),
+                    GrowWidth::Names { ceiling } => table.menu_panel_width_to(measure, *pill, *ceiling),
+                };
+                let safe = crate::consts::SAFE;
+                // a host with a `clear_y` has text above its pill that a panel too tall for the room below covers
+                // by exactly its shortfall (the Detail hero's); every other one stays top-flush and scrolls
+                let room = match clear_y {
+                    Some(_) => safe.h,
+                    None => (safe.y + safe.h - pill.y).clamp(120.0, safe.h),
+                };
+                grow_over(*pill, *clear_y, (w, h.clamp(120.0, room)))
             }
             Mount::BesideGlass { anchor } => beside(rect_of(*anchor), table.menu_panel_width(measure), h),
             Mount::Sheet { anchor } => popover::under_or_above_fit(rect_of(*anchor), table.menu_panel_width(measure), h),
@@ -576,6 +609,12 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
         }
     }
 
+    /// The pages pushed over the root, outermost first, each with the row that opened it and the scroll it was
+    /// left at (for a host whose replay canon writes them).
+    pub fn pages(&self) -> impl Iterator<Item = &page_stack::Saved<P, Id>> {
+        self.stack.iter()
+    }
+
     /// How many pages are pushed over the root.
     pub fn depth(&self) -> usize {
         self.stack.len()
@@ -639,8 +678,13 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
     /// the menu is up (the profile chip rides the bar's tuck) starts and ends its morph on the live rect, and
     /// the panel is laid over it. Call before every draw; inert for a host that does not grow.
     pub fn track_opener(&mut self, drawn: Rect) {
-        if let Mount::Grows { pill, glass, .. } = &mut self.core.mount {
-            *pill = drawn;
+        let MenuCore { mount, motion, .. } = &mut self.core;
+        if let Mount::Grows { pill, glass, .. } = mount {
+            // the panel is laid over the pill, so the rect measured for the old one is stale
+            if *pill != drawn {
+                *pill = drawn;
+                motion.forget_natural();
+            }
             glass.track_opener(drawn);
         }
     }
@@ -658,6 +702,11 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
     #[cfg(test)]
     pub(crate) fn glass_opener(&self) -> Option<Rect> {
         self.core.glass().and_then(Popover::opener)
+    }
+
+    /// The growing glass, for the tests that hold its morph to the scrim's clock (`None`: a host that does not grow).
+    pub fn glass(&self) -> Option<&Popover> {
+        self.core.glass()
     }
 
     /// The form of the page showing.
@@ -898,7 +947,12 @@ impl<P: Copy, Id: PartialEq + Clone, A: Clone> Menu<P, Id, A> {
         }
         let Some(built) = build(self.stack.top()) else { return };
         let held = keep.or_else(|| self.form.selected_id().cloned());
-        self.form.set_sliding(built.form, held.as_ref());
+        match self.core.class {
+            // an action menu must never slide onto a neighbour that may be destructive (*Sign out* once
+            // *Change profile* is hidden): a row that is gone opens the page afresh on its initial row
+            Class::Action => self.form.set_sliding_or_open(built.form, held.as_ref(), built.initial.as_ref()),
+            Class::Picker => self.form.set_sliding(built.form, held.as_ref()),
+        }
         self.form.table.set_title((!self.stack.is_empty()).then_some(built.title));
     }
 }

@@ -546,6 +546,11 @@ pub mod draw_census {
         static CLIP: std::cell::Cell<Option<Rect>> = const { std::cell::Cell::new(None) };
     }
     pub fn note_run(mut run: Run) {
+        // a speculative pass (the text prewarm's walk of a page no frame is drawing) draws nothing: its runs are
+        // not what a frame showed
+        if crate::rec::speculating() {
+            return;
+        }
         run.label = LABEL.with(|c| c.get());
         RUNS.with(|l| {
             if let Some(v) = l.borrow_mut().as_mut() {

@@ -45,7 +45,7 @@ fn anchor() -> [u32; 4] {
 }
 
 fn grows() -> Host {
-    Host::Grows { pill: pill(), clear_y: None, fill: Some(crate::theme::ACCENT), morph: Morph::FromPill }
+    Host::Grows { pill: pill(), clear_y: None, fill: Some(crate::theme::ACCENT), morph: Morph::FromPill, width: GrowWidth::Catch }
 }
 
 /// The root: a Nav row into page One, a plain action, a disabled one.
@@ -356,7 +356,7 @@ fn the_width_floor_the_radius_and_the_dim_are_derived() {
 fn one_width_rule_for_every_host() {
     let wide = Rect::new(1200.0, 800.0, 400.0, 60.0);
     let hosts = [
-        Host::Grows { pill: wide, clear_y: None, fill: Some(crate::theme::ACCENT), morph: Morph::FromPill },
+        Host::Grows { pill: wide, clear_y: None, fill: Some(crate::theme::ACCENT), morph: Morph::FromPill, width: GrowWidth::Catch },
         Host::BesideGlass { anchor: anchor() },
         Host::Sheet { anchor: anchor() },
         Host::Video { anchor: anchor(), placement: crate::popover::Placement::PLAYER_MENU },
@@ -502,7 +502,7 @@ fn a_video_host_under_or_above_fit_is_the_sheets_placement_on_a_flat_card() {
 /// fade-and-scale entrance, and follows the control from then on.
 #[test]
 fn a_pill_less_morph_opens_from_nothing_and_follows_the_opener() {
-    let fade = Host::Grows { pill: pill(), clear_y: None, fill: None, morph: Morph::Fade };
+    let fade = Host::Grows { pill: pill(), clear_y: None, fill: None, morph: Morph::Fade, width: GrowWidth::Catch };
     let mut m = menu(fade, Class::Action);
     step(&mut m, Event::Opening);
     assert_eq!(m.glass_opener(), None, "the morph has no rect to grow from");
@@ -592,4 +592,111 @@ fn keyed_maps_back_left_right_and_passes_the_rest() {
     assert_eq!(k(Key::Right, Up, true, Some(1)), "swallow");
     assert_eq!(k(Key::Left, Down, false, Some(1)), "pass", "a LEFT the engine moved focus with is not ours");
     assert_eq!(k(Key::Up, Down, true, Some(1)), "pass");
+}
+
+/// A rebuild that takes the focused row away is derived from the menu's CLASS: an action menu opens the page afresh
+/// on its initial row (the neighbour that slides into the vacated place may be a destructive row), a picker lands on
+/// its nearest survivor. A row that survives keeps the cursor in both.
+#[test]
+fn a_rebuild_that_loses_the_focused_row_opens_afresh_for_an_action_menu_and_lands_on_a_neighbour_for_a_picker() {
+    let page = |ids: &[Id]| {
+        let mut sec = FormSection::new("");
+        for id in ids {
+            sec = sec.item(*id, RowKind::Choice, "x", Row::new("row"));
+        }
+        Page::root(Form::new().section(sec)).initial(Some(ids[0]))
+    };
+    let all = [Id::Leaf(0), Id::Leaf(1), Id::Leaf(2), Id::Leaf(3)];
+    let without_one = [Id::Leaf(0), Id::Leaf(2), Id::Leaf(3)];
+    let fewer = [Id::Leaf(0), Id::Leaf(3)];
+    for (class, want_lost, name) in [(Class::Action, Id::Leaf(0), "action"), (Class::Picker, Id::Leaf(3), "picker")] {
+        let mut m = Mn::new(grows(), class, crate::table_screen::BAND_BASE);
+        m.step(Event::ReplaceRoot { slide: None }, &mut |p| p.is_none().then(|| page(&all)));
+        step(&mut m, Event::Focused(Id::Leaf(2).key().0));
+        assert_eq!(m.form().selected_id(), Some(&Id::Leaf(2)), "rig");
+        m.step(Event::Refresh { keep: None }, &mut |p| p.is_none().then(|| page(&without_one)));
+        assert_eq!(m.form().selected_id(), Some(&Id::Leaf(2)), "{name}: a surviving row keeps the cursor");
+        m.step(Event::Refresh { keep: None }, &mut |p| p.is_none().then(|| page(&fewer)));
+        assert_eq!(m.form().selected_id(), Some(&want_lost), "{name}");
+    }
+}
+
+/// A growing glass over USER-NAMED rows is as wide as its widest row up to the host's ceiling; a host that does not
+/// say is held to the localization catch (`MENU_MAX_W`).
+#[test]
+fn a_names_width_rule_lets_a_list_of_names_grow_past_the_localization_catch() {
+    let long = || {
+        Page::root(Form::new().section(
+            FormSection::new("").item(Id::Go, RowKind::Button, "go", Row::new("A library name that is far too long ".repeat(4))),
+        ))
+    };
+    let build = |m: &mut Mn| m.step(Event::ReplaceRoot { slide: None }, &mut |p| p.is_none().then(long));
+    let mut capped = Mn::new(grows(), Class::Action, crate::table_screen::BAND_BASE);
+    build(&mut capped);
+    let names = Host::Grows { pill: pill(), clear_y: None, fill: None, morph: Morph::FromPill, width: GrowWidth::Names { ceiling: crate::consts::SAFE.w } };
+    let mut wide = Mn::new(names, Class::Action, crate::table_screen::BAND_BASE);
+    build(&mut wide);
+    assert!(capped.panel_rect(&M).w <= crate::table::MENU_MAX_W, "{:?}", capped.panel_rect(&M));
+    assert!(wide.panel_rect(&M).w > crate::table::MENU_MAX_W, "{:?}", wide.panel_rect(&M));
+    assert!(wide.panel_rect(&M).w <= crate::consts::SAFE.w);
+}
+
+/// The panel is laid over the pill, so a pill that moves AFTER the panel was measured moves the panel (the rect is
+/// cached per layout revision; the opener is part of what it was measured for).
+#[test]
+fn the_panel_follows_an_opener_that_moves_after_it_was_measured() {
+    let fade = Host::Grows { pill: pill(), clear_y: None, fill: None, morph: Morph::Fade, width: GrowWidth::Catch };
+    let mut m = menu(fade, Class::Action);
+    let first = m.panel_rect(&M);
+    assert_eq!(first.y, pill().y, "rig: laid over the pill it was built with");
+    let moved = Rect::new(1180.0, 400.0, 120.0, 60.0);
+    m.track_opener(moved);
+    let next = m.panel_rect(&M);
+    assert_ne!(next, first, "the cached rect is not served for another opener");
+    assert_eq!((next.y, next.x + next.w), (moved.y, moved.x + moved.w), "laid over the opener where it is now");
+    m.track_opener(moved);
+    assert_eq!(m.panel_rect(&M), next, "the same rect again moves nothing");
+}
+
+/// A growing panel is top-flush with its pill and as tall as the room below the pill's top: a page that is longer
+/// scrolls inside it, and never rides up over what stands above the pill.
+#[test]
+fn a_tall_page_in_a_growing_panel_stays_top_flush_with_its_pill_and_scrolls() {
+    let high = Rect::new(1200.0, 120.0, 120.0, 60.0);
+    let host = Host::Grows { pill: high, clear_y: None, fill: None, morph: Morph::FromPill, width: GrowWidth::Catch };
+    let mut m = Mn::new(host, Class::Action, crate::table_screen::BAND_BASE);
+    m.step(Event::ReplaceRoot { slide: None }, &mut |p| p.is_none().then(|| Page::root(leaves(40, false))));
+    let r = m.panel_rect(&M);
+    let safe = crate::consts::SAFE;
+    assert_eq!(r.y, high.y, "top-flush with its pill, not slid up to the top of the frame");
+    assert!(r.y + r.h <= safe.y + safe.h + 0.5, "inside the frame: {r:?}");
+    assert_eq!(r.h, safe.y + safe.h - high.y, "as tall as the room below the pill's top");
+}
+
+/// A host with text above its pill (the Detail hero's `clear_y`) keeps its rule: a panel too tall for the room below
+/// slides up inside the frame, as tall as the table is up to the frame's height.
+#[test]
+fn a_growing_panel_with_text_above_its_pill_still_slides_up_inside_the_frame() {
+    let low = Rect::new(1200.0, 700.0, 120.0, 60.0);
+    let host = Host::Grows { pill: low, clear_y: Some(500.0), fill: None, morph: Morph::FromPill, width: GrowWidth::Catch };
+    let mut m = Mn::new(host, Class::Action, crate::table_screen::BAND_BASE);
+    m.step(Event::ReplaceRoot { slide: None }, &mut |p| p.is_none().then(|| Page::root(leaves(14, false))));
+    let r = m.panel_rect(&M);
+    let safe = crate::consts::SAFE;
+    assert!(r.h > safe.y + safe.h - low.y, "taller than the room below the pill: {r:?}");
+    assert!(r.y < low.y && r.y + r.h <= safe.y + safe.h + 0.5, "slid up, inside the frame: {r:?}");
+}
+
+/// The pages pushed over the root are readable (for a host whose replay canon writes them), and only a growing host
+/// has a glass.
+#[test]
+fn the_pushed_pages_and_the_glass_are_readable() {
+    let mut m = menu(grows(), Class::Action);
+    assert_eq!(m.pages().count(), 0);
+    assert!(m.glass().is_some());
+    step(&mut m, Event::Ok(Id::Go.key().0));
+    let saved: Vec<_> = m.pages().map(|s| (s.page, s.return_id)).collect();
+    assert_eq!(saved, [(Pg::One, Id::Go)], "the page pushed and the row that opened it");
+    let sheet = menu(Host::Sheet { anchor: anchor() }, Class::Action);
+    assert!(sheet.glass().is_none());
 }

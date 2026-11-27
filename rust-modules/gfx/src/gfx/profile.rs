@@ -142,6 +142,7 @@ mod imp {
         "rc.ground",
         "rc.rows",
         "st.ground",
+        "wl.menu",
     ];
 
     /// Resolve a trigger's contents to a phase name, or explain why it is not one.

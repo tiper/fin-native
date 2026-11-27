@@ -1,26 +1,22 @@
 //! **The Watchlist's Sort & Filter menu** (plan §2.4 W45; boards WatchlistOptions, Motion): a
 //! `Style::Compact` surface presented over the page, a glass `Ground::Menu` panel that MORPHS out
-//! of the header pill (DS6, DS7). The surface owns the open/morph state ([`OptionsMenu`]) and the
-//! engine owns the highlight: every row is a focus stop keyed by its position in
-//! [`OptionsRow::ALL`].
+//! of the header pill (DS6, DS7). It is a host of the shared menu ([`plx_ui::menu::Menu`]): the menu owns the
+//! open/morph state, the table, the ground, the size class and the stops, and the engine owns the highlight:
+//! every row is a focus stop keyed by its position in [`OptionsRow::ALL`].
 //!
 //! OK on a row applies it ([`OptionsRow::apply`]) and reports the new value to the application
 //! (`AppFx::Watchlist(WatchlistOut::SetOptions)`), which hands it to the store; the menu stays up
 //! with the check marks moved, the Library sort menu's idiom. BACK dismisses.
 use std::borrow::Cow;
 
-use plx_machine::machine::{
-    Canon, Cx, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind, Key, LogicalState, Machine, NavOp,
-};
+use plx_machine::machine::{Canon, Cx, Effects, EntryId, FocusKey, Fx, GroupId, Handled, LogicalState, Machine, NavOp};
 use plx_ui::a11y::{A11y, A11yPath, Role};
-use plx_ui::frame::Budget;
-use plx_ui::screen::{
-    Activate, At, AxisMask, Dir, DrawFrame, EdgeRule, ElemKind, Focusable, GroupKind, GroupSpec, Hover, Placed,
-    RenderStrategy, Screen, ScreenEvent, Scrim, Seat, Step, Stop,
-};
+use plx_ui::menu::{Event, Out, Page};
+use plx_ui::screen::{At, Dir, Focusable, GroupSpec, Placed, RenderStrategy, Screen, ScreenEvent, Step};
 use plx_ui::Rect;
+use std::convert::Infallible;
 
-use super::options::{OptionsMenu, OptionsRow, WatchlistOptionsState};
+use super::options::{options_form, options_menu, opening_row, OptionsMenu, OptionsRow, WatchlistOptionsState};
 use super::page::WatchlistOut;
 use crate::registry::{AppFx, ContentLike, WatchlistMenuArg};
 
@@ -34,8 +30,6 @@ pub struct WatchlistMenuScreen {
     /// The value the rows show; the application's store is the owner, this follows the presses.
     options: WatchlistOptionsState,
     menu: OptionsMenu,
-    /// The highlighted row (an index into [`OptionsRow::ALL`]).
-    sel: usize,
     opened: bool,
 }
 
@@ -45,51 +39,55 @@ fn anchor_rect(arg: &WatchlistMenuArg) -> Rect {
     Rect::new(x, y, w, h)
 }
 
-/// The row a value opens on: the first row it has chosen (the Type choice), so a stray OK on a
-/// freshly opened menu re-asserts what is already set.
-fn opening_row(options: &WatchlistOptionsState) -> usize {
-    OptionsRow::ALL.iter().position(|row| row.is_chosen(options)).unwrap_or(0)
+/// The only page there is: the rows of `options`, opening on the first row it has chosen.
+fn root(options: WatchlistOptionsState) -> impl FnMut(Option<Infallible>) -> Option<Page<OptionsRow, OptionsRow, Infallible>> {
+    move |page| match page {
+        Some(never) => match never {},
+        None => Some(Page::root(options_form(&options)).initial(opening_row(&options))),
+    }
 }
 
 impl WatchlistMenuScreen {
-
     /// The panel as it reads: each section's heading and its rows' `(label, value)`, for a route
     /// test that compares the Watchlist's words with the Library's.
     #[cfg(any(test, feature = "test-support"))]
     pub fn probe_panel(&self) -> Vec<(String, Vec<(String, Option<String>)>)> {
-        self.menu.probe_panel()
+        self.menu.form().table.sections.iter()
+            .map(|section| (section.header.clone(), section.rows.iter().map(|row| (row.label.clone(), row.value.clone())).collect()))
+            .collect()
     }
+
     pub fn new(entry: EntryId, arg: WatchlistMenuArg) -> Self {
-        Self {
-            entry,
-            arg,
-            options: arg.options,
-            menu: OptionsMenu::new(),
-            sel: opening_row(&arg.options),
-            opened: false,
+        let mut menu = options_menu(anchor_rect(&arg));
+        menu.step(Event::ReplaceRoot { slide: None }, &mut root(arg.options));
+        Self { entry, arg, options: arg.options, menu, opened: false }
+    }
+
+    /// Perform what the menu answered: a pick edits the value (and the rows are rebuilt in place under the
+    /// cursor), BACK closes.
+    fn run<H: ContentLike>(&mut self, out: Out<OptionsRow>, fx: &mut Effects<'_, H>) {
+        match out {
+            Out::Picked(row) => {
+                if row.apply(&mut self.options) {
+                    fx.push(Fx::App(AppFx::Watchlist(WatchlistOut::SetOptions(self.options))));
+                    self.menu.step(Event::Refresh { keep: Some(row) }, &mut root(self.options));
+                }
+            }
+            Out::Dismiss => fx.push(Fx::Nav(NavOp::Dismiss(self.entry))),
+            Out::Stay | Out::Moved => {}
         }
     }
+}
 
-    fn key(&self, row: usize) -> FocusKey<u32> {
-        FocusKey { entry: self.entry, elem: row as u32 }
+impl plx_ui::menu::HasMenu for WatchlistMenuScreen {
+    type Page = Infallible;
+    type Row = OptionsRow;
+    type Act = OptionsRow;
+    fn menu(&self) -> &OptionsMenu {
+        &self.menu
     }
-
-    fn row_of(&self, elem: u32) -> Option<usize> {
-        ((elem as usize) < OptionsRow::ALL.len()).then_some(elem as usize)
-    }
-
-    fn activate<H: ContentLike>(&mut self, elem: u32, fx: &mut Effects<'_, H>) {
-        let Some(row) = self.row_of(elem) else { return };
-        self.sel = row;
-        self.menu.set_selected(row);
-        if self.menu.press(&mut self.options) {
-            fx.push(Fx::App(AppFx::Watchlist(WatchlistOut::SetOptions(self.options))));
-        }
-    }
-
-    /// The settled panel, for the focus engine and the overscan audit.
-    fn frame(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
-        self.menu.panel_rect(measure)
+    fn menu_entry(&self) -> EntryId {
+        self.entry
     }
 }
 
@@ -97,98 +95,47 @@ impl<H: ContentLike> Machine<H> for WatchlistMenuScreen {
     type Ev = ScreenEvent<H>;
 
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
-        match ev {
-            ScreenEvent::Mount => {
-                self.menu.open(anchor_rect(&self.arg), &self.options);
-                self.menu.set_selected(self.sel);
-                self.opened = true;
-            }
-            ScreenEvent::Tick(tick) => {
-                if let Some(row) = cx
-                    .focus
-                    .current
-                    .filter(|key| key.entry == self.entry)
-                    .and_then(|key| self.row_of(key.elem))
-                {
-                    self.sel = row;
-                    self.menu.set_selected(row);
-                }
-                self.menu.update(tick.dt(), cx.measure);
-            }
-            ScreenEvent::FocusMoved { to, .. } => {
-                if let Some(row) = self.row_of(to.elem) {
-                    self.sel = row;
-                    self.menu.set_selected(row);
-                }
-            }
-            ScreenEvent::Activate(elem) => self.activate(*elem, fx),
-            ScreenEvent::PressCommit(_) => {
-                if let Some(key) = cx.focus.current {
-                    self.activate(key.elem, fx);
-                }
-            }
-            ScreenEvent::Input(input) => {
-                if let InputKind::Key { key: Key::Back, edge: Edge::Down, .. } = input.kind {
-                    self.menu.dismiss();
-                    fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
-                    return Handled::Yes;
-                }
-            }
-            _ => {}
+        if matches!(ev, ScreenEvent::Mount) {
+            self.opened = true;
         }
-        Handled::No
+        match self.menu.on_screen(ev, cx, self.entry, fx, &mut root(self.options)) {
+            Some(glued) => {
+                self.run(glued.out, fx);
+                glued.handled
+            }
+            None => Handled::No,
+        }
     }
 }
 
 impl<H: ContentLike> Focusable<H> for WatchlistMenuScreen {
     fn groups(&self, cx: &Cx<'_, H>, out: &mut Vec<GroupSpec>) {
-        out.push(GroupSpec {
-            id: GROUP,
-            kind: GroupKind::Column,
-            seat: Seat::Remembered,
-            reachable: AxisMask::BOTH,
-            edge: [EdgeRule::Stop; 4],
-            extent: self.frame(cx.measure),
-            len: OptionsRow::ALL.len(),
-            elem: ElemKind::Bare,
-        });
+        self.menu.groups(GROUP, cx.measure, out);
     }
     fn group_of(&self, elem: &u32, _: &Cx<'_, H>) -> Option<GroupId> {
-        self.row_of(*elem).map(|_| GROUP)
+        self.menu.group_of(elem, GROUP)
     }
     fn neighbour(&self, key: FocusKey<u32>, dir: Dir, _: &Cx<'_, H>) -> Step<u32> {
-        let Some(row) = self.row_of(key.elem) else { return Step::Edge };
-        let next = match dir {
-            Dir::Up => row.checked_sub(1),
-            Dir::Down => (row + 1 < OptionsRow::ALL.len()).then_some(row + 1),
-            _ => None,
-        };
-        next.map_or(Step::Edge, |next| Step::Move(self.key(next)))
+        self.menu.neighbour(self.entry, key, dir)
     }
     fn place(&self, elem: &u32, cx: &Cx<'_, H>, _: At) -> Option<Placed> {
-        let row = self.row_of(*elem)?;
-        let rect = self.menu.row_frame(row, cx.measure)?;
-        Some(Placed { rect, rest_rect: rect, clip: self.frame(cx.measure), index: Some(row as u32) })
+        self.menu.place(elem, cx.measure)
     }
-    fn reconcile(&self, want: FocusKey<u32>, cx: &Cx<'_, H>) -> FocusKey<u32> {
-        if self.group_of(&want.elem, cx).is_some() {
-            want
-        } else {
-            self.key(self.sel)
-        }
+    fn reconcile(&self, want: FocusKey<u32>, _: &Cx<'_, H>) -> FocusKey<u32> {
+        self.menu.reconcile(self.entry, want, GROUP)
     }
     fn seat(&self, _: GroupId, _: Placed, _: &Cx<'_, H>) -> FocusKey<u32> {
-        self.key(self.sel)
+        self.menu.seat(self.entry)
     }
     /// `watchlist_menu.<row>`: each row is named by what it chooses (`OptionsRow::a11y_name`),
     /// labelled with its drawn words.
     fn a11y(&self, key: &u32, _: &Cx<'_, H>) -> Option<A11y<'_>> {
-        let row = *OptionsRow::ALL.get(self.row_of(*key)?)?;
+        let row = *self.menu.id_of(*key)?;
         Some(A11y::new(A11yPath::new().name(row.a11y_name()), Role::Row).with_label(row.label()))
     }
     fn a11y_elems(&self, g: GroupId, _: &Cx<'_, H>, out: &mut Vec<u32>) {
         if g == GROUP {
-            out.extend((0..OptionsRow::ALL.len()).map(|row| row as u32));
+            out.extend(self.menu.focusable());
         }
     }
 }
@@ -206,16 +153,13 @@ impl<H: ContentLike> Screen<H> for WatchlistMenuScreen {
     fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
         Some((self.arg.host, Some(FocusKey { entry: self.arg.host, elem: super::page::PILL_ELEM })))
     }
-    /// The opener is CONSUMED by the morph (`popover_morph`): the lift paints it at the morph's
-    /// `opener_alpha`, out as the glass detaches from it and back in as it merges into it.
-    fn opener_alpha(&self) -> f32 {
-        self.menu.popover().opener_alpha()
-    }
-    /// The droplet has drained into the pill: the surface, and the lift that holds the pill above
-    /// it, end on this frame (`Screen::handed_back`).
-    fn handed_back(&self) -> bool {
-        self.menu.popover().handed_back()
-    }
+    // The menu's own (`plx_ui::menu_screen_methods!`): the opener is CONSUMED by the morph (the lift paints it at
+    // the morph's `opener_alpha`: out as the glass detaches, back in as it merges into it), the droplet's
+    // hand-back, the COMPACT dim (DS6's 30% scrim: a chip-shaped control on a live page opening a list), the
+    // prewarm, the pointer hold, and the draw with its focus stops (the glass grows out of the pill's rect; drawn
+    // NOT faded by the container's appear: the morph is its own entrance, and the pill above it is the opener
+    // lift's).
+    plx_ui::menu_screen_methods!(H, "wl.menu");
     fn as_any(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }
@@ -228,32 +172,6 @@ impl<H: ContentLike> Screen<H> for WatchlistMenuScreen {
     fn crumb(&self, _: &Cx<'_, H>) -> Option<Cow<'_, str>> {
         None
     }
-    /// The COMPACT role (DS6's 30% scrim): a chip-shaped control on a live page opening a list.
-    fn scrim(&self) -> Scrim {
-        self.menu.popover().dim(plx_ui::theme::underlay::DIM_COMPACT)
-    }
-    fn prepare(&mut self, _: &mut Budget, _: &Cx<'_, H>) {}
-    /// The panel, growing out of the pill's rect (`OptionsMenu::draw`). Drawn on the frame painter,
-    /// NOT faded by the container's appear (`f.page_alpha`, which still gates the hit stops): the
-    /// morph is its own entrance, and the pill above it is the opener lift's.
-    fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
-        let p = f.painter.alpha(f.page_alpha);
-        self.menu.draw(f.painter.alpha(f.nav_page_alpha), f.underlay, f.measure);
-        for row in 0..OptionsRow::ALL.len() {
-            let Some(rect) = self.menu.row_frame(row, f.measure) else { continue };
-            f.stop(
-                p,
-                Stop {
-                    key: self.key(row),
-                    rect,
-                    rest_rect: rect,
-                    clip: self.frame(f.measure),
-                    hover: Hover::Focus,
-                    activate: Activate::Immediate,
-                },
-            );
-        }
-    }
     fn render(&self) -> RenderStrategy {
         RenderStrategy::Page
     }
@@ -263,10 +181,10 @@ impl LogicalState for WatchlistMenuScreen {
     fn write(&self, c: &mut Canon) {
         self.arg.write(c);
         self.options.write_canon(c);
-        c.u32(self.sel as u32);
-        self.menu.write_motion(c);
+        c.u32(self.menu.form().selected_key().map_or(0, |key| key.0));
+        self.menu.form().table.write_motion(c);
     }
     fn probe(&self, out: &mut String) {
-        out.push_str(&format!("watchlist_menu sel={} opened={}", self.sel, self.opened));
+        out.push_str(&format!("watchlist_menu sel={} opened={}", self.menu.form().selected_key().map_or(0, |key| key.0), self.opened));
     }
 }

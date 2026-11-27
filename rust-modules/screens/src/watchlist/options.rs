@@ -5,10 +5,11 @@ use plx_data::watchlist::model::{Kind, TileState};
 pub use plx_data::watchlist::order::SortKey;
 use plx_data::watchlist::order::{sorted_filtered, FilterSpec, Show, SortSpec};
 use plx_os::i18n::msg;
-use plx_ui::popover::Popover;
-use plx_ui::table::{Row, Section, TableView};
-use plx_ui::widgets::Ground;
-use plx_ui::{Painter, Rect};
+use plx_ui::form::{Form, FormId, FormSection, RowKey, RowKind};
+use plx_ui::menu::{Class, GrowWidth, Host, Menu, Morph};
+use plx_ui::table::Row;
+use plx_ui::Rect;
+use std::convert::Infallible;
 
 /// The Type section: `Movies & Shows` / `Movies` / `TV Shows`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -215,167 +216,66 @@ impl OptionsRow {
     }
 }
 
+/// A row's identity IS what it chooses, and its focus key is its position in [`OptionsRow::ALL`] (draw order),
+/// as it always was: the form is rebuilt in place when a press changes the value, and a key names the same
+/// choice before and after.
+impl FormId for OptionsRow {
+    fn key(&self) -> RowKey {
+        RowKey(OptionsRow::ALL.iter().position(|row| row == self).unwrap_or(0) as u32)
+    }
+    fn a11y(&self) -> Option<&'static str> {
+        Some(self.a11y_name())
+    }
+}
+
 /// The menu's three sections for `state`, named as the Library's Sort & Filter panel names its own:
 /// Show (the kind of title), Sort (the checked key carries the direction as a value word, "Newest
 /// first", from the same table), Filter (availability). Pure, so the text-fit suite drives the
 /// real builder.
-pub fn sections(state: &WatchlistOptionsState) -> Vec<Section> {
-    let mut type_ = Section::new(msg::library_header_show());
-    let mut sort = Section::new(msg::browse_library_sort());
-    let mut show = Section::new(msg::browse_library_filter());
+pub fn options_form(state: &WatchlistOptionsState) -> Form<OptionsRow, OptionsRow, Infallible> {
+    let mut type_ = FormSection::new(msg::library_header_show());
+    let mut sort = FormSection::new(msg::browse_library_sort());
+    let mut show = FormSection::new(msg::browse_library_filter());
     for id in OptionsRow::ALL {
         let mut row = Row::new(id.label()).checked(id.is_chosen(state));
         if let OptionsRow::Sort(key) = id {
             if let Some(axis) = key.fact().axis().filter(|_| id.is_chosen(state)) { row = row.value(axis.direction_word(state.descending)); }
         }
         match id {
-            OptionsRow::Type(_) => type_ = type_.row(row),
-            OptionsRow::Sort(_) => sort = sort.row(row),
-            OptionsRow::Show(_) => show = show.row(row),
+            OptionsRow::Type(_) => type_ = type_.item(id, RowKind::Choice, id, row),
+            OptionsRow::Sort(_) => sort = sort.item(id, RowKind::Choice, id, row),
+            OptionsRow::Show(_) => show = show.item(id, RowKind::Choice, id, row),
         }
     }
-    vec![type_, sort, show]
+    Form::new().section(type_).section(sort).section(show)
 }
 
-/// The panel's corner radius: `--radius-panel`, as the shipped account menu pins it. The board
-/// draws 26; shipped menus win and the morph ends on this one (`Popover::morph_frame`).
-pub const PANEL_RAD: f32 = 24.0;
-
-/// The Sort & Filter menu: a glass `Ground::Menu` panel that MORPHS out of the header pill (DS6,
-/// DS7), its rows a [`TableView`]. A component the mounting surface owns, like the profile menu's
-/// table: it holds the open/morph state, the row cursor and the geometry, and answers `draw`.
-///
-/// The panel grows out of the pill (`popover_morph`): [`draw`](Self::draw) lays the glass at the
-/// morphing rect, then the rows. It draws NO pill: the pill is the control's own, painted by the
-/// host's opener lift (the host surface names it as its `opener`, the page leaves it out of its
-/// pass, `WatchlistScreen::redraw_focused` paints it) like every header opener, above the scrim and
-/// the panel at the morph's `opener_alpha`: lit as the glass grows out, gone while the menu stands,
-/// back as the droplet drains into it.
-pub struct OptionsMenu {
-    popover: Popover,
-    table: TableView,
-    /// The pill the panel grows from and covers.
-    pill: Rect,
+/// The sections [`options_form`] draws, as the table reads them (each section's heading and rows), for the
+/// text-fit suite and the route tests that compare the Watchlist's words with the Library's.
+#[cfg(any(test, feature = "test-support"))]
+pub fn sections(state: &WatchlistOptionsState) -> Vec<plx_ui::table::Section> {
+    let mut form = plx_ui::form::FormTable::new(crate::registry::BAND);
+    form.open(options_form(state), None);
+    std::mem::take(&mut form.table.sections)
 }
 
-impl Default for OptionsMenu {
-    fn default() -> Self {
-        Self::new()
-    }
+/// The row a value opens on: the first row it has chosen (the Type choice), so a stray OK on a freshly opened
+/// menu re-asserts what is already set.
+pub fn opening_row(state: &WatchlistOptionsState) -> Option<OptionsRow> {
+    OptionsRow::ALL.into_iter().find(|row| row.is_chosen(state))
 }
 
-impl OptionsMenu {
-    pub fn new() -> Self {
-        let mut table = TableView::new();
-        // A menu of one-word choices: BODY regular labels (the Library's sort menu does the same).
-        table.compact = true;
-        // the header pill opens it: the close's blob whitens toward the pill's own focused fill
-        Self { popover: Popover::new().morphing().opener_fill(plx_ui::page_header::OPENER_FILL), table, pill: Rect::default() }
-    }
+/// **The Sort & Filter menu**: the shared [`Menu`] growing out of the header pill (DS6, DS7) over its rows, the
+/// glass on the frozen ground, compact one-word choices, the pill covered top edge to top edge. It draws NO
+/// pill: the pill is the control's own, painted by the host's opener lift. A page-less menu: its root is the
+/// only page there is.
+pub type OptionsMenu = Menu<Infallible, OptionsRow, OptionsRow>;
 
-    /// The open table as it reads: each section's heading and its rows' `(label, value)`.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn probe_panel(&self) -> Vec<(String, Vec<(String, Option<String>)>)> {
-        self.table.sections.iter()
-            .map(|section| (section.header.clone(), section.rows.iter().map(|row| (row.label.clone(), row.value.clone())).collect()))
-            .collect()
-    }
-
-    /// Open on `state`, growing out of `pill` (the header pill's rect).
-    pub fn open(&mut self, pill: Rect, state: &WatchlistOptionsState) {
-        self.pill = pill;
-        self.table.open_sections(sections(state));
-        self.popover.open_from(Some(pill));
-    }
-
-    /// BACK / OK: run the morph in reverse; input returns to the page now, focus on the pill.
-    pub fn dismiss(&mut self) {
-        self.popover.dismiss();
-    }
-
-    pub fn is_open(&self) -> bool {
-        self.popover.is_open()
-    }
-
-    /// Still on screen (the close morph is running).
-    pub fn visible(&self) -> bool {
-        self.popover.visible()
-    }
-
-    pub fn popover(&self) -> &Popover {
-        &self.popover
-    }
-
-    /// The highlighted row's identity.
-    pub fn selected(&self) -> Option<OptionsRow> {
-        OptionsRow::ALL.get(usize::try_from(self.table.sel).ok()?).copied()
-    }
-
-    /// Move the highlight `delta` rows (the table skips nothing here: every row is selectable).
-    pub fn move_sel(&mut self, delta: i32) {
-        self.table.move_sel(delta);
-    }
-
-    /// Press the highlighted row against `state`; the rows are rebuilt in place (the highlight
-    /// stays where it was) when the value changed. Returns whether it changed.
-    pub fn press(&mut self, state: &mut WatchlistOptionsState) -> bool {
-        let Some(row) = self.selected() else { return false };
-        let changed = row.apply(state);
-        if changed {
-            self.table.set_sections(sections(state), self.table.sel, true);
-        }
-        changed
-    }
-
-    /// The settled panel: laid OVER the pill (the shared rule, [`plx_ui::popover::cover_opener`]:
-    /// top edges flush, right edges flush), as wide as its longest label and never narrower than
-    /// the pill ([`TableView::menu_panel_width_from`], the Library's rule too) and as tall as its
-    /// rows, held inside the safe frame (a menu taller than the room below the pill's top slides up
-    /// rather than cutting its last rows off). The pill is consumed by the morph: the glass that
-    /// replaces it is this panel.
-    pub fn panel_rect(&self, measure: &dyn plx_machine::machine::Measure) -> Rect {
-        let safe = plx_ui::consts::SAFE;
-        let w = self.table.menu_panel_width_from(measure, self.pill);
-        let h = self.table.measured_height().min(safe.h);
-        plx_ui::popover::cover_opener(self.pill, (w, h), safe)
-    }
-
-    /// The `row`-th row's drawn frame inside the settled panel (`OptionsRow::ALL` order), for the
-    /// focus engine's placement and the hit stops.
-    pub fn row_frame(&self, row: usize, measure: &dyn plx_machine::machine::Measure) -> Option<Rect> {
-        self.table.row_frame(self.panel_rect(measure), i32::try_from(row).ok()?)
-    }
-
-    /// Put the highlight on `row` (the engine's focus moved there).
-    pub fn set_selected(&mut self, row: usize) {
-        self.table.sel = i32::try_from(row).unwrap_or(-1);
-    }
-
-    /// The table's motion state, for the screen's canonical hash.
-    pub fn write_motion(&self, c: &mut plx_machine::machine::Canon) {
-        self.table.write_motion(c);
-    }
-
-    /// Step the morph and the table.
-    pub fn update(&mut self, dt: f32, measure: &dyn plx_machine::machine::Measure) {
-        self.popover.update(dt);
-        self.table.update(dt, self.panel_rect(measure).h);
-    }
-
-    /// Draw the menu on `base` (the surface's frame painter): the glass panel (`Ground::Menu`) at
-    /// the morphing rect and the rows through `Popover::morph_rows` (clipped to the surface, scaled
-    /// about the panel anchor, not before the glass has taken over).
-    pub fn draw(
-        &self,
-        base: Painter,
-        field: Option<&plx_ui::underlay::UnderlayField>,
-        measure: &dyn plx_machine::machine::Measure,
-    ) {
-        let panel = self.panel_rect(measure);
-        let p = self.popover.content_painter_on(base, 0.0);
-        self.popover.panel(p, panel, PANEL_RAD, field, Ground::Menu);
-        self.popover.morph_rows(p, panel, PANEL_RAD, |p| self.table.draw(p, panel, measure));
-    }
+/// The menu for a header pill at `pill`.
+pub fn options_menu(pill: Rect) -> OptionsMenu {
+    // the header pill opens it: the close's blob whitens toward the pill's own focused fill
+    let host = Host::Grows { pill, clear_y: None, fill: Some(plx_ui::page_header::OPENER_FILL), morph: Morph::FromPill, width: GrowWidth::Catch };
+    Menu::new(host, Class::Action, crate::registry::BAND)
 }
 
 #[cfg(test)]

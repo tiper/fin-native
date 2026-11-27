@@ -107,19 +107,19 @@ fn menu_side_actions_keep_source_sort_and_filter_row_identity() {
         SortEntry { key: "addedAt".into(), desc_key: String::new(), title: "Added".into(), default_desc: true },
     ];
     sort.apply_draft(sort_draft(&sorts, 0, false));
-    let sort_key = sort.form.key_at(1).unwrap().0;
+    let sort_key = sort.menu.form().key_at(1).unwrap().0;
     let mut filter = LibraryMenu::new(EntryId(7), menu_arg(LibraryMenuKind::Filter, [0; 4]));
     filter.apply_draft(filter_draft(false, None, true));
-    let filter_key = filter.form.key_at(0).unwrap().0;
+    let filter_key = filter.menu.form().key_at(0).unwrap().0;
     let (groups, sections) = source_sections();
     let mut sources = LibraryMenu::new(EntryId(7), menu_arg(LibraryMenuKind::Sources, [0; 4]));
     sources.apply_draft(source_draft(11, 0, &groups, &sections, &(0..9).collect::<Vec<u32>>(), false));
-    let source_key = sources.form.key_at(1).unwrap().0;
+    let source_key = sources.menu.form().key_at(1).unwrap().0;
 
     with_cx(|cx| {
-        assert!(matches!(sort.form.index_of_key(RowKey(sort_key)).and_then(|i| sort.form.binding_at(i)).map(|b| &b.action), Some(Action::Edit(QueryEdit::Sort { key, desc: true })) if key == "addedAt"));
-        assert!(matches!(filter.form.index_of_key(RowKey(filter_key)).and_then(|i| filter.form.binding_at(i)).map(|b| &b.action), Some(Action::Edit(QueryEdit::Unwatched(true)))));
-        assert!(matches!(sources.form.index_of_key(RowKey(source_key)).and_then(|i| sources.form.binding_at(i)).map(|b| &b.action), Some(Action::Select(SectionAddress { sid, section: 7, .. })) if sid == &ServerId::from_raw(2)));
+        assert!(matches!(sort.menu.form().index_of_key(RowKey(sort_key)).and_then(|i| sort.menu.form().binding_at(i)).map(|b| &b.action), Some(Action::Edit(QueryEdit::Sort { key, desc: true })) if key == "addedAt"));
+        assert!(matches!(filter.menu.form().index_of_key(RowKey(filter_key)).and_then(|i| filter.menu.form().binding_at(i)).map(|b| &b.action), Some(Action::Edit(QueryEdit::Unwatched(true)))));
+        assert!(matches!(sources.menu.form().index_of_key(RowKey(source_key)).and_then(|i| sources.menu.form().binding_at(i)).map(|b| &b.action), Some(Action::Select(SectionAddress { sid, section: 7, .. })) if sid == &ServerId::from_raw(2)));
         assert!(<LibraryMenu as Focusable<HostFixture>>::place(&sort, &sort_key, cx, At::Drawn).is_some());
         assert!(<LibraryMenu as Focusable<HostFixture>>::place(&filter, &filter_key, cx, At::Drawn).is_some());
         assert!(<LibraryMenu as Focusable<HostFixture>>::place(&sources, &source_key, cx, At::Drawn).is_some());
@@ -196,7 +196,9 @@ fn sources_menu_left_is_an_engine_edge_not_an_editor_transition() {
         let mut engine = FocusEngine::new();
         engine.enter(owner, &menu, plx_ui::screen::FocusTarget::ContainerGroup(GroupId(0)), None, cx);
         let before = engine.current(owner).expect("source menu seats its first row");
-        assert!(matches!(engine.move_dir(owner, &menu, &[], Dir::Left, cx), Outcome::Nothing));
+        // LEFT is the page stack's edge (`EdgeRule::Screen`): the engine hands it back to the menu (re-delivered with
+        // `at_edge`), which pops a page or, at the root, swallows it; focus never moves
+        assert!(matches!(engine.move_dir(owner, &menu, &[], Dir::Left, cx), Outcome::Edge(plx_ui::screen::EdgeRule::Screen)));
         assert_eq!(engine.current(owner), Some(before));
 
         let mut output = Vec::new();
@@ -211,15 +213,15 @@ fn sources_menu_left_is_an_engine_edge_not_an_editor_transition() {
                         sym: 0,
                         wcode: 0,
                         edge: Edge::Down,
-                        at_edge: false,
+                        at_edge: true,
                     },
                 }),
                 cx,
                 &mut Effects::new(&mut output, MachineId::Instance(plx_machine::machine::InstanceId(7)), &mut present),
             ),
-            Handled::No
+            Handled::Yes
         );
-        assert_eq!(menu.kind, LibraryMenuKind::Sources, "LEFT cannot enter an editor");
+        assert_eq!(menu.kind(), LibraryMenuKind::Sources, "LEFT cannot enter an editor");
         assert!(output.is_empty(), "LEFT emits no source/editor action");
     });
 }
@@ -251,13 +253,13 @@ fn open_sources_refreshes_metadata_once_then_settles() {
 
     let cx_first = source_cx(&listing, &first, &hubs, &measure, Tick { ms: 1, dt_us: 16_000 });
     effects(&mut menu, &cx_first);
-    let first_key = menu.form.key_at(0).unwrap().0;
+    let first_key = menu.menu.form().key_at(0).unwrap().0;
     let first_stamp = menu.stamp.clone();
     assert_eq!(menu.draft_rebuilds, 1);
     effects(&mut menu, &cx_first);
     assert_eq!(menu.stamp, first_stamp);
-    assert_eq!(menu.form.key_at(0).unwrap().0, first_key, "an unchanged open source menu settles");
-    let first_selection = menu.form.table.sel;
+    assert_eq!(menu.menu.form().key_at(0).unwrap().0, first_key, "an unchanged open source menu settles");
+    let first_selection = menu.menu.form().table.sel;
     assert_eq!(menu.draft_rebuilds, 1);
 
     {
@@ -270,13 +272,13 @@ fn open_sources_refreshes_metadata_once_then_settles() {
     let cx_changed = source_cx(&listing, &changed, &hubs, &measure, Tick { ms: 2, dt_us: 16_000 });
     effects(&mut menu, &cx_changed);
     assert_ne!(menu.stamp, first_stamp, "source metadata refresh rebuilds the open menu");
-    assert_eq!(menu.form.key_at(0).unwrap().0, first_key, "refresh preserves the row identity");
+    assert_eq!(menu.menu.form().key_at(0).unwrap().0, first_key, "refresh preserves the row identity");
     assert_eq!(menu.draft_rebuilds, 2);
     let changed_stamp = menu.stamp.clone();
     effects(&mut menu, &cx_changed);
     assert_eq!(menu.stamp, changed_stamp, "the changed source menu settles after one rebuild");
-    assert_eq!(menu.form.key_at(0).unwrap().0, first_key);
-    assert_eq!(menu.form.table.sel, first_selection);
+    assert_eq!(menu.menu.form().key_at(0).unwrap().0, first_key);
+    assert_eq!(menu.menu.form().table.sel, first_selection);
     assert_eq!(menu.draft_rebuilds, 2);
 }
 
@@ -293,9 +295,9 @@ fn the_plus_n_list_covers_its_pill_and_fits_its_widest_row() {
     menu.apply_draft(source_draft(11, 0, &groups, &sections, &(0..9).collect::<Vec<u32>>(), false));
     with_cx(|cx| {
         let frame = menu.frame(cx.measure);
-        let widest = menu.form.table.measured_width(cx.measure);
+        let widest = menu.menu.form().table.measured_width(cx.measure);
         assert_eq!(frame.x, 648.0 - plx_ui::widgets::PILL_FOCUS_OUTSET, "the near edge is the +N pill's outer edge");
-        assert_eq!(frame.y, menu.pill().y, "the panel's top edge is the +N pill's top edge, as Sort & Filter");
+        assert_eq!(frame.y, pill_of(&menu.arg).y, "the panel's top edge is the +N pill's top edge, as Sort & Filter");
         assert!(widest > plx_ui::table::MENU_MAX_W, "the fixture name must outgrow the shared cap ({widest})");
         assert!(frame.w >= widest, "the panel fits its widest row ({} < {widest})", frame.w);
         let safe = plx_ui::consts::SAFE;
@@ -320,7 +322,7 @@ fn both_library_menus_open_over_their_opener_top_edges_flush() {
         let (groups, sections) = source_sections();
         menu.apply_draft(source_draft(11, 0, &groups, &sections, &(0..9).collect::<Vec<u32>>(), false));
         with_cx(|cx| {
-            let (frame, pill) = (menu.frame(cx.measure), menu.pill());
+            let (frame, pill) = (menu.frame(cx.measure), pill_of(&menu.arg));
             assert_eq!(frame.y, pill.y, "{kind:?}: the panel's top is the opener's top");
             assert!(frame.x <= pill.x + 0.01 && frame.x + frame.w >= pill.x + pill.w - 0.01, "{kind:?}: {frame:?} covers {pill:?} across");
             assert!(frame.y + frame.h >= pill.y + pill.h, "{kind:?}: {frame:?} covers {pill:?} down");

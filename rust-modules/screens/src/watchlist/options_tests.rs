@@ -156,12 +156,29 @@ fn the_control_keeps_its_right_edge_whatever_the_criterion_is() {
 
 // ---- the menu: glass ground, morph, geometry ----
 
+fn root_of(state: WatchlistOptionsState) -> impl FnMut(Option<std::convert::Infallible>) -> Option<plx_ui::menu::Page<OptionsRow, OptionsRow, std::convert::Infallible>> {
+    move |page| match page {
+        Some(never) => match never {},
+        None => Some(plx_ui::menu::Page::root(options_form(&state)).initial(opening_row(&state))),
+    }
+}
+
 fn open_menu() -> (OptionsMenu, Rect, WatchlistOptionsState) {
     let state = default_state();
     let pill = header::Row::new(&ShippedMeasure, &state.summary(), None).pill();
-    let mut m = OptionsMenu::new();
-    m.open(pill, &state);
+    let mut m = options_menu(pill);
+    m.step(plx_ui::menu::Event::ReplaceRoot { slide: None }, &mut root_of(state));
+    m.step(plx_ui::menu::Event::Opening, &mut root_of(state));
     (m, pill, state)
+}
+
+fn tick(m: &mut OptionsMenu, state: WatchlistOptionsState, dt: f32) {
+    m.step(plx_ui::menu::Event::Tick { dt, measure: &ShippedMeasure, focus: None }, &mut root_of(state));
+}
+
+/// The frame of the row `row` (its place in the panel), by its focus key.
+fn row_frame(m: &OptionsMenu, row: usize) -> Rect {
+    m.place(&(row as u32), &ShippedMeasure).expect("row frame").rect
 }
 
 /// **The panel is never narrower than the pill it grows out of** (owner: the Sort & Filter panel
@@ -175,23 +192,25 @@ fn the_panel_is_never_narrower_than_the_pill_it_grows_out_of() {
     assert!((panel.x + panel.w - (pill.x + pill.w)).abs() < 0.01, "right edges stay aligned");
 }
 
+/// **The menu is the shared one**: a growing glass whose opener the morph consumes (gone while the panel
+/// stands, back as the droplet drains into it), and a BACK at its only page closes it.
 #[test]
-fn the_menu_is_a_morphing_popover_that_grows_out_of_the_pill_and_ends_on_the_panel_radius() {
-    let (mut m, pill, _) = open_menu();
-    assert_eq!(m.popover().open_style(), plx_ui::popover::OpenStyle::Morph);
-    let panel = m.panel_rect(&ShippedMeasure);
-    let f0 = m.popover().morph_frame(Some(pill), panel, PANEL_RAD).unwrap();
-    assert_eq!(f0.rect, pill, "frame 0 is the focused pill (the plate and its outset), not the panel");
-    assert!(f0.rect.h < panel.h);
+fn the_menu_grows_out_of_the_pill_and_hands_the_pill_back_as_it_closes() {
+    let (mut m, _, state) = open_menu();
+    assert_eq!(m.surface(), plx_ui::menu::Surface::Glass);
+    assert_eq!(m.class(), plx_ui::menu::Class::Action);
     for _ in 0..120 {
-        m.update(1.0 / 60.0, &ShippedMeasure);
+        tick(&mut m, state, 1.0 / 60.0);
     }
-    let f = m.popover().morph_frame(Some(pill), panel, PANEL_RAD).unwrap();
-    assert!((f.radius - PANEL_RAD).abs() < 0.05, "the morph ends on the panel's radius");
-    assert!((f.rect.h - panel.h).abs() < 0.5 && (f.rect.w - panel.w).abs() < 0.5);
-    assert!(m.is_open());
-    m.dismiss();
-    assert!(!m.is_open());
+    assert!(m.opener_alpha() < 0.01, "the pill is consumed while the panel stands");
+    assert!(!m.handed_back());
+    assert_eq!(m.step(plx_ui::menu::Event::Back, &mut root_of(state)), plx_ui::menu::Out::Dismiss, "BACK at the root closes it");
+    m.step(plx_ui::menu::Event::Closing, &mut root_of(state));
+    for _ in 0..120 {
+        tick(&mut m, state, 1.0 / 60.0);
+    }
+    assert!(m.handed_back(), "the droplet drained into the pill");
+    assert!(m.opener_alpha() > 0.99);
 }
 
 #[test]
@@ -217,25 +236,43 @@ fn every_row_lies_inside_the_panel_in_every_language() {
         let panel = m.panel_rect(&ShippedMeasure);
         assert!(panel.y >= safe.y - 0.01 && panel.y + panel.h <= safe.y + safe.h + 0.01, "{}: panel in the safe frame", lang.tag());
         for i in 0..OptionsRow::ALL.len() {
-            let r = m.row_frame(i, &ShippedMeasure).expect("row frame");
+            let r = row_frame(&m, i);
             assert!(r.y >= panel.y - 0.01 && r.y + r.h <= panel.y + panel.h + 0.01, "{}: row {i} inside the panel", lang.tag());
         }
     }
 }
 
+/// A row's focus key is its place in [`OptionsRow::ALL`] (draw order), and the menu opens on the first row the
+/// value has chosen.
+#[test]
+fn a_rows_key_is_its_place_in_all_and_the_menu_opens_on_the_chosen_type() {
+    let (m, _, state) = open_menu();
+    assert_eq!(m.form().selected_id().copied(), Some(OptionsRow::Type(TypeFilter::All)));
+    for (i, row) in OptionsRow::ALL.into_iter().enumerate() {
+        assert_eq!(m.id_of(i as u32).copied(), Some(row), "key {i}");
+    }
+    assert_eq!(opening_row(&state), Some(OptionsRow::Type(TypeFilter::All)));
+    assert_eq!(m.focusable().count(), OptionsRow::ALL.len());
+}
+
 #[test]
 fn a_press_edits_the_value_and_keeps_the_highlight_on_its_row() {
     let (mut m, _, mut state) = open_menu();
-    assert_eq!(m.selected(), Some(OptionsRow::Type(TypeFilter::All)));
-    m.move_sel(1);
-    assert_eq!(m.selected(), Some(OptionsRow::Type(TypeFilter::Movies)));
-    assert!(m.press(&mut state));
+    let press = |m: &mut OptionsMenu, state: &mut WatchlistOptionsState, key: u32| {
+        m.step(plx_ui::menu::Event::Focused(key), &mut root_of(*state));
+        let plx_ui::menu::Out::Picked(row) = m.step(plx_ui::menu::Event::Ok(key), &mut root_of(*state)) else { panic!("OK picks") };
+        let changed = row.apply(state);
+        if changed {
+            m.step(plx_ui::menu::Event::Refresh { keep: Some(row) }, &mut root_of(*state));
+        }
+        changed
+    };
+    assert!(press(&mut m, &mut state, 1));
     assert_eq!(state.type_, TypeFilter::Movies);
-    assert_eq!(m.selected(), Some(OptionsRow::Type(TypeFilter::Movies)), "rebuilt in place");
-    assert!(!m.press(&mut state), "the chosen row again is not a change");
-    m.move_sel(3);
-    assert_eq!(m.selected(), Some(OptionsRow::Sort(SortKey::Title)));
-    assert!(m.press(&mut state));
+    assert_eq!(m.form().selected_id().copied(), Some(OptionsRow::Type(TypeFilter::Movies)), "rebuilt in place");
+    assert!(!press(&mut m, &mut state, 1), "the chosen row again is not a change");
+    assert!(press(&mut m, &mut state, 4));
+    assert_eq!(m.form().selected_id().copied(), Some(OptionsRow::Sort(SortKey::Title)));
     assert_eq!((state.sort, state.descending), (SortKey::Title, false));
 }
 

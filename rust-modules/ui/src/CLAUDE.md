@@ -522,7 +522,7 @@ presentation in a design pass.
    `Popover::panel` (the glass at the morphing rect) and `Popover::morph_rows` (the rows, scaled
    about the panel anchor by their own lens spring (`K_LENS`) on an open, and by the shrinking
    slab's height on a close). The morph draws no opener face: every header
-   opener, the profile chip included, is the lift pass's, and the morph starts and ends on the opener's LIVE drawn rect (`Screen::opener_rect` -> `Popover::track_opener`, so the chip follows the bar's tuck). The morph is not
+   opener, the profile chip included, is the lift pass's, and the morph starts and ends on the opener's LIVE drawn rect (`Screen::opener_rect` -> `Menu::track_opener`, which moves the panel laid over it and the glass's `Popover::track_opener`, so the chip follows the bar's tuck). The morph is not
    faded by the container's appear: the surface begins and ends as the opener. A held surface is ticked with no time, so a morph starts on the first
    frame anyone sees. The item hold menu keeps lift+appear. A new morph constant is named in
    `popover_morph.rs`. A menu whose opener is a flat focused pill names that fill

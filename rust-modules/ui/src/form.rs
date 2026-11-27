@@ -426,6 +426,17 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
         self.install_keeping(form, keep, false, false);
     }
 
+    /// [`Self::set_sliding`] for an ACTION MENU rebuilt under the cursor: a `keep` that survives glides (the
+    /// pill and the scroll stay where they are); one that vanished does NOT slide onto its neighbour but opens
+    /// afresh on `initial` (else [`TableView::opening_row`]), as [`Self::open`] does.
+    pub fn set_sliding_or_open(&mut self, form: Form<Id, A, Dest>, keep: Option<&Id>, initial: Option<&Id>) {
+        if keep.is_some_and(|k| form.contains(k)) {
+            self.install_keeping(form, keep, true, false);
+        } else {
+            self.open(form, initial);
+        }
+    }
+
     /// [`Self::set`] for a rebuild that happens UNDER the cursor and must not move the scroll or
     /// the highlight pill — a toggled switch on a list that has scrolled: the pill and the scroll
     /// keep gliding from where they are instead of snapping (`TableView::set_sections`'s `slide`).
