@@ -795,7 +795,7 @@ pub struct TableView {
     ///
     /// The class belongs to the surface, never to a page: **a picker pushed into an action menu takes
     /// the menu's class** (the hero `…` menu's and a tile menu's Select Version and Audio & Subtitles
-    /// pages are BODY regular), so a page push and pop leave it alone (`page_stack::push_page`,
+    /// pages are BODY regular), so a page push and pop leave it alone (`menu::Menu`'s push and pop,
     /// [`Self::blank_like`] carries it) and the same page on its standalone panel is HEADLINE bold.
     ///
     /// It no longer affects HEADERS: those are CAPS at CAPTION in both classes, because the caps

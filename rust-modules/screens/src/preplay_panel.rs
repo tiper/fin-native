@@ -9,7 +9,12 @@
 //! rule, and the start spends it), and the server gets the selection PUT plus the show's track memory
 //! ([`ContentReq::CommitPreplayPick`], run by the loop). The panel stays up with the check moved; BACK
 //! pops a page before it dismisses. On the failure screen the store is not written: the loop holds the
-//! pair on the session for Try again and closes the panel only when that retry started.
+//! pair on the session for Try again and closes the panel only when that retry started. That panel is a flat card
+//! over the player's video ([`host_of`]: `menu::Host::Video`), never glass or the sheet ground.
+//!
+//! **The glue is the menu's.** OK, BACK, LEFT, RIGHT, the hover and the pointer hold all go through
+//! `plx_ui::menu::Menu::on_screen` and `menu_screen_methods!`; this screen only performs what comes back
+//! (a pick commits, a dismissal closes).
 //!
 //! **Entry point.** Anything that wants the panel sends
 //! `ContentReq::Panel(ContentPanel::PreplayTracks { anchor })` from a Detail page: the panel's
@@ -20,22 +25,20 @@
 
 use std::borrow::Cow;
 
-use plx_appkit::preplay_tracks::{Back, Outcome, PickerState};
+use plx_appkit::preplay_tracks::PickerState;
 use plx_data::metadata::PreplayTracks;
 use plx_data::stores::{StoreCmd, StoreId};
 use plx_machine::machine::{
-    Canon, Cx, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind, InstanceId, Key, LogicalState,
-    Machine, NavOp,
+    Canon, Cx, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InstanceId, LogicalState, Machine, NavOp,
 };
 use plx_plex::plex::ServerId;
 use plx_ui::a11y::{A11y, A11yPath};
-use plx_ui::frame::Budget;
-use plx_ui::form::RowKey;
+use plx_ui::menu::{Host, Menu, Out};
+use plx_ui::popover::Placement;
 use plx_ui::page_stack;
-use plx_ui::popover::Popover;
 use plx_ui::screen::{
-    At, AxisMask, Dir, DrawFrame, EdgeRule, ElemKind, FocusSource, Focusable, GroupKind, GroupSpec, HitSource, Placed,
-    RenderStrategy, Screen, ScreenEvent, Scrim, Seat, Step,
+    At, Dir, FocusSource, Focusable, GroupSpec, HitSource, Placed, RenderStrategy, Screen, ScreenEvent,
+    Step,
 };
 
 use crate::registry::{AppFx, AppLike, ContentReq, MetadataLike, PageMemory};
@@ -107,26 +110,32 @@ impl LogicalState for PreplayArg {
     }
 }
 
+/// **The host the panel stands on, chosen from where its tracks come from** and never from whether an opener was
+/// named: the playback failure screen's panel stands over the VIDEO PLANE (the player stays flat over video,
+/// `docs/liquid-glass.md` §7), a card hung under or above the button that opened it ([`Placement::UNDER_OR_ABOVE_FIT`]),
+/// whatever its argument says about an opener. A Detail page's panel grows out of the hero control that opened it
+/// (glass, over the control), else hangs under or above its opener on the sheet ground.
+pub(crate) fn host_of(arg: &PreplayArg) -> Host {
+    match (arg.source, arg.opener) {
+        (Source::Failed { .. }, _) => Host::Video { anchor: arg.anchor, placement: Placement::UNDER_OR_ABOVE_FIT },
+        (Source::Page, Some(_)) => plx_ui::detail_layout::hero_host(arg.anchor),
+        (Source::Page, None) => Host::Sheet { anchor: arg.anchor },
+    }
+}
+
 pub struct PreplayPanelScreen {
     entry: EntryId,
     arg: PreplayArg,
+    /// The tracks, the choice and the menu that shows them, on the host [`host_of`] names.
     picker: PickerState,
-    /// The morph, present exactly when the panel has an opener to grow from (the page's hero control;
-    /// the failure screen's panel has none and keeps its fade).
-    popover: Option<Popover>,
 }
 
 impl PreplayPanelScreen {
     /// `tracks` is what the item offers, read by the registry's mount from [`Source`]; a page that
     /// cannot say gets an empty set, which lists its two rows with nothing behind them.
     pub fn new(entry: EntryId, arg: PreplayArg, tracks: PreplayTracks) -> Self {
-        let anchor = arg.anchor;
-        let picker = PickerState::new(tracks, anchor);
-        match arg.opener {
-            // the control's focused face is a near-white fill: the close's blob whitens toward it
-            Some(_) => Self { entry, arg, picker: picker.over_opener(), popover: Some(Popover::new().morphing().opener_fill(plx_ui::theme::ACCENT)) },
-            None => Self { entry, arg, picker, popover: None },
-        }
+        let picker = PickerState::new(tracks, host_of(&arg));
+        Self { entry, arg, picker }
     }
 
     pub fn picker(&self) -> &PickerState {
@@ -137,20 +146,17 @@ impl PreplayPanelScreen {
         fx.push(Fx::Nav(NavOp::Dismiss(self.entry)));
     }
 
-    /// BACK, or a click on the title band: pop a page, else close.
-    fn back<H: AppLike<Memory = PageMemory>>(&mut self, fx: &mut Effects<'_, H>) {
-        if self.picker.back() == Back::Dismiss {
-            self.dismiss(fx);
-        }
-    }
-
-    fn activate<H: AppLike<Memory = PageMemory>>(&mut self, elem: u32, fx: &mut Effects<'_, H>) {
-        if page_stack::is_title_key(elem) {
-            return self.back(fx);
-        }
-        let Some(id) = self.picker.row_at(RowKey(elem)) else { return };
-        if let Outcome::Picked(sel) = self.picker.ok(id) {
-            commit_pick(fx, self.picker.tracks().clone(), sel, self.arg.source);
+    /// What the menu answered: a dismissal closes the surface, and a pick of a track is carried forward by the
+    /// picker and committed (a drill-in is a page the menu pushed). The row is the event's own (`Glued::elem`).
+    fn run<H: AppLike<Memory = PageMemory>>(&mut self, out: Out<()>, elem: Option<u32>, fx: &mut Effects<'_, H>) {
+        match out {
+            Out::Stay | Out::Moved => {}
+            Out::Dismiss => self.dismiss(fx),
+            Out::Picked(()) => {
+                if let Some(sel) = elem.and_then(|key| self.picker.pick(key)) {
+                    commit_pick(fx, self.picker.tracks().clone(), sel, self.arg.source);
+                }
+            }
         }
     }
 }
@@ -182,59 +188,27 @@ pub(crate) fn commit_pick<H: AppLike>(
 impl<H: AppLike<Memory = PageMemory>> Machine<H> for PreplayPanelScreen {
     type Ev = ScreenEvent<H>;
     fn step(&mut self, ev: &Self::Ev, cx: &Cx<'_, H>, fx: &mut Effects<'_, H>) -> Handled {
-        match ev {
-            ScreenEvent::Mount => {
-                let pill = plx_ui::detail_layout::hero_pill(self.arg.anchor);
-                if let Some(pop) = &mut self.popover {
-                    pop.open_from(Some(pill));
-                }
-                Handled::No
+        // all of it the menu's (`Menu::on_screen`): BACK and LEFT pop a page, RIGHT enters a drill-in row; at the
+        // root LEFT is inert and BACK closes; however the surface was dismissed the glass runs its morph back
+        match self.picker.on_screen(ev, cx, self.entry, fx) {
+            Some(glued) => {
+                self.run(glued.out, glued.elem, fx);
+                glued.handled
             }
-            // However the surface was dismissed (BACK, a pick), the glass runs the morph back into
-            // the control.
-            ScreenEvent::Closing => {
-                if let Some(pop) = &mut self.popover {
-                    pop.dismiss();
-                }
-                Handled::No
-            }
-            ScreenEvent::Tick(tick) => {
-                if let Some(pop) = &mut self.popover {
-                    pop.update(tick.dt());
-                }
-                let focused = cx.focus.current.filter(|key| key.entry == self.entry);
-                if let Some(i) = focused.and_then(|key| self.picker.form.index_of_key(RowKey(key.elem))) {
-                    self.picker.form.table.sel = i as i32;
-                }
-                self.picker.update(tick.dt(), cx.measure);
-                Handled::Yes
-            }
-            ScreenEvent::FocusMoved { to, .. } => {
-                if let Some(i) = self.picker.form.index_of_key(RowKey(to.elem)) {
-                    self.picker.form.table.sel = i as i32;
-                }
-                fx.invalidate(plx_machine::present::Provenance::Input);
-                Handled::Yes
-            }
-            ScreenEvent::Activate(elem) => {
-                self.activate(*elem, fx);
-                Handled::Yes
-            }
-            ScreenEvent::PressCommit(_) => {
-                if let Some(key) = cx.focus.current {
-                    self.activate(key.elem, fx);
-                }
-                Handled::Yes
-            }
-            ScreenEvent::Input(input) => match input.kind {
-                InputKind::Key { key: Key::Back, edge: Edge::Down, .. } => {
-                    self.back(fx);
-                    Handled::Yes
-                }
-                _ => Handled::No,
-            },
-            _ => Handled::No,
+            None => Handled::No,
         }
+    }
+}
+
+impl plx_ui::menu::HasMenu for PreplayPanelScreen {
+    type Page = plx_appkit::preplay_tracks::PickPage;
+    type Row = plx_appkit::preplay_tracks::PickRow;
+    type Act = ();
+    fn menu(&self) -> &Menu<plx_appkit::preplay_tracks::PickPage, plx_appkit::preplay_tracks::PickRow, ()> {
+        self.picker.menu()
+    }
+    fn menu_entry(&self) -> EntryId {
+        self.entry
     }
 }
 
@@ -242,40 +216,27 @@ const GROUP: GroupId = GroupId(0);
 
 impl<H: AppLike<Memory = PageMemory> + MetadataLike> Focusable<H> for PreplayPanelScreen {
     fn groups(&self, cx: &Cx<'_, H>, out: &mut Vec<GroupSpec>) {
-        out.push(GroupSpec {
-            id: GROUP,
-            kind: GroupKind::Column,
-            seat: Seat::Remembered,
-            reachable: AxisMask::VERTICAL,
-            edge: [EdgeRule::Stop; 4],
-            extent: self.picker.panel_rect(cx.measure),
-            len: self.picker.form.focusable_len(),
-            elem: ElemKind::Bare,
-        });
+        self.picker.menu().groups(GROUP, cx.measure, out);
     }
     fn group_of(&self, elem: &u32, _cx: &Cx<'_, H>) -> Option<GroupId> {
-        page_stack::popover_group_of(&self.picker, elem, GROUP)
+        self.picker.menu().group_of(elem, GROUP)
     }
     fn neighbour(&self, key: FocusKey<u32>, dir: Dir, _cx: &Cx<'_, H>) -> Step<u32> {
-        page_stack::popover_neighbour(&self.picker, self.entry, key, dir)
+        self.picker.menu().neighbour(self.entry, key, dir)
     }
     fn place(&self, elem: &u32, cx: &Cx<'_, H>, _at: At) -> Option<Placed> {
-        page_stack::popover_place(&self.picker, elem, cx.measure)
+        self.picker.menu().place(elem, cx.measure)
     }
-    fn reconcile(&self, want: FocusKey<u32>, cx: &Cx<'_, H>) -> FocusKey<u32> {
-        if self.group_of(&want.elem, cx).is_some() {
-            want
-        } else {
-            page_stack::popover_seat(&self.picker, self.entry)
-        }
+    fn reconcile(&self, want: FocusKey<u32>, _cx: &Cx<'_, H>) -> FocusKey<u32> {
+        self.picker.menu().reconcile(self.entry, want, GROUP)
     }
     fn seat(&self, _g: GroupId, _from: Placed, _cx: &Cx<'_, H>) -> FocusKey<u32> {
-        page_stack::popover_seat(&self.picker, self.entry)
+        self.picker.menu().seat(self.entry)
     }
     /// `preplay.<row>`: the two root rows by name, every track row by its index in the item's list.
     fn a11y(&self, key: &u32, _cx: &Cx<'_, H>) -> Option<A11y<'_>> {
         use plx_appkit::preplay_tracks::PickRow;
-        page_stack::popover_a11y(&self.picker.form, key, |id| match *id {
+        page_stack::popover_a11y(self.picker.menu().form(), key, |id| match *id {
             PickRow::OpenAudio => A11yPath::new().name("audio"),
             PickRow::OpenSubtitles => A11yPath::new().name("subtitles"),
             PickRow::SubOff => A11yPath::new().name("subtitle").name("off"),
@@ -284,7 +245,7 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Focusable<H> for PreplayPan
         })
     }
     fn a11y_elems(&self, g: GroupId, _cx: &Cx<'_, H>, out: &mut Vec<u32>) {
-        page_stack::popover_a11y_elems(&self.picker.form, g, GROUP, out);
+        page_stack::popover_a11y_elems(self.picker.menu().form(), g, GROUP, out);
     }
 }
 
@@ -314,37 +275,18 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Screen<H> for PreplayPanelS
     fn crumb(&self, _cx: &Cx<'_, H>) -> Option<Cow<'_, str>> {
         None
     }
-    fn prepare(&mut self, _b: &mut Budget, _cx: &Cx<'_, H>) {}
-    /// The hero control the glass grew out of (see `VersionsPanelScreen::opener`).
+    /// The hero control the glass grew out of (see `VersionsPanelScreen::opener`). The failure screen's panel has none,
+    /// whatever its argument names: it stands over the video plane, with nothing of a page to lift.
     fn opener(&self) -> Option<(EntryId, Option<FocusKey<u32>>)> {
-        self.arg.opener.map(|(entry, elem)| (entry, Some(FocusKey { entry, elem })))
-    }
-    /// The opener is consumed by the morph: gone while the panel stands, back as it drains.
-    fn opener_alpha(&self) -> f32 {
-        self.popover.as_ref().map_or(1.0, Popover::opener_alpha)
-    }
-    /// The droplet has drained into the control: the surface and the lift end on this frame.
-    fn handed_back(&self) -> bool {
-        self.popover.as_ref().is_some_and(Popover::handed_back)
-    }
-    /// The panel's own weight; a morphing panel's dim FOLLOWS the morph (`Popover::dim`).
-    fn scrim(&self) -> Scrim {
-        match &self.popover {
-            Some(pop) => pop.dim(plx_ui::theme::underlay::DIM_PANEL),
-            None => Scrim::dim(plx_ui::theme::underlay::DIM_PANEL),
+        match self.arg.source {
+            Source::Failed { .. } => None,
+            Source::Page => self.arg.opener.map(|(entry, elem)| (entry, Some(FocusKey { entry, elem }))),
         }
     }
-    fn pointer_held(&self) -> bool {
-        self.picker.motion.transitioning()
-    }
-    fn draw(&mut self, f: &mut DrawFrame<'_, '_, H>) {
-        let measure = f.measure;
-        plx_ui::profile::phase("dt.preplay", || match &self.popover {
-            Some(pop) => self.picker.draw_morph(pop, f.painter.alpha(f.nav_page_alpha), f.underlay, measure),
-            None => self.picker.draw(f.page_alpha, measure),
-        });
-        page_stack::popover_register_stops(&self.picker, self.entry, f);
-    }
+    // The menu's own (`plx_ui::menu_screen_methods!`): the opener consumed by the morph (gone while the panel stands,
+    // back as it drains), the hand-back, the dim (a morphing panel's FOLLOWS the morph), the prewarm, the pointer
+    // hold and the draw.
+    plx_ui::menu_screen_methods!(H, "dt.preplay");
     fn render(&self) -> RenderStrategy {
         RenderStrategy::Page
     }
@@ -364,6 +306,7 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Screen<H> for PreplayPanelS
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use plx_ui::screen::DrawFrame;
     use super::*;
     use crate::registry::AppMsg;
     use plx_data::metadata::Stream;
@@ -456,6 +399,21 @@ pub(crate) mod tests {
         vec![plx_ui::a11y::conform::<HostFixture, _>(&panel(), &cx())]
     }
 
+    /// A key press (down edge), re-delivered at the edge as the menu's one group hands it to its screen.
+    fn key_ev(key: plx_machine::machine::Key) -> ScreenEvent<HostFixture> {
+        use plx_machine::machine::{Edge, InputEvent, InputKind, Source as InputSource, Tick};
+        ScreenEvent::<HostFixture>::Input(InputEvent {
+            at: Tick::default(),
+            source: InputSource::Script,
+            kind: InputKind::Key { key, sym: 0, wcode: 0, edge: Edge::Down, at_edge: true },
+        })
+    }
+
+    /// One screen event, as the dispatcher delivers it.
+    fn press(p: &mut PreplayPanelScreen, ev: ScreenEvent<HostFixture>, fx: &mut Effects<'_, HostFixture>) {
+        Machine::<HostFixture>::step(p, &ev, &cx(), fx);
+    }
+
     fn drive(
         p: &mut PreplayPanelScreen,
         f: impl FnOnce(&mut PreplayPanelScreen, &mut Effects<'_, HostFixture>),
@@ -474,10 +432,10 @@ pub(crate) mod tests {
         use plx_appkit::preplay_tracks::PickRow;
         let mut p = panel();
         let elem = |row: PickRow| plx_ui::form::FormId::key(&row).0;
-        let fx = drive(&mut p, |p, fx| p.activate(elem(PickRow::OpenSubtitles), fx));
+        let fx = drive(&mut p, |p, fx| press(p, ScreenEvent::Activate(elem(PickRow::OpenSubtitles)), fx));
         assert!(fx.is_empty(), "a drill-in picks nothing");
         assert_eq!(p.picker().depth(), 1);
-        let fx = drive(&mut p, |p, fx| p.activate(elem(PickRow::SubOff), fx));
+        let fx = drive(&mut p, |p, fx| press(p, ScreenEvent::Activate(elem(PickRow::SubOff)), fx));
         let patched = fx.iter().any(|f| {
             matches!(
                 f,
@@ -494,10 +452,49 @@ pub(crate) mod tests {
             matches!(f, Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { sel, .. })) if sel.subtitle_sid == 0)
         });
         assert!(patched && committed, "Off patches the page and commits the PUT");
-        let fx = drive(&mut p, |p, fx| p.back(fx));
+        let fx = drive(&mut p, |p, fx| press(p, key_ev(plx_machine::machine::Key::Back), fx));
         assert!(fx.is_empty() && p.picker().depth() == 0, "BACK pops the subtitle page first");
-        let fx = drive(&mut p, |p, fx| p.back(fx));
+        let fx = drive(&mut p, |p, fx| press(p, key_ev(plx_machine::machine::Key::Back), fx));
         assert!(matches!(fx.first(), Some(Fx::Nav(NavOp::Dismiss(EntryId(3))))), "BACK at the root closes");
+    }
+
+    /// **RIGHT enters a drill-in row and LEFT pops a page, as in the player**; at the root LEFT is inert, and
+    /// neither closes the panel (only BACK does). Both arrive re-delivered at the edge (`at_edge`).
+    #[test]
+    fn right_enters_a_drill_in_and_left_pops_without_ever_closing() {
+        use plx_appkit::preplay_tracks::PickRow;
+        use plx_machine::machine::{Edge, InputEvent, InputKind, Key, Source as InputSource, Tick};
+        let key = |key: Key, edge: Edge| {
+            ScreenEvent::<HostFixture>::Input(InputEvent {
+                at: Tick::default(),
+                source: InputSource::Script,
+                kind: InputKind::Key { key, sym: 0, wcode: 0, edge, at_edge: true },
+            })
+        };
+        let focus_on = |row: PickRow| {
+            let mut c = cx();
+            let elem = plx_ui::form::FormId::key(&row).0;
+            c.focus.current = Some(FocusKey { entry: EntryId(3), elem });
+            c
+        };
+        let mut p = panel();
+        let send = |p: &mut PreplayPanelScreen, ev: ScreenEvent<HostFixture>, c: &Cx<'_, HostFixture>| {
+            let mut out = Vec::new();
+            let mut present = plx_machine::present::Present::new();
+            let mut fx: Effects<'_, HostFixture> = Effects::new(&mut out, MachineId::Instance(InstanceId(4)), &mut present);
+            let handled = Machine::<HostFixture>::step(p, &ev, c, &mut fx);
+            (handled, out.len())
+        };
+        assert_eq!(send(&mut p, key(Key::Left, Edge::Down), &focus_on(PickRow::OpenAudio)), (Handled::Yes, 0), "LEFT at the root is inert");
+        assert_eq!(p.picker().depth(), 0);
+        assert_eq!(send(&mut p, key(Key::Right, Edge::Down), &focus_on(PickRow::OpenSubtitles)), (Handled::Yes, 0));
+        assert_eq!(p.picker().depth(), 1, "RIGHT on a drill-in row enters it");
+        assert_eq!(send(&mut p, key(Key::Right, Edge::Down), &focus_on(PickRow::SubOff)), (Handled::Yes, 0));
+        assert_eq!(p.picker().depth(), 1, "RIGHT on a choice row does nothing");
+        assert_eq!(send(&mut p, key(Key::Left, Edge::Up), &focus_on(PickRow::SubOff)), (Handled::Yes, 0));
+        assert_eq!(p.picker().depth(), 1, "the up edge is swallowed");
+        assert_eq!(send(&mut p, key(Key::Left, Edge::Down), &focus_on(PickRow::SubOff)), (Handled::Yes, 0));
+        assert_eq!(p.picker().depth(), 0, "LEFT pops the page");
     }
 
     /// A source's identity is where the tracks come from: the seed pick rides along but is not compared.
@@ -518,8 +515,8 @@ pub(crate) mod tests {
         use plx_appkit::preplay_tracks::PickRow;
         let elem = |row: PickRow| plx_ui::form::FormId::key(&row).0;
         let mut p = panel_from(Source::Failed { part_id: 9001, pick: None });
-        drive(&mut p, |p, fx| p.activate(elem(PickRow::OpenSubtitles), fx));
-        let fx = drive(&mut p, |p, fx| p.activate(elem(PickRow::SubOff), fx));
+        drive(&mut p, |p, fx| press(p, ScreenEvent::Activate(elem(PickRow::OpenSubtitles)), fx));
+        let fx = drive(&mut p, |p, fx| press(p, ScreenEvent::Activate(elem(PickRow::SubOff)), fx));
         assert!(fx.iter().any(|f| matches!(
             f,
             Fx::App(AppFx::Content(ContentReq::CommitPreplayPick { source: Source::Failed { .. }, sel, .. })) if sel.subtitle_sid == 0
@@ -530,8 +527,8 @@ pub(crate) mod tests {
             "the failure screen's pair is the session's: a derived standing Off is never stored as the viewer's pick"
         );
         let mut page = panel();
-        drive(&mut page, |p, fx| p.activate(elem(PickRow::OpenSubtitles), fx));
-        let fx = drive(&mut page, |p, fx| p.activate(elem(PickRow::SubOff), fx));
+        drive(&mut page, |p, fx| press(p, ScreenEvent::Activate(elem(PickRow::OpenSubtitles)), fx));
+        let fx = drive(&mut page, |p, fx| press(p, ScreenEvent::Activate(elem(PickRow::SubOff)), fx));
         assert!(!fx.iter().any(|f| matches!(f, Fx::Nav(_))), "a Detail page's panel stays up with the check moved");
     }
 
@@ -625,9 +622,60 @@ pub(crate) mod tests {
         let m = &plx_ui::fixture::FixtureMeasure;
         let beside = plx_ui::popover::under_or_above_fit(
             plx_ui::Rect::new(x, y, w, h),
-            failed.picker().form.table.menu_panel_width(m),
-            failed.picker().form.table.measured_height(),
+            failed.picker().menu().form().table.menu_panel_width(m),
+            failed.picker().menu().form().table.measured_height(),
         );
         assert_eq!(failed.picker().panel_rect(m), beside);
+    }
+
+    /// **The host is chosen from the SOURCE, never from whether an opener was named.** The failure screen's panel stands
+    /// over the video plane: flat (never the sheet ground, never glass: the player stays flat over video), the neutral
+    /// dim, no opener to lift, under or above its button by the fit rule. An argument that names an opener on the failure
+    /// screen is the same card, not a glass growing out of a control that is not there.
+    #[test]
+    fn the_failure_panel_is_a_flat_card_over_the_video_whatever_its_argument_names() {
+        use plx_ui::menu::Surface;
+        let failed = Source::Failed { part_id: 9001, pick: None };
+        for opener in [None, Some((EntryId(1), 9))] {
+            let p = morphing(opener, failed);
+            assert_eq!(p.picker().menu().surface(), Surface::Flat, "{opener:?}");
+            assert_eq!(Screen::<HostFixture>::opener(&p), None, "{opener:?}: nothing of a page to lift");
+            let scrim = Screen::<HostFixture>::scrim(&p);
+            assert_eq!(scrim.source, plx_ui::screen::UnderlaySource::Flat, "{opener:?}: the dim is neutral ink over the picture");
+            assert_eq!(p.picker().menu().form().table.min_panel_w, plx_ui::theme::layout::PLAYER_MENU_MIN_W);
+            assert_eq!(Screen::<HostFixture>::opener_alpha(&p), 1.0, "{opener:?}: no morph");
+        }
+        // a Detail page's: glass out of its control, or the sheet when it has none
+        assert_eq!(morphing(Some((EntryId(1), 9)), Source::Page).picker().menu().surface(), Surface::Glass);
+        assert_eq!(morphing(None, Source::Page).picker().menu().surface(), Surface::Sheet);
+        assert!(matches!(host_of(&morphing(Some((EntryId(1), 9)), failed).arg), plx_ui::menu::Host::Video { .. }));
+    }
+
+    /// **The pointer waits while the card moves**, through the menu's one forwarding (`menu_screen_methods!`): a host
+    /// that forgot it would act on a card still sliding between two pages.
+    #[test]
+    fn the_pointer_waits_while_a_page_slides() {
+        use plx_appkit::preplay_tracks::PickRow;
+        let mut p = panel();
+        assert!(!Screen::<HostFixture>::pointer_held(&p));
+        drive(&mut p, |p, fx| press(p, ScreenEvent::Activate(plx_ui::form::FormId::key(&PickRow::OpenSubtitles).0), fx));
+        assert!(Screen::<HostFixture>::pointer_held(&p), "the pages slide");
+        let mut ms = 0;
+        tick(&mut p, &mut ms, 120);
+        assert!(!Screen::<HostFixture>::pointer_held(&p), "and settle");
+    }
+
+    /// OK goes through the menu: a click on the header's back mark pops, and an OK on a key that names no row only closes
+    /// (the menu's own table, not a ladder of the host's).
+    #[test]
+    fn ok_is_the_menus_the_back_mark_pops_and_no_row_closes() {
+        use plx_appkit::preplay_tracks::PickRow;
+        let mut p = panel();
+        drive(&mut p, |p, fx| press(p, ScreenEvent::Activate(plx_ui::form::FormId::key(&PickRow::OpenAudio).0), fx));
+        assert_eq!(p.picker().depth(), 1);
+        let fx = drive(&mut p, |p, fx| press(p, ScreenEvent::Activate(plx_ui::page_stack::TITLE_KEY), fx));
+        assert!(fx.is_empty() && p.picker().depth() == 0, "the back mark pops");
+        let fx = drive(&mut p, |p, fx| press(p, ScreenEvent::Activate(999), fx));
+        assert!(matches!(fx.first(), Some(Fx::Nav(NavOp::Dismiss(EntryId(3))))), "no row: the menu closes");
     }
 }

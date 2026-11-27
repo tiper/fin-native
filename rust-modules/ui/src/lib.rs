@@ -78,7 +78,10 @@ pub mod master_detail; // RESTRUCTURE (spec §10): reusable two-region focus/ret
 // `Screen` mounted through `app::bridge` rather than a `Popover` reached through `app.rs`'s key
 // ladders. Its deletion readout now borrows the Session owner's immutable publication;
 // no module-level deletion counter remains for a newly mounted screen to poll.
-pub mod page_stack; // the drill-in page stack Tracks and More share
+pub mod page_stack; // the drill-in page stack and the focus-stop functions the menus share
+#[cfg(test)]
+mod menu_tests; // every transition of `menu`, and the illegal combinations
+pub mod menu; // THE menu component: a table of rows in glass / sheet / flat card, its page stack and motion (grew out of page_stack)
 pub mod panel_motion; // the resize/page-slide spring of the in-player table popovers (Tracks, More)
 
 pub mod breadcrumb; // 'Films > Collections' crumb (PR5)

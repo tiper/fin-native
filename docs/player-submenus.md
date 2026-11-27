@@ -10,7 +10,9 @@ the Size / Position / Color pickers, nav keys, persistence, locks, the rebuild s
 state) and PR 3 (Other languages, the language pages, the image-subtitle badge) and PR 4 (the animated
 panel resize and page slide for Tracks and More, `ui::panel_motion`, plus the device frame-time
 scene) and PR 5 (More -> Quality on the shared `ui::page_stack::PageStack`, the `more-quality-osc`
-scene) are what this repository has. The replay anchors were re-recorded for PR 2 and again for PR 5
+scene) are what this repository has. (The Detail hosts' pages, the hero and tile `…` menus, Select Version
+and Audio & Subtitles, are on `PageStack` too, driven by `ui::menu::Menu` (one machine for the push, pop, slide, placement and stops)
+instead of the per-popover code the Tracks and More menus still use; the player's menus move onto it in a later change.) The replay anchors were re-recorded for PR 2 and again for PR 5
 because the overlay's state shape changed on purpose.
 
 ## Behaviour
