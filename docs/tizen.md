@@ -2,7 +2,7 @@
 
 `PLATFORM=tizen` builds PlxNative for a Samsung Tizen television as a **hosted library**: a shared object, `libplx.so`, that a small
 .NET application (`tizen/host/PlxHost/`) loads and drives through the C functions its header exports (`plx_host_*`). The design is `docs/platform-ports.md`
-("Target shape", W9); this page is how to build, check, install and read what comes out. Nothing here is verified on a retail set.
+("Target shape", W9); this page is how to build, check, install and read what comes out. Except where a section names the retail tester's report (discussion #1460), nothing here is verified on a retail set.
 
 ## Scope of the MVP
 
@@ -621,10 +621,11 @@ Measured on the TV 10.0 emulator against `tests/mock_pms.py`:
 Not measured: a retail set, other layouts and languages (the `globe` key), the panel's arrows `<` / `>`, and the
 `filter_event` forwarding flutter-tizen does while the panel is up, which this emulator did not need.
 
-## The packet player (emulator probe, 2026-11-27; NOT run on a retail set)
+## The packet player (emulator probe and one retail set, 2026-11-27)
 
 Phase 1 of the Feed port: which native API takes the elementary-stream packets the Feed engine demuxes, what it does on the TV 10.0
-emulator, a probe a retail tester can run, and the port's design. Nothing here has run on a retail set; the probe is how one will.
+emulator, a probe a retail tester can run, and the port's design. The tester's retail Tizen 9.0 set ran the probe from the nightly and
+passed every step ("On a retail set", below).
 
 **The candidates, from the firmware itself** (the TV 10.0 x86_64 emulator image; the managed assemblies were read with a
 System.Reflection.Metadata dump, the native libraries with `nm -D`, `readelf` and `objdump`):
@@ -638,7 +639,7 @@ System.Reflection.Metadata dump, the native libraries with `nm -D`, `readelf` an
 - **The privilege.** The managed binding checks `http://developer.samsung.com/privilege/esplay`, which Samsung's TizenFX TV API
   reference for `ESPlayer` lists at the **Partner** level (with `SDK Support: N`). The native library carries no privilege string (nor do
   `libespplayer-core.so` and `libtrackrenderer.so`). This package does not declare it. On the emulator, create and open succeed without
-  it; a retail set may differ, and the probe's `privilege` line says which.
+  it, and so do they on the tester's retail set ("On a retail set", below).
 - **The layouts.** The probe compares the library's own `get_size_of_esplusplayer_es_packet`, `..._video_stream_info` and
   `..._audio_stream_info` with this build's structs before any packet is submitted (64, 40 and 32 bytes on x86_64) and refuses on any
   difference: armv7's sizes are the set's, read at run time, not assumed.
@@ -662,10 +663,10 @@ System.Reflection.Metadata dump, the native libraries with `nm -D`, `readelf` an
   is `listener_bridge::OnFirstDecodingDone(void*)`, the shape of the `OnEos(void*)` behind the binding's `void (*)(void*)` end-of-stream
   callback. That is evidence for the setter's arguments, not a primary statement of the callback's. The probe sets it, before `open`
   like every other callback, from a table of its own, and **the emulator never raised it** (two runs, every video scenario), so it is a
-  note in the log (`first-frame: ...`), not a counted step: whether a retail set raises it is the tester's log's.
+  note in the log (`first-frame: ...`), not a counted step. The tester's retail set never raised it either.
 - **Which sets have it.** The emulator image (TV 10.0) has esplusplayer 1.11.3; Samsung's reference gives the managed class version
-  5.5.0. The tester's set (discussion #1460, a 2023 UA65CU7700) logged a **Tizen 9.0** platform, not 7.0; whether its library and
-  sizes match is the probe's first lines.
+  5.5.0. The tester's set (discussion #1460, a 2023 UA65CU7700) logged a **Tizen 9.0** platform, not 7.0. Its library opened and its
+  sizes matched the build's armv7 structs.
 
 ### The probe
 
@@ -719,6 +720,30 @@ first-frame callback counted gave the same steps.
 No picture was seen: the app's window is opaque and the overlay shows only through a `(0, 0, 0, 0)` hole, which neither the player
 route's failure read-out nor the Settings page draws.
 
+### On a retail set
+
+The tester (discussion #1460) pressed the row on the armv7 nightly, on the 2023 UA65CU7700 (platform Tizen 9.0, .NET 6.0.9, kernel 5.4),
+and posted the log and a photo of the row reading `64 passed, 0 failed`. The log ended `done pass=64 fail=0`:
+
+| Step | Retail set |
+| --- | --- |
+| `fallback` | the push family present |
+| `api`, `layout` | PASS: the library bound by bare SONAME; sizes 48 / 36 / 24, equal to this build's armv7 structs |
+| `privilege` | PASS: create and open without declaring it |
+| `h264-clock` | open 97 ms (the first of the process; later opens 1 ms), `set_ecore_display -> 0`, prepared 333 ms after `prepare_async` with 26 packets, advancing 207 ms after `start`, paused at 1530 ms and moved 0 ms in 700 ms, resumed in 207 ms, `seek_done` 125 ms after the seek, landed at 5877 ms for 5500, `eos` at 7999 ms, `stop`/`close`/`destroy` 0; 12 callbacks, all on the player's own threads |
+| `h264+aac`, `hevc`, `hevc10-hdr10`, `av1`, `vp9` | PASS: prepared in 171-259 ms, advancing about 510 ms after `start` |
+| `aac`, `ac3`, `eac3`, `pcm_s16le` alone | PASS: prepared in 64-101 ms, advancing about 508 ms after `start` |
+| `first-frame` | never raised, in any scenario (as on the emulator) |
+
+The video runs logged `buffer video underrun` notes, 16 in all: 7 in `h264-clock`, three each in `h264+aac` and `hevc10-hdr10`, one each in
+`hevc`, `av1` and `vp9`. Their cause is not determined. The probe feeds a 2 s horizon ahead of the clock (`FEED_AHEAD_MS`), and every
+run passed regardless. So most of the Feed port's open questions are answered for this set. The packet player opens without the
+Partner privilege, and its armv7 layouts are the build's. Every codec the probe sends is accepted: H.264, HEVC, HEVC Main 10 with
+HDR10, AV1, VP9, AAC, AC3, EAC3 and PCM. Opus, which the Feed engine also sends, was not probed, and neither was undecoded DTS. Pause,
+seek and EOS behave as on the emulator. PCM prepares and plays, so the TrueHD and DTS plan below holds. No first-picture callback
+comes, so the sink cannot wait for one. Still not measured: whether the panel showed a picture (the row runs under the opaque Settings
+page), whether anything was heard, and Dolby Vision.
+
 ### The port (design; not built)
 
 - **The seam.** The Feed engine reaches the set through `plx_os::tv::sink::VideoSink`, which is Starfish-shaped (`feed_abi_is_cow`, the
@@ -738,8 +763,8 @@ route's failure read-out nor the Settings page draws.
   #1576 stages `libass-plx`, and opened by absolute path from the payload directory, as `media-codecs/src/ffi.rs` opens it on webOS. Its
   size in the package is measured at that step, not here.
 - **TrueHD and DTS** are decoded in the app to PCM, as on webOS (`ff_pcm::PcmDecoder`), and submitted as PCM, if a retail set prepares
-  PCM; the emulator did not, so the tester's `pcm_s16le` line decides it. If a set refuses PCM, those titles fall to the server's audio
-  transcode.
+  PCM. The emulator did not, but the tester's retail set did (`pcm_s16le` PASS, above). A set that refuses PCM sends those titles to
+  the server's audio transcode.
 - **PGS and VobSub** are decoded in the app with FFmpeg and drawn by the GL overlay above the plane, as on webOS; the window's hole and
   straight-alpha mixing ("The video plane", above) apply unchanged.
 - **A mid-play track switch** is a reload, the webOS rule: close the player and open a new one at the current position, never a stream
@@ -749,10 +774,15 @@ route's failure read-out nor the Settings page draws.
   player stack (review-checklist item 3), and the planner chooses between them per title as it does on webOS: the URI driver
   for the host player's direct play, Feed for what needs the app's demux (remux, app-decoded audio, picture subtitles).
 
-**Unknowns the tester's log answers:** whether a retail Tizen 9.0 set opens `libesplusplayer.so` and with what sizes; whether create
-and open succeed without the Partner privilege; HEVC Main 10 and HDR10 on a real panel; AV1 (the emulator refuses it); AAC, AC3,
-EAC3 and PCM alone (the emulator has no audio); whether `first_video_decoding_done` fires; the clock, pause, seek and EOS timings on a
-set; whether the public push family is present. Not measured anywhere yet: Dolby Vision, a picture on the plane, armv7.
+**What the tester's log answered** ("On a retail set", above):
+- a retail Tizen 9.0 set opens `libesplusplayer.so`, with sizes equal to this build's armv7 structs;
+- create and open succeed without the Partner privilege;
+- it accepts HEVC Main 10 with HDR10 and AV1, and AAC, AC3, EAC3 and PCM on their own (Opus and undecoded DTS were not probed);
+- `first_video_decoding_done` does not fire;
+- the clock, pause, seek and EOS work as on the emulator;
+- the public push family is present.
+
+Not measured anywhere yet: Dolby Vision, Opus, a picture on the plane, sound out of the speakers.
 
 ## Known gaps seen on the emulator (2026-11-21)
 

@@ -2092,7 +2092,8 @@ W3d. Neutral types (L15b item 2 prerequisites; part of item 3).
 ### W12 (H, after W10 and W11). Tizen feed over esplusplayer (optional)
 - A Feed sink over `dlopen("libesplusplayer.so")` (T6), after Option B is chosen. Verify: struct layouts
   against the set's binary (report 2e), a device run on mock media. Risk: firmware-dependent ABI and
-  certificate policy; decided after W10 ships.
+  certificate policy. The packet-player probe settled both for one retail Tizen 9.0 set: its layouts are the build's, and it opens
+  without the Partner privilege (`docs/tizen.md`, "The packet player"). The port's design is there too.
 
 ### W13 (N). The macOS app and the Windows simulator as product platforms
 - A Keychain key store, and a URI driver over AVPlayer or a Feed sink over VideoToolbox ("A Mac playback
