@@ -568,8 +568,17 @@ impl World {
     /// (`the_crumb_root_pops_to_the_library…`, `the_rail_is_entered_only_from_the_last_column…`,
     /// 4 whole-binary runs of 37). The join is `Serial`'s own (`task::drain_workers_for_test`): a
     /// worker that outlives its bound is reported and left, never waited on forever.
+    ///
+    /// **The storage worker is drained too** (`storage_worker::drain_for_test`): a session write
+    /// queued earlier, such as `remember_library_page` when a library child page opens, lands on the
+    /// long-lived `persistence` thread and moves `session::visible_generation`, which the next frame
+    /// reads as `Landing(Session)` page damage. Not joined, it landed under load in whichever graded
+    /// window followed: the account menu's close counted it as its own damage on the Recommended and
+    /// Collections pages (`closing_the_account_menu_with_back_raises_no_page_damage`, about 1 run in
+    /// 40 under load; 0 of 400 with the drain).
     pub(super) fn settle(&mut self, n: u32) -> Vec<String> {
         plx_base::task::drain_workers_for_test();
+        plx_base::storage_worker::drain_for_test();
         self.performed.clear();
         self.frames(n);
         std::mem::take(&mut self.performed)
