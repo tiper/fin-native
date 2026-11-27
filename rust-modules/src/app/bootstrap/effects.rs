@@ -223,13 +223,18 @@ fn content_request(request: &plx_screens::registry::ContentReq) -> Result<Value,
         ContentReq::PreviewTransport(play) => json!({"preview_transport":play}),
         ContentReq::PreviewSeek(position) => json!({"preview_seek":position}),
         ContentReq::ItemMenu => json!("itemmenu"),
+        ContentReq::SelectVersion { sid, rk, media } => json!({"select_version":{"sid":sid.raw(),"rk":rk,"media":media.0}}),
+        ContentReq::CommitPreplayPick { tracks, sel, .. } => json!({"commit_preplay_pick":{
+            "sid":tracks.sid.raw(),"rk":tracks.rk,"audio":sel.audio_sid,"subtitle":sel.subtitle_sid}}),
         ContentReq::Panel(panel) => json!({"panel":match panel {
             ContentPanel::AltSources { anchor } => json!({"alt_sources":anchor}),
-            ContentPanel::Versions { anchor } => json!({"versions":anchor}),
+            ContentPanel::Versions { anchor, .. } => json!({"versions":anchor}),
+            ContentPanel::PreplayTracks { anchor, .. } => json!({"preplay_tracks":anchor}),
             ContentPanel::Tracks { page } => json!({"tracks":page}),
             ContentPanel::About => json!("about"),
             ContentPanel::Bio => json!("bio"),
             ContentPanel::CollectionAbout => json!("collection_about"),
+            ContentPanel::ChannelEntry { first } => json!({"channel_entry":first}),
         }}),
         // Full playback still needs its own controlled bootstrap and resource/result contract.
         ContentReq::Play { .. } => return Err("unsupported controlled playback effect"),
@@ -241,6 +246,7 @@ pub(crate) fn app(effect: &AppFx) -> Result<Value, &'static str> {
         AppFx::Session(command) => json!({"session":wire(command)?}),
         AppFx::SessionEffect(effect) => json!({"session_effect":wire(effect)?}),
         AppFx::PlaybackTrace(plx_os::playback_trace::Command::Status) => json!({"playback_trace":"status"}),
+        AppFx::PacketProbe(plx_os::tv::packet_probe::Command::Status) => json!({"packet_probe":"status"}),
         AppFx::Preferences(_) => return Err("unsupported controlled preferences effect"),
         // Yielding is not authorization: these heads must refuse before any MainThread,
         // recorder, catalog write or native player resource is borrowed by the runner.
@@ -272,9 +278,11 @@ pub(crate) fn inline(effect: &plx_screens::registry::InlineAppFx) -> Result<Valu
     match effect {
         InlineAppFx::Session(command) => Ok(json!({"session":wire(command)?})),
         InlineAppFx::PlaybackTrace(plx_os::playback_trace::Command::Status) => Ok(json!({"playback_trace":"status"})),
+        InlineAppFx::PacketProbe(plx_os::tv::packet_probe::Command::Status) => Ok(json!({"packet_probe":"status"})),
         InlineAppFx::Store(id, command) => Ok(json!({"store":id.ord().0,"command":store(command)?})),
         InlineAppFx::StoreWork(work) => Ok(json!({"work":work_value(work)?})),
-        InlineAppFx::PlaybackTrace(_) | InlineAppFx::Consent(_) | InlineAppFx::Huds(_) => Err("unsupported Home application effect"),
+        InlineAppFx::PlaybackTrace(_) | InlineAppFx::PacketProbe(_) | InlineAppFx::Consent(_) | InlineAppFx::Huds(_) =>
+            Err("unsupported Home application effect"),
     }
 }
 
@@ -346,6 +354,7 @@ pub(crate) fn message(message: &AppMsg) -> Result<Value, &'static str> {
             _ => return Err("unsupported Home Session delivery"),
         },
         AppMsg::PlaybackTrace(plx_os::playback_trace::Status::Off) => json!({"playback_trace":"off"}),
+        AppMsg::PacketProbe(plx_os::tv::packet_probe::Status::Unavailable) => json!({"packet_probe":"unavailable"}),
         AppMsg::Store(command) => store(command)?,
         AppMsg::PersonCommand { command, .. } => store(&plx_data::stores::StoreCmd::Person(command.clone()))?,
         AppMsg::StoreWork(work) => work_value(work)?,
@@ -524,6 +533,20 @@ mod tests {
         assert!(super::message(&AppMsg::PlaybackTrace(Status::Recording)).is_err());
     }
 
+    /// **A replay records only the packet probe's status query and its `Unavailable` answer**: a Start would run the
+    /// live player, so it is refused, as is any answer a live probe gave.
+    #[test]
+    fn controlled_diagnostics_records_only_the_packet_probes_unavailable_query() {
+        use plx_os::tv::packet_probe::{Command, Status};
+        use plx_screens::registry::{AppFx, AppMsg, InlineAppFx};
+        assert_eq!(super::app(&AppFx::PacketProbe(Command::Status)), Ok(serde_json::json!({"packet_probe":"status"})));
+        assert_eq!(super::inline(&InlineAppFx::PacketProbe(Command::Status)), Ok(serde_json::json!({"packet_probe":"status"})));
+        assert_eq!(super::message(&AppMsg::PacketProbe(Status::Unavailable)), Ok(serde_json::json!({"packet_probe":"unavailable"})));
+        assert!(super::app(&AppFx::PacketProbe(Command::Start)).is_err());
+        assert!(super::inline(&InlineAppFx::PacketProbe(Command::Start)).is_err());
+        assert!(super::message(&AppMsg::PacketProbe(Status::Done { pass: 1, fail: 0 })).is_err());
+    }
+
     /// **A by-id input is recorded once and decodes only in its canonical spelling**: the id must
     /// be a full accessibility id, the press pair the OK key's two integers, and a subject rides
     /// only on a press. A row that is not exactly what the encoder writes is refused, so a recording
@@ -580,6 +603,8 @@ mod tests {
             (ContentReq::PreviewSeek(i64::MAX), json!({"preview_seek":i64::MAX})),
             (ContentReq::PreviewSeek(i64::MIN), json!({"preview_seek":i64::MIN})),
             (ContentReq::ItemMenu, json!("itemmenu")),
+            (ContentReq::SelectVersion { sid, rk: "1001".into(), media: plx_plex::plex::MediaId(3086) },
+                json!({"select_version":{"sid":7,"rk":"1001","media":3086}})),
             (ContentReq::Panel(ContentPanel::AltSources { anchor: [0, 1, u32::MAX, 0x80000000] }),
                 json!({"panel":{"alt_sources":[0,1,u32::MAX,0x80000000_u32]}})),
             (ContentReq::Panel(ContentPanel::Tracks { page: -1 }), json!({"panel":{"tracks":-1}})),

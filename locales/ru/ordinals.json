@@ -1,0 +1,13 @@
+{
+  "ordinal.first": "на первом месте",
+  "ordinal.second": "на втором месте",
+  "ordinal.third": "на третьем месте",
+  "ordinal.fourth": "на четвёртом месте",
+  "ordinal.fifth": "на пятом месте",
+  "ordinal.sixth": "на шестом месте",
+  "ordinal.seventh": "на седьмом месте",
+  "ordinal.eighth": "на восьмом месте",
+  "ordinal.ninth": "на девятом месте",
+  "ordinal.tenth": "на десятом месте",
+  "ordinal.other": "на месте № {n}"
+}

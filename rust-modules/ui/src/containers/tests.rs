@@ -448,6 +448,31 @@ fn the_scrim_ladder_scales_by_appear_and_the_route_dip() {
     assert!((d.nav.modals.scrims(1.0)[0].1 - 0.5).abs() < 1e-6);
 }
 
+/// **A dim that exists only over a held page is the style's answer, never the plane's** (`Scrim::over_host`,
+/// Live TV's number entry): a surface whose host is cached (a menu over a page) owes the page its dim, and with it
+/// the latched field its glass stands on; one whose host stays live (`PlayerPanel`, the video plane behind) owes
+/// none, whatever the plane's bound bit says, so nothing latches and no dim lands on the picture. A plain dim is
+/// unchanged on either style.
+#[test]
+fn a_host_only_dim_is_owed_over_a_held_page_and_never_over_a_live_host() {
+    let owed = |style: Style, over_host: bool| {
+        let (mut d, mut rig, _) = booted();
+        let id = open_modal(&mut d, &mut rig, style, 16);
+        let m = modal_mut(&mut d, id);
+        m.scrim_alpha = crate::theme::underlay::DIM_COMPACT;
+        m.scrim_over_host = over_host;
+        d.nav.modals.surface_mut(id).unwrap().motion = super::modal::PopoverMotion::at(1.0);
+        let dims = d.nav.modals.scrims(1.0);
+        (dims.len(), dims.first().map(|&(_, a)| a), d.nav.modals.first_dim(1.0).is_some())
+    };
+    let compact = crate::theme::underlay::DIM_COMPACT;
+    assert_eq!(owed(Style::Compact, true), (1, Some(compact), true), "a menu over a page owes its dim");
+    for style in [Style::PlayerPanel { survives_failure: false }, Style::PlayerPanel { survives_failure: true }] {
+        assert_eq!(owed(style, true), (0, None, false), "{style:?}: a live host has no page to dim");
+        assert_eq!(owed(style, false).0, 1, "{style:?}: a plain dim is the surface's own business");
+    }
+}
+
 /// **The frame's lowest dim as a pure value** (`ModalStack::first_dim`, which the host bakes the frost's
 /// body from at the head of the frame): the first of `scrims` at the same alpha, through the stack's
 /// field. Nothing latched, that is the flat scrim ink at that alpha (`underlay::plan`'s contract); a
@@ -3224,4 +3249,109 @@ fn a_push_parked_behind_a_surfaces_dismiss_keeps_the_hosts_return_spot() {
     d.frame(&mut rig, tick(32), vec![], vec![], &mut NoTap);
     assert_eq!(d.nav.entry(home).unwrap().ret.focus, Some(card),
         "the closing menu's row did not replace the host's return spot");
+}
+
+/// **A panel parked behind a menu's `Dismiss` keeps the host's return spot** (the hero's `…` menu's
+/// *Select Version* and *Audio & Subtitles* rows). The panel's `Present` is captured on the closing
+/// menu's row, like the page op above; stored on the page it made the panel's close (a pick, or BACK)
+/// restore focus onto the dead menu entry, and the page held none. The page keeps the spot it had when
+/// the MENU opened (the `…` it hangs off), and the panel's close restores it.
+#[test]
+fn a_panel_parked_behind_a_surfaces_dismiss_keeps_the_hosts_return_spot() {
+    let (mut d, mut rig, _) = booted();
+    let home = d.nav.top_page().unwrap().id;
+    let opener = FocusKey { entry: home, elem: 1 };
+    d.set_focus(Some(opener));
+    let menu = open_modal(&mut d, &mut rig, Style::Compact, 16);
+    d.set_focus(Some(FocusKey { entry: menu, elem: 5 }));
+    assert_eq!(d.nav.entry(home).unwrap().ret.focus, Some(opener), "captured at the menu's Present");
+    d.request(MachineId::Nav, NavOp::Dismiss(menu));
+    d.nav.next_style = Style::Compact;
+    d.request(MachineId::Nav, NavOp::Present(FixtureArg::Modal));
+    d.frame(&mut rig, tick(32), vec![], vec![], &mut NoTap);
+    let panel = d.nav.modals.top().expect("the panel is up").entry.id;
+    assert_ne!(panel, menu, "premise: the panel is another surface than the menu");
+    assert_eq!(d.nav.entry(home).unwrap().ret.focus, Some(opener),
+        "the closing menu's row did not replace the host's return spot");
+
+    d.request(MachineId::Nav, NavOp::Dismiss(panel));
+    for ms in (48..=400).step_by(16) {
+        d.frame(&mut rig, tick(ms), vec![], vec![], &mut NoTap);
+    }
+    assert_eq!(d.nav.input_owner(), Some(InputOwner::Entry(home)), "the page holds input again");
+    assert_eq!(d.focus(), Some(opener), "and focus is back on what the menu hung off, never none");
+}
+
+/// **A panel a page's own control opens returns to that control** (the hero's disc, the failure
+/// screen's *Audio & Subtitles* action): captured on the page, so it is the page's spot, and the
+/// panel's close restores it.
+#[test]
+fn a_panel_a_pages_control_opens_returns_to_that_control() {
+    let (mut d, mut rig, _) = booted();
+    let home = d.nav.top_page().unwrap().id;
+    let opener = FocusKey { entry: home, elem: 1 };
+    d.set_focus(Some(opener));
+    let panel = open_modal(&mut d, &mut rig, Style::Compact, 16);
+    d.set_focus(Some(FocusKey { entry: panel, elem: 5 }));
+    assert_eq!(d.nav.entry(home).unwrap().ret.focus, Some(opener), "captured at the Present");
+    d.request(MachineId::Nav, NavOp::Dismiss(panel));
+    for ms in (32..=400).step_by(16) {
+        d.frame(&mut rig, tick(ms), vec![], vec![], &mut NoTap);
+    }
+    assert_eq!(d.focus(), Some(opener), "the control that opened the panel holds focus again");
+}
+
+/// **A `ret` lands where it was captured, whatever it carries** (`Navigation::captured_on`, the one rule both
+/// the page-op arm and the `Present` arm follow). The capturing owner travels with the parked op; the
+/// `ret`'s own focus is not a stand-in for it, so a `ret` with NO focus, captured on the page, cannot
+/// overwrite the return state of the surface that holds input when the op commits, while a `ret` captured
+/// on that surface still lands on it.
+#[test]
+fn a_ret_without_focus_lands_only_where_it_was_captured() {
+    use crate::screen::ReturnState;
+    let (mut d, mut rig, _) = booted();
+    let home = d.nav.top_page().unwrap().id;
+    let surface = open_modal(&mut d, &mut rig, Style::Opaque { snapshot: true }, 16);
+    let spot = FocusKey { entry: surface, elem: 3 };
+    d.nav.entry_mut(surface).unwrap().ret.focus = Some(spot);
+    assert_eq!(d.nav.input_owner(), Some(InputOwner::Entry(surface)), "setup: the surface holds input at commit");
+
+    // captured on the page, no focus: the page-op arm may not land it on the surface
+    let _ = d.nav.request(NavOp::Push(FixtureArg::Page(20)), ReturnState { captured: Some(home), ..ReturnState::default() });
+    assert_eq!(d.nav.entry(surface).unwrap().ret.focus, Some(spot), "page-op arm: not captured on the surface");
+    // captured on the surface, no focus: it lands there (the state the surface was left in)
+    let _ = d.nav.request(NavOp::Push(FixtureArg::Page(21)), ReturnState { captured: Some(surface), ..ReturnState::default() });
+    assert_eq!(d.nav.entry(surface).unwrap().ret.focus, None, "page-op arm: captured on the surface, it lands there");
+    assert_eq!(d.nav.entry(surface).unwrap().ret.captured, None, "a stored ret carries no stale stamp");
+    let _ = d.nav.request(NavOp::Push(FixtureArg::Page(22)), ReturnState { captured: Some(home), ..ReturnState::default() });
+    assert_eq!(d.nav.entry(home).unwrap().ret.captured, None, "a ret stored on the page carries no stale stamp either");
+
+    // the `Present` arm follows the same rule
+    d.nav.entry_mut(surface).unwrap().ret.focus = Some(spot);
+    let _ = d.nav.request(NavOp::Present(FixtureArg::Modal), ReturnState { captured: Some(home), ..ReturnState::default() });
+    assert_eq!(d.nav.entry(surface).unwrap().ret.focus, Some(spot), "Present arm: not captured on the surface");
+}
+
+/// **The capturing entry travels with the `ret`** (`ReturnState::captured`, stamped by
+/// `Dispatcher::return_state`): a `ret` captured on the page, handed back through `request_with_return`
+/// after a surface took input, lands nowhere on that surface, and one with no capture (`default()`)
+/// lands nowhere at all. The owner at call time is not a stand-in, and neither is the `ret`'s focus.
+#[test]
+fn request_with_return_lands_a_ret_where_it_was_captured_not_where_the_owner_is_now() {
+    use crate::screen::ReturnState;
+    let (mut d, mut rig, _) = booted();
+    let home = d.nav.top_page().unwrap().id;
+    let page_ret = d.return_state();
+    assert_eq!(page_ret.captured, Some(home), "return_state stamps the owner that held input");
+    let surface = open_modal(&mut d, &mut rig, Style::Opaque { snapshot: true }, 16);
+    let spot = FocusKey { entry: surface, elem: 3 };
+    d.nav.entry_mut(surface).unwrap().ret.focus = Some(spot);
+
+    // captured on the page, no capture at all: neither may overwrite the surface's return state
+    d.request_with_return(MachineId::Nav, NavOp::Push(FixtureArg::Page(30)), page_ret);
+    d.request_with_return(MachineId::Nav, NavOp::Push(FixtureArg::Page(31)), ReturnState::default());
+    for ms in (32..=400).step_by(16) {
+        d.frame(&mut rig, tick(ms), vec![], vec![], &mut NoTap);
+    }
+    assert_eq!(d.nav.entry(surface).unwrap().ret.focus, Some(spot), "neither landed on the surface");
 }

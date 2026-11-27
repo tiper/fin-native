@@ -308,6 +308,31 @@ fn face_in(cx: &LocaleContext, unix_s: i64, offset_s: i64) -> Option<String> {
     cx.time_of_day(clock_hm(unix_s, offset_s)?)
 }
 
+/// A Unix instant as the viewer's clock face ("21:38", or "9:38 PM" where the TV's format says so), in
+/// the `offset_s` of a frame's [`Wall`]: the face every airing line is made of ([`airing_line_in`]), here
+/// for the player banner's clock and its "Next at" line. `None` only where the sum overflows.
+pub fn clock_face_in(cx: &LocaleContext, unix_s: i64, offset_s: i64) -> Option<String> {
+    face_in(cx, unix_s, offset_s)
+}
+
+/// [`clock_face_in`] in the thread's locale.
+pub fn clock_face(unix_s: i64, offset_s: i64) -> Option<String> {
+    clock_face_in(plx_os::i18n::current(), unix_s, offset_s)
+}
+
+/// **An airing's clock times alone** ("21:00–22:00", the range every [`airing_line_in`] is made of), in the
+/// `offset_s` of a frame's [`Wall`]: the Guide's cell says it under the title, whatever the phase. `None` only
+/// where the sum overflows.
+pub fn airing_range_in(cx: &LocaleContext, begin: i64, end: i64, offset_s: i64) -> Option<String> {
+    // The generated accessor takes its arguments in name order: end, then start.
+    Some(msg::core_airing_range_in(cx, &face_in(cx, end, offset_s)?, &face_in(cx, begin, offset_s)?))
+}
+
+/// [`airing_range_in`] in the thread's locale.
+pub fn airing_range(begin: i64, end: i64, offset_s: i64) -> Option<String> {
+    airing_range_in(plx_os::i18n::current(), begin, end, offset_s)
+}
+
 /// **The one line that words an airing against the clock**, for either surface ([`Airing`]), from
 /// its [`phase`]: within ten minutes of the start it says how long ago it started, while on air
 /// otherwise the clock times and how long is left, and before the start or after the end the clock
@@ -321,8 +346,7 @@ pub fn airing_line_in(cx: &LocaleContext, surface: Airing, begin: i64, end: i64,
         return None;
     }
     let offset_s = i64::from(wall.utc_offset_s);
-    // The generated accessor takes its arguments in name order: end, then start.
-    let range = msg::core_airing_range_in(cx, &face_in(cx, end, offset_s)?, &face_in(cx, begin, offset_s)?);
+    let range = airing_range_in(cx, begin, end, offset_s)?;
     let pair = |first: String, second: String| msg::core_airing_pair_in(cx, &first, &second);
     let left = |left| footer_left_minutes_in(cx, left);
     Some(match (phase, surface) {

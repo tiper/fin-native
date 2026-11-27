@@ -485,6 +485,17 @@ fn draw_cell(
         },
         measure,
     );
+    // VER-7 D3 E: an episode with two or more files wears the sheets mark and the count at the
+    // still's top-left. It rides the still's own drawn rect (the pop included), on a 250 tile's
+    // ratios (`CARD_W`), so it is the watched tick's size, not a 420 still's.
+    widgets::versions_mark(
+        p,
+        drawn,
+        CARD_RADIUS,
+        drawn.w * plx_ui::consts::CARD_W / W,
+        ep.versions.len(),
+        measure,
+    );
 
     // Every episode's label block draws in the same ink; focus is marked by the shared
     // `ui::text_lift` treatment. The plate shows while the still pops or the text is lifted; the
@@ -704,6 +715,68 @@ mod tests {
         .into_iter()
         .map(|(text, _)| text)
         .collect()
+    }
+
+    fn versions_of(n: usize) -> Vec<plx_data::pms::MediaVersion> {
+        (0..n).map(|i| plx_data::pms::MediaVersion { id: plx_plex::plex::MediaId(i as i64 + 1), ..Default::default() }).collect()
+    }
+
+    /// **VER-7 D3 E**: an episode with two or more files wears the count at the still's top-left
+    /// corner (the numeral alone is text, so nothing translates); one file wears nothing.
+    #[test]
+    fn an_episode_with_versions_wears_the_count_at_the_stills_top_left_and_one_file_wears_nothing() {
+        let _g = plx_base::testlock::serial();
+        let measure = plx_ui::fixture::FixtureMeasure;
+        let d = Detail::default();
+        let numeral = |n: usize| -> Vec<(String, Rect)> {
+            let ep = Episode { dur_ms: 0, versions: versions_of(n), ..Default::default() };
+            plx_ui::draw_census::capture_text(|| {
+                draw_cell(Painter::recording(), &d, 0, &ep, None, 1.0, 1.0, &TextLift::new(), kicker_cap_top(), &measure)
+            })
+            .into_iter()
+            .filter(|(w, _)| w.chars().all(|c| c.is_ascii_digit()) && !w.is_empty())
+            .collect()
+        };
+        let sheets = |n: usize| -> Vec<Rect> {
+            let ep = Episode { dur_ms: 0, versions: versions_of(n), ..Default::default() };
+            plx_ui::draw_census::capture_icons(|| {
+                draw_cell(Painter::recording(), &d, 0, &ep, None, 1.0, 1.0, &TextLift::new(), kicker_cap_top(), &measure)
+            })
+            .into_iter()
+            .filter(|(icon, _)| *icon == plx_ui::icons::Icon::Collection)
+            .map(|(_, at)| at)
+            .collect()
+        };
+        assert!(sheets(1).is_empty() && sheets(0).is_empty(), "no sheets glyph below two files");
+        let glyph = sheets(2);
+        assert_eq!(glyph.len(), 1, "two files: one sheets glyph");
+        assert!(glyph[0].x < strip_x(0) + 40.0 && glyph[0].y < 40.0, "the glyph stands at the top-left: {:?}", glyph[0]);
+        assert!(numeral(0).is_empty(), "no versions: no numeral");
+        assert!(numeral(1).is_empty(), "one file: no numeral");
+        for n in [2usize, 3, 12] {
+            let runs = numeral(n);
+            assert_eq!(runs.len(), 1, "{n} files: one numeral, got {runs:?}");
+            assert_eq!(runs[0].0, n.to_string());
+            let at = runs[0].1;
+            assert!(at.x < strip_x(0) + 80.0 && at.y < 60.0, "the numeral stands at the top-left of the still: {at:?}");
+        }
+    }
+
+    /// The mark is the watched tick's own veil and glyph: more ink on the cell than the same cell
+    /// with one file, and the cell without it is unchanged.
+    #[test]
+    fn the_versions_mark_adds_the_veil_and_sheets_glyph_only_from_two_files() {
+        let _g = plx_base::testlock::serial();
+        let measure = plx_ui::fixture::FixtureMeasure;
+        let d = Detail::default();
+        let census = |n: usize| {
+            let ep = Episode { dur_ms: 100, versions: versions_of(n), ..Default::default() };
+            plx_ui::draw_census::capture(|| {
+                draw_cell(Painter::recording(), &d, 0, &ep, None, 1.0, 1.0, &TextLift::new(), kicker_cap_top(), &measure)
+            })
+        };
+        assert_eq!(census(0), census(1), "one file draws exactly what none does");
+        assert!(census(2).len() > census(1).len(), "two files add the veil, the glyph and the numeral");
     }
 
     /// **A card for an episode the server did not number never reads "EPISODE 0"**: its kicker is the

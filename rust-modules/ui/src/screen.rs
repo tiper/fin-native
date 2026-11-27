@@ -62,6 +62,10 @@ pub struct Scrim {
     /// The surface's OWN 0..1 ramp for the dim, when it has one: the container uses it in place of
     /// the surface's appear spring ([`Scrim::following`]). `None` = the appear spring.
     pub ramp: Option<f32>,
+    /// The dim exists only where the surface's host is a held page ([`Scrim::over_host`]): the
+    /// container answers it with no dim at all for a style that leaves its host live
+    /// ([`crate::containers::modal::style_caches_host`]).
+    pub host_only: bool,
 }
 
 /// **What a surface's dim inherits.** A dim here is not a black sheet: the container paints it
@@ -84,6 +88,7 @@ impl Scrim {
         alpha: 0.0,
         source: UnderlaySource::Page,
         ramp: None,
+        host_only: false,
     };
 
     /// A dim of `alpha`. `alpha` is a `theme::underlay::DIM_*`
@@ -93,6 +98,23 @@ impl Scrim {
             alpha,
             source: UnderlaySource::Page,
             ramp: None,
+            host_only: false,
+        }
+    }
+
+    /// A dim of `alpha` over the host PAGE, asked only where the host IS a held page: the glass
+    /// ground's own condition. A glass panel stands on the frozen host (`popover_glass`), and the
+    /// field it stands on latches only under a page-sourced dim, so a panel that is glass over a page
+    /// and the flat sheet over the video plane (Live TV's number entry) declares ONE dim, and the
+    /// container drops it for the style that has no page to hold (`Style::PlayerPanel`, host live):
+    /// there is then no latch, no dim on the picture and no glass. The answer follows the surface's
+    /// style, which is fixed for its life, never the plane's bound bit, which is not.
+    pub const fn over_host(alpha: f32) -> Scrim {
+        Scrim {
+            alpha,
+            source: UnderlaySource::Page,
+            ramp: None,
+            host_only: true,
         }
     }
 
@@ -104,6 +126,7 @@ impl Scrim {
             alpha,
             source: UnderlaySource::Flat,
             ramp: None,
+            host_only: false,
         }
     }
 
@@ -111,7 +134,7 @@ impl Scrim {
     /// morphing menu's dim follows its MORPH (`Popover::dim`), so the page dims as the glass grows
     /// and clears as the slab drains, not on a clock of its own.
     pub const fn following(self, ramp: f32) -> Scrim {
-        Scrim { alpha: self.alpha, source: self.source, ramp: Some(ramp) }
+        Scrim { ramp: Some(ramp), ..self }
     }
 }
 
@@ -408,6 +431,25 @@ pub struct ReturnState<K, M = ()> {
     /// raised — tier 2's answer to "where was this page standing" for whatever a screen's `focus`
     /// and `scroll` alone cannot say (spec §6.1; e.g. Detail's season/column/sub-row `Spot`).
     pub memory: M,
+    /// **Routing, not state**: the entry that held input when this was captured
+    /// (`Dispatcher::return_state`'s `owner_entry()`), carried with the value wherever it goes (the
+    /// app's command and back into `request_with_return`) so the one rule "a `ret` lands where it
+    /// was captured" (`Navigation::captured_on`) never has to guess from `focus`. Not part of
+    /// [`RETURN_STATE_SHAPE`]: it is never recorded or hashed. `None` lands nowhere.
+    ///
+    /// **The one carrier.** `Navigation::request`/`back` read it from here (the parked op carries only
+    /// the `ret`), and it is a property of a `ret` IN FLIGHT: a `ret` stored on an `Entry` has been
+    /// through [`Self::stored`] (by `Entry::store_ret`, the one whole-value writer), which clears it, so
+    /// `Entry.ret` never carries a stale stamp.
+    pub captured: Option<EntryId>,
+}
+
+impl<K, M> ReturnState<K, M> {
+    /// This `ret` as an `Entry` stores it: the routing stamp is spent once the `ret` has landed.
+    pub fn stored(mut self) -> Self {
+        self.captured = None;
+        self
+    }
 }
 
 pub const RETURN_STATE_SHAPE: &str = "ReturnState{focus:Option<(EntryId,H::Elem)>,remembered:[(GroupId,H::Elem)],scroll:f32,memory:H::Memory}";
@@ -419,6 +461,7 @@ impl<K, M: Default> Default for ReturnState<K, M> {
             remembered: Vec::new(),
             scroll: 0.0,
             memory: M::default(),
+            captured: None,
         }
     }
 }

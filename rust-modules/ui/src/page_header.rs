@@ -1,5 +1,5 @@
 //! **PageHeader** — the one row of plain-text controls a library page wears under the top bar:
-//! the library names on the left (with a "+N" for the ones that do not fit) or a breadcrumb
+//! the library names on the left (the ones that do not fit fold behind a trailing ⋯, `more_item`) or a breadcrumb
 //! ("Films › Collections"), and the page's own controls on the right ("Collections · 12",
 //! "Recommended", "≡ Date added ⌄"; the Library's own cluster is the board's: "Collections
 //! · 24 ›  Recommended ›  |  ≡ Date added ⌄", places with a chevron ([`HeaderItem::place`]), a
@@ -343,6 +343,180 @@ pub fn cluster_width(items: &[HeaderItem], measure: &dyn Measure) -> f32 {
     HStack::new(&cluster_items(items, measure), GAP, Align::Leading(0.0)).budget_w()
 }
 
+/// A plain focusable pill: the one builder of a row's name items (a library name, a sibling page),
+/// so the Library's header and any other row of names (Settings' Library order preview) build the
+/// same item.
+pub fn item(label: impl Into<String>) -> HeaderItem {
+    HeaderItem { label: label.into(), focusable: true, ..Default::default() }
+}
+
+/// **The ⋯ item that opens the libraries menu** at the end of a row of names: the More glyph alone
+/// (its label is its name, never drawn), named `libraries` for the accessibility ids.
+pub fn more_item() -> HeaderItem {
+    HeaderItem {
+        glyph: Some(Icon::More), value_only: true, a11y: Some("libraries"),
+        ..item(plx_os::i18n::msg::browse_library_libraries())
+    }
+}
+
+/// The width the names `picks` (then, with `more_w`, the options after them) stand in, one [`GAP`]
+/// apart: [`HStack::width`]. [`PageHeader::layout`] places the names with the same stack and the
+/// same gap, so what is packed here and where the names stand share the gap rule (not one
+/// construction: this takes measured widths, the layout takes spec items).
+fn names_w(widths: &[f32], picks: &[usize], more_w: Option<f32>) -> f32 {
+    let names: Vec<Item> = picks.iter().map(|&i| widths[i]).chain(more_w).map(Item::new).collect();
+    HStack::new(&names, GAP, Align::Leading(0.0)).width()
+}
+
+/// Which of `n` names show when the row cannot hold them all (`budget` is text edge to text edge
+/// for names plus options). Keep a stable prefix of favorites, reserving room for the options
+/// action. Choosing another library never reorders these shortcuts.
+pub fn pack_names(widths: &[f32], _selected: usize, budget: f32, more_w: f32, cap: usize) -> Vec<usize> {
+    let mut picks = Vec::new();
+    for i in 0..widths.len().min(cap) {
+        let mut next = picks.clone();
+        next.push(i);
+        if names_w(widths, &next, Some(more_w)) > budget { break; }
+        picks = next;
+    }
+    picks
+}
+
+/// How a row of names packs: which names show, what each reads, and the room the visiting name has.
+pub struct NamesPlan {
+    /// Every name, fitted to its slot ([`Self::picks`] index into it).
+    pub labels: Vec<String>,
+    /// The names that show, in order (a stable prefix, [`pack_names`]).
+    pub picks: Vec<usize>,
+    /// The ⋯ item that follows them ([`more_item`]).
+    pub more: HeaderItem,
+    /// The width left for the visiting name when the current one is not among `picks`.
+    pub current_room: f32,
+}
+
+/// **The ONE packing of a row of names**, shared by the Library's header and anything that must
+/// show what that header would do: `budget` is [`HeaderLayout::left_budget`]; `visit_slot` reserves
+/// a slot for a current name that is not a shortcut (so a visit never shifts the shortcuts);
+/// `labels_at(room)` reads every name fitted to `room` (an owner credit is atomic, which only the
+/// caller knows); `cap` is the most names ever shown.
+pub fn plan_names(budget: f32, visit_slot: bool, cap: usize, measure: &dyn Measure, labels_at: impl FnOnce(f32) -> Vec<String>) -> NamesPlan {
+    let more = more_item();
+    let more_w = cluster_width(&[more.clone()], measure);
+    // Reserve a current-name slot whenever the roster can require one, whether or not it is in use,
+    // so a visit never shifts or displaces the shortcuts. Shared measurement/elision bounds every label.
+    let slots = if visit_slot { 3.0 } else { 2.0 };
+    let name_budget = ((budget - more_w - slots * GAP) / slots).max(0.0);
+    let labels = labels_at(name_budget);
+    let widths: Vec<f32> = labels.iter().map(|label| cluster_width(&[item(label.as_str())], measure)).collect();
+    let reserve = if visit_slot { name_budget + GAP } else { 0.0 };
+    let picks = pack_names(&widths, 0, budget - reserve, more_w, cap);
+    let current_room = (budget - names_w(&widths, &picks, Some(more_w)) - GAP).max(0.0);
+    NamesPlan { labels, picks, more, current_room }
+}
+
+/// **How the ⋯ stands in a names row.** The Library header's ⋯ is also the way to its library
+/// options, so it is always there; a picture of that header (Settings' Library order preview) draws
+/// it only when it holds folded names. Both pack the names against the SAME reserved room for it
+/// ([`plan_names`]), so the picture folds exactly where the header does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoreOpener {
+    /// The row always ends its shortcuts with the ⋯ (the Library header).
+    Always,
+    /// The ⋯ is drawn only when a name is folded behind it ([`NamesRow::overflowed`]).
+    WhenFolded,
+}
+
+/// What one slot of a laid-out names row holds: a name (by its handle) or the ⋯ item.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NameSlot<K> {
+    Pill(K),
+    More,
+}
+
+/// A names row laid out as the Library header would lay it: see [`names_row`].
+pub struct NamesRow<K> {
+    pub page: PageHeader,
+    pub layout: HeaderLayout,
+    /// The left slots in layout order, one per `page.spec().left` item (`Slot::Left(i)` is
+    /// `slots[i]`): the shortcuts that fit, the ⋯ ([`MoreOpener`]), then the visiting name when the
+    /// current one is not a shortcut.
+    pub slots: Vec<NameSlot<K>>,
+    /// The names that did not fit and are not the current one: they go behind the ⋯.
+    pub folded: Vec<K>,
+}
+impl<K> NamesRow<K> {
+    /// Did any name overflow into the ⋯? The ONE answer to "is something behind the ⋯", for the
+    /// opener ([`MoreOpener::WhenFolded`]) and for the note a picture says about it.
+    pub fn overflowed(&self) -> bool {
+        !self.folded.is_empty()
+    }
+}
+
+/// The most names a row of them ever shows; the rest go behind the ⋯.
+pub const MAX_NAMES: usize = 8;
+
+/// A name and, when someone else's, its owner's handle as one name: the title, then the handle. The
+/// one place the join is spelled.
+pub fn joined_name(title: &str, owner: &str) -> String {
+    if owner.is_empty() { title.to_owned() } else { format!("{title} {owner}") }
+}
+
+/// **A name fitted to `room`.** An owner credit is atomic: it shows whole or not at all, and an
+/// oversized credit gives its room back to the title, which uses the ordinary single-line fit.
+pub fn fit_name(title: &str, owner: &str, room: f32, measure: &dyn Measure) -> String {
+    let size = theme::size::BODY;
+    let full = joined_name(title, owner);
+    if measure.width_str(&full, size, false) <= room {
+        return full;
+    }
+    measure.fit_line(title, room, size, false).to_string_lossy().into_owned()
+}
+
+/// What [`names_row`] lays out. `pills` are the shortcuts in order, `current` the library on view (a
+/// shortcut, which is plated, or else a visitor after them; `None`: none is on view), `visit_slot` whether the roster can need
+/// a slot for a visitor ([`plan_names`]), `right` and `widest` the controls that share the row (they
+/// size the room the names get).
+pub struct NamesIn<'a, K> {
+    pub pills: &'a [K],
+    pub current: Option<&'a K>,
+    pub visit_slot: bool,
+    pub more: MoreOpener,
+    pub right: Vec<HeaderItem>,
+    pub widest: &'a [HeaderItem],
+}
+
+/// **Lay out a row of names, exactly as the Library header does** ([`plan_names`], at most
+/// [`MAX_NAMES`] shown): the ONE assembly both the header and any picture of it go through. `label_at`
+/// reads a name fitted to a room ([`fit_name`], which only the caller can say: an owner's credit is
+/// atomic). The result says which names showed and whether any overflowed into the ⋯.
+pub fn names_row<K: Clone + PartialEq>(
+    names: NamesIn<'_, K>, measure: &dyn Measure, label_at: impl Fn(&K, f32) -> String,
+) -> NamesRow<K> {
+    let NamesIn { pills, current, visit_slot, more, right, widest } = names;
+    let width = crate::consts::SCR_W;
+    let budget = PageHeader::new(PageHeaderSpec { right: right.clone(), ..Default::default() }, widest, measure).layout(width, measure).left_budget;
+    let plan = plan_names(budget, visit_slot, MAX_NAMES, measure, |room| pills.iter().map(|pill| label_at(pill, room)).collect());
+    let at = current.and_then(|current| pills.iter().position(|pill| pill == current));
+    let folded: Vec<K> = pills.iter().enumerate().filter(|(i, _)| !plan.picks.contains(i) && Some(*i) != at).map(|(_, k)| k.clone()).collect();
+    let mut left = Vec::new();
+    let mut slots = Vec::new();
+    for &pick in &plan.picks {
+        left.push(HeaderItem { selected_plate: Some(pick) == at, ..item(plan.labels[pick].as_str()) });
+        slots.push(NameSlot::Pill(pills[pick].clone()));
+    }
+    if more == MoreOpener::Always || !folded.is_empty() {
+        left.push(plan.more.clone());
+        slots.push(NameSlot::More);
+    }
+    if let Some(current) = current.filter(|_| !at.is_some_and(|at| plan.picks.contains(&at))) {
+        left.push(HeaderItem { selected_plate: true, ..item(label_at(current, plan.current_room)) });
+        slots.push(NameSlot::Pill(current.clone()));
+    }
+    let page = PageHeader::new(PageHeaderSpec { left, right, ..Default::default() }, widest, measure);
+    let layout = page.layout(width, measure);
+    NamesRow { page, layout, slots, folded }
+}
+
 impl PageHeader {
     /// `widest` is the right cluster in its widest case (every value at its longest): it sizes the
     /// cluster's BUDGET (`cluster_w`, and so `left_budget`), whatever `spec.right` holds now. The
@@ -477,13 +651,25 @@ impl PageHeader {
     /// painted as it says (a value cross-fading in place, a control leaving or arriving), every
     /// other face as `draw` paints it.
     pub fn draw_with(&self, p: Painter, layout: &HeaderLayout, capsules: &TabStrip, pop: f32, lifted: Option<usize>, swap: &HeaderSwap) {
+        self.draw_items(p, layout, capsules, pop, lifted, swap, |_| true);
+    }
+
+    /// **Only the left group** (the names, the `+N` / ⋯): the row as a picture of the names that
+    /// would show, without the controls that share the real row (a preview of the header, beside
+    /// a page that is not it). The layout is the real one, so the names stand where they would.
+    pub fn draw_names(&self, p: Painter, layout: &HeaderLayout, capsules: &TabStrip, pop: f32) {
+        self.draw_items(p, layout, capsules, pop, None, &HeaderSwap::new(), |r| !matches!(r.slot, Slot::Right(_)));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_items(&self, p: Painter, layout: &HeaderLayout, capsules: &TabStrip, pop: f32, lifted: Option<usize>, swap: &HeaderSwap, keep: impl Fn(&ItemRect) -> bool) {
         let ground = TabGround::Bare { pop, focus: lifted.is_none() };
         capsules.draw(p, layout.top(), HEIGHT, ground);
         if let Some(glyph) = layout.glyph {
             icons::draw(p, Icon::Chevron, glyph, breadcrumb::GLYPH_INK);
         }
         for (index, r) in layout.items.iter().enumerate() {
-            if lifted == Some(index) { continue; }
+            if lifted == Some(index) || !keep(r) { continue; }
             let face = self.face_in(r, swap);
             // Inked by what is under each pixel: a label a capsule's arc is crossing wears the
             // capsule's ink on its side of the arc and the resting one on the other.

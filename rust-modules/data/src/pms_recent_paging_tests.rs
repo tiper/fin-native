@@ -154,17 +154,16 @@ fn a_profile_refetch_starts_at_the_preview_instead_of_the_old_window() {
     check_refetch_window(true);
 }
 
-fn check_refetch_window(change_profile: bool) {
+/// A PMS that answers one refresh: the hub list (one Recently Added Movies hub whose first page holds
+/// cards of the libraries `section` names, 0 for none), Continue Watching, the DVR list and, for a row
+/// held past its first window, the window reload. Returns the paths it was asked for, after `expected`.
+fn refresh_server(listener: std::net::TcpListener, expected: usize, section: fn(usize) -> i64) -> std::thread::JoinHandle<Vec<String>> {
     use std::io::{Read, Write};
-    let _guard = plx_base::testlock::serial();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let server = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         let mut paths = Vec::new();
-        // four requests: the hub list, Continue Watching, the Live TV DVR list and the window reload
-        while std::time::Instant::now() < deadline && paths.len() < 4 {
+        while std::time::Instant::now() < deadline && paths.len() < expected {
             let (mut socket, _) = match plx_base::testnet::accept(&listener) {
                 Ok(socket) => socket,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -177,9 +176,11 @@ fn check_refetch_window(change_profile: bool) {
             let mut request = [0; 4096];
             let n = socket.read(&mut request).unwrap();
             let path = String::from_utf8_lossy(&request[..n]).split_whitespace().nth(1).unwrap().to_owned();
-            let metadata = |start: usize, count: usize| (start..start + count).map(|i| serde_json::json!({
-                "ratingKey":i.to_string(),"type":"movie","title":"Refreshed movie","thumb":"/poster"
-            })).collect::<Vec<_>>();
+            let metadata = |start: usize, count: usize| (start..start + count).map(|i| {
+                let mut card = serde_json::json!({"ratingKey":i.to_string(),"type":"movie","title":"Refreshed movie","thumb":"/poster"});
+                if section(i) != 0 { card["librarySectionID"] = section(i).into(); }
+                card
+            }).collect::<Vec<_>>();
             let body = if path.starts_with("/hubs/home/recentlyAdded?") {
                 serde_json::json!({"MediaContainer":{"offset":36,"totalSize":12000,"Metadata":metadata(36,24)}})
             } else if path.starts_with("/hubs/continueWatching?") {
@@ -195,7 +196,15 @@ fn check_refetch_window(change_profile: bool) {
             paths.push(path);
         }
         paths
-    });
+    })
+}
+
+fn check_refetch_window(change_profile: bool) {
+    let _guard = plx_base::testlock::serial();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // four requests: the hub list, Continue Watching, the Live TV DVR list and the window reload
+    let server = refresh_server(listener, 4, |_| 0);
     plx_plex::plex::reset_servers_for_test();
     let registered = plx_plex::plex::register_for_test("refresh-http", "127.0.0.1", i32::from(port), "synthetic", "fixture");
     let mut owner = Owner::default();
@@ -315,7 +324,7 @@ fn paging_a_sparse_pinned_row_retains_its_selected_visible_card() {
         Arc::make_mut(item).sec=if i%8==0 { 7 } else { 8 };
     }
     seed(&mut owner.state,vec![src(registered.raw(),"",HubState::Ready,Some(build))]);
-    let scope=BrowseScope { sections_gen:1,pins:&[(registered,7,true),(registered,8,false)],clients:std::borrow::Cow::Owned(registry_keys_for_test()) };
+    let scope=BrowseScope { verdicts: &[], order: crate::pms::HomeOrder::Natural, sections_gen:1,pins:&[(registered,7,true),(registered,8,false)],clients:std::borrow::Cow::Owned(registry_keys_for_test()) };
     let mut held=None;
     let seen=owner.state.catalog_gen;
     let _=run_with_scope(&mut owner.state,&owner.adapter,
@@ -844,4 +853,47 @@ fn a_row_whose_every_landing_meets_a_stale_ask_still_reaches_its_last_window() {
     }
     reset(&mut owner.state, &owner.adapter);
     plx_plex::plex::reset_servers_for_test();
+}
+
+/// How the row a refresh finds in `last` stands.
+#[derive(Clone, Copy, Debug)]
+enum RowAtRefresh { Held, Released, Sample }
+
+/// A lone Recently Added Movies row decided `One(1)`, then a refresh whose first page holds cards of
+/// libraries 1 and 5: that projection decides `Mixed`, whether the row is held and paged (its window is
+/// read again), released to the ring, or a Sample that keeps its old window (`HubRequest::fetch`'s windows
+/// loop). The latest projection wins on every path.
+#[test]
+fn a_refresh_whose_first_page_changes_the_answer_decides_a_held_released_or_sample_row_alike() {
+    let _guard = plx_base::testlock::serial();
+    for variant in [RowAtRefresh::Held, RowAtRefresh::Released, RowAtRefresh::Sample] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // the hub list, Continue Watching and the DVR list; a held row's window is read again too
+        let server = refresh_server(listener, if matches!(variant, RowAtRefresh::Held) { 4 } else { 3 }, |i| if i % 2 == 0 { 1 } else { 5 });
+        plx_plex::plex::reset_servers_for_test();
+        let registered = plx_plex::plex::register_for_test("refresh-decides", "127.0.0.1", i32::from(port), "synthetic", "fixture");
+        let mut owner = Owner::default();
+        let mut row = page(36, 24, true).shelves.remove(0);
+        row.library = ShelfLibrary::One(1);
+        match variant {
+            RowAtRefresh::Held => {}
+            RowAtRefresh::Released => { row.shown = row.items.len(); row.items = Vec::new(); row.positions = Vec::new(); }
+            RowAtRefresh::Sample => row.row.mode = paging::RowMode::Sample(Vec::new()),
+        }
+        seed(&mut owner.state, vec![src(registered.raw(), "", HubState::Ready, Some(built(registered.raw(), &[], vec![row])))]);
+        let mut held = None;
+        let _ = request_refetch_hubs_with_scope(&mut owner.state, &owner.adapter, &BrowseScope::standalone(),
+            &mut |request| { held = Some(request); });
+        let request = held.unwrap();
+        let result = request.fetch_for_test();
+        deliver(&mut owner, request, result);
+        server.join().unwrap();
+        let row = &owner.state.srcs[0].last.as_ref().unwrap().shelves[0];
+        assert_eq!(row.library, ShelfLibrary::Mixed, "{variant:?}: the fresh first page decided it");
+        assert_eq!(row.released(), matches!(variant, RowAtRefresh::Released), "{variant:?}");
+        assert_eq!(row.offset, 36, "{variant:?}: the row returns where it was");
+        reset(&mut owner.state, &owner.adapter);
+        plx_plex::plex::reset_servers_for_test();
+    }
 }

@@ -1,4 +1,15 @@
 use super::*;
+
+/// The place words come from the catalog (one per place to tenth), and a place past tenth states the figure
+/// instead of building a suffix in code: "number 11" in the source language.
+#[test]
+fn an_ordinal_is_the_catalog_s_word_to_tenth_and_the_figure_after() {
+    let words: Vec<String> = (1..=10).map(ordinal).collect();
+    assert_eq!(words.iter().collect::<std::collections::BTreeSet<_>>().len(), 10, "ten different words: {words:?}");
+    assert_eq!(ordinal(0), ordinal(1), "no place zero: a list is counted from the first");
+    assert_eq!(ordinal(11), msg::ordinal_other(11));
+    assert!(ordinal(12).contains("12"), "{}", ordinal(12));
+}
 #[test]
 fn the_webos_release_line_reads_unknown_rather_than_inventing_a_release() {
     let known = crate::tv::device::Info { release: "4.10.2".into(), major: 4, ..Default::default() };

@@ -4,6 +4,12 @@
 Only plx_ass_* leaves the resulting shared library. No firmware FreeType, FriBidi,
 HarfBuzz, libass, or platform font provider can affect its ABI or rendering.
 The same source pins and configuration build both the ARM library and host one.
+
+PLX_ASS_STAGE=DIR publishes the library into DIR instead of pkg/, stripped: the Tizen package's copy
+(mk/platform-tizen.mk, `tizen-libass`). Its ARM library is this same cross build (the Tizen armv7
+link uses the pinned webOS NDK); its x86_64 one, for the emulator, is the host build, linked by the
+build host's compiler exactly as the Tizen library is. The webOS goals never set it, so pkg/ stays
+theirs alone.
 """
 import fcntl
 import hashlib
@@ -337,7 +343,11 @@ def build_locked(host, darwin, target, prefix, work, sources):
             command += ['-Wl,--build-id=sha1']
     run([*command, '-o', output], env=env)
     verify_library(output, darwin, shutil.which('readelf') if host else str(cross) + 'readelf')
-    staged = ROOT / 'pkg' / name
+    stage_dir = Path(os.environ['PLX_ASS_STAGE']).resolve() if os.environ.get('PLX_ASS_STAGE') else ROOT / 'pkg'
+    if darwin and stage_dir != ROOT / 'pkg':
+        raise ValueError('PLX_ASS_STAGE stages the Tizen package copy, which needs a Linux build')
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    staged = stage_dir / name
     candidate = staged.with_name(staged.name + '.' + str(os.getpid()) + '.new')
     sidecars = ['.link.map', '.link.trace', '.link.json'] if not host else []
     try:
@@ -349,6 +359,13 @@ def build_locked(host, darwin, target, prefix, work, sources):
         if not host:
             run([str(cross) + 'strip', '--strip-unneeded', candidate], env=env)
             run([sys.executable, ROOT / 'ci/stage-link-evidence.py', output, candidate, '--stripped'], env=env)
+        elif stage_dir != ROOT / 'pkg':
+            # The Tizen emulator package's copy: shipped, so stripped like the ARM one (the unstripped
+            # link output stays in the prefix).
+            strip = shutil.which('strip')
+            if not strip:
+                raise ValueError('strip (binutils) is required to stage the packaged host library')
+            run([strip, '--strip-unneeded', candidate], env=env)
         elif darwin:
             run(['codesign', '--force', '--sign', '-', candidate])
         # Publish the target last. A failed strip, signature or receipt must never
@@ -360,7 +377,7 @@ def build_locked(host, darwin, target, prefix, work, sources):
         candidate.unlink(missing_ok=True)
         for suffix in sidecars:
             Path(str(candidate) + suffix).unlink(missing_ok=True)
-    print('libass: ' + str(staged.relative_to(ROOT)), flush=True)
+    print('libass: ' + (str(staged.relative_to(ROOT)) if staged.is_relative_to(ROOT) else str(staged)), flush=True)
 
 
 if __name__ == '__main__':

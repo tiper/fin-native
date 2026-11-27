@@ -88,10 +88,10 @@ fn only_the_controls_that_play_lose_their_stop_and_the_row_is_never_empty() {
         assert!(ctl.writes_account(), "{ctl:?} changes the household's record");
     }
     for mark in [PosterMark::None, PosterMark::InProgress, PosterMark::Watched] {
-        for (bits, favorite) in (0..64u32).flat_map(|b| [None, Some(false), Some(true)].map(|f| (b, f))) {
-            let set = hero::HeroSet {
+        for (bits, favorite) in (0..128u32).flat_map(|b| [None, Some(false), Some(true)].map(|f| (b, f))) {
+            let set = hero::HeroSet { favorite,
                 watchlist: bits & 1 != 0, go_show: bits & 2 != 0, version: bits & 4 != 0, restart: bits & 8 != 0,
-                trailer: bits & 16 != 0, alt: bits & 32 != 0, more: bits & 3 == 0, mark, favorite,
+                trailer: bits & 16 != 0, alt: bits & 32 != 0, tracks: bits & 64 != 0, mark,
             };
             let (all, drawn) = hero::hero_ctls(set);
             for stops in [hero::Stops::default(), hero::Stops { no_playback: true, ..Default::default() }] {
@@ -111,7 +111,7 @@ fn only_the_controls_that_play_lose_their_stop_and_the_row_is_never_empty() {
                         "{set:?} {stops:?}: column {col}");
                 }
                 // The default stop is the first stop that does not write: Play with a driver, and
-                // without one the first of Go to Show, More, Version, Also available the row has,
+                // without one the first of Go to Show, More, Version, Audio & Subtitles, Also available the row has,
                 // or none at all when every stop the row has writes.
                 let default = hero::default_stop(set, stops);
                 assert_eq!(default, visible[..n].iter().copied().find(|c| !c.writes_account()), "{set:?} {stops:?}");
@@ -119,7 +119,7 @@ fn only_the_controls_that_play_lose_their_stop_and_the_row_is_never_empty() {
                 if !stops.no_playback {
                     assert_eq!(default, Some(hero::HeroCtl::Play), "{set:?} {stops:?}: with a driver Play stays the default");
                 }
-                if stops.no_playback && !(set.go_show || set.more || set.version || set.alt) {
+                if stops.no_playback && !(set.go_show || set.restart || set.version || set.tracks || set.alt) {
                     assert_eq!(default, None, "{set:?}: a row of writes only has no default stop of its own");
                 }
             }
@@ -146,7 +146,7 @@ fn the_hero_group_spans_the_controls_that_own_a_stop() {
         let screen = bare(&guard, sid, "movie");
         let meta = test_store().view();
         let set = screen.hero_set(meta);
-        assert_eq!(hero::hero_ctls(set).1, 4, "Play, Watchlist, Restart, Mark watched");
+        assert_eq!(hero::hero_ctls(set).1, 4, "Play, Watchlist, Mark watched, Restart");
         let mut groups = Vec::new();
         Focusable::<TestHost>::groups(&screen, &cx(&measure, None), &mut groups);
         let spec = groups.iter().find(|g| g.id == hero::HERO_GROUP).expect("the hero group");
@@ -154,7 +154,7 @@ fn the_hero_group_spans_the_controls_that_own_a_stop() {
         let y = screen.hero_chain(&measure, meta).btn_y;
         let rect = |i| hero::hero_btn_rect_at(set, i, y, widths);
         let (len, first) = if no_driver { (2, 1) } else { (4, 0) };
-        let (head, tail) = (rect(first), rect(3));
+        let (head, tail) = (rect(first), rect(if no_driver { 2 } else { 3 }));
         assert_eq!(spec.len, len, "no_driver={no_driver}");
         assert_eq!(spec.extent, Rect::new(head.x, y - screen.scroll_target, tail.x + tail.w - head.x, hero::CD), "no_driver={no_driver}");
         if !no_driver {
@@ -371,7 +371,7 @@ fn the_control_focus_lands_on_draws_a_focused_face_and_a_disabled_one_never_woul
         for _ in 0..120 {
             screen.ctl_pop.step(focus, 0.05);
         }
-        plx_ui::draw_census::capture_inks(|| screen.draw_buttons(plx_ui::Painter::recording(), &cx(&measure, None), 600.0, 1.0))
+        plx_ui::draw_census::capture_inks(|| screen.draw_buttons(plx_ui::Painter::recording(), &cx(&measure, None), 600.0, 1.0, super::ButtonPass::Page { lifted: None }))
     };
     for no_driver in [false, true] {
         let guard = install(resumable(sid));
@@ -403,7 +403,7 @@ fn focus_travels_between_the_controls_that_can_act_and_never_onto_one_that_canno
     let sid = ServerId::UNSET;
     // (driver composed, the row's stops in order)
     for (no_driver, stops) in [
-        (false, vec![hero::ELEM_PLAY, hero::ELEM_WATCHLIST, hero::ELEM_RESTART, hero::ELEM_MARK_WATCHED]),
+        (false, vec![hero::ELEM_PLAY, hero::ELEM_WATCHLIST, hero::ELEM_MARK_WATCHED, hero::ELEM_RESTART]),
         (true, vec![hero::ELEM_WATCHLIST, hero::ELEM_MARK_WATCHED]),
     ] {
         let guard = install(resumable(sid));
@@ -494,11 +494,11 @@ fn the_write_controls_stay_reachable_by_travel_from_a_page_that_opened_below_the
 fn a_restored_hero_spot_keeps_the_control_it_names_and_otherwise_takes_the_default() {
     let sid = ServerId::UNSET;
     let measure = plx_ui::fixture::FixtureMeasure;
-    // columns: 0 Play, 1 Watchlist, 2 Restart, 3 Mark watched; `None` is the default below the row
+    // columns: 0 Play, 1 Watchlist, 2 Mark watched, 3 Restart; `None` is the default below the row
     for (no_driver, col, lands) in [
-        (false, 0, Some(hero::ELEM_PLAY)), (false, 2, Some(hero::ELEM_RESTART)),
-        (true, 0, None), (true, 1, Some(hero::ELEM_WATCHLIST)), (true, 2, None),
-        (true, 3, Some(hero::ELEM_MARK_WATCHED)),
+        (false, 0, Some(hero::ELEM_PLAY)), (false, 3, Some(hero::ELEM_RESTART)),
+        (true, 0, None), (true, 1, Some(hero::ELEM_WATCHLIST)), (true, 3, None),
+        (true, 2, Some(hero::ELEM_MARK_WATCHED)),
     ] {
         let guard = install(resumable(sid));
         let _driver = NoDriver::set(no_driver);
@@ -582,7 +582,6 @@ fn every_control_that_plays_is_inert_with_no_driver_and_unchanged_with_one() {
             ("Play", ScreenEvent::Activate(hero::ELEM_PLAY), hero::ELEM_PLAY),
             ("Restart", ScreenEvent::Activate(hero::ELEM_RESTART), hero::ELEM_RESTART),
             ("Trailer", ScreenEvent::Activate(hero::ELEM_TRAILER), hero::ELEM_TRAILER),
-            ("Play Version", ScreenEvent::App(AppMsg::PlayVersion(plx_plex::plex::MediaId(7))), hero::ELEM_VERSION),
         ] {
             let (_, effects) = step(&mut screen, &event, Some(focus));
             assert_eq!(play_item(&effects).is_some(), !no_driver, "{name}, no_driver={no_driver}");
@@ -595,17 +594,22 @@ fn every_control_that_plays_is_inert_with_no_driver_and_unchanged_with_one() {
     }
 }
 
-/// A version pick plays THAT version with a driver (it is `Some(media)` on the intent, not the
-/// default one), so the inertness above is the guard and not a pick that never played.
+/// A version pick is reported with a driver (never plays), and with none it is refused like the
+/// panel's disabled rows, so the inertness is the guard and not a pick that never arrived.
 #[test]
-fn a_version_pick_plays_that_version_when_a_driver_is_composed() {
+fn a_version_pick_is_selected_only_when_a_driver_is_composed() {
     let sid = ServerId::UNSET;
-    let guard = install(resumable(sid));
-    let mut screen = bare(&guard, sid, "movie");
-    let (_, effects) = step(&mut screen, &ScreenEvent::App(AppMsg::PlayVersion(plx_plex::plex::MediaId(7))), None);
-    let (play, _) = play_item(&effects).expect("a version pick plays");
-    assert!(matches!(play, PlayIntent::Item { version: Some(plx_plex::plex::MediaId(7)), .. }), "the pick names its version");
-    clear();
+    for no_driver in [false, true] {
+        let guard = install(Detail { versions: plx_appkit::version_list::sample(), ..resumable(sid) });
+        let _driver = NoDriver::set(no_driver);
+        let mut screen = bare(&guard, sid, "movie");
+        let pick = plx_appkit::version_list::sample()[1].id;
+        let (_, effects) = step(&mut screen, &ScreenEvent::App(AppMsg::SelectVersion(pick)), None);
+        assert!(play_item(&effects).is_none(), "a pick never plays, no_driver={no_driver}");
+        let selected = effects.iter().any(|e| matches!(&e.fx, Fx::App(AppFx::Content(ContentReq::SelectVersion { media, .. })) if *media == pick));
+        assert_eq!(selected, !no_driver, "no_driver={no_driver}");
+        clear();
+    }
 }
 
 /// A page running the way `Dispatcher` runs it: `Enter` reaches the screen and the engine then seats
@@ -1000,5 +1004,35 @@ fn a_hold_that_opens_a_menu_ends_the_pages_claim_and_one_that_opens_nothing_does
         step(&mut screen, &hold, Some(held));
         assert_eq!(screen.provisional, own, "{what}");
         clear();
+    }
+}
+
+/// **A hero control a surface lifts is drawn ONCE, by the lift.** The page pass leaves it out
+/// (`ButtonPass::Page { lifted }`, asked through `DrawFrame::leaves_out`), and the opener lift draws it
+/// alone (`ButtonPass::Lift`), so the two passes together are exactly the row: nothing doubled under the
+/// scrim, nothing missing where the morph consumes the control. Red when the page kept drawing the
+/// `…` under the glass that grew out of it.
+#[test]
+fn a_lifted_hero_control_is_left_out_of_the_page_pass_and_drawn_alone_by_the_lift() {
+    let sid = ServerId::UNSET;
+    let measure = plx_ui::fixture::FixtureMeasure;
+    let guard = install(resumable(sid));
+    let mut screen = bare(&guard, sid, "movie");
+    let set = screen.hero_set(test_store().view());
+    let (row, n) = hero::visible_ctls(set, hero::Stops { full_trailer: false, no_playback: false });
+    assert!(n >= 3, "rig: a row of several controls");
+    for _ in 0..120 {
+        screen.ctl_pop.step(None, 0.05);
+    }
+    let ink = |pass: super::ButtonPass| {
+        plx_ui::draw_census::capture(|| screen.draw_buttons(plx_ui::Painter::recording(), &cx(&measure, None), 600.0, 1.0, pass))
+    };
+    let all = ink(super::ButtonPass::Page { lifted: None }).len();
+    for &ctl in &row[..n] {
+        let page = ink(super::ButtonPass::Page { lifted: Some(ctl.elem()) }).len();
+        let lift = ink(super::ButtonPass::Lift(ctl.elem())).len();
+        assert!(lift > 0, "{ctl:?}: the lift draws the control");
+        assert!(page < all, "{ctl:?}: the page pass leaves it out");
+        assert_eq!(page + lift, all, "{ctl:?}: the two passes are the row, each control once");
     }
 }

@@ -9,15 +9,22 @@
 //!
 //! Like every page of the family it states no IO: the three buttons leave as one
 //! [`AppFx::PlaybackTrace`] and the status returns as an addressed `AppMsg::PlaybackTrace`.
+//!
+//! A platform that offers the packet-player probe (Samsung Tizen; docs/tizen.md, "The packet player") gets one more
+//! row, *Packet player test*, in a section of its own above Delete. Whether it exists is the runner's answer to
+//! [`AppFx::PacketProbe`]'s status query, never a platform check in the screen: on every other platform the answer is
+//! `Unavailable` and the page is the three rows above.
 
 use super::*;
 use plx_os::playback_trace::{Command, Status};
+use plx_os::tv::packet_probe::{Command as ProbeCommand, Status as ProbeStatus};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(super) enum DiagId {
     Trace,
     Export,
     Delete,
+    Probe,
 }
 
 impl FormId for DiagId {
@@ -26,6 +33,7 @@ impl FormId for DiagId {
             DiagId::Trace => 1,
             DiagId::Export => 2,
             DiagId::Delete => 3,
+            DiagId::Probe => 4,
         })
     }
     fn a11y(&self) -> Option<&'static str> {
@@ -33,6 +41,7 @@ impl FormId for DiagId {
             DiagId::Trace => "trace",
             DiagId::Export => "export",
             DiagId::Delete => "delete",
+            DiagId::Probe => "packet_probe",
         })
     }
 }
@@ -42,10 +51,22 @@ pub(super) enum DiagAction {
     Trace,
     Export,
     Delete,
+    Probe,
 }
 
-/// The page's rows from the trace status alone.
-pub(super) fn diagnostics_form(status: Status) -> Form<DiagId, DiagAction, SettingsPage> {
+/// The packet-player probe row's value.
+fn probe_label(probe: ProbeStatus) -> Cow<'static, str> {
+    use plx_os::i18n::msg;
+    match probe {
+        ProbeStatus::Unavailable | ProbeStatus::Idle => Cow::Borrowed(msg::settings_packet_probe_idle()),
+        ProbeStatus::Running => Cow::Borrowed(msg::settings_packet_probe_running()),
+        ProbeStatus::Done { pass, fail } => Cow::Owned(msg::settings_packet_probe_result(i64::from(fail), i64::from(pass))),
+        ProbeStatus::Refused => Cow::Borrowed(msg::settings_packet_probe_refused()),
+    }
+}
+
+/// The page's rows from the trace status and the packet probe's (no probe row where it is `Unavailable`).
+pub(super) fn diagnostics_form(status: Status, probe: ProbeStatus) -> Form<DiagId, DiagAction, SettingsPage> {
     use plx_os::i18n::msg;
     let record = FormSection::new("")
         .disabled(status == Status::Saving)
@@ -56,7 +77,18 @@ pub(super) fn diagnostics_form(status: Status) -> Form<DiagId, DiagAction, Setti
     let delete = FormSection::new("")
         .disabled(status == Status::Saving)
         .item(DiagId::Delete, RowKind::Button, DiagAction::Delete, Row::new(msg::settings_trace_delete()));
-    Form::new().section(record).section(delete)
+    let form = Form::new().section(record);
+    let form = if probe == ProbeStatus::Unavailable {
+        form
+    } else {
+        form.section(
+            FormSection::new("")
+                .item(DiagId::Probe, RowKind::Button, DiagAction::Probe,
+                    Row::new(msg::settings_packet_probe_title()).value(probe_label(probe)))
+                .disabled(probe == ProbeStatus::Running),
+        )
+    };
+    form.section(delete)
 }
 
 /// The root's Diagnostics value: the recording switch, as Off or On, both from the toggle's own
@@ -79,29 +111,42 @@ pub(super) struct DiagnosticsPage {
 struct DiagState {
     sel: RowKey,
     status: Status,
+    /// The packet probe's last answer; `Unavailable` (no row) until the runner says otherwise.
+    probe: ProbeStatus,
 }
 
 impl LogicalState for DiagState {
     fn write(&self, w: &mut Canon) {
         w.u32(self.sel.0).u8(self.status as u8);
+        // Only where the platform has a probe, so every other platform's state reads as it always did.
+        match self.probe {
+            ProbeStatus::Unavailable => {}
+            ProbeStatus::Idle => { w.u8(1); }
+            ProbeStatus::Running => { w.u8(2); }
+            ProbeStatus::Done { pass, fail } => { w.u8(3).u32(pass).u32(fail); }
+            ProbeStatus::Refused => { w.u8(4); }
+        }
     }
     fn probe(&self, out: &mut String) {
         out.push_str(&format!("diagnostics sel={} status={:?}", self.sel.0, self.status));
+        if self.probe != ProbeStatus::Unavailable {
+            out.push_str(&format!(" packet_probe={:?}", self.probe));
+        }
     }
 }
 
 impl DiagnosticsPage {
     pub(super) fn new(entry: EntryId) -> Self {
-        Self::at(entry, Status::Off)
+        Self::at(entry, Status::Off, ProbeStatus::Unavailable)
     }
 
-    /// The page as it stands once the runner has answered `status`: the table the fit tests grade
-    /// in every status, the one a player sees.
-    pub(super) fn at(entry: EntryId, status: Status) -> Self {
+    /// The page as it stands once the runner has answered `status` and `probe`: the table the fit
+    /// tests grade in every status, the one a player sees.
+    pub(super) fn at(entry: EntryId, status: Status, probe: ProbeStatus) -> Self {
         let mut page = Self {
             entry,
             form: FormTable::page(super::super::registry::BAND),
-            state: DiagState { sel: DiagId::Trace.key(), status },
+            state: DiagState { sel: DiagId::Trace.key(), status, probe },
         };
         page.rebuild();
         page
@@ -109,7 +154,7 @@ impl DiagnosticsPage {
 
     fn rebuild(&mut self) {
         let keep = self.form.selected_id().cloned().unwrap_or(DiagId::Trace);
-        self.form.set(diagnostics_form(self.state.status), Some(&keep));
+        self.form.set(diagnostics_form(self.state.status, self.state.probe), Some(&keep));
         self.form.table.list_focused = true;
     }
 
@@ -129,6 +174,12 @@ impl DiagnosticsPage {
             DiagAction::Trace => Command::Start,
             DiagAction::Export => Command::Export,
             DiagAction::Delete => Command::Delete,
+            DiagAction::Probe => {
+                if self.state.probe != ProbeStatus::Running {
+                    fx.push(Fx::App(AppFx::PacketProbe(ProbeCommand::Start)));
+                }
+                return;
+            }
         };
         fx.push(Fx::App(AppFx::PlaybackTrace(command)));
     }
@@ -148,6 +199,7 @@ impl Machine<InnerHost> for DiagnosticsPage {
                 ));
                 // Read the status through the runner, never through a global in the screen.
                 fx.push(Fx::App(AppFx::PlaybackTrace(Command::Status)));
+                fx.push(Fx::App(AppFx::PacketProbe(ProbeCommand::Status)));
                 Handled::Yes
             }
             ScreenEvent::App(super::super::registry::AppMsg::PlaybackTrace(status)) => {
@@ -158,9 +210,20 @@ impl Machine<InnerHost> for DiagnosticsPage {
                 }
                 Handled::Yes
             }
+            ScreenEvent::App(super::super::registry::AppMsg::PacketProbe(probe)) => {
+                if self.state.probe != *probe {
+                    self.state.probe = *probe;
+                    self.rebuild();
+                    fx.invalidate(Provenance::Landing(MachineId::Session));
+                }
+                Handled::Yes
+            }
             ScreenEvent::Tick(t) => {
                 if matches!(self.state.status, Status::Recording | Status::Saving) {
                     fx.push(Fx::App(AppFx::PlaybackTrace(Command::Status)));
+                }
+                if self.state.probe == ProbeStatus::Running {
+                    fx.push(Fx::App(AppFx::PacketProbe(ProbeCommand::Status)));
                 }
                 self.form.table.update(t.dt(), RouteLayout::screen().sectioned_table().h);
                 Handled::Yes

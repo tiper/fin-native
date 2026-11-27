@@ -108,5 +108,44 @@ namespace PlxHost
 
         [DllImport(MediaLib, CallingConvention = CallingConvention.Cdecl)]
         internal static extern int player_set_interrupted_cb(IntPtr player, IntCallback interrupted, IntPtr userData);
+
+        // The audio tracks (TizenFX API8 Interop.Player.cs GetTrackCount / SelectTrack / GetCurrentTrack / GetTrackLanguageCode, the entry points
+        // PlayerTrackInfo.cs wraps). player_stream_type_e: PLAYER_STREAM_TYPE_AUDIO is 1 (PlayerEnums.cs StreamType: Audio = 1, Video, Text).
+        // All four are valid only in the READY, PLAYING or PAUSED state (PlayerTrackInfo.cs ValidatePlayerState), so never before PREPARED;
+        // an index is valid when 0 <= index < player_get_track_count (PlayerTrackInfo.cs `Selected`). UNVERIFIED on a Samsung set: that the
+        // native index numbers the audio streams in the container's order, which is PMS's (docs/tizen.md, "The audio track is selected").
+        internal const int STREAM_TYPE_AUDIO = 1;
+
+        [DllImport(MediaLib, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int player_get_track_count(IntPtr player, int type, out int count);
+
+        [DllImport(MediaLib, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int player_select_track(IntPtr player, int type, int index);
+
+        [DllImport(MediaLib, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int player_get_current_track(IntPtr player, int type, out int index);
+
+        // player_get_track_language_code(player, type, index, char **code): `code` is allocated by the library and released by the caller with
+        // free(); TizenFX frees it with LibcSupport.Free. Marshal.FreeHGlobal is free() on every non-Windows .NET runtime.
+        [DllImport(MediaLib, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int player_get_track_language_code(IntPtr player, int type, int index, out IntPtr code);
+
+        // The text tracks: the same four calls with PLAYER_STREAM_TYPE_TEXT (3). MEASURED on the emulator 2026-11-26 (TV 10.0 x86_64, a probe on
+        // the scratch branch claude/tizen-subtitle-probe, MKV clips with SubRip and ASS streams): the count and the ISO 639-1 codes are read in
+        // READY; select returns 0 at PREPARED and mid-play (4-5 ms) and the next cue comes from the new track. UNVERIFIED on a Samsung set.
+        internal const int STREAM_TYPE_TEXT = 3;
+
+        // player_subtitle_updated_cb: void (*)(unsigned long duration, char *text, void *user_data). `unsigned long` is pointer-sized on both
+        // LP64 x86_64 and ILP32 ARM, so it is a UIntPtr. `text` is the player's NUL-terminated UTF-8, valid only during the call.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate void SubtitleCallback(UIntPtr duration, IntPtr text, IntPtr userData);
+
+        // player_set_subtitle_updated_cb(player, callback, user_data). MEASURED on the emulator 2026-11-26: returns 0 before prepare and in
+        // READY; with it the embedded text track's cues arrive WITHOUT player_set_subtitle_path, on a thread of the player's own, each when it
+        // is due (a 2000 ms cue at a 2003 ms position), an EMPTY text with duration 0 when it ends and right after a seek, none while paused;
+        // SubRip tags and ASS override blocks are already removed and a line break is "\n". The player draws no subtitle of its own, with or
+        // without the callback.
+        [DllImport(MediaLib, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int player_set_subtitle_updated_cb(IntPtr player, SubtitleCallback callback, IntPtr userData);
     }
 }

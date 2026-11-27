@@ -6,7 +6,7 @@
 //! effect it has leaves through this port, and every result comes back through [`HostPlayer::drain`] as an
 //! addressed [`PlayerEvent`]. A host test gives the driver a fake port; the contract's own fake host table
 //! (`hosted::testing`) is what [`HostedPlayer`]'s tests run over.
-use crate::host_abi::{self, PlayerEvent};
+use crate::host_abi::{self, HostCue, PlayerEvent};
 use crate::hosted::{Drained, Hosted};
 use plx_media::player::adapter::MonotonicMs;
 use plx_playback_contract::Failure;
@@ -57,6 +57,10 @@ pub enum Verb {
     /// Seek to `ms`; `command` is the library's command id, echoed in `PLAYER_SEEK_DONE`.
     Seek { ms: i64, command: i64 },
     Close,
+    /// Select the audio track at native `index`; `command` is the library's command id, echoed in `PLAYER_TRACK`.
+    AudioTrack { index: i64, command: i64 },
+    /// Select the TEXT track at native `index` and turn the epoch's cues on; `command` is echoed in `PLAYER_TRACK`.
+    TextTrack { index: i64, command: i64 },
 }
 
 /// What the driver asks of the host's player, and the clock its deadlines read.
@@ -71,6 +75,8 @@ pub trait HostPlayer {
     /// Every player event the host has posted since the last call, in order (the host's queue is lossless but for
     /// position and buffering), and what was lost.
     fn drain(&mut self, out: &mut Vec<PlayerEvent>) -> Drained;
+    /// Every subtitle cue the host has posted since the last call, in order, and how many a full cue queue dropped.
+    fn drain_cues(&mut self, out: &mut Vec<HostCue>) -> usize;
     /// Monotonic milliseconds, for the driver's deadlines.
     fn now_ms(&self) -> u64;
 }
@@ -107,12 +113,18 @@ impl HostPlayer for HostedPlayer {
             Verb::Pause => (host_abi::VERB_PAUSE, 0, 0),
             Verb::Seek { ms, command } => (host_abi::VERB_SEEK, ms, command),
             Verb::Close => (host_abi::VERB_CLOSE, 0, 0),
+            Verb::AudioTrack { index, command } => (host_abi::VERB_AUDIO_TRACK, index, command),
+            Verb::TextTrack { index, command } => (host_abi::VERB_TEXT_TRACK, index, command),
         };
         self.hosted.player_verb(epoch, code, a, b).map_err(Refusal::of)
     }
 
     fn drain(&mut self, out: &mut Vec<PlayerEvent>) -> Drained {
         self.hosted.drain_player(out)
+    }
+
+    fn drain_cues(&mut self, out: &mut Vec<HostCue>) -> usize {
+        self.hosted.drain_cues(out)
     }
 
     fn now_ms(&self) -> u64 {

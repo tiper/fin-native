@@ -12,6 +12,7 @@ import re
 import sys
 import tempfile
 import unittest
+import urllib.parse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
@@ -21,6 +22,7 @@ DVR = "/livetv/dvrs/7"
 EPG = "/tv.plex.providers.epg.xmltv:7"
 NOW = 1792523168  # 368 s into its half hour, so an airing's begin is not `now`
 UNSORTED = ["C102.243.mock.tv", "C101.242.mock.tv", "C105.246.mock.tv", "C103.244.mock.tv", "C104.245.mock.tv"]
+LATER = [f"C{v}.{v + 141}.mock.tv" for v in range(106, 117)]  # the eleven channels after the unsorted five
 SESSION_KEY = re.compile(r"^/livetv/sessions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 NO_SEGMENT = (404, "text/plain", b"mock_pms: no live segments")
 GONE = "00000000-0000-4000-8000-000000000000"  # a uuid no tune minted
@@ -72,6 +74,11 @@ def guide(pms, encoded=True):
     return jcall(pms, "GET", f"{EPG}/grid?{keys}")["Metadata"]
 
 
+def window_guide(pms, until, now=None):
+    """`GET /{epg}/grid?beginsAt<=until&endsAt>=now`: the Guide's window read (the client sends the operators encoded)."""
+    return jcall(pms, "GET", f"{EPG}/grid?beginsAt%3C={until}&endsAt%3E={NOW if now is None else now}")["Metadata"]
+
+
 def segments(playlist):
     return [line.decode() for line in playlist.splitlines() if line.endswith(b".ts")]
 
@@ -108,17 +115,23 @@ class LiveTvMock(unittest.TestCase):
         device = dvr["Device"][0]
         self.assertEqual(device["status"], "dead", "discovery status is history, not health (§10)")
         self.assertEqual(device["tuners"], "2")
-        self.assertEqual([m["enabled"] for m in device["ChannelMapping"]], ["1"] * 5)
+        self.assertEqual([m["enabled"] for m in device["ChannelMapping"]], ["1"] * 16)
 
     def test_lineup_order(self):
         mc = jcall(make_live(), "GET", f"{EPG}/lineups/dvr/channels")
-        self.assertEqual(mc["size"], 5)
-        self.assertEqual([c["id"] for c in mc["Channel"]], UNSORTED)
+        self.assertEqual(mc["size"], 16)
+        self.assertEqual([c["id"] for c in mc["Channel"]], UNSORTED + LATER)
         self.assertTrue(all(c["gridKey"] == c["id"] for c in mc["Channel"]))
 
-    def test_grid_four_airings(self):
+    def test_grid_fifteen_airings(self):
         rows = guide(make_live())
-        self.assertEqual(sorted(r["Media"][0]["channelVcn"] for r in rows), ["101", "102", "104", "105"])
+        self.assertEqual(sorted(r["Media"][0]["channelVcn"] for r in rows),
+                         ["101", "102", "104", "105"] + [str(v) for v in range(106, 117)])
+
+    def test_grid_start_times_are_mixed(self):
+        """The channels' schedules do not change programme together: the fifteen airings on now began at many different times."""
+        rows = {r["Media"][0]["channelVcn"]: r["Media"][0] for r in guide(make_live())}
+        self.assertGreaterEqual(len({m["beginsAt"] for m in rows.values()}), 10)
 
     def test_grid_covers_now(self):
         for row in guide(make_live()):
@@ -126,14 +139,105 @@ class LiveTvMock(unittest.TestCase):
                 self.assertLessEqual(m["beginsAt"], NOW)
                 self.assertLessEqual(NOW, m["endsAt"])
 
+    def test_the_schedule_is_a_pure_function_of_the_clock(self):
+        """A read at the same instant answers the same programmes whenever it is made, and a later read sees the programme
+        still running (not "started a few minutes ago" again) until its end."""
+        live = make_live().livetv
+        first = {r["Media"][0]["channelVcn"]: r["Media"][0] for r in live.grid(NOW)}
+        self.assertEqual(live.grid(NOW), make_live().livetv.grid(NOW))
+        later = {r["Media"][0]["channelVcn"]: r["Media"][0] for r in live.grid(NOW + 600)}
+        for vcn, m in first.items():
+            if NOW + 600 < m["endsAt"]:
+                self.assertEqual(later[vcn]["beginsAt"], m["beginsAt"], vcn)
+
     def test_grid_episode(self):
         ep = next(r for r in guide(make_live()) if r["Media"][0]["channelVcn"] == "101")
         self.assertEqual((ep["type"], ep["grandparentTitle"]), ("episode", "Family Show"))
         self.assertTrue(ep["thumb"] and ep["grandparentThumb"])
 
+    def test_the_window_read_answers_every_programme_that_overlaps_it(self):
+        """Both bounds are honoured: `beginsAt<=until` lets the programmes after the one on now in, `endsAt>=now` keeps the
+        ones that have ended out; the instant read (until == now) still answers exactly the fifteen rows on now."""
+        pms = make_live()
+        self.assertEqual(len(window_guide(pms, NOW)), 15, "the instant form is unchanged")
+        until = NOW - NOW % 1800 + 5400
+        by_channel = {}
+        for row in window_guide(pms, until):
+            by_channel.setdefault(row["Media"][0]["channelVcn"], []).append(row["Media"][0])
+        self.assertEqual(sorted(by_channel), ["101", "102", "104", "105"] + [str(v) for v in range(106, 117)],
+                         "103 has no guide data")
+        for vcn, airings in by_channel.items():
+            airings.sort(key=lambda m: m["beginsAt"])
+            self.assertLessEqual(airings[0]["beginsAt"], NOW, vcn)
+            self.assertGreaterEqual(airings[0]["endsAt"], NOW, vcn)
+            for before, after in zip(airings, airings[1:]):
+                self.assertGreaterEqual(after["beginsAt"], before["endsAt"], f"{vcn}: programmes do not overlap")
+                self.assertGreater(after["beginsAt"], NOW, vcn)
+            self.assertLessEqual(airings[-1]["beginsAt"], until, vcn)
+        self.assertTrue(all(len(airings) > 1 for airings in by_channel.values() if airings[0]["endsAt"] < until),
+                        "a programme that ends inside the window is followed by one")
+        self.assertTrue(any(len(airings) >= 3 for airings in by_channel.values()), "some rows hold three programmes")
+
+    def test_programme_lengths_are_varied(self):
+        """Over the whole guide, programmes of 15, 30, 45, 60, 90 and 120 minutes all air."""
+        pms = make_live()
+        rows = window_guide(pms, NOW - NOW % 1800 + 6 * 3600)
+        self.assertEqual({(m["endsAt"] - m["beginsAt"]) // 60 for r in rows for m in r["Media"]},
+                         {15, 30, 45, 60, 90, 120})
+
+    def test_the_guide_runs_six_hours_ahead_and_then_ends(self):
+        """Programmes begin up to six hours past the half hour `now` falls in, and none begins after that, however far
+        the read asks: the end of the guide data. The end follows the clock of the read, not the first read."""
+        pms = make_live()
+        half = NOW - NOW % 1800
+        rows = window_guide(pms, half + 12 * 3600)
+        last = max(r["Media"][0]["beginsAt"] for r in rows)
+        self.assertGreaterEqual(last, half + 5 * 3600)
+        self.assertLess(last, half + 6 * 3600)
+        later = NOW + 3 * 3600
+        self.assertLess(max(r["Media"][0]["beginsAt"] for r in window_guide(pms, later + 12 * 3600, now=later)),
+                        later - later % 1800 + 6 * 3600)
+        self.assertGreater(max(r["Media"][0]["beginsAt"] for r in window_guide(pms, later + 12 * 3600, now=later)),
+                           half + 6 * 3600, "three hours on, the guide reaches three hours further")
+
+    def test_one_channel_has_no_guide_data_and_one_has_a_gap(self):
+        pms = make_live()
+        rows = window_guide(pms, NOW - NOW % 1800 + 6 * 3600)
+        self.assertNotIn("103", {r["Media"][0]["channelVcn"] for r in rows}, "the Anime Movies case: no guide data")
+        airings = sorted((r["Media"][0] for r in rows if r["Media"][0]["channelVcn"] == "112"), key=lambda m: m["beginsAt"])
+        gaps = [after["beginsAt"] - before["endsAt"] for before, after in zip(airings, airings[1:])]
+        self.assertTrue(any(g > 0 for g in gaps), "112 has a hole in its schedule")
+        others = [m for r in rows for m in [r["Media"][0]] if m["channelVcn"] not in ("112", "103")]
+        by = {}
+        for m in others:
+            by.setdefault(m["channelVcn"], []).append(m)
+        for vcn, ms in by.items():
+            ms.sort(key=lambda m: m["beginsAt"])
+            self.assertTrue(all(b["beginsAt"] == a["endsAt"] for a, b in zip(ms, ms[1:])), f"{vcn}: back to back")
+
+    def test_a_programmes_still_is_an_opaque_image(self):
+        """The still the grid names (`/art/<vcn>.jpg` on the Live TV device) is served by `/photo/:/transcode`, which would
+        answer a catalog 404 for it otherwise; a logo is not one of the stills."""
+        pms = make_live()
+        thumb = guide(pms)[0]["thumb"]
+        self.assertTrue(thumb.startswith("http://192.0.2."), "TEST-NET-1: no real host")
+        status, ctype, data = call(pms, "GET", "/photo/:/transcode?width=400&height=225&minSize=1&url="
+                                   + urllib.parse.quote(thumb, safe=""))
+        self.assertEqual((status, ctype), (200, "image/png"))
+        self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(data[16:24], (400).to_bytes(4, "big") + (225).to_bytes(4, "big"))
+        self.assertEqual(data[24:26], bytes([8, 2]), "8-bit RGB, no alpha: opaque")
+
+    def test_the_window_read_keeps_ended_airings_out(self):
+        """`endsAt>=now` bounds from below: asked a half hour later, the five that aired the half hour of NOW are gone."""
+        pms = make_live()
+        later = NOW + 1800
+        first_half = {r["Media"][0]["beginsAt"] for r in window_guide(pms, later, now=later) if r["Media"][0]["channelVcn"] == "101"}
+        self.assertEqual(first_half, {NOW - NOW % 1800 + 1800})
+
     def test_grid_encoded_and_literal_keys(self):
         pms = make_live()
-        self.assertEqual(len(guide(pms)), 4)
+        self.assertEqual(len(guide(pms)), 15)
         self.assertEqual(guide(pms, encoded=False), guide(pms))
 
     def test_tune_needs_session_id(self):

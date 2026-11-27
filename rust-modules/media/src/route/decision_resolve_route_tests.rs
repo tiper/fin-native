@@ -2376,6 +2376,35 @@ fn the_preview_names_a_converted_audio_only_when_the_track_that_plays_needs_it()
     assert_eq!(playback_preview(&item("h264", vec![])), Some(Preview::Remux));
 }
 
+/// **The facts line follows the viewer's pre-play pick** (#1532): the page's own track flags describe
+/// the server, so the preview applies the stored pick over them the way the plan does. Picking the
+/// French AC3 beside an English TrueHD default is a direct play; with no pick the same item says its
+/// audio is converted.
+#[test]
+fn the_preview_follows_the_viewers_pre_play_pick() {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    restore_quality(Quality::Original);
+    let track = |id: i64, codec: &str, channels: i64, lang: &str, default: bool| plx_data::metadata::Stream {
+        id, codec: codec.into(), channels, lang_code: lang.into(), default, selected: default, ..Default::default()
+    };
+    let d = plx_data::metadata::Detail {
+        vcodec: "h264".into(),
+        part: "/library/parts/1/2/file.mkv".into(),
+        width: 1920,
+        height: 1080,
+        audio: vec![track(1, "truehd", 8, "eng", true), track(2, "ac3", 6, "fra", false)],
+        ..Default::default()
+    };
+    let preview = |picks: &[PreplayPick]| detail_playback_preview(&d, picks).map(|(preview, _)| preview);
+    assert_eq!(preview(&[]), Some(Preview::OriginalAudioConverted), "control: no pick, the default's audio is converted");
+    let fra = PreplayPick { part_id: 1, audio_sid: 2, sub: SubPick::Server };
+    assert_eq!(preview(&[fra]), Some(Preview::DirectPlay), "the picked French AC3 plays as it is");
+    let other_file = PreplayPick { part_id: 2, audio_sid: 99, sub: SubPick::Server };
+    assert_eq!(preview(&[other_file]), Some(Preview::OriginalAudioConverted), "a pick of another file changes nothing");
+}
+
 /// **The label follows the planner's subtitle stand-in and its reference track.** A due subtitle
 /// the app will not draw itself (`stand_in_retry`) lets a direct-playable track of another
 /// language play (`StandIn::Any`), so nothing is converted; once the side reader is admitted (a
@@ -3236,6 +3265,30 @@ fn forced_resolve_decodes_dts_in_the_app_when_the_set_has_no_dts_row() {
     assert!(plan.url.contains("/library/parts/36013/"), "a direct Part reaches the Load: {}", plan.url);
     let probes = request_with(&requests, "hasMDE=1");
     assert!(!probes.is_empty() && probes.iter().all(|l| query_param(l, "audioStreamID") == Some("1")), "{requests:?}");
+}
+
+/// **"Convert audio: on the TV" keeps an Opus 5.1 original a direct play under Auto.** The C1 takes
+/// Opus only in stereo; with the setting on the app converts the 5.1 track to AC3 itself, so the
+/// planner must pick it and play the Part. It used to leave the pick empty and ask the server for a
+/// remux (video and audio copied, the app converting anyway), whose every seek is a fresh Load: the
+/// TV then announced Dolby Vision again on each seek.
+#[test]
+#[cfg(feature = "devtriggers")]
+fn auto_direct_plays_an_opus_51_track_the_app_converts_on_the_tv() {
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    let (plan, _) = cold_audio_resolve_held(&ps, "cold-opus51-tv-convert", 2, MDE_DIRECTPLAY,
+        vec![cold_track(1, "opus", "eng", true, "")], Vec::new(), "opus", |env, _| {
+            env.audio_conversion = true;
+            env.caps = std::sync::Arc::new(plx_os::devcaps::Caps {
+                audio: "aac,ac3,eac3,dts,flac,opus".into(),
+                audio_channels: [("opus".into(), 2)].into(),
+                ..plx_os::devcaps::Caps::assumed()
+            });
+        });
+    assert!(plan.verdict.is_none(), "{:?}", plan.verdict);
+    assert!(plan.url.contains("/library/parts/36013/"), "the Part reaches the Load: {}", plan.url);
+    assert!(plan.tsession.is_empty(), "no server session: a seek stays in place");
 }
 
 /// **Force Direct Play never mixes a surround source down** (owner, 2026-10-28, #1082). The same set (no

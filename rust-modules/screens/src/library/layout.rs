@@ -6,7 +6,6 @@ use plx_ui::theme;
 
 pub(super) const COLS: usize = 6;
 const EPISODE_COLS: usize = 4;
-pub(super) const MAX_LIBRARY_PILLS: usize = 8;
 pub(super) use plx_ui::cards::{GridBand, MAX_GRID_BANDS};
 /// Where the page's header row stands (`PageHeader`'s top): the document starts here.
 pub(super) const HEADER_Y: f32 = plx_ui::page_header::TOP;

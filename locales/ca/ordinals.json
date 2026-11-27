@@ -1,0 +1,13 @@
+{
+  "ordinal.first": "al primer lloc",
+  "ordinal.second": "al segon lloc",
+  "ordinal.third": "al tercer lloc",
+  "ordinal.fourth": "al quart lloc",
+  "ordinal.fifth": "al cinquè lloc",
+  "ordinal.sixth": "al sisè lloc",
+  "ordinal.seventh": "al setè lloc",
+  "ordinal.eighth": "al vuitè lloc",
+  "ordinal.ninth": "al novè lloc",
+  "ordinal.tenth": "al desè lloc",
+  "ordinal.other": "al lloc núm. {n}"
+}

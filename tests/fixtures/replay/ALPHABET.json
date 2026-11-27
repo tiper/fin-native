@@ -1,6 +1,7 @@
 {
   "_comment": "The CLOSED ALPHABET every string value in a committed replay fixture must belong to (restructure spec §5.6 rule 2). Match literals exactly or patterns with fullmatch. Synthetic construction against tests/mock_pms.py remains required: membership is a vocabulary check, not proof of data provenance, and cannot distinguish private values coincidentally equal to allowed words/numbers. CLI, outbound guard and host tests share this policy. Add new protocol constants by source-backed name, never by harvesting an unchecked recording.",
   "_sources": {
+    "shelf_library": "data/src/pms.rs ShelfLibrary: a recorded Home shelf carries the library it was decided for ({\"library\":\"Mixed\"} or {\"library\":{\"One\":<section id>}}, record::SHAPE `library`); \"Mixed\" is the one string, an enum variant name of the data layer and no server text.",
     "by_id_refusal": "ui/src/dispatch/by_id.rs by_id_refusal_line: a refused focus:/press: token logs `a11y: refused <act> <id> <reason> owner=<ns>`, which Fx::Log records as {\"log\":...} (app/bootstrap/effects.rs). tests/fixtures/replay/13-by-id-filmography seeds focus:nav.watchlist on the Filmography page, which has no tab strip: the line is listed literally, as that one recorded refusal, never as a pattern over every act, id and reason.",
     "store_close": "app/bootstrap/effects.rs encodes PersonCmd::Close and CollectionCmd::Close as the string \"close\" ({\"person\":\"close\"}, {\"collection\":\"close\"}): the store command the app sends when a Person or Collection page is popped. tests/fixtures/replay/13-by-id-filmography unwinds Flow 12's stack to Home, so its recording holds the Person close.",
     "accessibility_ids": "ui/src/a11y.rs grammar (an id is <ns>.<path>, the path one to MAX_ID_SEGS segments, each [a-z][a-z0-9_]* or a canonical decimal index). The first segment is a CLOSED alternation, never [a-z]+: a household hostname such as nas.local would otherwise pass. It lists every namespace a screen answers (Screen::a11y_ns, the namespaces plx_screens' registry a11y_coverage_tests reports for every arm of the table, which the test the_replay_alphabet_names_exactly_the_namespaces_the_table_reports holds equal to this list, and holds the repeat bound equal to plx_ui::a11y::MAX_ID_SEGS) plus nav, the shared tab strip's (ui/src/dispatch.rs strip_path). app/bootstrap/effects.rs encodes InputKind::ById as {\"by_id\":{\"id\",\"press\",\"expect\"}} and By::Script as the FocusMoved word \"script\"; app/recorder.rs ResolutionWire::Id rows are kind \"Id\".",
@@ -8,6 +9,7 @@
     "playback_diagnostics": "locales/en/settings.json settings.trace.* labels and uppercase section; app/bootstrap/effects.rs deterministic playback_trace status/off codec.",
     "quiet_refetch": "app/bootstrap/effects.rs encodes HubsCmd::RefetchSourceQuiet as {\"hubs\":{\"refetch_source_quiet\":<server>}}: the quiet Home refetch of app/reread.rs.",
     "localization": "ui/table.rs TableView draw elides each section header (uppercased, at CAPTION) through the Measure, so the Settings root's eight headers (Playback, Privacy, Legal, System, About, Information, Reporting, On this TV, from locales/en/settings.json) enter the measurement table in capitals; locales/en/settings.json names the Language destination (Language, its detail line and System default); locales/en/browse.json browse.person.credits pluralises the Filmography count, measured word by word as it wraps; i18n/mod.rs LocaleContext formats dates as ICU YMD short with a full year, and controlled System resolves to en-US, so tests/mock_pms.py's 2011-03-14 reads 3/14/2011; plx_appkit::hero_layout::play_label names the Home hero's Play control (browse.detail.play, or browse.detail.resume, \"Resume\", for a resume point), the one label Home, Detail and the card menu share.",
+    "clock_face": "app/chrome.rs + ui/widgets.rs (TopBar: the clock on every screen, #1577): a recording of a page that wears the bar holds one Width metric for the bar's clock face (the loop measures it while it records; a replay has no wall clock, so it never asks), which is the time of day the recording was taken, in the television's clock style (ui/fmt.rs clock_face: \"21:38\" or \"9:38 PM\"). It names no household, server or account.",
     "playback_settings": "plex/session.rs DirectPlayMode serializes auto/forced/disabled. screens/settings.rs supplies the added Playback destinations, detail lines and root copy.",
     "controlled_content": "app/bootstrap/effects.rs and stores/tape.rs name content/metadata; metadata.rs MarkerKind/RatingArt; person.rs seed_dev_credits and filmography name the finite departments. tests/mock_pms.py builds people thumb paths, plex GUIDs from sname, two-sname mkv filenames, a four-sname tagline and en/eng/srt/mkv media values. ContentReq::PreviewStop and ContentPanel::{About,Bio} serialize preview_stop/about/bio; the other preview/panel discriminators are object keys.",
     "effect_and_machine_names": "rust-modules/src/app/recorder.rs: Recplay::effect Fx match and machine_name exhaustive MachineId match",
@@ -54,6 +56,7 @@
     "/library/metadata/[0-9]+/similar",
     "/library/parts/[0-9]+/17[0-9]{8}/file\\.mkv",
     "[0-9]{4}-[0-9]{2}-[0-9]{2}",
+    "[0-9]{1,2}:[0-9]{2}( [AP]M)?",
     "[0-9]+",
     "[0-9]+\\.[0-9]+\\.[0-9]+(-dev)?",
     "inst:[0-9]+",
@@ -72,11 +75,12 @@
     "pat:solid:[0-9]+(\\.[0-9]+)?(:[0-9]+(\\.[0-9]+)?)?",
     "txt:s[0-9a-f]{8}(\\+s[0-9a-f]{8})*",
     "press phase=(idle|down|up) live=[01] active=[01] long=[01]",
-    "(about|account|alt|audio|bio|catalog|collection|consent|contribute|detail|diagnostics|filmography|home|hud-about|hud-detail|hud-gallery|hud-preview|itemmenu|language|legal|legal-document|library|library_menu|livetv|login|menu|more|nav|onboard|person|picker|playback|player|player-hud|privacy|privacy-preview|profiles|recommended|search|settings|settings-about|timing|tracks|under-posters|under-posters-movie|under-posters-show|versions|watchlist|watchlist_menu)(\\.([a-z][a-z0-9_]*|0|[1-9][0-9]*)){1,6}"
+    "(about|account|alt|audio|bio|catalog|channel_entry|collection|consent|contribute|detail|diagnostics|filmography|home|hud-about|hud-detail|hud-gallery|hud-preview|itemmenu|language|legal|legal-document|library|library-order|library_menu|livetv|login|menu|more|nav|onboard|person|picker|playback|player|player-hud|preplay|privacy|privacy-preview|profiles|recommended|search|settings|settings-about|timing|tracks|under-posters|under-posters-movie|under-posters-show|versions|watchlist|watchlist_menu)(\\.([a-z][a-z0-9_]*|0|[1-9][0-9]*)){1,6}"
   ],
   "literals": [
     "a11y: refused focus nav.watchlist unknown owner=filmography",
     "close",
+    "Mixed",
     "32m",
     "47m",
     "S2 · E2",

@@ -160,10 +160,10 @@ impl SampleRow {
         let n = arts.len();
         let mut led = vec![ArtImage::NONE; n];
         for (i, art) in arts.iter().enumerate().filter(|(i, _)| *i != focused) {
-            led[i] = card_row::lead_focused(p, art, Self::tile(sty, n, i, frame.row), 1.0);
+            led[i] = card_row::lead_focused(p, art, Self::tile(sty, n, i, frame.row), 1.0, sty);
         }
         if focused < n {
-            led[focused] = card_row::lead_focused(p, &arts[focused], Self::lifted(sty, n, focused, frame.row), sty.focus_scale);
+            led[focused] = card_row::lead_focused(p, &arts[focused], Self::lifted(sty, n, focused, frame.row), sty.focus_scale, sty);
         }
         led
     }
@@ -220,6 +220,7 @@ impl SampleRow {
                 })
                 .hash(h),
             Art::Thumb { sid, key, res } | Art::Person { sid, key, res } => (*sid, *key, res.0, res.1).hash(h),
+            Art::Channel { sid, logo, number, name } => (*sid, *logo, *number, *name).hash(h),
         }
     }
 }
@@ -312,7 +313,7 @@ mod tests {
     }
 
     fn image(tex: u32) -> ArtImage {
-        ArtImage { tex, w: 250.0, h: 375.0, shown: 1.0 }
+        ArtImage { tex, w: 250.0, h: 375.0, backdrop: 0, ink: None, shown: 1.0 }
     }
 
     fn key_of(frame: &SampleFrame<'_>, sty: &RowStyle, arts: &[Art<'_>], led: &[ArtImage], focused: usize) -> Option<u64> {

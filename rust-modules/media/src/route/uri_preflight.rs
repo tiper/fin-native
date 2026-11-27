@@ -15,10 +15,53 @@ use plx_playback_contract::{Capabilities, Fidelity, Requirements, SourceKind, Tr
 
 use super::SourceSelection;
 
+/// Whether two language tags name one language (ISO 639-1, 639-2/B and 639-2/T spellings fold together): the
+/// shared test, re-exported for a URI driver that checks a native track's language against [`OriginalRequest::audio_language`].
+pub use plx_data::metadata::lang_matches;
+
 /// The exact selected subtitle's source format and placement. A native track index alone does
 /// not establish that this firmware renders its codec.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceSubtitle { pub codec: String, pub embedded: bool }
+
+/// One subtitle stream EMBEDDED in the Part, as PMS lists it: what a qualifier needs to map every
+/// such stream to its native track and to say which codecs the Part holds, beside the selected
+/// one ([`OriginalRequest::subtitle_source`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceSubtitleStream {
+    /// PMS's stream id: the track's identity in a `TrackSelection` (0 when PMS gave none).
+    pub sid: u64,
+    /// The stream's 0-based position among the Part's embedded subtitle streams in container order
+    /// ([`plx_data::metadata::sub_render_ordinal`]): the numbering the app's own renderer and the
+    /// Feed demuxer use.
+    pub ordinal: i64,
+    /// PMS's codec name, lowercased (`srt`, `ass`, `pgs`, `mov_text`, ...).
+    pub codec: String,
+    /// The language as PMS states it (`languageCode`, ISO 639-2); empty when PMS states none.
+    pub language: String,
+}
+
+/// **The Part's embedded subtitle streams, as a qualifier reads them** ([`OriginalRequest::subtitle_streams`]).
+/// Only a qualifier whose driver hands the selected track's cues to the app reads them, and only a build with
+/// `uri-captions` (Tizen) has one: without the feature (webOS) this holds nothing and costs nothing (a zero-sized
+/// value), and [`From`] a list drops it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SubtitleStreams(#[cfg(feature = "uri-captions")] Vec<SourceSubtitleStream>);
+
+impl std::ops::Deref for SubtitleStreams {
+    type Target = [SourceSubtitleStream];
+    #[cfg(feature = "uri-captions")]
+    fn deref(&self) -> &[SourceSubtitleStream] { &self.0 }
+    #[cfg(not(feature = "uri-captions"))]
+    fn deref(&self) -> &[SourceSubtitleStream] { &[] }
+}
+
+impl From<Vec<SourceSubtitleStream>> for SubtitleStreams {
+    #[cfg(feature = "uri-captions")]
+    fn from(streams: Vec<SourceSubtitleStream>) -> Self { Self(streams) }
+    #[cfg(not(feature = "uri-captions"))]
+    fn from(_: Vec<SourceSubtitleStream>) -> Self { Self() }
+}
 
 /// Captured product evidence shared by boot's executor configuration and one resolve's IO port.
 /// Callable operations and certified firmware behavior are separate facts, and the display path is
@@ -107,8 +150,9 @@ pub struct StandardDirectPlay {
     /// profile's setting) admits this source's layering: it has none, or it plays as a base layer or as a
     /// declared stream. A Profile 5 file on a set without Dolby Vision is the refusal.
     pub dolby_vision: bool,
-    /// The selected audio track plays on the SET'S OWN decoder (`audio_natively_plays_with`: the
-    /// table's row, the Load's channel and rate limits, the direct-play mode). Standard may also decode
+    /// The selected audio track plays on the SET'S OWN decoder (`plan::uri_original_audio_plays`:
+    /// `audio_natively_plays_with`, i.e. the table's row, the Load's channel and rate limits and the
+    /// direct-play mode, plus, in Auto, the row's bound on the track's whole layout). Standard may also decode
     /// a codec in the app, which the TV's pipeline cannot, so that is not enough here.
     pub audio: bool,
     /// The Part's container is one Standard streams (`part_is_streamable`: .mkv, .mp4, .m4v). Any other
@@ -288,12 +332,23 @@ pub struct OriginalRequest {
     ///
     /// HYPOTHESIS, unmeasured on the 4.5 service: that this position is also the native track
     /// index the service names in `audioInfo.track` and takes in `selectTrack`. A qualifier may map
-    /// it to a [`NativeTrackIndex`] only for a source it knows lists its audio in the Part's order;
+    /// it to a [`NativeTrackIndex`] only for a source it knows lists its audio in the Part's order,
+    /// or together with a [`NativeTrackCheck`](plx_playback_contract::uri::NativeTrackCheck) its driver verifies before trusting the index (Tizen
+    /// states the stream's language, `audio_language`);
     /// `selection.audio_sid` stays the stream's identity, this is only where it sits.
     pub audio_ordinal: Option<i64>,
     /// The exported-window service can enumerate multiple tracks in a different order from PMS.
     pub has_multiple_audio_tracks: bool,
+    /// The selected audio stream's language as PMS states it (`languageCode`, ISO 639-2, e.g. `ger`); empty when no
+    /// stream is selected or PMS states none. The identity evidence a driver whose native track order is unproven
+    /// matches against the native track's own language ([`lang_matches`]) before it trusts [`audio_ordinal`].
+    ///
+    /// [`audio_ordinal`]: Self::audio_ordinal
+    pub audio_language: String,
     pub subtitle_source: Option<SourceSubtitle>,
+    /// Every subtitle stream embedded in the Part, in PMS's order (external sidecars are not in the
+    /// file and are not listed). Empty when the Part has none or the plan did not read them.
+    pub subtitle_streams: SubtitleStreams,
     /// Off is an actual viewer choice, distinct from no subtitle streams being present.
     /// The current URI driver has no native disable operation.
     pub subtitle_choice: TrackChoice,
@@ -1194,8 +1249,8 @@ mod tests {
             video_codec: "h264".to_owned(), dolby_vision: plx_data::metadata::Dovi::NONE,
             dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto,
             dolby_vision_base_layer_only: false, uri_opt_in,
-            standard: PLAYS, audio_codec: "aac".to_owned(), audio_ordinal: Some(1), has_multiple_audio_tracks: false,
-            subtitle_source: None, subtitle_choice: TrackChoice::Unspecified,
+            standard: PLAYS, audio_codec: "aac".to_owned(), audio_ordinal: Some(1), has_multiple_audio_tracks: false, audio_language: String::new(),
+            subtitle_source: None, subtitle_streams: SubtitleStreams::default(), subtitle_choice: TrackChoice::Unspecified,
             source_kbps: Some(4000), raster: Some((1280, 720)),
             requested_rate_permille: plx_playback_contract::RATE_NORMAL, resume_ns: 0,
             quality_allows_original: true, link_allows_original: true, auto_allows_original: true,
@@ -1374,8 +1429,9 @@ mod tests {
             video_codec: "hevc".to_owned(), dolby_vision: dovi,
             dolby_vision_mode: plx_plex::plex::session::DolbyVisionMode::Auto,
             dolby_vision_base_layer_only: false, uri_opt_in: false,
-            standard: PLAYS, audio_codec: "ac3".to_owned(), audio_ordinal: Some(0), has_multiple_audio_tracks: false,
+            standard: PLAYS, audio_codec: "ac3".to_owned(), audio_ordinal: Some(0), has_multiple_audio_tracks: false, audio_language: String::new(),
             subtitle_source: None,
+            subtitle_streams: SubtitleStreams::default(),
             subtitle_choice: TrackChoice::Unspecified,
             source_kbps: Some(4000), raster: Some((1920, 1080)),
             requested_rate_permille: plx_playback_contract::RATE_NORMAL, resume_ns: 0,

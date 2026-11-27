@@ -1,8 +1,8 @@
 // The library page header (redesign PR4): geometry, controls per kind, the focus table and the
 // "focus never switches the library" rule. Included from `navigation_tests` for its `Fixture`.
 use super::*;
-use super::header::pack_names;
-use plx_machine::machine::{InputEvent, InputKind, Measure, Source};
+use plx_ui::page_header::pack_names;
+use plx_machine::machine::{InputEvent, InputKind, Source};
 
 fn key_press(key: Key) -> ScreenEvent<TestHost> {
     ScreenEvent::Input(InputEvent {
@@ -71,19 +71,6 @@ fn a_non_favorite_gets_one_selected_temporary_pill_after_the_favorites() {
 }
 
 #[test]
-fn the_library_pill_shows_the_owner_only_if_the_full_credit_fits() {
-    let measure = plx_base::fontcov::advances::ShippedMeasure;
-    let title = "LDN Films";
-    let owner = "by a friend";
-    let full = toolbar::joined_name(title, owner);
-    let width = |s| measure.width_str(s, plx_ui::theme::size::BODY, false);
-    assert_eq!(header::fit_name(title, owner, width(&full), &measure), full);
-    assert_eq!(header::fit_name(title, owner, width("LDN Films b…"), &measure), title);
-    let short = header::fit_name(title, owner, width("LDN Fi…"), &measure);
-    assert!(short.ends_with('…') && title.starts_with(short.trim_end_matches('…')));
-}
-
-#[test]
 fn long_favorite_names_leave_room_for_options_in_every_language() {
     let _guard = plx_base::testlock::serial();
     let measure = plx_base::fontcov::advances::ShippedMeasure;
@@ -110,6 +97,60 @@ fn long_favorite_names_leave_room_for_options_in_every_language() {
         assert_eq!(names.len(), 3, "{}: both favorites and the active visit fit", language.tag());
         assert!(names[2].selected_plate);
     }
+}
+
+/// **The Library order preview and the real header assemble their names alike**: for the same
+/// directory (short names, long names that fold, a library that is not a favourite so a visit slot
+/// is reserved, the current library a visitor) the preview's names row shows the same names, plated
+/// the same, standing at the same x, as the header the page builds for a library that offers every
+/// sort the shared table knows (the preview cannot know a server's list). The preview omits the ⋯
+/// when nothing folded; the real header keeps its opener.
+#[test]
+fn the_library_order_preview_lays_names_out_exactly_as_the_real_header_does() {
+    let _guard = plx_base::testlock::serial();
+    let measure = plx_base::fontcov::advances::ShippedMeasure;
+    let long = |title: &str| format!("{title} \u{2014} International cinema and restored classics and more");
+    // (favourites, a non-favourite library too, long titles, the library on view)
+    let cases = [(3, false, false, 0), (3, false, true, 1), (5, false, true, 4), (2, true, false, 0), (4, true, true, 2), (3, true, true, 3), (12, false, false, 11)];
+    let mut folds = 0;
+    let mut visits = 0;
+    for (favourites, extra, long_titles, current) in cases {
+        let mut fixture = Fixture::new(favourites + usize::from(extra), 36, 0);
+        for section in &mut fixture.sections {
+            if long_titles { section.row.title = long(&section.row.title); }
+        }
+        if extra { fixture.sections[favourites].row.pinned = false; }
+        fixture.publish(current, 36);
+        // the preview cannot know a server's sorts, so it stands in the right cluster of a library
+        // that offers every sort the shared table knows: give the real library that listing
+        let labels: Vec<(&str, &str)> = plx_data::sortfacts::SortFact::ALL.iter().map(|fact| (fact.label(), fact.label())).collect();
+        fixture.listing = fixture.listing.clone().with_sorts(&labels, 0);
+        let engine = FocusEngine::new();
+        let cx = Cx { measure: &measure, ..fixture.cx(&engine) };
+        let mut page = LibraryScreen::new(ENTRY, InstanceId(19), SecKind::Movie);
+        page.sync(&cx);
+        let real = page.header.row().expect("the header is built");
+        let pinned: Vec<usize> = (0..favourites).collect();
+        let preview = super::header::names_preview(
+            &pinned, &current, SecKind::Movie, fixture.directory.view(), &measure,
+            |at, room| plx_ui::page_header::fit_name(&fixture.sections[*at].row.title, "", room, &measure),
+        );
+        let names = |spec: &plx_ui::page_header::PageHeaderSpec| -> Vec<(String, bool)> {
+            spec.left.iter().filter(|item| item.glyph.is_none()).map(|item| (item.label.clone(), item.selected_plate)).collect()
+        };
+        let what = format!("{favourites} favourites, extra {extra}, long {long_titles}, on view {current}");
+        folds += usize::from(preview.overflowed());
+        visits += usize::from(preview.slots.last().is_some_and(|slot| *slot == plx_ui::page_header::NameSlot::Pill(current)) && current >= preview.slots.len().saturating_sub(2));
+        assert_eq!(names(preview.page.spec()), names(real.page.spec()), "{what}: the same names, fitted and plated alike");
+        // the shortcuts stand at the same x (the visitor, after a ⋯ only the header draws, may differ)
+        let shortcuts = real.page.spec().left.iter().take_while(|item| item.glyph.is_none()).count();
+        for at in 0..shortcuts {
+            assert_eq!(preview.layout.items[at].text, real.layout.items[at].text, "{what}: name {at} stands where the header's does");
+        }
+        assert!(real.page.spec().left.iter().any(|item| item.glyph.is_some()), "{what}: the real header keeps its opener");
+        assert_eq!(preview.page.spec().left.iter().any(|item| item.glyph.is_some()), preview.overflowed(), "{what}: the preview draws a ⋯ only when it folded names");
+    }
+    assert!(folds >= 2 && visits >= 1, "the cases fold names ({folds}) and put a visitor after the shortcuts ({visits})");
 }
 
 #[test]
@@ -1527,4 +1568,17 @@ fn entering_a_library_with_collections_fades_the_whole_control_in_when_its_count
         }
     }
     knows_collections(&[]);
+}
+
+/// A Library order moves the pills and nothing else the header reads: the row must redraw anyway.
+#[test]
+fn a_reorder_with_nothing_else_changed_redraws_the_pills() {
+    let _guard = plx_base::testlock::serial();
+    let (mut fixture, mut page, engine) = grid_page(3);
+    let pills = |page: &LibraryScreen| page.probe_libraries().into_iter().map(|(_, index)| index)
+        .filter(|index| *index != usize::MAX).collect::<Vec<_>>();
+    assert_eq!(pills(&page), [0, 1, 2]);
+    fixture.directory = fixture.directory.clone().with_presentation_order(vec![2, 0, 1]);
+    page.sync(&fixture.cx(&engine));
+    assert_eq!(pills(&page), [2, 0, 1], "the pills follow the profile's order");
 }

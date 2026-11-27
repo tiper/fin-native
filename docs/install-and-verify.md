@@ -212,7 +212,7 @@ Nothing. A release build compiles out the whole `/tmp` trigger surface, the remo
 ## Scope
 
 Movies and TV shows from a Plex Media Server your account can reach, and that server's Live TV
-channels (watch only). No music, no photos, no guide grid, no DVR recording.
+channels (watch only; a Guide page lays the channels' programmes along a time ruler). No music, no photos, no DVR recording.
 
 There is deliberately nowhere on the television to type a server address — configure servers on a phone or PC, and the app offers what your Plex account already knows about.
 

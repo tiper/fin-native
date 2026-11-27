@@ -12,6 +12,7 @@ use super::auth::ClientIdentity;
 use super::favorites;
 use super::client::{both, CurlTransport, JfClient, LibraryPage, PlayState, PlaybackReport, Session as SignedIn, HOME_SHELF_SIZE};
 use super::live;
+use super::livetv;
 use super::paths::{self, SortBy};
 use super::playback_info;
 use super::transcode;
@@ -259,7 +260,10 @@ impl JfBackend {
         let held = self.verdict_for(item);
         let encoders = held.as_ref().map_or(playback_info::Encoders::ALL, |v| v.encoders);
         let server = held.filter(|v| !v.direct_play && spec.contract.ceiling.is_none());
-        let (video_copy, audio_ok) = (plx_plex::plex::direct_play_video_codecs(spec.caps), dp_audio(spec.caps));
+        let video_copy = plx_plex::plex::direct_play_video_codecs(spec.caps);
+        // A server session's copy may reach the TV's own player whole: judged as a session, never
+        // by the direct-play ask, which admits a DTS-HD wider than the row for its core (#1537).
+        let audio_ok = |codec: &str, channels: i64, rate: i64| plx_plex::plex::is_session_audio_track_with(spec.caps, codec, channels, rate);
         let dev = transcode::Device {
             force_video_encode: server.as_ref().is_some_and(|v| v.video_encode),
             force_audio_encode: server.as_ref().is_some_and(|v| v.audio_encode),
@@ -273,6 +277,14 @@ impl JfBackend {
             }
         }
         Some((c, p))
+    }
+
+    /// The channel list when `epg` names this server's one Live TV source.
+    fn live_channels_of(&self, epg: &str) -> Option<Arc<Vec<super::dto::BaseItemDto>>> {
+        if epg != livetv::SOURCE {
+            return None;
+        }
+        self.client()?.live_channels()
     }
 
     fn remember_name(&self, base: &str, name: &str) {
@@ -1051,12 +1063,49 @@ impl Backend for Shared {
         }
         Some(MediaContainer { size: 1, total_size: 1, metadata: vec![m], ..Default::default() })
     }
+    fn live_tv_dvrs(&self) -> (Option<i32>, Option<Vec<plx_plex::plex::Dvr>>) {
+        let Some(channels) = self.0.client().and_then(|c| c.live_channels()) else { return (None, None) };
+        (Some(200), Some(if channels.is_empty() { Vec::new() } else { vec![livetv::source()] }))
+    }
+    fn epg_channels(&self, epg: &str) -> (Option<i32>, Option<Vec<plx_plex::plex::EpgChannel>>) {
+        let Some(channels) = self.0.live_channels_of(epg) else { return (None, None) };
+        (Some(200), Some(channels.iter().filter_map(livetv::channel_of).collect()))
+    }
+    fn epg_guide(&self, epg: &str, now: i64, until: i64) -> Option<Vec<Metadata>> {
+        let channels = self.0.live_channels_of(epg)?;
+        let until = until.max(plx_plex::plex::livetv::window_end(now));
+        // A server that cannot answer the guide still says what is on now, as the lineup carries it.
+        match self.0.client().and_then(|c| c.live_programs(now, until)) {
+            Some(programs) => Some(livetv::programs_of(&programs, &channels)),
+            None => Some(channels.iter().filter_map(livetv::airing_of).collect()),
+        }
+    }
+    fn tune(&self, _off: &plx_base::task::OffFrame, _dvr: &str, channel: &str, playback: &str) -> plx_plex::plex::livetv::TuneOutcome {
+        use plx_plex::plex::livetv::TuneOutcome;
+        let Some(c) = self.0.client() else { return TuneOutcome::Failed { status: None } };
+        let profile = livetv::live_profile();
+        match c.tune_channel(channel, playback, &profile) {
+            Some(session) => TuneOutcome::Tuned { session, status: 200 },
+            None => TuneOutcome::Failed { status: None },
+        }
+    }
+    fn live_part(&self, _off: &plx_base::task::OffFrame, session: &plx_plex::plex::livetv::LiveSession, _playback: &str) -> Option<plx_plex::plex::livetv::LivePlay> {
+        self.0.client()?.live_play(&session.key)
+    }
+    fn live_timeline(&self, session: &plx_plex::plex::livetv::LiveSession, state: plx_plex::plex::TimelineState, _watched_ms: i64, playback: &str) -> bool {
+        // Jellyfin keeps no live position: only the end of the play is news, and it frees the tuner.
+        state != plx_plex::plex::TimelineState::Stopped
+            || self.0.client().is_some_and(|c| c.close_live_stream(&session.key, playback))
+    }
     fn direct_play_url(&self, part_key: &str, session: &str) -> Option<StreamUrl> {
         let c = self.0.client()?;
         let session = (!session.is_empty()).then_some(session);
         Some(StreamUrl::parse(&c.direct_play_url(part_key, session)))
     }
     fn transcode_decision(&self, spec: &TranscodeSpec<'_>) -> Option<MediaContainer> {
+        if matches!(spec.source, plx_plex::plex::TranscodeSource::Live(_)) {
+            return Some(transcode::live_refusal());
+        }
         if transcode::is_hls(spec) {
             return Some(transcode::hls_refusal());
         }

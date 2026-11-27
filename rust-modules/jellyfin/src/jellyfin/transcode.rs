@@ -78,12 +78,18 @@ impl Plan {
     }
 }
 
+fn unplayable(text: &str) -> MediaContainer {
+    MediaContainer { general_decision_code: Some(2000), general_decision_text: text.into(), ..Default::default() }
+}
+
 pub fn hls_refusal() -> MediaContainer {
-    MediaContainer {
-        general_decision_code: Some(2000),
-        general_decision_text: "This server's streams are served as Matroska, not HLS.".into(),
-        ..Default::default()
-    }
+    unplayable("This server's streams are served as Matroska, not HLS.")
+}
+
+/// A live channel the server could not serve has no other cut to fall back to: the channel is what
+/// failed, not the format.
+pub fn live_refusal() -> MediaContainer {
+    unplayable("The server could not start this channel.")
 }
 
 /// The server may not encode a stream this device cannot decode, so it would send it as it is.
@@ -482,6 +488,14 @@ mod tests {
         let p = plan(item("hevc", &[("ac3", 6)]), &spec(true, Some(low)), &device()).unwrap();
         assert!(p.copy_video);
         assert_eq!(p.request("abc", "s1").max_bitrate, None);
+    }
+
+    #[test]
+    fn a_live_channel_the_server_could_not_serve_says_so_not_that_hls_is_unsupported() {
+        let r = live_refusal();
+        assert_eq!(r.general_decision_code, Some(2000));
+        assert!(r.general_decision_text.contains("channel"));
+        assert_ne!(r.general_decision_text, hls_refusal().general_decision_text);
     }
 
     #[test]

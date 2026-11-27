@@ -1464,6 +1464,20 @@ fn a_remux_that_cannot_be_asked_for_codecs_guesses_what_the_server_would_send() 
     assert_eq!(remux_output_acodec(&plx_os::devcaps::caps(), false, None, "eac3"), "eac3");
 }
 
+/// #1537: a `DTS/6` row lets the direct-play ask admit a 7.1 DTS-HD MA (fed as its core), but an
+/// encoder session's profile keeps the row on the track's layout, so the server converts it: the
+/// guess must name the conversion's `ac3`, not the `dca` that never arrives.
+#[test]
+fn a_remux_guess_follows_the_session_profiles_dts_bound() {
+    let mut caps = plx_os::devcaps::Caps::assumed();
+    caps.audio.push_str(",dts");
+    caps.audio_channels.insert("dts".into(), 6);
+    let a = |ch| CarriedAudio { codec: "dca".into(), channels: ch, ..a1() };
+    assert!(plx_plex::plex::is_dp_audio_track_with(&caps, "dca", 8, 48000), "control: the direct-play ask admits the core");
+    assert_eq!(remux_output_acodec(&caps, false, Some(&a(8)), "dca"), "ac3");
+    assert_eq!(remux_output_acodec(&caps, false, Some(&a(6)), "dca"), "dca");
+}
+
 #[test]
 fn picking_a_playable_track_again_clears_audio_converted() {
     let mut ps = PlaybackSession::IDLE;

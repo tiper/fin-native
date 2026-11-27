@@ -49,9 +49,11 @@ pub(crate) fn content_command_label(request: &ContentReq) -> &'static str {
     match request {
         ContentReq::Push(_) => "content:Push", ContentReq::Present(_) => "content:Present",
         ContentReq::Back => "content:Back", ContentReq::Play { .. } => "content:Play",
+        ContentReq::SelectVersion { .. } => "content:SelectVersion",
         ContentReq::PreviewStart { .. } => "content:PreviewStart", ContentReq::PreviewStop => "content:PreviewStop",
         ContentReq::PreviewTransport(_) => "content:PreviewTransport", ContentReq::PreviewSeek(_) => "content:PreviewSeek",
         ContentReq::Panel(_) => "content:Panel", ContentReq::ItemMenu => "content:ItemMenu",
+        ContentReq::CommitPreplayPick { .. } => "content:CommitPreplayPick",
     }
 }
 
@@ -765,6 +767,36 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
                 #[cfg(not(feature = "play-feed"))]
                 let _ = target_ns;
             }
+            // The Select Version list's commit: remembered for the seated profile, which is what the
+            // page's Play and Resume and its facts line read. It starts nothing and leaves the page.
+            ContentReq::SelectVersion { sid, rk, media } => {
+                plx_media::route::choose_version(sid, &rk, media);
+            }
+            ContentReq::CommitPreplayPick { tracks, sel, source: tracks_from } => {
+                // The selection PUT (queued off the frame thread) and, for an episode, the show's
+                // track memory; a page's pick is already held by the metadata store.
+                if !plx_appkit::preplay_tracks::commit_for(&tracks, &sel) {
+                    plx_base::eventlog::log("preplay: pick not written (no part to address)");
+                }
+                // On the failure screen the pick is what the retry plays, and the pick STARTS it, as a
+                // quality pick from Change quality does (`apply_quality`): the pair is held on the
+                // session, the one owner of what a retry carries, and the retry consumes it. A refusal
+                // DecisionRefused has no Try again, so a pick that only held would have nothing to play it.
+                if let plx_screens::preplay_panel::Source::Failed { .. } = tracks_from {
+                    commit_failed_pick(
+                        &mut app.player.session,
+                        &sel.pick,
+                        |session| super::playback::retry_failed_playback(
+                            session,
+                            &mut app.adapters.player,
+                            app.bridge.metadata_mut(),
+                            None,
+                            plx_media::player::report::AttemptOrigin::ViewerReconfigure,
+                        ),
+                        || content_back(&mut app.pages, source, entry, ret),
+                    );
+                }
+            }
             ContentReq::Panel(panel) => {
                 halt_screen_preview(app);
                 // **The SUBJECT is the page's item, and a page need not have one.** A panel that
@@ -792,6 +824,21 @@ fn content_command(app: &mut ScreenCommandApp<'_, '_>, source: MachineId, reques
             }
     }
     AppCommandOutcome::Completed
+}
+
+/// **A pick made on the failure screen, performed**: the pair is held on the session, the one owner of what
+/// a retry carries, and the retry consumes it. The panel closes only when the retry STARTED: a refused one
+/// leaves the panel up, with the pair held for Try again.
+fn commit_failed_pick(
+    session: &mut plx_media::route::PlaybackSession,
+    pick: &plx_data::metadata::PreplayPick,
+    retry: impl FnOnce(&mut plx_media::route::PlaybackSession) -> bool,
+    close: impl FnOnce(),
+) {
+    plx_media::route::hold_pick_for_retry(session, pick);
+    if retry(session) {
+        close();
+    }
 }
 
 /// **Home's BACK fold, performed**: the screen owns the fold (its dive), the input engine owns the
@@ -2883,5 +2930,126 @@ mod repair_replay_tests {
         let mut live = vec![PlayerReq::RepairSandbox, PlayerReq::Exit];
         assert!(!remove_replayed_repairs(&mut live, false, false));
         assert_eq!(live, vec![PlayerReq::RepairSandbox, PlayerReq::Exit]);
+    }
+}
+
+#[cfg(test)]
+mod failed_pick_tests {
+    use super::commit_failed_pick;
+    use plx_data::metadata::{PreplayPick, SubPick};
+    use plx_media::route::PlaybackSession;
+
+    fn pick() -> PreplayPick {
+        PreplayPick { part_id: 9001, audio_sid: 21, sub: SubPick::Off }
+    }
+
+    /// **The failure panel closes only on a retry that STARTED**: the pair is held on the session either way
+    /// (a refused retry leaves the panel up, with the pair held for Try again), but the panel goes only when
+    /// the retry returned `true`.
+    #[test]
+    fn the_failure_panel_closes_when_the_retry_started_and_stays_up_when_it_did_not() {
+        for started in [true, false] {
+            let mut session = PlaybackSession::default();
+            plx_media::route::seed_request_for_test(&mut session, "m1");
+            let (mut asked, mut closed) = (0, 0);
+            commit_failed_pick(&mut session, &pick(), |_| { asked += 1; started }, || closed += 1);
+            assert_eq!(plx_media::route::failed_pick(&session), Some(pick()), "the pair is held either way");
+            assert_eq!(asked, 1, "the pick starts the retry once");
+            assert_eq!(closed, usize::from(started), "retry started = {started}");
+        }
+    }
+
+    /// The real retry on a session with no Plex request has nothing to resolve again and answers `false`:
+    /// the panel stays up, the case the injected `false` above stands for.
+    #[test]
+    fn a_session_with_nothing_to_retry_leaves_the_panel_up_through_the_real_retry() {
+        let _guard = plx_base::testlock::serial();
+        let mut session = PlaybackSession::default();
+        let mt = unsafe { plx_base::task::MainThread::assume() };
+        let mut adapter = plx_media::player::adapter::PlayerAdapter::new(mt);
+        let mut meta = plx_data::stores::metadata::MetadataStore::default();
+        let mut closed = false;
+        commit_failed_pick(
+            &mut session,
+            &pick(),
+            |s| crate::app::playback::retry_failed_playback(
+                s, &mut adapter, &mut meta, None, plx_media::player::report::AttemptOrigin::ViewerReconfigure),
+            || closed = true,
+        );
+        assert!(!closed, "no request descriptor: the retry is refused and the panel stays");
+        assert_eq!(plx_media::route::failed_pick(&session), None,
+            "no request, no item the pick could belong to: nothing is held");
+    }
+
+    /// **Try again plays the pick it was made for**, through the real retry on a session that HAS a request:
+    /// the retry stops the failed playback (`stop_for_replacement`, the same player visit) and resolves
+    /// again; the pick is still held for it afterwards, not dropped by the stop.
+    #[test]
+    fn the_real_retry_keeps_the_pick_it_was_made_for() {
+        let _guard = plx_base::testlock::serial();
+        let mut session = PlaybackSession::default();
+        plx_media::route::seed_request_for_test(&mut session, "m1");
+        let mt = unsafe { plx_base::task::MainThread::assume() };
+        let mut adapter = plx_media::player::adapter::PlayerAdapter::new(mt);
+        let mut meta = plx_data::stores::metadata::MetadataStore::default();
+        let mut retried = false;
+        commit_failed_pick(
+            &mut session,
+            &pick(),
+            |s| {
+                retried = crate::app::playback::retry_failed_playback(
+                    s, &mut adapter, &mut meta, None, plx_media::player::report::AttemptOrigin::UserRetry);
+                retried
+            },
+            || {},
+        );
+        assert!(retried, "the retry was taken: it stopped and started a resolve");
+        assert_eq!(plx_media::route::failed_pick(&session), Some(pick()),
+            "the retry stopped and resolved again with the viewer's pick, which the failure screen still reads");
+        // the retry started a real resolve: end it, so no worker or in-flight slot outlives the test
+        plx_media::route::cancel_play(&mut session);
+    }
+
+    /// **The `content_command` arm itself**, not only the helper it calls: a pick committed on the failure
+    /// screen reaches the session's held pick through the product runner (`execute_resource_command`), and
+    /// the retry (on a session with a request) stops and resolves again with the pick still held for it.
+    /// The tracks name no part, so the selection PUT is not queued.
+    #[test]
+    fn the_commit_arm_holds_the_failure_screens_pick_on_the_session() {
+        use plx_appkit::preplay_tracks::{select, Pick, TrackSet};
+        use plx_data::metadata::{PreplayTracks, Stream};
+        use plx_machine::machine::MachineId;
+        use plx_screens::preplay_panel::Source;
+        use plx_screens::registry::{ContentReq, ResourceAppFx};
+        let _guard = plx_base::testlock::serial();
+        let mut d = plx_ui::dispatch::Dispatcher::<crate::app::bridge::AppHost>::new();
+        let mut harness = crate::app::runtime_owners::Harness::new(|| 0);
+        let mut rig = harness.bridge();
+        crate::app::bridge::nav_root(&mut d, plx_screens::registry::AppArg::Home);
+        crate::app::bridge::frame(&mut d, &mut rig, plx_machine::machine::Tick::default(), vec![]);
+        let instance = d.nav.top_page().and_then(|page| page.inst.as_ref()).expect("Home root").id;
+        let stream = |id| Stream { id, ..Default::default() };
+        let (audio, subs) = (vec![stream(21)], vec![stream(31)]);
+        let set = TrackSet { part_id: 9001, audio: &audio, subs: &subs };
+        let sel = select(set, None, Pick::Subtitle(None)).expect("Off is a row");
+        assert_eq!(sel.pick, pick());
+        let tracks = PreplayTracks {
+            sid: plx_plex::plex::ServerId::from_raw(0), rk: "1".into(), kind: "movie".into(), show_rk: String::new(),
+            part: String::new(), audio: audio.clone(), subs: subs.clone(), pick: None,
+        };
+        let mut resources = crate::app::bridge::test_support::TestCommandResources::new();
+        plx_media::route::seed_request_for_test(resources.session_mut(), "1");
+        assert_eq!(plx_media::route::failed_pick(resources.session()), None, "nothing held before the commit");
+        let outcome = super::execute_resource_command(
+            &mut d, &mut rig, &mut resources.borrow(), MachineId::Instance(instance),
+            ResourceAppFx::Content(ContentReq::CommitPreplayPick {
+                tracks, sel, source: Source::Failed { part_id: 9001, pick: None },
+            }),
+            plx_ui::screen::ReturnState::default(), 0,
+        );
+        assert_eq!(outcome, plx_machine::machine::AppCommandOutcome::Completed);
+        assert_eq!(plx_media::route::failed_pick(resources.session()), Some(pick()), "the arm held the pick on the session");
+        // the retry started a real resolve: end it, so no worker or in-flight slot outlives the test
+        plx_media::route::cancel_play(resources.session_mut());
     }
 }

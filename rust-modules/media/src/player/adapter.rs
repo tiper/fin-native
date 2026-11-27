@@ -56,6 +56,45 @@ struct PendingUriAudio {
 #[path = "adapter_track_tests.rs"]
 mod track_tests;
 
+/// **A URI attempt opened on the contract's scriptable driver, for a dependent's tests** (the application's
+/// `commit_track`): a fresh route start claimed and bound, `tracks` staged as the source's native map (each
+/// one also mapped by the driver), the Start dispatched paused and the attempt Active on `ReadyAwaitPlay`.
+/// The caller resets the route (`route::reset_player_control_for_test`) when it is done.
+#[cfg(any(test, feature = "test-support"))]
+pub fn open_fake_uri_for_test(caps: plx_playback_contract::Capabilities, tracks: Vec<plx_playback_contract::uri::NativeTrackIndex>)
+    -> (crate::route::PlaybackSession, PlayerAdapter, plx_playback_contract::test_support::FakeUriHandle,
+        crate::route::RouteStartAttempt) {
+    use plx_playback_contract::{DriverEvent, EvidenceSource, Fidelity, InitialPlayback, Observation, Observed,
+        Requirements, SourceKind, TrackChoice};
+    let mut ps = crate::route::PlaybackSession::IDLE;
+    crate::route::reset_player_control_for_test(&ps);
+    let ticket = crate::route::begin_route_start().expect("first real route transaction");
+    assert!(crate::route::prepare_route_start(ticket));
+    let route_attempt = crate::route::claim_route_start_attempt(ticket).expect("first physical route attempt");
+    ps.begin_attempt_view(route_attempt, super::attempt_view::Backend::Uri);
+    let mut pa = PlayerAdapter::new(unsafe { MainThread::assume() });
+    let (driver, handle) = plx_playback_contract::test_support::FakeUriDriver::new(caps);
+    for track in &tracks { handle.map_track(track.selection); }
+    assert!(pa.install_uri_driver(Box::new(driver)).is_ok());
+    let attempt = route_attempt.contract_id();
+    let source = pa.stage_uri_source(attempt, UriSource::new("https://example.invalid/selected.mkv".into(), tracks))
+        .expect("staged source");
+    let requirements = Requirements { source: SourceKind::ProgressiveUri, video: Fidelity::Exact,
+        audio: Fidelity::Exact, audio_track: TrackChoice::Unspecified, subtitle_track: TrackChoice::Unspecified };
+    let at = pa.backend_tick();
+    let started = pa.backend_send_at(&mut ps, Intent::Start { backend: BackendKind::Uri, attempt, source,
+        requirements, initial: InitialPlayback { position: None, paused: true } },
+        super::attempt_metrics::Origin::Fresh, at);
+    assert!(!started.playback.iter().any(|fx| matches!(fx, plx_playback_contract::Fx::Rejected { .. })));
+    pa.bind_uri_attempt(route_attempt, crate::route::backend_policy::OfferId::URI_ORIGINAL);
+    handle.queue([DriverEvent::Observation { attempt, observation: Observation::Playback(Observed {
+        value: Playback::ReadyAwaitPlay, from: EvidenceSource::BackendReport }) }]);
+    let at = pa.backend_tick();
+    let _ = pa.backend_poll_session_at(&mut ps, at);
+    assert_eq!(pa.backend_snapshot().phase, plx_playback_contract::Phase::Active);
+    (ps, pa, handle, route_attempt)
+}
+
 struct PendingUriSubtitle {
     attempt: AttemptId,
     command: CommandId,
@@ -512,6 +551,13 @@ pub struct PlayerAdapter {
     pending_uri_subtitle: Option<PendingUriSubtitle>,
     refused_uri_audio: Option<PendingUriAudio>,
     refused_uri_subtitle: Option<PendingUriSubtitle>,
+    /// Where a URI driver's captions go: the caption store generation of the subtitle the app draws for it.
+    /// Only a build with a driver that hands its cues over has it (`uri-captions`, the Tizen build).
+    #[cfg(feature = "uri-captions")]
+    uri_captions: super::uri_captions::UriCaptionSink,
+    /// The captions of one poll, kept to reuse its allocation.
+    #[cfg(feature = "uri-captions")]
+    uri_caption_inbox: Vec<plx_playback_contract::uri::UriCaption>,
     /// The bound physical attempt: its route identity, product trace and foreground follow mark.
     /// The feed itself receives only the canonical contract ID and native epoch. Bound right after
     /// the Engine is installed, dropped by [`Self::stop_begin`]: an Engine is installed
@@ -597,6 +643,10 @@ impl PlayerAdapter {
             uri_finalized: false,
             pending_uri_audio: None,
             pending_uri_subtitle: None,
+            #[cfg(feature = "uri-captions")]
+            uri_captions: Default::default(),
+            #[cfg(feature = "uri-captions")]
+            uri_caption_inbox: Vec::new(),
             refused_uri_audio: None,
             refused_uri_subtitle: None,
             feed_attempt: None,
@@ -898,18 +948,70 @@ impl PlayerAdapter {
         Some(true)
     }
 
+    /// Drain the URI driver's captions and put those of the subtitle the app draws into the caption store
+    /// (`player::uri_captions`). A driver whose pipeline draws its own subtitles hands none over, and a build
+    /// without `uri-captions` (webOS) composes no driver that does, so there this is nothing.
+    #[cfg(not(feature = "uri-captions"))]
+    fn deliver_uri_captions(&mut self, _: &crate::route::PlaybackSession) {}
+
+    /// **Whether the installed URI driver hands the selected subtitle's cues to the app**
+    /// ([`UriDriver::delivers_captions`](plx_playback_contract::uri::UriDriver::delivers_captions)): there the app
+    /// draws a selected embedded subtitle, and Off is the app no longer drawing it. Only a build with
+    /// `uri-captions` (Tizen) composes such a driver, so without the feature (webOS) this is `false` and every
+    /// path behind it compiles out.
+    #[cfg(feature = "uri-captions")]
+    pub fn uri_delivers_captions(&self) -> bool {
+        self.physical.uri().is_some_and(|driver| driver.delivers_captions())
+    }
+
+    #[cfg(not(feature = "uri-captions"))]
+    #[inline(always)]
+    pub fn uri_delivers_captions(&self) -> bool { false }
+
+    /// Forget the caption source of the subtitle the app draws for the URI driver (a pick, Off, a new attempt).
+    #[cfg(not(feature = "uri-captions"))]
+    fn clear_uri_captions(&mut self) {}
+
+    #[cfg(feature = "uri-captions")]
+    fn clear_uri_captions(&mut self) { self.uri_captions.clear(); }
+
+    #[cfg(feature = "uri-captions")]
+    fn deliver_uri_captions(&mut self, ps: &crate::route::PlaybackSession) {
+        let Some(driver) = self.physical.uri_mut().filter(|driver| driver.delivers_captions()) else { return };
+        let mut captions = std::mem::take(&mut self.uri_caption_inbox);
+        captions.clear();
+        driver.drain_captions(&mut captions);
+        if let (Some(route), false) = (self.uri_route_attempt, captions.is_empty()) {
+            self.uri_captions.deliver(route.contract_id(), crate::route::embedded_subtitle_drawn_by_app(ps),
+                super::playpos_ns(ps), &captions);
+        }
+        captions.clear();
+        self.uri_caption_inbox = captions;
+    }
+
     pub fn select_uri_subtitle(&mut self, ps: &mut crate::route::PlaybackSession,
         ordinal: i32, stream_id: i64, has_sidecar: bool,
         memo: Option<plx_plex::plex::session::prefs::SubtitleMemo>) -> Option<bool> {
         if ps.attempt_view().backend() != Some(super::attempt_view::Backend::Uri) { return None; }
-        // Off and external sidecars have no confirmed native operation in this transport.
+        // An external sidecar has no native operation in this transport. Off has one only on a driver whose pipeline
+        // draws nothing of its own and hands its cues to the app: there Off is the app no longer drawing them.
         let Ok(id) = u64::try_from(stream_id) else { return Some(false); };
-        if id == 0 || ordinal < 0 || has_sidecar { return Some(false); }
+        if has_sidecar { return Some(false); }
+        let choice = if id == 0 {
+            let off_carried = self.uri_delivers_captions() && self.physical.uri().is_some_and(|driver|
+                driver.capabilities(BackendKind::Uri).is_some_and(|caps| caps.subtitle_off));
+            if !off_carried { return Some(false); }
+            plx_playback_contract::TrackChoice::Off
+        } else if ordinal < 0 {
+            return Some(false);
+        } else {
+            plx_playback_contract::TrackChoice::Selected(id)
+        };
+        let ordinal = if id == 0 { -1 } else { ordinal };
         let Some(route_attempt) = self.uri_route_attempt else { return Some(false); };
         self.refused_uri_subtitle = None;
         let attempt = route_attempt.contract_id();
-        let operation = Operation::SelectTrack { kind: plx_playback_contract::TrackKind::Subtitle,
-            choice: plx_playback_contract::TrackChoice::Selected(id) };
+        let operation = Operation::SelectTrack { kind: plx_playback_contract::TrackKind::Subtitle, choice };
         let result = self.backend_send_at(ps, Intent::Control { backend: BackendKind::Uri, attempt,
             operation },
             super::attempt_metrics::Origin::Fresh, self.backend_tick());
@@ -1190,6 +1292,12 @@ impl PlayerAdapter {
         offer: QualifiedUriOffer) -> Result<(), Failure> {
         if self.physical.uri().is_none() { return Err(Failure::Unavailable); }
         if crate::route::is_preview(ps) { return Err(Failure::Unsupported); }
+        // A certified selected subtitle is drawn by the app from the driver's cues (the plan gave it a render
+        // ordinal): a driver that hands none over cannot carry it.
+        if matches!(offer.requirements.subtitle_track, plx_playback_contract::TrackChoice::Selected(_))
+            && !self.uri_delivers_captions() {
+            return Err(Failure::Unsupported);
+        }
         if offer.selection != ps.uri_selection()
             || crate::route::pending_route_start() != Some(offer.route_start)
             || offer.expires_at <= std::time::Instant::now() {
@@ -1287,6 +1395,7 @@ impl PlayerAdapter {
         self.pending_uri_subtitle = None;
         self.refused_uri_audio = None;
         self.refused_uri_subtitle = None;
+        self.clear_uri_captions();
     }
 
     /// A foreground restore owes a re-resolve of the parked URI original at `resume_ns` (the Sans-IO request: the app's
@@ -1523,8 +1632,33 @@ impl PlayerAdapter {
                                 && u64::try_from(pending.stream_id).ok() == Some(id)) {
                         let pending = self.pending_uri_subtitle.take().expect("matched URI subtitle pick");
                         self.refused_uri_subtitle = None;
+                        let app_draws = self.uri_delivers_captions();
                         crate::route::confirm_uri_subtitle_pick(ps, pending.ordinal,
-                            pending.stream_id, pending.memo);
+                            pending.stream_id, pending.memo, app_draws);
+                        if app_draws {
+                            // The cues of the new track are drawn at its ordinal from a fresh source.
+                            self.clear_uri_captions();
+                            super::request_subtitle(pending.ordinal);
+                        }
+                    }
+                }
+                // Only a driver that hands its cues over carries Off (`select_uri_subtitle`), so only a build with one has
+                // an Off to settle.
+                #[cfg(feature = "uri-captions")]
+                plx_playback_contract::Fx::AcceptedTrackSettled {
+                    backend: BackendKind::Uri, attempt, command,
+                    kind: plx_playback_contract::TrackKind::Subtitle,
+                    choice: plx_playback_contract::TrackChoice::Off,
+                } => {
+                    // Only the viewer's own Off (a pending pick); the startup plan's Off settles nothing here.
+                    if self.uri_route_attempt.is_some_and(|route| route.contract_id() == attempt)
+                        && self.pending_uri_subtitle.as_ref().is_some_and(|pending|
+                            pending.attempt == attempt && pending.command == command && pending.stream_id == 0) {
+                        let pending = self.pending_uri_subtitle.take().expect("matched URI subtitle Off");
+                        self.refused_uri_subtitle = None;
+                        crate::route::confirm_uri_subtitle_pick(ps, -1, 0, pending.memo, false);
+                        self.clear_uri_captions();
+                        super::request_subtitle(-1);
                     }
                 }
                 plx_playback_contract::Fx::CommandRefused {
@@ -1590,6 +1724,7 @@ impl PlayerAdapter {
                 _ => {}
             }
         }
+        self.deliver_uri_captions(ps);
         if let Some(attempt) = failed_startup.filter(|attempt|
             self.uri_route_attempt.is_some_and(|route| route.contract_id() == *attempt)) {
             // The common startup verdict alone distinguishes mandatory initial selection,
@@ -2509,6 +2644,30 @@ mod uri_stop_refusal_tests {
             "a rejected Stop cannot suppress a later physical failure report");
         assert!(!adapter.release_busy(), "no native release began");
         assert!(!adapter.release_has_queued_start(), "no successor was admitted");
+    }
+
+    /// **A URI play that reached its end leaves no end of stream for the next play to find.** The URI
+    /// twin of `engine.rs`'s `a_stopped_play_leaves_no_end_of_stream_for_the_deferred_replay_to_find`.
+    /// The service's `Ended` stands in the attempt view, and only the next physical start replaces
+    /// it. The next play's player page mounts while its resolve is still in flight, so if the stop
+    /// left `ended` standing, the loop's end-of-stream rule (`app::run::playback_tick`: player page
+    /// up and `ended` true) exits that page at once, and every play after it, until a relaunch.
+    #[test]
+    fn a_stopped_uri_play_leaves_no_end_of_stream_for_the_next_play_to_find() {
+        let _serial = plx_base::testlock::serial();
+        let mut adapter = PlayerAdapter::new_fed(unsafe { MainThread::assume() });
+        let route = crate::route::RouteStartAttempt::fixture();
+        adapter.uri_route_attempt = Some(route);
+        let mut ps = crate::route::PlaybackSession::default();
+        ps.begin_attempt_view(route, super::super::attempt_view::Backend::Uri);
+        adapter.publish_uri_observation(&mut ps, route.contract_id(), Observation::Playback(
+            Observed { value: Playback::Ended, from: EvidenceSource::BackendReport }));
+        assert_eq!(crate::player::ended(&ps), Some(true), "PRECONDITION FAILED: the title has ended");
+        // The service closed its session at the end; the attempt is no longer bound to the route.
+        adapter.uri_route_attempt = None;
+        crate::player::stop_playback(&mut ps, &mut adapter);
+        assert_ne!(crate::player::ended(&ps), Some(true),
+            "the finished URI play's end of stream outlived its stop: the next play's page would exit at once");
     }
 }
 

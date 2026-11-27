@@ -2,6 +2,7 @@
 //! Button, CircleButton, TabPill, TransportButton, PageDots, Badge, plus the shared art-card
 //! core (`card`/`draw_card`) and the poster-resolve helper. (Multi-line text wrapping
 //! now lives in the `TextView` primitive in `text_view.rs`.)
+use crate::art_fit::{place, ArtFit, Derive, Ink, Placement};
 use crate::hstack::{Align as StackAlign, HStack, Item as HItem};
 use crate::vstack::{Anchor as VAnchor, VStack};
 use crate::label::{HAlign, Label, VAlign};
@@ -138,7 +139,7 @@ pub fn declare_chrome_glass_for_test(p: Painter, rects: &[Rect]) {
 /// Which ground a popover panel stands on — the caller's explicit, per-call choice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ground {
-    /// A MENU (Sort & Filter, the account menu, the item hold menu): glass on the frozen ground
+    /// A MENU (Sort & Filter, the account menu, the item hold menu, Live TV's number entry): glass on the frozen ground
     /// (`popover_glass`: a frost of the host snapshot, the latched field as its fallback body, and
     /// the snapshot itself for the rim), the latched-field ground only when there is nothing frozen
     /// to stand on.
@@ -171,8 +172,9 @@ pub enum Ground {
 /// Never a blank, and never the frost alone — [`theme::PANEL_FROST_TOP`] is only legal over the
 /// field it is frosting.
 ///
-/// **DS6 put glass back on MENUS, and only menus** (owner decision, wave 2 review): the caller
-/// states which ground it wants with a [`Ground`], per call, and there is no global switch.
+/// **DS6 put glass back on MENUS, and only menus** (owner decision, wave 2 review; Live TV's number entry joined them
+/// on 2026-11-27, glass while on the GUI): the caller states which ground it wants with a [`Ground`], per call, and
+/// there is no global switch. A menu is never glass on a video-plane frame (`popover_glass::draw_shadowed`).
 /// [`Ground::Menu`] runs `popover_glass::draw` first and wins whenever the field is latched; that
 /// glass stands on frozen pictures (the host's frost of the page for its body, this field as the
 /// body's fallback, and the host snapshot for its rim) and reads no framebuffer either. Everything described above is the ground of [`Ground::Sheet`]
@@ -336,7 +338,7 @@ pub fn warm_tex_on(
     h: c_int,
     png: c_int,
 ) -> crate::tex::Warm {
-    crate::tex::warm_on(srv, path, w, h, png != 0)
+    crate::tex::warm_on(srv, path, w, h, png != 0, None)
 }
 
 /// Source art for a [`card`]: a catalog poster (resolved 250×375, dark gradient skeleton), any
@@ -377,6 +379,16 @@ pub enum Art<'a> {
         key: &'a str,
         res: (c_int, c_int),
     },
+    /// **A Live TV channel's tile**: its logo, contained on a flat plate with the channel number
+    /// at the corner (`channel_tile`). The logo is a transparent PNG, so it is asked for as one
+    /// ([`ArtRequest::png`]); `name` is what stands in the logo's place when the channel has none.
+    /// `sid` is the raw id of the server that holds the logo, as every variant carries.
+    Channel {
+        sid: u16,
+        logo: &'a str,
+        number: &'a str,
+        name: &'a str,
+    },
 }
 
 impl Art<'_> {
@@ -393,6 +405,7 @@ impl Art<'_> {
             Self::Still(Some(m)) => (m.owner, m.src, still_key(m), 1),
             Self::Thumb { sid, key, .. } => (key.as_ptr() as usize, *sid, *key, 2),
             Self::Person { sid, key, .. } => (key.as_ptr() as usize, *sid, *key, 3),
+            Self::Channel { sid, logo, .. } => (logo.as_ptr() as usize, *sid, *logo, 4),
             Self::Poster(None) | Self::Still(None) => return None,
         };
         let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -911,7 +924,7 @@ pub fn art_uv(art: &Art, tw: f32, th: f32, r: Rect) -> [f32; 4] {
 pub fn art_crop(art: &Art) -> crate::Crop {
     match art {
         Art::Person { .. } => crate::Crop::Headshot,
-        Art::Poster(_) | Art::Still(_) | Art::Thumb { .. } => crate::Crop::Centre,
+        Art::Poster(_) | Art::Still(_) | Art::Thumb { .. } | Art::Channel { .. } => crate::Crop::Centre,
     }
 }
 
@@ -924,12 +937,18 @@ pub struct ArtImage {
     pub tex: u32,
     pub w: f32,
     pub h: f32,
+    /// The texture of the picture's blurred copy ([`crate::tex::Decoded::backdrop`]) when it came
+    /// with one, else 0: what a tile that CONTAINS its art ([`crate::art_fit::ArtFit`]) draws behind it.
+    pub backdrop: u32,
+    /// The bounding box of the picture's ink ([`crate::tex::Decoded::ink`]) when its request asked for
+    /// one ([`Derive::INK`]: a channel's logo), else `None`: what a tile sizes the MARK by, not the canvas.
+    pub ink: Option<Ink>,
     pub shown: f32,
 }
 
 impl ArtImage {
     /// No texture: the skeleton (or ground) is the whole picture.
-    pub const NONE: ArtImage = ArtImage { tex: 0, w: 0.0, h: 0.0, shown: 1.0 };
+    pub const NONE: ArtImage = ArtImage { tex: 0, w: 0.0, h: 0.0, backdrop: 0, ink: None, shown: 1.0 };
 }
 
 /// A not-yet-loaded skeleton falls back to a rimmed fill (no shadow until the art arrives).
@@ -944,30 +963,69 @@ impl ArtImage {
 /// first, [`lead_card_art`]) resolves here once and hands the result to [`card_named_led`], never
 /// calls this twice.
 pub fn resolve_card_art(p: Painter, rect: Rect, art: &Art<'_>) -> ArtImage {
+    resolve_card_art_fitted(p, rect, art, ArtFit::Cover)
+}
+
+/// [`resolve_card_art`] for a tile that draws its art under `fit`: the request names the blurred copy
+/// that fit contains over ([`ArtFit::derive_request`]), and the answer carries it ([`ArtImage::backdrop`]).
+pub fn resolve_card_art_fitted(p: Painter, rect: Rect, art: &Art<'_>, fit: ArtFit) -> ArtImage {
     if p.is_recording() { return ArtImage::NONE; }
     let admission = art.motion_identity()
         .map(|id| crate::card_motion::Scope::card(id, p.to_screen(rect).0));
-    let (tex, w, h) = card_art_request(art).map_or((0, 0.0, 0.0), |(srv, path, w, h)| resolve_tex_wh_on(srv, path, w, h, 0));
+    let crate::tex::ArtTex { id: tex, w, h, backdrop, ink } = card_art_request_fitted(art, fit)
+        .map_or(crate::tex::ArtTex::default(), |q| crate::tex::resolve_art_on(q.srv, q.path, q.w, q.h, q.png, q.derive));
     #[cfg(feature = "devtriggers")]
     {
         crate::card_motion_metrics::draw(tex != 0);
-        if let Some((srv, path, w, h)) = card_art_request(art) {
-            crate::card_probe::art(srv, path, w, h, tex != 0);
+        if let Some(q) = card_art_request_fitted(art, fit) {
+            crate::card_probe::art(q.srv, q.path, q.w, q.h, tex != 0);
         }
     }
     let shown = admission.as_ref().map_or(1.0, |scope| scope.arrival(tex != 0));
-    ArtImage { tex, w, h, shown }
+    ArtImage { tex, w, h, backdrop, ink, shown }
 }
 
-/// The `(server, path, width, height)` [`resolve_card_art`] asks the source for, for a screen that
-/// must WARM exactly that key (the Library's at-rest lookahead). [`resolve_card_art`] resolves
-/// through this, so the two cannot name different keys; `screens/src/library/lookahead_tests.rs::the_lookahead_asks_for_the_key_the_card_draw_resolves` pins it. `None` for an empty slot.
-pub fn card_art_request<'a>(art: &Art<'a>) -> Option<(u16, &'a str, c_int, c_int)> {
-    Some(match art {
-        Art::Poster(m) => { let m = (*m)?; (m.src, m.thumb, POSTER_RES.0, POSTER_RES.1) }
-        Art::Still(m) => { let m = (*m)?; (m.src, still_key(&m), STILL_RES.0, STILL_RES.1) }
-        Art::Thumb { sid, key, res } | Art::Person { sid, key, res } => (*sid, *key, res.0, res.1),
-    })
+/// What [`resolve_card_art`] asks the image source for: the server, the path on it, the size, whether
+/// the picture is wanted as a PNG (a logo with a transparent ground; everything else is a JPEG), and
+/// what the tile that draws it wants derived from it, if anything: the blurred copy it will contain it
+/// over, or the ink box it will size it by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArtRequest<'a> {
+    pub srv: u16,
+    pub path: &'a str,
+    pub w: c_int,
+    pub h: c_int,
+    pub png: bool,
+    /// What to derive and deliver with the picture: a poster's blurred copy under a fit that contains
+    /// ([`ArtFit::derive_request`]), or a channel logo's ink box ([`Derive::INK`]).
+    pub derive: Option<Derive>,
+}
+
+/// What [`resolve_card_art`] asks the source for, for a screen that must WARM exactly that key (the
+/// Library's at-rest lookahead). [`resolve_card_art`] resolves through this, so the two cannot name
+/// different keys; `screens/src/library/lookahead_tests.rs::the_lookahead_asks_for_the_key_the_card_draw_resolves`
+/// pins it. `None` for an empty slot.
+pub fn card_art_request<'a>(art: &Art<'a>) -> Option<ArtRequest<'a>> {
+    card_art_request_fitted(art, ArtFit::Cover)
+}
+
+/// [`card_art_request`] for a tile that draws its art under `fit`: a POSTER's request names the
+/// blurred copy `fit` contains over, and a CHANNEL's its logo's ink box ([`Derive::INK`]); no other
+/// art asks for anything (a still, a headshot are never contained, whatever the row says). A screen that warms art for a row warms with the row's `fit`,
+/// so the warm and the draw name one key.
+pub fn card_art_request_fitted<'a>(art: &Art<'a>, fit: ArtFit) -> Option<ArtRequest<'a>> {
+    let (srv, path, (w, h), png) = match art {
+        Art::Poster(m) => { let m = (*m)?; (m.src, m.thumb, POSTER_RES, false) }
+        Art::Still(m) => { let m = (*m)?; (m.src, still_key(&m), STILL_RES, false) }
+        Art::Thumb { sid, key, res } | Art::Person { sid, key, res } => (*sid, *key, *res, false),
+        Art::Channel { sid, logo, .. } => (*sid, *logo, channel_tile::LOGO_RES, true),
+    };
+    let derive = match art {
+        Art::Poster(_) => fit.derive_request(),
+        Art::Channel { .. } => Some(Derive::INK),
+        _ => None,
+    };
+    Some(ArtRequest { srv, path, w, h, png, derive })
 }
 
 /// The name a poster card draws on the neutral collection tile, when it draws one: a collection
@@ -984,9 +1042,11 @@ pub fn card(p: Painter, frame: Rect, art: Art, rad: f32, focused: bool, scale: f
 /// at the rect it would resolve at (`frame` scaled by `scale` for a focused card), so the card's
 /// one motion occurrence is this call's. The source serves the newest frame's requests in the
 /// order they were made, so a card painted last (the focused one) that asks first gets its poster
-/// first.
-pub fn lead_card_art(p: Painter, frame: Rect, art: &Art<'_>, focused: bool, scale: f32) -> ArtImage {
-    resolve_card_art(p, if focused { frame.scaled(scale) } else { frame }, art)
+/// first. `fit` is the tile's own ([`RowStyle::fit`](crate::card_row::RowStyle::fit)): the led answer
+/// is the tile's ONLY resolve this frame, so it must name the key (picture and copy) the tile draws
+/// with, or a contained tile would be led a picture without its copy and take a second slot.
+pub fn lead_card_art(p: Painter, frame: Rect, art: &Art<'_>, focused: bool, scale: f32, fit: ArtFit) -> ArtImage {
+    resolve_card_art_fitted(p, if focused { frame.scaled(scale) } else { frame }, art, fit)
 }
 
 /// [`card`] for a caller whose art is a bare path to a collection's thumb and who knows the
@@ -1013,13 +1073,57 @@ pub fn card_named(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>, rad
 #[allow(clippy::too_many_arguments)]
 pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>, rad: f32, focused: bool,
     scale: f32, f: f32, led: Option<ArtImage>) {
+    card_fitted(p, frame, art, fan_name, rad, focused, scale, f, led, ArtFit::Cover)
+}
+
+/// Paint a poster tile's picture `t` (and its backdrop `backdrop`, 0 for none: a blurred copy, or a
+/// flat ground for a picture with transparency) as `placement` decided, in the tile `r`: ONE card pass
+/// for a covered picture; for a contained one the backdrop is the card (rounded coverage, shadow,
+/// sheen, pop) over the whole tile and the picture is laid whole in `inner` with square corners (it
+/// touches the tile only along straight edges: a square or 16:9 never reaches a corner, and `place`
+/// covers anything near enough to the tile's shape to).
+///
+/// `p` is the tile's painter and `pa` the same under the late-arrival fade ([`ArtImage::shown`]).
+/// **The fade belongs to the card.** Two layers each drawn at the fade would composite to
+/// `1 - (1 - shown)^2` inside the picture's box, ahead of its own backdrop, so a resting tile fades the
+/// BACKDROP card in (over the skeleton it replaces) and lays the picture at full alpha over it; a
+/// focused tile is one pass, which fades as the one surface it is.
+///
+/// A FOCUSED contained tile (`f > 0`) composes both layers INSIDE the one card pass
+/// ([`Painter::tex_carded_inset`]): the card's rim glow, sheen crown and gloss ramp are that pass's,
+/// and a second quad over it would paint over them inside its box. At rest there is no glow, crown or
+/// gloss to lose and two plain quads are the cheaper program; the picture's square edge does cover the
+/// constant 1px sheen along the sides where it touches the tile.
+#[allow(clippy::too_many_arguments)]
+fn paint_poster_art(p: Painter, pa: Painter, placement: Placement, t: u32, backdrop: u32, r: Rect, rad: f32, f: f32) {
+    match placement {
+        Placement::Cover { uv } => pa.tex_carded(t, uv, r, rad, theme::TINT_WHITE, f),
+        Placement::Contained { inner, backdrop_uv } => {
+            if !pa.tex_carded_inset(backdrop, backdrop_uv, t, inner, r, rad, f) {
+                pa.tex_carded(backdrop, backdrop_uv, r, rad, theme::TINT_WHITE, f);
+                p.tex(t, inner, 0.0, theme::TINT_WHITE);
+            }
+        }
+    }
+}
+
+/// [`card_named_led`] for a row that declares how its art meets the tile ([`RowStyle::fit`], which
+/// `card_row`'s tile draws pass). Only a poster's art is fitted: [`ArtFit::ContainOnBlur`] contains a
+/// picture that is not within [`crate::art_fit::POSTER_FIT_TOLERANCE`] of the tile's shape over its own
+/// blurred copy ([`crate::art_fit::place`]); every other art, and a poster that came without a
+/// copy, is covered as it always was.
+#[allow(clippy::too_many_arguments)]
+pub fn card_fitted(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>, rad: f32, focused: bool,
+    scale: f32, f: f32, led: Option<ArtImage>, fit: ArtFit) {
+    #[cfg(any(test, feature = "test-support"))]
+    crate::draw_census::note_fit(fit);
     // Text prewarming visits an offscreen page. This leaf has no text: starting
     // image work here would bypass on-screen admission, and pollute its history.
     if p.is_recording() { return; }
     let r = if focused { frame.scaled(scale) } else { frame };
     // All card variants resolve inside their final placement scope. Neither the
     // screen nor its springs can forget to report a new positional expression.
-    let image = led.unwrap_or_else(|| resolve_card_art(p, r, &art));
+    let image = led.unwrap_or_else(|| resolve_card_art_fitted(p, r, &art, fit));
     // Art that landed late dissolves in over the skeleton the card wore until now: the texture is
     // drawn at `shown` and the placeholder underneath it (uncounted: the art is here).
     let shown = image.shown;
@@ -1033,7 +1137,7 @@ pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>,
             // also re-pointed `current`; the moment that stopped, the Library grid of a friend's
             // library drew skeletons for most tiles and OUR films for the few ratingKeys that
             // happen to collide — both servers number from 1, so collisions are the normal case.
-            let ArtImage { tex: t, w: tw, h: th, .. } = image;
+            let ArtImage { tex: t, w: tw, h: th, backdrop, .. } = image;
             if let Some(name) = neutral_collection_name(m.as_ref()) {
                 // A collection with no artwork of its own: nothing will ever resolve, so a skeleton
                 // would read as loading forever. It wears its mark and name instead, and no state
@@ -1043,7 +1147,7 @@ pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>,
             }
             if t != 0 {
                 if shown < 1.0 { crate::placeholder::skeleton_under(p, r, rad); }
-                pa.tex_carded(t, art_uv(&art, tw, th, r), r, rad, theme::TINT_WHITE, f);
+                paint_poster_art(p, pa, place(fit, art_crop(&art), tw, th, r, backdrop != 0), t, backdrop, r, rad, f);
                 // A collection whose thumb is the server's composite is drawn as our baked fan,
                 // which leaves its name to be set live — on every tile, focused or not.
                 if let Some(m) = m.filter(|m| m.kind == TileKind::Collection && m.composite_thumb) {
@@ -1143,6 +1247,7 @@ pub fn card_named_led(p: Painter, frame: Rect, art: Art, fan_name: Option<&str>,
             // it too.
             let _ = m;
         }
+        Art::Channel { sid, logo, number, name } => channel_tile::draw(p, frame, r, rad, f, &channel_tile::Face { sid, logo, number, name }, image),
         Art::Person { key, .. } => {
             let ArtImage { tex: t, w: tw, h: th, .. } = image;
             if t != 0 {
@@ -1330,6 +1435,9 @@ const VEIL_TEX_PX: usize = 64;
 /// identical on every platform this targets), written once on the 0→nonzero transition below and
 /// read everywhere else — the same shape the diagnostic counters already uses in this file.
 static VEIL_TEX: AtomicU32 = AtomicU32::new(0);
+/// The same falloff mirrored to peak at the TOP-LEFT corner ([`versions_mark`]'s). `tex_uv` reads a
+/// reversed window as a zero-width crop, not a flip, so the mirror is its own texture.
+static VEIL_TEX_LEFT: AtomicU32 = AtomicU32::new(0);
 
 /// The corner **veil** texture: white RGB with a radial alpha falloff peaking at the TOP-RIGHT
 /// corner, generated once and reused at every size. It is a texture rather than geometry because the
@@ -1341,7 +1449,15 @@ static VEIL_TEX: AtomicU32 = AtomicU32::new(0);
 /// gets the tile's own silhouette for free — the veil's other three corners live in fully
 /// transparent territory, so rounding them changes nothing.
 fn veil_tex() -> std::os::raw::c_uint {
-    let cached = VEIL_TEX.load(Relaxed);
+    veil_tex_at(&VEIL_TEX, false)
+}
+
+fn veil_tex_left() -> std::os::raw::c_uint {
+    veil_tex_at(&VEIL_TEX_LEFT, true)
+}
+
+fn veil_tex_at(slot: &AtomicU32, mirrored: bool) -> std::os::raw::c_uint {
+    let cached = slot.load(Relaxed);
     if cached != 0 {
         return cached;
     }
@@ -1350,7 +1466,7 @@ fn veil_tex() -> std::os::raw::c_uint {
     for y in 0..n {
         for x in 0..n {
             // distance from the top-right corner, in units of the box's width
-            let dx = (n - 1 - x) as f32 / (n - 1) as f32;
+            let dx = (if mirrored { x } else { n - 1 - x }) as f32 / (n - 1) as f32;
             let dy = y as f32 / (n - 1) as f32;
             let a = (1.0 - (dx * dx + dy * dy).sqrt() / VEIL_EXTENT).clamp(0.0, 1.0);
             let i = (y * n + x) * 4;
@@ -1361,7 +1477,7 @@ fn veil_tex() -> std::os::raw::c_uint {
         }
     }
     let tex = plx_gfx::gfx::upload_rgba(0, n as std::os::raw::c_int, n as std::os::raw::c_int, px.as_ptr());
-    VEIL_TEX.store(tex, Relaxed);
+    slot.store(tex, Relaxed);
     tex
 }
 
@@ -1390,10 +1506,7 @@ pub fn corner_mark(p: Painter, card: Rect, rad: f32, icon: crate::icons::Icon) {
         rad,
         theme::TILE_MARK_VEIL,
     );
-    // Quantized to 4px so the focus pop reuses a handful of cached masks instead of rasterizing +
-    // uploading one per rounded pixel, and proportional to the DRAWN tile so the mark rides the pop.
-    let d = ((card.w * TICK_RATIO) / 4.0).round() * 4.0; // 24px on a 250 card (26 → nearest rung)
-    let ins = card.w * TICK_INSET;
+    let (d, ins) = tick_box(card.w);
     let tick = Rect::new(card.x + card.w - ins - d, card.y + ins, d, d);
     p.shadow(
         tick,
@@ -1403,6 +1516,65 @@ pub fn corner_mark(p: Painter, card: Rect, rad: f32, icon: crate::icons::Icon) {
         theme::TILE_MARK_SHADOW,
     );
     crate::icons::draw(p, icon, tick, theme::TILE_MARK_INK);
+}
+
+/// The tick's box and corner inset for a tile `w` wide. Quantized to 4px so the focus pop reuses a
+/// handful of cached masks instead of rasterizing + uploading one per rounded pixel, and
+/// proportional to the DRAWN tile so the mark rides the pop. 24px / 12px on a 250 card (26 → the
+/// nearest rung).
+fn tick_box(w: f32) -> (f32, f32) {
+    (((w * TICK_RATIO) / 4.0).round() * 4.0, w * TICK_INSET)
+}
+
+/// The least version count that earns [`versions_mark`]: one file is the normal case and says nothing.
+pub const VERSIONS_MARK_MIN: usize = 2;
+
+/// **The versions mark** on an episode still (VER-7 D3 E): the overlapping-sheets glyph and the file
+/// count as a numeral, `⧉ 2`, at the TOP-LEFT of the still, where the official app puts it. It is
+/// the watched tick's own object, mirrored: the same veil texture (flipped to the left corner), the
+/// same inset, glyph box and soft shadow ([`tick_box`]), the same ink, and a numeral in the caption
+/// face the still's footer is set in. No new colour or token.
+///
+/// `count` is the episode's number of files; under [`VERSIONS_MARK_MIN`] nothing is drawn. `card` is
+/// the rect actually drawn (scaled while popped) and `rad` its corner radius. `unit_w` is the width
+/// the mark's ratios are taken on: a 250 tile for a poster, so a wider still carries a mark of the
+/// same physical size (`CARD_W`, scaled with the pop) instead of a 44px glyph. Returns whether it
+/// drew.
+pub fn versions_mark(
+    p: Painter,
+    card: Rect,
+    rad: f32,
+    unit_w: f32,
+    count: usize,
+    measure: &dyn plx_machine::machine::Measure,
+) -> bool {
+    if count < VERSIONS_MARK_MIN {
+        return false;
+    }
+    let v = unit_w * VEIL_RATIO;
+    // The tick's veil mirrored, its peak at the TOP-LEFT corner. A recording painter submits
+    // nothing, so it must not upload the texture either (no GL context).
+    let veil = if p.is_recording() { 0 } else { veil_tex_left() };
+    p.tex(
+        veil,
+        Rect::new(card.x, card.y, v, v),
+        rad,
+        theme::TILE_MARK_VEIL,
+    );
+    let (d, ins) = tick_box(unit_w);
+    let glyph = Rect::new(card.x + ins, card.y + ins, d, d);
+    let sz = theme::size::CAPTION;
+    let text = count.to_string();
+    let (run, w) = measure.fit_line_measured(&text, v, sz, false);
+    let gap = theme::space::XS * 0.5;
+    // One shadow under glyph and numeral together, the tick's own (`corner_mark`).
+    let pill = Rect::new(glyph.x, glyph.y, d + gap + w, d);
+    p.shadow(pill, d * 0.5, d * TICK_SHADOW_BLUR, d * TICK_SHADOW_DY, theme::TILE_MARK_SHADOW);
+    crate::icons::draw(p, crate::icons::Icon::Collection, glyph, theme::TILE_MARK_INK);
+    let (cap_t, cap_b) = plx_gfx::text::text_cap_band(sz, 0);
+    let y = glyph.y + d * 0.5 - (cap_t + cap_b) * 0.5;
+    p.text(run.as_ptr(), glyph.x + d + gap, y, sz, theme::TILE_MARK_INK, 0, 0);
+    true
 }
 
 /// Person-glyph box as a fraction of a headshot tile — the [`Art::Person`] fallback's one ratio.
@@ -3023,12 +3195,26 @@ pub struct ProfileChipRead<'a> {
     pub name_w: f32,
 }
 
+/// The bar's clock as the application captured it: the wall-clock face already worded in the
+/// television's clock style (`fmt::clock_face`) and its measured width. Rendering this view reads
+/// no clock and formats nothing; the owner re-captures it when the minute changes
+/// (`app::chrome::ChromeSnapshot::set_clock`).
+#[derive(Clone, Copy)]
+pub struct ClockRead<'a> {
+    pub text: &'a CStr,
+    pub w: f32,
+}
+
 /// The borrowed shared-chrome publication used by both its normal paint and a scrim lift.
+///
+/// `clock` is `None` only when the app has no wall time to show (no zone offset, a replay); the
+/// strip yields to the clock ([`TAB_CLOCK_CLEAR`]), the clock never to the strip.
 #[derive(Clone, Copy)]
 pub struct ChromeRead<'a> {
     pub profile: ProfileChipRead<'a>,
     pub labels: TabLabels<'a>,
     pub chip_expand: f32,
+    pub clock: Option<ClockRead<'a>>,
 }
 
 /// Measure and own the chip's two glyph runs when the application's captured profile changes, **or
@@ -4353,6 +4539,10 @@ pub fn art_wash_split(r: Rect, art: Rect) -> Option<(Rect, [Option<Rect>; 4])> {
     ))
 }
 
+/// A Live TV channel's tile face (a plate, a contained logo, the number): [`Art::Channel`]'s draw.
+#[path = "widgets_channel_tile.rs"]
+pub mod channel_tile;
+
 // ---- PageGround: the item-keyed ground a BROWSING screen stands on. ----
 
 /// **The page ground under a browsing surface** — one [`AmbientWash`] dissolving toward the colours
@@ -4937,10 +5127,14 @@ impl<'a> StatusOverlay<'a> {
         self.focus = i;
         self
     }
-    /// The first two controls' focus pop, normally `[pop.scale(0), pop.scale(1)]`; any `extra`
-    /// control keeps 1.0.
-    pub fn scales(mut self, s: [f32; 2]) -> Self {
-        self.scales[..2].copy_from_slice(&s);
+    /// The first controls' focus pop, normally `[pop.scale(0), pop.scale(1), ..]` for a row whose
+    /// `CtlPop` has as many slots as the row has controls (at most [`STATUS_ROW_MAX`]); a control
+    /// past those given keeps 1.0.
+    pub fn scales<const N: usize>(mut self, s: [f32; N]) -> Self {
+        debug_assert!(N <= STATUS_ROW_MAX, "a read-out row holds at most {STATUS_ROW_MAX} controls");
+        for (slot, scale) in self.scales.iter_mut().zip(s) {
+            *slot = scale;
+        }
         self
     }
     /// How far the read-out's ink reaches ABOVE the frame centre: the spinner ring plus its dots
@@ -6914,12 +7108,56 @@ pub const TOP_BAR_BOTTOM: f32 = TOP_BAR_Y + TAB_PILL_H + TAB_TRACK_PAD; // 130
 /// context margin, exactly as the season tabs use their advance.
 const TAB_GAP: f32 = 16.0;
 /// How wide the pill strip may grow before it starts scrolling. The row stays CENTERED, but it
-/// must never reach the profile chip (a focus stop of its own at `MARGIN_X`), so the viewport is
-/// the screen less a symmetric chip-clearing margin, less the track's own inset on both ends. The
+/// must never reach the profile chip (a focus stop of its own at `MARGIN_X`) NOR the bar's clock
+/// at the other end, so the viewport is the screen less a symmetric clearing margin (the wider of
+/// the two ends' needs, [`TAB_SIDE_CLEAR`]), less the track's own inset on both ends. The
 /// track stays glass while the pills scroll inside it ([`tab_glass_on`]): the width never decides
 /// the material.
-const TAB_SIDE_CLEAR: f32 = CHIP_FRAME.x + CHIP_D + theme::space::MD;
+const TAB_CHIP_CLEAR: f32 = CHIP_FRAME.x + CHIP_D + theme::space::MD;
+/// What the right end needs, from the screen's edge: the margin the clock's right edge stands on, the
+/// widest face it can wear ([`TOP_BAR_CLOCK_MAX_W`]) and [`BAND_AIR`] between it and the track. The strip
+/// yields to the clock (it scrolls past [`TAB_VIEW_MAX`]); the clock is never left out for the strip.
+const TAB_CLOCK_CLEAR: f32 = crate::consts::MARGIN_X + TOP_BAR_CLOCK_MAX_W + BAND_AIR;
+/// The centred track's clearance on both sides: the bar is symmetric, so the wider end sets it.
+const TAB_SIDE_CLEAR: f32 = if TAB_CLOCK_CLEAR > TAB_CHIP_CLEAR { TAB_CLOCK_CLEAR } else { TAB_CHIP_CLEAR };
 const TAB_VIEW_MAX: f32 = crate::consts::SCR_W - 2.0 * (TAB_SIDE_CLEAR + TAB_TRACK_PAD);
+
+/// **The bar's clock: a status, not a control** (Live TV handoff SPEC-1 item 2, "the clock goes in
+/// the TopBar on every screen"). Its right edge stands on the safe frame's right margin,
+/// [`crate::consts::MARGIN_X`] in from the screen's edge: the chip's mirror at the far end of the bar.
+pub const TOP_BAR_CLOCK_RIGHT: f32 = crate::consts::SCR_W - crate::consts::MARGIN_X;
+/// The clock's text size: BODY, regular, in [`theme::TEXT_SECONDARY`] (see [`draw_top_bar_clock`]).
+pub const TOP_BAR_CLOCK_SIZE: c_int = theme::size::BODY;
+/// **The widest face the clock can wear, in px at BODY regular**: the 12-hour face of the shipped
+/// language that words it longest, Spanish and Catalan "12:00 p. m." (U+202F around the "p. m."),
+/// measured at 146 with the shipped `appfont.ttf` across all 13 shipped languages (English 129,
+/// Portuguese 141; a 24-hour face is 80). Digits share one advance, so the hour and minute never
+/// change it. The strip's viewport is solved against this ([`TAB_CLOCK_CLEAR`]): the face is never
+/// elided and never left out. A face measured wider than this in a future language moves this
+/// constant and, with it, where the strip starts to scroll.
+pub const TOP_BAR_CLOCK_MAX_W: f32 = 146.0;
+
+/// **The clock's layout box** for a face `w` wide: its right edge on [`TOP_BAR_CLOCK_RIGHT`] and its
+/// height the bar's own pill row ([`TOP_BAR_Y`], [`TAB_PILL_H`]), so the face is centred on the bar
+/// the way a pill's label is (by the font's cap band, `Label`'s `VAlign::Middle`).
+pub fn top_bar_clock_frame(w: f32) -> Rect {
+    Rect::new(TOP_BAR_CLOCK_RIGHT - w, TOP_BAR_Y, w, TAB_PILL_H)
+}
+
+/// **Draw the bar's clock** on `p` (the bar's own painter, so the page's tuck, fade and lift carry
+/// it): BODY 28 regular in [`theme::TEXT_SECONDARY`], right-aligned on [`TOP_BAR_CLOCK_RIGHT`],
+/// centred on the bar, with the caption's soft text shadow (a 1 px offset copy: the glyph path has
+/// no blur). Tabular figures are the face's own (every digit shares one advance, as
+/// [`FIELD_KEY_W`] relies on), so a minute changing never moves the right-aligned run's left edge.
+/// Never focusable and never registers a stop.
+pub fn draw_top_bar_clock(p: Painter, clock: ClockRead<'_>) {
+    let frame = top_bar_clock_frame(clock.w);
+    let shadow = Rect::new(frame.x, frame.y + crate::caption_policy::CAPTION_SHADOW_DY, frame.w, frame.h);
+    Label::new(clock.text.as_ptr(), TOP_BAR_CLOCK_SIZE, crate::caption_policy::CAPTION_SHADOW)
+        .h(HAlign::Right)
+        .draw(p, shadow);
+    Label::new(clock.text.as_ptr(), TOP_BAR_CLOCK_SIZE, theme::TEXT_SECONDARY).h(HAlign::Right).draw(p, frame);
+}
 /// **The shared top bar's outermost drawn chrome, for the overscan audit**
 /// ([`crate::consts::SAFE`]) — the one band Home, the Library and Search all wear, i.e. the
 /// "main page" LG's checklist item #2 is about.
@@ -8820,6 +9058,11 @@ const BTN_RAIL_W: f32 = 64.0;
 const BTN_RAIL_H: f32 = 6.0;
 /// Total horizontal air a pill carries around its icon+label run.
 pub const BTN_PILL_AIR: f32 = 68.0;
+/// Total horizontal air of the inline-progress pill ([`Button::inline_progress`]), measured to the
+/// leading glyph's INK and the label: half of it each side. Tighter than [`BTN_PILL_AIR`] because a
+/// pill floored at a minimum width (Home's Resume) hands its slack to the rail rather than to the
+/// ends, so the glyph, rail and time fill the capsule instead of floating in it.
+const BTN_PROGRESS_AIR: f32 = 48.0;
 /// [`ControlStyle::Keyline`]'s stroke width (the design's 1.5 — same weight as [`keyline_chip`]'s).
 const BTN_KEYLINE_W: f32 = 1.5;
 
@@ -8972,27 +9215,50 @@ impl<'a> Button<'a> {
     }
 
     fn pill_w_from_advance(advance: f32, sz: c_int, icon: bool, trailing: Option<crate::icons::Icon>) -> f32 {
-        HStack::new(&Self::run_items(advance, sz, icon, trailing, false), BTN_ICON_GAP, StackAlign::Leading(0.0)).width()
+        HStack::new(&Self::run_items(advance, sz, icon, trailing), BTN_ICON_GAP, StackAlign::Leading(0.0)).width()
             + BTN_PILL_AIR
     }
 
     /// The pill's one run, which `draw` places and `pill_w_*` sizes: the leading icon's box, the
     /// label, and the trailing accessory standing by its INK. An accessory the pill does not carry
-    /// is ABSENT, so it leaves neither its width nor its gap.
-    fn run_items(advance: f32, sz: c_int, icon: bool, trailing: Option<crate::icons::Icon>, rail: bool) -> [HItem; 4] {
+    /// is ABSENT, so it leaves neither its width nor its gap. Slot 1 is the inline-progress rail's
+    /// ([`Button::progress_items`]), absent here, so `draw` reads both runs by the same indices.
+    fn run_items(advance: f32, sz: c_int, icon: bool, trailing: Option<crate::icons::Icon>) -> [HItem; 4] {
         let box_w = sz as f32 * BTN_ICON_RATIO;
         [
             if icon { HItem::new(box_w) } else { HItem::absent() },
-            if rail { HItem::new(BTN_RAIL_W) } else { HItem::absent() },
+            HItem::absent(),
             HItem::new(advance),
             trailing.map_or_else(HItem::absent, |acc| HItem::glyph(acc, box_w)),
         ]
     }
 
-    /// Width of the Play glyph, inline progress rail, and duration at this type size.
-    pub fn progress_pill_width(measure: &dyn plx_machine::machine::Measure, label: &std::ffi::CStr, sz: c_int) -> f32 {
-        let items = Self::run_items(measure.width(label, sz, true), sz, true, None, true);
-        HStack::new(&items, BTN_ICON_GAP, StackAlign::Leading(0.0)).width() + BTN_PILL_AIR
+    /// The natural width of the inline-progress pill: `icon` (placed by its ink), the rail at its
+    /// least width [`BTN_RAIL_W`], and the label, plus [`BTN_PROGRESS_AIR`]. A caller may floor it
+    /// at a minimum; [`Button::draw`] then stretches the rail, so the air stays this one value.
+    pub fn progress_pill_width(measure: &dyn plx_machine::machine::Measure, label: &std::ffi::CStr, sz: c_int,
+        icon: crate::icons::Icon) -> f32 {
+        let items = Self::progress_items(measure.width(label, sz, true), sz, Some(icon), BTN_RAIL_W);
+        HStack::new(&items, BTN_ICON_GAP, StackAlign::Leading(0.0)).width() + BTN_PROGRESS_AIR
+    }
+
+    /// The inline-progress pill's run: the leading glyph by its INK when it is a named icon (an SVG
+    /// has no ink table, so it stands by its box), the rail `rail_w` wide, and the label.
+    fn progress_items(advance: f32, sz: c_int, icon: Option<crate::icons::Icon>, rail_w: f32) -> [HItem; 4] {
+        let box_w = sz as f32 * BTN_ICON_RATIO;
+        [
+            icon.map_or_else(|| HItem::new(box_w), |i| HItem::glyph(i, box_w)),
+            HItem::new(rail_w),
+            HItem::new(advance),
+            HItem::absent(),
+        ]
+    }
+
+    /// The rail width that makes the progress run fill `frame_w` less [`BTN_PROGRESS_AIR`], never
+    /// under [`BTN_RAIL_W`]: the slack a minimum-width floor adds goes to the rail, not the ends.
+    fn progress_rail_w(frame_w: f32, advance: f32, sz: c_int, icon: Option<crate::icons::Icon>) -> f32 {
+        let run = HStack::new(&Self::progress_items(advance, sz, icon, BTN_RAIL_W), BTN_ICON_GAP, StackAlign::Leading(0.0)).width();
+        BTN_RAIL_W + (frame_w - BTN_PROGRESS_AIR - run).max(0.0)
     }
 
     /// Place a playback progress rail between the leading glyph and the label.
@@ -9176,11 +9442,19 @@ impl View for Button<'_> {
         // sizing the pill without the chevron and then drawing one would push the label off-centre.
         // The accessory stands by its INK, so the pill's right pad is measured to the mark itself.
         let isz = self.sz as f32 * BTN_ICON_RATIO;
-        let items = Self::run_items(tw, self.sz, self.icon.is_some() || self.svg.is_some(), self.trailing, self.inline_progress.is_some());
+        // The progress pill's run is its own: the glyph stands by its ink and the rail takes the
+        // frame's slack (`progress_rail_w`). The rail is sized off the LAID-OUT frame, so the pop
+        // grows the plate around a run that holds still, as every other pill's does.
+        let items = if self.inline_progress.is_some() {
+            let icon = if self.svg.is_some() { None } else { self.icon };
+            Self::progress_items(tw, self.sz, icon, Self::progress_rail_w(self.frame.w, tw, self.sz, icon))
+        } else {
+            Self::run_items(tw, self.sz, self.icon.is_some() || self.svg.is_some(), self.trailing)
+        };
         for span in HStack::new(&items, BTN_ICON_GAP, StackAlign::Centre(r.cx())).placed() {
             match span.i {
                 0 => {
-                    let rect = Rect::new(span.x, r.y + (r.h - isz) * 0.5, isz, isz);
+                    let rect = Rect::new(span.box_x, r.y + (r.h - isz) * 0.5, isz, isz);
                     if let Some(svg) = self.svg {
                         crate::icons::draw_svg(p, svg, rect, ink);
                     } else if let Some(icon) = self.icon {
@@ -9188,7 +9462,7 @@ impl View for Button<'_> {
                     }
                 }
                 1 => {
-                    let rail = Rect::new(span.x, r.cy() - BTN_RAIL_H * 0.5, BTN_RAIL_W, BTN_RAIL_H);
+                    let rail = Rect::new(span.x, r.cy() - BTN_RAIL_H * 0.5, span.w, BTN_RAIL_H);
                     let rad = BTN_RAIL_H * 0.5;
                     p.rrect(rail, rad, rad, theme::with_a(ink, 0.22));
                     let w = rail.w * self.inline_progress.unwrap_or_default();
@@ -9646,6 +9920,10 @@ mod test_support;
 mod tab_strip_geometry_tests;
 
 #[cfg(test)]
+#[path = "widgets_top_bar_clock_tests.rs"]
+mod top_bar_clock_tests;
+
+#[cfg(test)]
 #[path = "widgets_control_face_tests.rs"]
 mod control_face_tests;
 
@@ -9893,4 +10171,18 @@ fn button_progress_ring_uses_bounded_quadrants_and_leaves_the_default_face_uncha
     let plain = crate::draw_census::capture(|| make().draw(&Env::inert(), Painter::recording()));
     let zero = crate::draw_census::capture(|| make().progress_ring(0.0).draw(&Env::inert(), Painter::recording()));
     assert_eq!(plain, zero, "zero progress adds no geometry or alternate resting face");
+}
+
+/// A channel plate asks for its logo as a PNG (the transparent ground is the mark's), a poster for a JPEG.
+#[cfg(test)]
+#[test]
+fn a_channel_logo_is_requested_as_a_png_and_every_other_card_art_as_a_jpeg() {
+    let logo = Art::Channel { sid: 3, logo: "/logos/7.png", number: "7", name: "Seven" };
+    let asked = card_art_request(&logo).expect("a logo is asked for");
+    assert_eq!((asked.srv, asked.path, asked.png), (3, "/logos/7.png", true));
+    assert_eq!((asked.w, asked.h), channel_tile::LOGO_RES);
+    assert_eq!(asked.derive, Some(Derive::INK), "the plate sizes the mark by its ink, so the request asks for the box");
+    let thumb = card_art_request(&Art::Thumb { sid: 3, key: "/t/1", res: (10, 10) }).unwrap();
+    assert!(!thumb.png);
+    assert_eq!(card_art_request(&Art::Poster(None)), None);
 }

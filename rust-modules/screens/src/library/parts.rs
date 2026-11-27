@@ -487,8 +487,8 @@ impl GridPart {
         let rows = len.div_ceil(cols).min(self.layout.rows);
         for index in super::lookahead::candidates(painted, cols, rows, len, ahead, self.rest.forward()) {
             let Some(item) = view.item(index) else { continue };
-            let Some((srv, path, w, h)) = plx_ui::widgets::card_art_request(&grid_art(item)) else { continue };
-            if plx_ui::tex::warm_ahead_on(srv, path, w, h, false) != Warm::Known { return; }
+            let Some(q) = plx_ui::widgets::card_art_request_fitted(&grid_art(item), self.layout.style().fit) else { continue };
+            if plx_ui::tex::warm_ahead_on(q.srv, q.path, q.w, q.h, q.png, q.derive) != Warm::Known { return; }
         }
     }
 

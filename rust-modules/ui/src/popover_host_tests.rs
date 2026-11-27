@@ -1084,3 +1084,27 @@ fn a_reflowing_page_is_live_under_the_glass_and_the_host_is_retaken_once() {
     reflow_frame(&_reset.modal, "r-final", false);
     assert_eq!(counts().4, after, "no old-look quad once it is released");
 }
+
+/// **A menu glass is never drawn on a frame whose picture is the video plane**, whatever field is latched:
+/// what is behind is a hole, and a frozen picture of the page there would be served back over the video. The
+/// same panel, field and painter declare the frozen glass on a page frame and nothing on a video-plane frame
+/// (`popover_glass::draw_shadowed`'s guard).
+#[test]
+fn a_menu_glass_is_refused_on_a_video_plane_frame() {
+    use crate::popover_glass::tests::{declared_glass, latched, unlatch};
+    let _g = plx_base::testlock::serial();
+    let _reset = Reset::new(false);
+    let tex = 9_761;
+    let field = latched(tex);
+    let panel = crate::Rect::new(1380.0, 146.0, 316.0, 400.0);
+    let on = |plane: bool| {
+        let was = plx_gfx::gfx::set_video_plane_frame(plane);
+        let pop = crate::popover::Popover::new();
+        let glass = declared_glass(|| pop.panel(crate::Painter::root(), panel, RAD, Some(&field), crate::widgets::Ground::Menu));
+        plx_gfx::gfx::set_video_plane_frame(was);
+        glass.len()
+    };
+    assert_eq!(on(false), 1, "the premise: a page frame stands the glass");
+    assert_eq!(on(true), 0, "a video-plane frame is the sheet");
+    unlatch(tex);
+}

@@ -748,6 +748,12 @@ fn chrome_presented<H: Host>(navigation: super::screen::NavPresentation, screen:
     presented.chrome_drawn().then_some(presented)
 }
 
+/// **Does this page wear the shared bar?** The registry's answer (`ScreenArg::chrome()`) on a screen the
+/// engine drives: the one test the chrome pass, the strip's stops and [`Dispatcher::bar_presented`] share.
+fn wears_bar<H: Host>(arg: &H::Arg, screen: &dyn Screen<H>) -> bool {
+    arg.chrome() == plx_machine::machine::Chrome::TabBar && screen.focus_source() == FocusSource::Engine
+}
+
 pub struct Split<'a, H: Host> {
     pub mounter: &'a mut dyn Mounter<H>,
     pub views: H::Views<'a>,
@@ -1139,7 +1145,19 @@ where
         self.request_with_return(from, op, self.return_state());
     }
 
+    /// The argument of a surface whose `Present` is PARKED for this frame's commit and that `which` names. A
+    /// surface mounts at the commit, once a frame, so a second request in the same frame cannot see the first in
+    /// the tree: whoever presents once-only surfaces asks here too, and folds or refuses the second request.
+    pub fn parked_present_mut(&mut self, which: impl Fn(&H::Arg) -> bool) -> Option<&mut H::Arg> {
+        self.parked.iter_mut().find_map(|(item, _)| match &mut item.fx {
+            Fx::Nav(NavOp::Present(arg)) if which(arg) => Some(arg),
+            _ => None,
+        })
+    }
+
     pub fn request_with_return(&mut self, from: MachineId, op: NavOp<H::Arg>, ret: ReturnState<H::Elem, H::Memory>) {
+        // A `ret` handed in from outside was captured by an earlier `return_state()`, which stamped the
+        // entry that held input then (`ret.captured`); the owner now is not a stand-in for it.
         self.parked.push((Stamped {
             from,
             fx: Fx::Nav(op),
@@ -1147,8 +1165,9 @@ where
     }
 
     fn park(&mut self, item: Stamped<H>) {
-        let ret = self.return_state();
-        self.parked.push((item, ret));
+        // The capturing owner travels with the op, stamped on the `ret` itself: where the `ret` lands is
+        // decided at commit, by `ret.captured`.
+        self.parked.push((item, self.return_state()));
     }
 
     /// `Lifecycle(0x103/0x104)`: `Suspend` down the tree at the next commit.
@@ -1172,6 +1191,17 @@ where
         self.page_stops.clear();
         self.page_debt = None;
         self.page_image_alpha = None;
+    }
+
+    /// **The shared bar as the top page presents it this frame, or `None` when it is not on screen**: the
+    /// top page wears the bar and [`chrome_presented`] keeps it (not fully faded by the nav or the page's
+    /// tuck). The chrome pass draws exactly when this is `Some`, so a status that lives on the bar (the
+    /// clock) asks THIS, not a list of routes. `navigation` is the rig's presentation of `self.nav`.
+    pub fn bar_presented(&self, navigation: super::screen::NavPresentation) -> Option<super::screen::NavPresentation> {
+        let top = self.nav.tabs.stack.top()?;
+        let screen = &*top.inst.as_ref()?.screen;
+        if !wears_bar::<H>(&top.arg, screen) { return None; }
+        chrome_presented::<H>(navigation, screen)
     }
 
     /// The top page's instance id, if mounted.
@@ -1383,6 +1413,7 @@ where
             scroll: 0.0,
             memory: self.owner_entry().and_then(|e| self.nav.entry(e))
                 .and_then(|e| e.inst.as_ref()).map(|i| i.screen.memory_at(self.focus())).unwrap_or_default(),
+            captured: self.owner_entry(),
         }
     }
 
@@ -2594,8 +2625,7 @@ where
                     }
                     set.pages += 1;
                     set.bytes += inst.screen.render_report().bytes;
-                    if Z::CHROME < ceiling && top_entry == Some(e.id) && e.arg.chrome() == plx_machine::machine::Chrome::TabBar
-                        && inst.screen.focus_source() == FocusSource::Engine {
+                    if Z::CHROME < ceiling && top_entry == Some(e.id) && wears_bar::<H>(&e.arg, &*inst.screen) {
                         let mut chrome_parts = parts.clone();
                         chrome_parts.owner = InputOwner::Entry(e.id);
                         chrome_parts.focus = input.engine.read(chrome_parts.owner);

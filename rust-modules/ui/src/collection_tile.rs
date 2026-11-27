@@ -430,7 +430,7 @@ pub fn layout(r: Rect, name_w: f32, name_h: f32) -> (Rect, Rect) {
 /// carried by [`Painter::zoomed`] — the one transform `text_lift` uses — so a glyph run is the SAME
 /// cached texture at every frame of a pop, resized. Scoped to the closure, so nothing drawn after it
 /// inherits the zoom. At rest (`r == rest`) it is the plain painter.
-fn grown(p: Painter, rest: Rect, r: Rect, content: impl FnOnce(Painter)) {
+pub(crate) fn grown(p: Painter, rest: Rect, r: Rect, content: impl FnOnce(Painter)) {
     let s = r.w / rest.w.max(1.0);
     let (dx, dy) = (r.cx() - rest.cx(), r.cy() - rest.cy());
     if s == 1.0 && dx == 0.0 && dy == 0.0 {

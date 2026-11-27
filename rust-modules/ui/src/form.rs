@@ -188,6 +188,21 @@ impl<Id, A, Dest> FormSection<Id, A, Dest> {
         }
         self
     }
+    /// Make the item just declared **INERT** when `cond` holds: it stays in the table, drawn dimmed
+    /// ([`Row::inert`]), but it becomes an inert slot - no binding, no key, no accessibility name -
+    /// so focus travel skips it in both directions and nothing can activate it. Where
+    /// [`Self::disabled`] keeps the row focusable so the viewer can read why it does nothing, this is
+    /// for an action that does not exist right now and has no reason worth a stop of focus (Library
+    /// order's Reset row while the order is the server's own). Like [`Self::disabled`] it is a no-op
+    /// when the last slot is not an item, or the last declaration was an `_if` that was skipped.
+    pub fn inert(mut self, cond: bool) -> Self {
+        if cond && !self.skipped && matches!(self.slots.last(), Some(Slot::Item(..))) {
+            if let Some(Slot::Item(_, row, _)) = self.slots.pop() {
+                self.push(Slot::Inert(row.inert(true)));
+            }
+        }
+        self
+    }
     pub fn item_keyed_if(
         mut self,
         cond: bool,
@@ -291,11 +306,11 @@ impl<Id, A, Dest> Form<Id, A, Dest> {
             })
             .collect()
     }
-    /// Re-type every focusable row: `f` gets each binding and answers its replacement, or `None` to
+    /// Re-type every focusable row (identity, action and the drill-in destination's type): `f` gets each binding and answers its replacement, or `None` to
     /// demote the row to an inert slot — still DRAWN exactly as declared, but never focusable.
     /// Sections, headers, accessories and every row's presentation pass through untouched, so a
     /// shared builder (`appkit::source_list::form`) serves a surface that has its own row identities.
-    pub fn map<Id2, A2>(self, mut f: impl FnMut(Binding<Id, A, Dest>) -> Option<Binding<Id2, A2, Dest>>) -> Form<Id2, A2, Dest> {
+    pub fn map<Id2, A2, Dest2>(self, mut f: impl FnMut(Binding<Id, A, Dest>) -> Option<Binding<Id2, A2, Dest2>>) -> Form<Id2, A2, Dest2> {
         Form {
             sections: self
                 .sections
@@ -424,13 +439,66 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
     fn install_keeping(&mut self, form: Form<Id, A, Dest>, keep: Option<&Id>, slide: bool, neighbour: bool) {
         let (sections, bindings, names) = self.check(form);
         let landing = keep.and_then(|k| self.landing_for(k, &bindings, neighbour));
+        let before = self.drawn_keys();
+        let lift = self.lift_key();
         self.bindings = bindings;
         self.names = names;
         match landing {
             Some(i) => self.table.set_sections(sections, i as i32, slide),
             None => self.table.open_sections(sections),
         }
+        self.glide_reordered(&before);
+        self.follow_lift(lift);
         self.reseat_after_install();
+    }
+
+    /// The key of the row the table's lift belongs to (held, or landing after a drop): the identity a
+    /// reinstall follows it by ([`Self::follow_lift`]).
+    fn lift_key(&self) -> Option<RowKey> {
+        let at = usize::try_from(self.table.lift_owner()?).ok()?;
+        self.bindings.get(at)?.as_ref().map(|b| b.key)
+    }
+
+    /// **Hand the lift to the row that was lifted**, by key, wherever the install put it; with no such
+    /// row (it left the form, or the page was opened afresh) the lift is dropped, never left on the
+    /// row that stands in its old slot.
+    fn follow_lift(&mut self, key: Option<RowKey>) {
+        let to = key.and_then(|key| self.index_of_key(key)).map(|i| i as i32);
+        self.table.carry_lift(to);
+    }
+
+    /// Each keyed row's key and where the table DRAWS it now, by global row index (`None` at an
+    /// inert slot): the "before" of a reorder, captured ahead of a reinstall.
+    fn drawn_keys(&self) -> Vec<Option<(RowKey, f32)>> {
+        let tops = self.table.drawn_tops();
+        self.bindings.iter().zip(tops).map(|(b, top)| b.as_ref().map(|b| (b.key, top))).collect()
+    }
+
+    /// **Glide the rows a reinstall REORDERED**: the keyed rows that stand in both `before` and the
+    /// form just installed, compared by key. When their relative order is unchanged (a row appeared
+    /// or went, a value changed) nothing glides and every existing caller cuts exactly as it did;
+    /// when it changed, every surviving row slides from where it was drawn to its new slot
+    /// ([`TableView::glide_from`]). The page decides the order; this only reads it.
+    fn glide_reordered(&mut self, before: &[Option<(RowKey, f32)>]) {
+        let from: Vec<Option<(usize, f32)>> = self
+            .bindings
+            .iter()
+            .map(|b| {
+                let key = b.as_ref()?.key;
+                before.iter().position(|o| o.is_some_and(|(k, _)| k == key)).map(|j| (j, before[j].map_or(0.0, |(_, top)| top)))
+            })
+            .collect();
+        let mut seen = from.iter().flatten().map(|(j, _)| *j);
+        let mut last = None;
+        let reordered = seen.any(|j| {
+            let out = last.is_some_and(|l| j < l);
+            last = Some(j);
+            out
+        });
+        if reordered {
+            let tops: Vec<Option<f32>> = from.iter().map(|f| f.map(|(_, top)| top)).collect();
+            self.table.glide_from(&tops);
+        }
     }
 
     /// **Open** a page: snap the pill, scroll to the top and focus `initial` when the form has it,
@@ -446,6 +514,7 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
             Some(i) => self.table.set_sections(sections, i as i32, false),
             None => self.table.open_sections(sections),
         }
+        self.follow_lift(None);
         self.reseat_after_install();
     }
 
@@ -465,6 +534,8 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
     pub fn refresh_with(&mut self, form: Form<Id, A, Dest>, prefer: Option<&Id>, fallback: Option<&Id>) {
         let (sections, bindings, names) = self.check(form);
         let find = |id: &Id| Self::position_of(&bindings, id);
+        let before = self.drawn_keys();
+        let lift = self.lift_key();
         let keep = self.selected_id().cloned();
         let landing = prefer
             .and_then(find)
@@ -474,6 +545,8 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
         self.bindings = bindings;
         self.names = names;
         self.table.set_sections_or_open(sections, landing.map(|i| i as i32), true);
+        self.glide_reordered(&before);
+        self.follow_lift(lift);
         self.reseat_after_install();
     }
 
@@ -486,6 +559,7 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
         self.bindings = bindings;
         self.names = names;
         self.table.restore_sections(sections, at.map(|i| i as i32), scroll);
+        self.follow_lift(None);
         self.reseat_after_install();
     }
 
@@ -564,6 +638,12 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
         self.bindings
             .iter()
             .position(|b| b.as_ref().is_some_and(|b| b.key == key))
+    }
+    /// Can focus land on the row `key` names right now? It is bound AND a stop of the table
+    /// ([`Row::selectable`](crate::table::Row::selectable): a row that waits while another is held is
+    /// bound but no stop). `false` for a key the form does not know.
+    pub fn lands_on(&self, key: RowKey) -> bool {
+        self.index_of_key(key).and_then(|i| crate::geom::table_row(&self.table, i)).is_some_and(|row| row.selectable())
     }
     /// The id under the table's current selection.
     pub fn selected_id(&self) -> Option<&Id> {

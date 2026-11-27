@@ -1144,5 +1144,34 @@
       "number": "str",
       "programme": "str"
     }
+  },
+  "widgets.live.badge": {
+    "value": "LIVE",
+    "description": "The player banner's badge on a live channel: a short all-caps state word on a red chip (MICRO, bold, tracked). Keep it to one or two short words."
+  },
+  "widgets.live.next_at": {
+    "value": "Next at {time}",
+    "description": "The player banner's last line on a live channel: when the next programme starts. {time} is the clock time in the viewer's format, for example 22:39.",
+    "args": {
+      "time": "str"
+    }
+  },
+  "widgets.live.entry_none": {
+    "value": "No channel {number}",
+    "description": "Number entry on Live TV: shown in place of the list when the digits typed so far start no channel's number. {number} is the digits typed, for example 2099.",
+    "args": {
+      "number": "str"
+    }
+  },
+  "widgets.live.entry_more": {
+    "value": "+{count} more \u00b7 \u25b2 \u25bc to scroll",
+    "description": "Number entry on Live TV: the line under the list of five matches when more match. {count} is how many more there are; the arrows are the Up and Down keys. A MICRO caption: keep it short.",
+    "args": {
+      "count": "str"
+    }
+  },
+  "widgets.live.playing": {
+    "value": "Playing",
+    "description": "Number entry on Live TV: the small tag on the channel that is already on screen, so OK on it is never a silent no-op. One short word (MICRO, in a chip)."
   }
 }

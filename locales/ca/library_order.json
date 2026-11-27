@@ -1,0 +1,17 @@
+{
+  "library_order.title": "Ordre de biblioteques",
+  "library_order.value_server": "Ordre del servidor",
+  "library_order.value_first": "{title} al capdavant",
+  "library_order.row_detail": "Tria l’ordre de les teves biblioteques preferides a l’Inici i a la capçalera de Biblioteca.",
+  "library_order.reset": "Restableix l’ordre",
+  "library_order.state_idle": "Prem OK per moure {title} amunt o avall. L’Inici i la capçalera de {kind} mostren les teves biblioteques preferides en aquest ordre.",
+  "library_order.state_reset": "Torna les teves biblioteques preferides a l’ordre en què les llisten els servidors.",
+  "library_order.state_moving": "Es mou {title}. Amunt i Avall en canvien la posició, OK la confirma i Enrere cancel·la.",
+  "library_order.state_unnamed": "{title} encara no es pot moure: el seu servidor no ha acabat de connectar-se.",
+  "library_order.state_dropped": "{title} és ara {home} a l’Inici i {header} a la capçalera de {kind}.",
+  "library_order.state_confirm": "Prem OK una altra vegada per tornar les teves biblioteques preferides a l’ordre dels servidors. Qualsevol altre botó conserva el teu ordre.",
+  "library_order.state_reset_done": "Les teves biblioteques preferides han tornat a l’ordre en què les llisten els servidors.",
+  "library_order.state_unsaved": "No s’ha pogut desar aquest ordre; s’aplica fins que es reiniciï PlxNative.",
+  "library_order.preview_caption": "{kind} · Capçalera de Biblioteca",
+  "library_order.preview_more": "Les biblioteques que no hi caben van darrere de …."
+}

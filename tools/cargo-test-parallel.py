@@ -191,6 +191,11 @@ class Run:
         self.env["NO_PROXY"] = self.env["no_proxy"] = "*"
         if threads and "RUST_TEST_THREADS" not in os.environ:
             self.env["RUST_TEST_THREADS"] = str(threads)
+        # A test thread gets 4 MiB of stack, as the app's main thread has room for. The unoptimised
+        # session owner's `transition` takes about 1 MiB of frame and a test steps it two deep, so
+        # libtest's 2 MiB default overflows as soon as the preference record grows a field. An
+        # explicit RUST_MIN_STACK from the caller wins.
+        self.env.setdefault("RUST_MIN_STACK", str(4 * 1024 * 1024))
         self.proc: subprocess.Popen | None = None
         self.started = 0.0
         self.elapsed = 0.0

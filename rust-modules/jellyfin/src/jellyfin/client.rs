@@ -182,6 +182,7 @@ pub struct JfClient {
     started: Mutex<HashSet<String>>,
     /// Play sessions the server is transcoding, which report as `Transcode` rather than `DirectPlay`.
     transcoding: Mutex<HashSet<String>>,
+    live: livetv::LiveTv,
     /// The item [`Self::metadata`] read last, and when: starting a playback asks for the same item
     /// at each step (the decision, the queue, a transcode's plan), seconds after its page did.
     /// Forgotten by every write this client makes about an item ([`Self::forget_recent`]).
@@ -281,6 +282,7 @@ impl JfClient {
             sections: SectionIds::new(),
             started: Mutex::new(HashSet::new()),
             transcoding: Mutex::new(HashSet::new()),
+            live: livetv::LiveTv::default(),
             recent_item: Mutex::new(None),
             queue: Mutex::new((0, Vec::new())),
             recent_user: Recent::default(),
@@ -520,6 +522,7 @@ pub fn base_path(base: &str) -> &str {
 
 mod browse;
 mod items;
+mod livetv;
 mod playback;
 mod signin;
 

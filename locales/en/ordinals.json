@@ -1,0 +1,49 @@
+{
+  "ordinal.first": {
+    "value": "first",
+    "description": "The ordinal for place 1 in a sentence about a library's position (\"is now first on Home\"): an adverbial form that needs no agreement with the library's name. One lower-case word."
+  },
+  "ordinal.second": {
+    "value": "second",
+    "description": "The ordinal for place 2 in a sentence about a library's position (\"is now second on Home\"): an adverbial form that needs no agreement with the library's name. One lower-case word."
+  },
+  "ordinal.third": {
+    "value": "third",
+    "description": "The ordinal for place 3 in a sentence about a library's position (\"is now third on Home\"): an adverbial form that needs no agreement with the library's name. One lower-case word."
+  },
+  "ordinal.fourth": {
+    "value": "fourth",
+    "description": "The ordinal for place 4 in a sentence about a library's position (\"is now fourth on Home\"): an adverbial form that needs no agreement with the library's name. One lower-case word."
+  },
+  "ordinal.fifth": {
+    "value": "fifth",
+    "description": "The ordinal for place 5 in a sentence about a library's position (\"is now fifth on Home\"): an adverbial form that needs no agreement with the library's name. One lower-case word."
+  },
+  "ordinal.sixth": {
+    "value": "sixth",
+    "description": "The ordinal for place 6 in a sentence about a library's position (\"is now sixth on Home\"): an adverbial form that needs no agreement with the library's name. One lower-case word."
+  },
+  "ordinal.seventh": {
+    "value": "seventh",
+    "description": "The ordinal for place 7 in a sentence about a library's position (\"is now seventh on Home\"): an adverbial form that needs no agreement with the library's name. One lower-case word."
+  },
+  "ordinal.eighth": {
+    "value": "eighth",
+    "description": "The ordinal for place 8 in a sentence about a library's position (\"is now eighth on Home\"): an adverbial form that needs no agreement with the library's name. One lower-case word."
+  },
+  "ordinal.ninth": {
+    "value": "ninth",
+    "description": "The ordinal for place 9 in a sentence about a library's position (\"is now ninth on Home\"): an adverbial form that needs no agreement with the library's name. One lower-case word."
+  },
+  "ordinal.tenth": {
+    "value": "tenth",
+    "description": "The ordinal for place 10 in a sentence about a library's position (\"is now tenth on Home\"): an adverbial form that needs no agreement with the library's name. One lower-case word."
+  },
+  "ordinal.other": {
+    "value": "number {n}",
+    "description": "The place of a library past tenth in the same sentence (\"is now number 12 on Home\"). {n} is the place as a number.",
+    "args": {
+      "n": "i64"
+    }
+  }
+}

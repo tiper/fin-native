@@ -18,7 +18,7 @@
 
 use super::*;
 use plx_plex::plex::session::prefs::{AudioMemo, SubtitleMemo, TrackMemoryEntry};
-use plx_plex::plex::session::SubtitleOffsetEntry;
+use plx_plex::plex::session::{SubtitleOffsetEntry, VersionChoiceEntry};
 use super::super::track_memory::{forced_only_shown, memory_show, rematch_with_names, subtitle_pick_changed};
 
 /// **Whose memory this is**: the active profile's key and the machine id of `sid`'s server, the two
@@ -55,6 +55,61 @@ pub(super) fn recalled_track_memory(sid: ServerId) -> Vec<TrackMemoryEntry> {
 pub(super) fn remembered_subtitle_offset(sid: ServerId, rk: &str) -> Option<i64> {
     let (profile, machine_id) = memory_scope(sid)?;
     recall::<SubtitleOffsetEntry>(&profile, &(machine_id, rk.to_string())).map(|e| e.offset_ms)
+}
+
+/// **The version this profile selected, or last played, for `rk` on `sid`'s server** (the
+/// `version_choices` tenant of the memory door): what Resume and Play start when they name no
+/// version, and what the Detail page's facts line describes. Per ITEM: an episode's choice is that
+/// episode's alone, so it is never carried to the next one. `None` when nothing is remembered, the
+/// server is not registered yet, or no profile is seated.
+pub fn chosen_version(sid: ServerId, rk: &str) -> Option<plx_plex::plex::MediaId> {
+    let (profile, machine_id) = memory_scope(sid)?;
+    recall::<VersionChoiceEntry>(&profile, &(machine_id, rk.to_string())).map(|e| plx_plex::plex::MediaId(e.media_id))
+}
+
+/// Remember that `rk` on `sid`'s server plays `media` from now on (Select Version, or a playback
+/// that ran this specific version). Nothing is written when it is already the remembered one.
+/// Refused without a seated profile and a registered server, like every write of the door.
+pub fn choose_version(sid: ServerId, rk: &str, media: plx_plex::plex::MediaId) -> bool {
+    let Some((user, machine_id)) = memory_scope(sid) else {
+        return false;
+    };
+    if chosen_version(sid, rk) == Some(media) {
+        return true;
+    }
+    let rk = rk.to_string();
+    let key = (machine_id.clone(), rk.clone());
+    remember::<VersionChoiceEntry>(&user, key, move |current| {
+        Some(VersionChoiceEntry {
+            machine_id: machine_id.clone(),
+            rating_key: rk.clone(),
+            media_id: media.0,
+            extensions: current.map(|e| e.extensions.clone()).unwrap_or_default(),
+        })
+    })
+}
+
+/// **Which version a play asks for**: the caller's own (`Some`: the viewer picked it, so it is
+/// remembered), else the remembered one. A remembered id whose media is gone from the item
+/// resolves to `None` where the item's versions are `known` (the page that is playing it),
+/// so a stale choice plays exactly what no choice would, the automatic default included.
+/// Where they are not known the id stands, and the resolve falls back to the default file itself
+/// (`route: version N is gone from the item`).
+pub(super) fn settle_version(
+    sid: ServerId,
+    rk: &str,
+    asked: Option<plx_plex::plex::MediaId>,
+    known: Option<&[plx_data::pms::MediaVersion]>,
+) -> Option<plx_plex::plex::MediaId> {
+    if let Some(media) = asked {
+        choose_version(sid, rk, media);
+        return Some(media);
+    }
+    let stored = chosen_version(sid, rk)?;
+    match known {
+        Some(versions) if !versions.iter().any(|v| v.id == stored) => None,
+        _ => Some(stored),
+    }
 }
 
 /// Remember the viewer's subtitle sync-timing correction for the CURRENTLY PLAYING item, so the
@@ -304,10 +359,16 @@ enum TrackPick {
 /// and against the file's entry when the queued write runs): an audio pick must not erase the
 /// subtitle the viewer chose a minute ago, nor the other way round.
 fn remember_track_pick(ps: &PlaybackSession, pick: TrackPick) -> bool {
-    let Some(show) = memory_show(cur_kind(ps), cur_show_rk(ps)) else {
+    remember_show_pick(cur_sid(ps), cur_kind(ps), cur_show_rk(ps), pick)
+}
+
+/// [`remember_track_pick`]'s write, session-free: the item is named by its server, Plex type and
+/// show, which is all the memory's key reads. The before-playback picker has no session yet.
+fn remember_show_pick(sid: ServerId, kind: &str, show_rk: &str, pick: TrackPick) -> bool {
+    let Some(show) = memory_show(kind, show_rk) else {
         return false;
     };
-    let Some((user, machine_id)) = memory_scope(cur_sid(ps)) else {
+    let Some((user, machine_id)) = memory_scope(sid) else {
         return false;
     };
     let show = show.to_string();
@@ -367,10 +428,12 @@ pub fn confirm_uri_audio_pick(ps: &mut PlaybackSession, audio: CarriedAudio, mem
     if let Some(memo) = memo { remember_track_pick(ps, TrackPick::Audio(memo)); }
 }
 
-/// The product URI driver renders its selected embedded subtitle. No side reader, burn refresh,
-/// or Feed subtitle mailbox may run for this confirmed native selection.
+/// A URI driver confirmed a subtitle pick (`stream_id` 0 = Off): either its pipeline draws the
+/// selected embedded subtitle (webOS), or it hands the track's cues to the app (`app_draws`, Tizen),
+/// which draws them at `ordinal`. No side reader, burn refresh, or Feed subtitle mailbox may run for
+/// this confirmed native selection.
 pub fn confirm_uri_subtitle_pick(ps: &mut PlaybackSession, ordinal: i32, stream_id: i64,
-    memo: Option<SubtitleMemo>) {
+    memo: Option<SubtitleMemo>, app_draws: bool) {
     let changed = subtitle_pick_changed(ps.cur_sub_sid, stream_id,
         ps.sub_mode == SubMode::ForcedOnly);
     ps.sub_mode = SubMode::of_stream(stream_id);
@@ -380,7 +443,9 @@ pub fn confirm_uri_subtitle_pick(ps: &mut PlaybackSession, ordinal: i32, stream_
     }
     ps.cur_sub_ordinal = ordinal;
     ps.cur_sub_sidecar = false;
-    ps.cur_sub_client_drawable = false;
+    // A driver whose pipeline draws the subtitle leaves the app nothing to draw; one that hands its cues over
+    // (`UriDriver::delivers_captions`) has the app draw the embedded track at `ordinal`.
+    ps.cur_sub_client_drawable = app_draws && stream_id > 0 && ordinal >= 0;
     ps.cur_memory_note = false;
     queue_put_selection(cur_sid(ps), cur_part_id(ps), cur_audio_sid(ps), cur_sub_sid(ps));
     if let Some(memo) = memo.filter(|_| changed) {
@@ -590,4 +655,97 @@ pub fn on_decoded_frame(ps: &mut PlaybackSession) {
     rematch_subtitle_with_names(ps);
     confirm_resume_presented(ps);
     send_parked_write_back(ps);
+}
+
+/// What the before-playback picker ([`commit_preplay_pick`]) is told about the item whose tracks it
+/// chose, none of it read from a session (there is none yet).
+pub struct PreplayItem<'a> {
+    pub sid: ServerId,
+    /// The Plex type (`movie`, `episode`) and, for an episode, its show: the track memory's key.
+    pub kind: &'a str,
+    pub show_rk: &'a str,
+    /// The part the selection PUT addresses.
+    pub part_id: i64,
+}
+
+impl<'a> PreplayItem<'a> {
+    /// The picker's item as the loaded page names it ([`plx_data::metadata::PreplayTracks`]); the part
+    /// id is the number in the part key (`/library/parts/{id}/..`), `0` when it names none.
+    pub fn of(tracks: &'a plx_data::metadata::PreplayTracks) -> Self {
+        Self { sid: tracks.sid, kind: &tracks.kind, show_rk: &tracks.show_rk, part_id: part_id_of(&tracks.part) }
+    }
+}
+
+/// **A viewer's track pick made BEFORE playback starts: the in-player menu's user-pick door, with
+/// no session.** It writes what the in-player pick writes, and for the same reasons:
+/// * the selection PUT (`PUT /library/parts/{id}?audioStreamID=..&subtitleStreamID=..`, queued off
+///   the frame thread; Off is `subtitleStreamID=0`), carrying BOTH ids so a half-pick never
+///   erases the other half;
+/// * the show's track memory for an episode (descriptors the plan's subtitle ladder ranks above
+///   the server's selection, so the memory must carry the pick or the first start would plan the
+///   old track). A movie has no show and writes no memory.
+///
+/// `audio_sid` / `subtitle_sid` are the stream ids the start should land on (`0` = subtitles Off);
+/// a memo is `Some` only for the half the viewer changed. Returns whether the PUT was queued.
+pub fn commit_preplay_pick(
+    item: &PreplayItem<'_>,
+    audio_sid: i64,
+    subtitle_sid: i64,
+    audio: Option<AudioMemo>,
+    subtitle: Option<SubtitleMemo>,
+) -> bool {
+    if item.part_id <= 0 {
+        return false;
+    }
+    queue_put_selection(item.sid, item.part_id, audio_sid, subtitle_sid);
+    if let Some(memo) = audio {
+        remember_show_pick(item.sid, item.kind, item.show_rk, TrackPick::Audio(memo));
+    }
+    if let Some(memo) = subtitle {
+        remember_show_pick(item.sid, item.kind, item.show_rk, TrackPick::Subtitle(memo));
+    }
+    true
+}
+
+/// **A pick made on the playback failure screen, held for Try again** ([`PlaybackSession::held_pick`]).
+/// The failed attempt's own selection is what a retry would otherwise carry; this replaces it with the
+/// viewer's. The session's copy of the ONE pick value ([`plx_data::metadata::PreplayPick`], written by
+/// the picker's `Selection`): derived here and nowhere else, written only by the loop's
+/// `CommitPreplayPick` on the failure screen. Held until the LANDING that consumes it clears it
+/// (`apply_plan`), the full stop ([`super::retire_stopped_playback`]) or a fresh, non-retry request
+/// ([`super::begin_track_selection`]): a retry's request cancelled before it lands (BACK, Home or a
+/// background suspend during the resolve) leaves it held, so it lives one player visit; and only the item
+/// it was made on reads it back ([`super::held_pick`]). A
+/// [`plx_data::metadata::SubPick::Server`] subtitle half keeps the subtitle the attempt stood on, so an
+/// audio-only pick does not turn subtitles off.
+pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::PreplayPick) {
+    use plx_data::metadata::SubPick;
+    // A pick on no file (`part_id` unknown) names nothing a retry could play: hold nothing, so the
+    // retry keeps carrying the attempt's own pair.
+    // Nor with no request in force: there is no item the pick could belong to.
+    let Some(item) = super::attempt_item(ps) else { return };
+    if pick.part_id <= 0 {
+        return;
+    }
+    let sub_sid = match pick.sub {
+        SubPick::Off => 0,
+        SubPick::Track(id) => id,
+        // The attempt's subtitle belongs to the attempt's FILE: a pick on another file of the item
+        // inherits none of it (no subtitle override).
+        SubPick::Server => super::standing_selection(ps)
+            .filter(|held| held.part_id == pick.part_id)
+            .map_or(0, |held| held.sub_sid),
+    };
+    let selection = super::HeldSelection { part_id: pick.part_id, audio_sid: pick.audio_sid, sub_sid };
+    ps.held_pick = Some(super::HeldPick { item, selection });
+}
+
+/// **What the failure screen's picker starts from**: the held pick, else the attempt's standing
+/// selection ([`standing_selection`]), as the same [`plx_data::metadata::PreplayPick`] a pre-play pick
+/// is, so the panel reads one shape from either source. A `0` subtitle reads as Off.
+pub fn failed_pick(ps: &PlaybackSession) -> Option<plx_data::metadata::PreplayPick> {
+    use plx_data::metadata::{PreplayPick, SubPick};
+    let held = super::held_pick(ps).or_else(|| super::standing_selection(ps))?;
+    let sub = if held.sub_sid == 0 { SubPick::Off } else { SubPick::Track(held.sub_sid) };
+    Some(PreplayPick { part_id: held.part_id, audio_sid: held.audio_sid, sub })
 }

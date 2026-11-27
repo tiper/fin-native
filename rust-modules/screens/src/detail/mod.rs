@@ -12,6 +12,7 @@ mod collection;
 mod episodes;
 mod extras;
 mod hero;
+pub use hero::{face as hero_face, HeroCtl};
 mod related;
 mod season;
 mod section;
@@ -477,7 +478,7 @@ struct LayoutStamp {
 impl LayoutStamp {
     fn of(d: &Detail) -> Self {
         use std::hash::{Hash, Hasher};
-        let hero = hero::hero_episode(d);
+        let hero = d.resume_episode();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         let paged = d.episodes.len() > plx_data::metadata::EPISODE_PAGE;
         if !paged {
@@ -861,13 +862,37 @@ impl DetailScreen {
         }
     }
 
-    /// The More disc follows the on-deck subject even when a different season is loaded below it.
-    pub fn hero_menu_episode<'a>(&self, focus: Option<FocusKey<u32>>, meta: plx_data::metadata::MetadataView<'a>)
-        -> Option<(&'a plx_data::metadata::Episode, PosterMark)> {
+    /// **What the hero's … opens**: the item its Play from Start / Play Version act on (the on-deck
+    /// episode on a show page, via [`Detail::play_rk`]) and one row per action the round buttons had no
+    /// room for ([`hero::overflow_ctls`]), in the row's order, and the page's own key (`Detail::rk`) for the pages the menu hosts. `None` unless focus is on the … button.
+    /// A new hero action is one more arm in the `match` below.
+    pub fn hero_overflow(
+        &self,
+        focus: Option<FocusKey<u32>>,
+        meta: plx_data::metadata::MetadataView<'_>,
+        opener: plx_machine::machine::InstanceId,
+    ) -> Option<(String, crate::registry::ItemMenuKind)> {
         let key = focus.filter(|key| key.entry == self.entry)?;
-        if key.elem != hero::ELEM_MORE { return None; }
-        let ep = hero::hero_episode(self.detail(meta)?)?;
-        Some((ep, episodes::watch_state(ep)))
+        if key.elem != hero::ELEM_MORE {
+            return None;
+        }
+        let d = self.detail(meta)?;
+        let (moved, n) = hero::overflow_ctls(self.hero_set(meta));
+        let rows: Vec<_> = moved[..n]
+            .iter()
+            .filter(|ctl| match ctl {
+                hero::HeroCtl::GoToShow => hero::go_to_show_target(d).is_some(),
+                hero::HeroCtl::Restart | hero::HeroCtl::Version | hero::HeroCtl::AudioSubtitles
+                | hero::HeroCtl::Favorite | hero::HeroCtl::Unfavorite => true,
+                // Never moved into the menu (`hero::overflow_ctls`): they keep their own disc or pill.
+                hero::HeroCtl::Play | hero::HeroCtl::Trailer | hero::HeroCtl::Alt | hero::HeroCtl::Watchlist
+                | hero::HeroCtl::MarkWatched | hero::HeroCtl::MarkUnwatched | hero::HeroCtl::More => false,
+            })
+            .copied()
+            .collect();
+        Some((d.play_rk().to_string(), rows))
+            .filter(|(_, rows)| !rows.is_empty())
+            .map(|(rk, rows)| (rk, crate::registry::ItemMenuKind::HeroOverflow { rows, opener, page: d.rk.clone() }))
     }
 
     pub fn focused_episode(
@@ -958,6 +983,17 @@ impl DetailScreen {
                 f.measure,
                 meta,
             ),
+            // A hero control a surface lifts: the page pass left it out (`draw`), so this is its one
+            // copy, drawn exactly where and how the row draws it (the row's scroll, fade and chrome
+            // alpha, the focus spring the frozen page holds) at the alpha the morph says.
+            Some(Located::Hero(ctl)) => {
+                let hero_vis = hero_alpha(self.scroll.pos, HERO_FADE);
+                if hero_vis > 0.01 {
+                    let chain = self.hero_chain(measure, meta);
+                    let p = f.painter.translate(0.0, -self.scroll.pos).alpha(hero_vis).alpha(self.preview_chrome);
+                    self.draw_buttons(p, f.cx, chain.btn_y, f.nav_page_alpha, ButtonPass::Lift(ctl.elem()));
+                }
+            }
             Some(Located::Related(_)) => self.related.redraw_focused(
                 f,
                 f.painter,
@@ -2217,7 +2253,7 @@ impl DetailScreen {
 /// series keeps the whole-show action; a season addresses its own number under its parent show.
 fn hero_mark_scope(d: &Detail) -> plx_data::viewstate::Scope {
     use plx_data::viewstate::Scope;
-    if hero::hero_episode(d).is_some() {
+    if d.resume_episode().is_some() {
         Scope::Leaf
     } else if d.is_show {
         Scope::Show
@@ -2623,13 +2659,26 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Machine<H> for
                 self.content(fx, ContentReq::Present(arg.clone()));
                 Handled::Yes
             }
-            // The *Play Version* surface committed a row: this page plays that version as its
-            // Play pill would.
-            ScreenEvent::App(AppMsg::PlayVersion(media)) => {
+            // The *Select Version* surface committed a row: that version is now the file this page's
+            // Play and Resume start (and its facts line describes). Nothing plays.
+            // A row of the hero's … menu, handed back with the rect the menu hung off: the page performs the
+            // control as if its own disc had been pressed, so `activate_hero` is the only action path.
+            ScreenEvent::App(AppMsg::HeroCtl { ctl, anchor }) => {
+                // The menu was built from the page as it stood: a page read since (a version list that
+                // shrank, a resume point that finished) may have taken the control away, and a row of a
+                // menu that outlived it acts on nothing. The ONE check, at the one door the overflow
+                // uses, against the same list the row's buttons and … menu are built from.
+                let (actions, n) = hero::actions(self.hero_set(H::metadata(cx)));
+                if actions[..n].contains(ctl) {
+                    self.activate_hero(*ctl, Some(*anchor), cx, fx, H::metadata(cx));
+                }
+                Handled::Yes
+            }
+            ScreenEvent::App(AppMsg::SelectVersion(media)) => {
                 // The panel's rows are disabled with no driver composed (`versions_panel`) and send
-                // nothing; a message that arrives anyway starts nothing.
+                // nothing; a message that arrives anyway selects nothing.
                 if H::screen_inputs(cx).can_play() {
-                    self.play_hero(false, Some(*media), fx, H::metadata(cx));
+                    self.select_version(*media, fx, H::metadata(cx));
                 }
                 Handled::Yes
             }
@@ -2790,7 +2839,16 @@ impl<H: ContentLike + crate::registry::MetadataLike + PlayerLike> Screen<H> for 
         self.draw_backdrop(p, d, f.measure, preview, meta);
         let hero_vis = hero_alpha(self.scroll.pos, HERO_FADE);
         if hero_vis > 0.01 {
-            self.draw_hero(p.translate(0.0, -self.scroll.pos).alpha(hero_vis), f, d, nav_page_alpha);
+            // A hero control a surface lifts (the `…` a menu grew out of, the disc a panel did) is
+            // left OUT of this pass: the opener lift (`redraw_focused`) draws its only copy, at the
+            // morph's alpha, above the scrim and the glass, as it does for an episode still.
+            let lifted = f
+                .lifted
+                .filter(|k| k.entry == self.entry)
+                .filter(|k| matches!(self.locate(k.elem, meta), Some(Located::Hero(_))))
+                .filter(|k| f.leaves_out(self.entry, k.elem))
+                .map(|k| k.elem);
+            self.draw_hero(p.translate(0.0, -self.scroll.pos).alpha(hero_vis), f, d, nav_page_alpha, lifted);
         }
         if let Some(d) = d {
             self.draw_compact_title(p, d, hero_vis, f.measure);
@@ -3022,7 +3080,7 @@ impl DetailScreen {
     fn art_identity<'a>(&'a self, d: Option<&'a Detail>) -> (ServerId, &'a str) {
         if let Some(d) = d {
             let path = if d.is_show {
-                hero::hero_episode(d)
+                d.resume_episode()
                     .map(|ep| ep.thumb.as_str())
                     .filter(|path| !path.is_empty())
                     .unwrap_or(&d.art)
@@ -3093,7 +3151,7 @@ impl DetailScreen {
         }
     }
 
-    fn draw_hero<H: ContentLike + crate::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, d: Option<&Detail>, nav_page_alpha: f32) {
+    fn draw_hero<H: ContentLike + crate::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, d: Option<&Detail>, nav_page_alpha: f32, lifted: Option<u32>) {
         let meta = H::metadata(cx);
         let measure = cx.measure;
         use plx_ui::detail_layout::HERO_TEXT_W;
@@ -3142,7 +3200,8 @@ impl DetailScreen {
             );
         }
         if let Some(d) = d {
-            hero::draw_facts(chrome, d, H::screen_inputs(cx).can_play(), chain.facts_y, cx.measure);
+            let picks = H::metadata(cx).picks_of(d.sid, d.play_rk());
+            hero::draw_facts(chrome, d, &picks, H::screen_inputs(cx).can_play(), chain.facts_y, cx.measure);
             hero::draw_people(chrome, d, chain.btn_y, measure);
         }
         // Full-trailer mode takes the action row with the rest of the page: the viewer asked for
@@ -3151,7 +3210,7 @@ impl DetailScreen {
         // focus there — `hero::focusable` keeps Play legitimate, so the engine has somewhere to
         // stand and the page does not scroll itself into the sections below — it simply fades out
         // with `chrome`, like everything else the page owns.
-        self.draw_buttons(chrome, cx, chain.btn_y, nav_page_alpha);
+        self.draw_buttons(chrome, cx, chain.btn_y, nav_page_alpha, ButtonPass::Page { lifted });
         // The hint that UP is there — since 2026-09-18 a third element on the HEADER line rather
         // than page furniture under the action row: centred on the screen, vertically centred on
         // the same row the preview-shrunk logo/title occupies (`PREVIEW_LOGO_Y`/`compact_band`),
@@ -3282,7 +3341,7 @@ impl DetailScreen {
         }
     }
 
-    fn draw_buttons<H: ContentLike + crate::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, y: f32, nav_page_alpha: f32) {
+    fn draw_buttons<H: ContentLike + crate::registry::MetadataLike>(&self, p: Painter, cx: &Cx<'_, H>, y: f32, nav_page_alpha: f32, pass: ButtonPass) {
         let meta = H::metadata(cx);
         let set = self.hero_set(meta);
         let widths = hero::hero_widths(
@@ -3307,7 +3366,11 @@ impl DetailScreen {
         let picture = plx_media::player::preview::view().picture;
         // A text-recording pass (the transition's prewarm, or a headless sweep) drew no pixels
         // under this row, so a read-back there would sample some other page's ground.
+        // The lift reads no ground of its own: the framebuffer it would sample is the dimmed page under
+        // the scrim, so it wears the palette the page pass last sampled (`sample_control_ground` hands
+        // back that one when it may not read), and the two copies are the same colour.
         let may_read = !picture
+            && matches!(pass, ButtonPass::Page { .. })
             && !p.is_recording()
             && may_sample_control_ground(nav_page_alpha, hero_alpha(self.scroll.pos, HERO_FADE));
         let palette = if picture {
@@ -3323,6 +3386,9 @@ impl DetailScreen {
             ControlGround::Keyed
         };
         for (i, ctl) in controls[..n].iter().copied().enumerate() {
+            if !pass.draws(ctl.elem()) {
+                continue;
+            }
             let rect = hero::hero_btn_rect_at(set, i, y, widths);
             let fill = self.ctl_pop.focus(i);
             let scale = self.ctl_pop.scale(i, cx.press);
@@ -3352,17 +3418,15 @@ impl DetailScreen {
                 }
                 ctl => {
                     let icon = match ctl {
-                        hero::HeroCtl::Restart => plx_ui::icons::Icon::Restart,
-                        hero::HeroCtl::Trailer => plx_ui::icons::Icon::Trailer,
+                        hero::HeroCtl::Restart | hero::HeroCtl::Trailer | hero::HeroCtl::GoToShow | hero::HeroCtl::Version
+                        | hero::HeroCtl::AudioSubtitles | hero::HeroCtl::Favorite | hero::HeroCtl::Unfavorite => {
+                            hero::face(ctl).map(|f| f.0).unwrap_or_else(|| unreachable!())
+                        }
                         hero::HeroCtl::More => plx_ui::icons::Icon::More,
                         hero::HeroCtl::MarkWatched => plx_ui::icons::Icon::Check,
                         hero::HeroCtl::MarkUnwatched => plx_ui::icons::Icon::Minus,
                         // At either rest the plain face; only a flip in flight layers the fill.
                         hero::HeroCtl::Watchlist => plx_appkit::watchlist_disc::paint(self.watchlist.pos()).0,
-                        hero::HeroCtl::GoToShow => hero::GO_TO_SHOW_ICON,
-                        hero::HeroCtl::Version => hero::VERSION_ICON,
-                        hero::HeroCtl::Favorite => plx_ui::icons::Icon::Heart,
-                        hero::HeroCtl::Unfavorite => plx_ui::icons::Icon::HeartFill,
                         _ => unreachable!(),
                     };
                     let mut button = CircleButton::new(c"".as_ptr())
@@ -3552,6 +3616,25 @@ fn play_resume_ns(from_start: bool, resume_ms: i64, duration_ms: i64) -> i64 {
 /// stable backdrop to sample: `sample_control_ground` caches its result across frames
 /// (`CONTROL_GROUND_SAMPLE_EVERY`), so a sample taken mid-transition would be read back for
 /// several frames after the transition ends, on a real device screen this cannot be tested on.
+/// **Which hero controls one `draw_buttons` call paints**: the page pass draws every control but the
+/// one a surface lifts, and the opener lift draws that one alone.
+#[derive(Clone, Copy)]
+enum ButtonPass {
+    /// The page's own pass; `lifted` is the control the lift owns this frame, left out.
+    Page { lifted: Option<u32> },
+    /// The opener lift: only this control (its engine elem).
+    Lift(u32),
+}
+
+impl ButtonPass {
+    fn draws(self, elem: u32) -> bool {
+        match self {
+            ButtonPass::Page { lifted } => lifted != Some(elem),
+            ButtonPass::Lift(only) => only == elem,
+        }
+    }
+}
+
 fn may_sample_control_ground(nav_page_alpha: f32, hero_alpha: f32) -> bool {
     nav_page_alpha >= 0.999 && hero_alpha > 0.99
 }
@@ -3586,7 +3669,7 @@ fn hero_blurb<'a>(
 ) -> (String, String) {
     if let Some(d) = d {
         if d.is_show {
-            if let Some(ep) = hero::hero_episode(d) {
+            if let Some(ep) = d.resume_episode() {
                 let lead = plx_appkit::hero_layout::episode_lead(ep.season, ep.index, &ep.title);
                 return (lead, ep.summary.clone());
             }
@@ -4600,21 +4683,20 @@ impl DetailScreen {
         // `a_movie_trailer_disc_plays_the_extra_from_the_start` et al., which explicitly assert
         // `!hero_set().trailer` and then drive `ELEM_TRAILER` directly to prove `activate_hero`'s
         // handling stays correct even though the disc itself is never shown.)
-        // The favourite toggle: a movie, show or episode, where the server keeps favourites.
-        let favorite = self
-            .detail(meta)
-            .filter(|d| matches!(d.kind.as_str(), "movie" | "show" | "episode"))
-            .and_then(|d| plx_plex::plex::favorite_mark(&d.rk));
         hero::HeroSet {
-            more: self.detail(meta).is_some_and(|d| hero::hero_episode(d).is_some()),
             version: self.detail(meta).is_some_and(|d| hero_versions(d).len() >= 2),
+            tracks: self.detail(meta).is_some_and(|d| meta.has_preplay_tracks(d.sid, d.play_rk(), taken_version(d))),
             go_show: self.detail(meta).is_some_and(|d| hero::go_to_show_target(d).is_some()),
             restart,
             trailer: false,
             alt: self.alt_available(meta),
             mark,
             watchlist: self.detail(meta).is_some_and(|d| plx_plex::plex::catalog_hex_of_guid(&d.guid).is_some()),
-            favorite,
+            // The favourite toggle: a movie, show or episode, where the server keeps favourites.
+            favorite: self
+                .detail(meta)
+                .filter(|d| matches!(d.kind.as_str(), "movie" | "show" | "episode"))
+                .and_then(|d| plx_plex::plex::favorite_mark(&d.rk)),
         }
     }
 
@@ -4664,7 +4746,7 @@ impl DetailScreen {
         }
         let local = self.locate(elem, meta).and_then(Located::local_key).unwrap_or(elem);
         match self.locate(elem, meta) {
-            Some(Located::Hero(ctl)) => self.activate_hero(ctl, cx, fx, meta),
+            Some(Located::Hero(ctl)) => self.activate_hero(ctl, None, cx, fx, meta),
             Some(Located::Season(i)) => {
                 // A direct press skips the dwell entirely — pre-loading `season_settle` past the
                 // threshold fires on the very NEXT `tick` rather than after a full `SETTLE_S`.
@@ -4751,6 +4833,7 @@ impl DetailScreen {
     fn activate_hero<H: ContentLike>(
         &mut self,
         ctl: hero::HeroCtl,
+        menu_anchor: Option<[u32; 4]>,
         cx: &Cx<'_, H>,
         fx: &mut Effects<'_, H>,
         meta: plx_data::metadata::MetadataView<'_>,
@@ -4805,9 +4888,10 @@ impl DetailScreen {
                     from_home: false,
                 })));
             }
-            hero::HeroCtl::Alt | hero::HeroCtl::Version => {
+            hero::HeroCtl::Alt | hero::HeroCtl::Version | hero::HeroCtl::AudioSubtitles => {
                 let set = self.hero_set(meta);
-                if let Some(i) = hero::index_of(set, ctl) {
+                // A control moved into the … menu has no disc: the menu's own rect is its anchor.
+                let drawn = hero::index_of(set, ctl).map(|i| {
                     let widths = hero::hero_widths(
                         cx.measure,
                         set,
@@ -4819,11 +4903,16 @@ impl DetailScreen {
                     rect.y -= self.scroll.pos;
                     // The ANCHOR travels on the argument, bit for bit, so the surface places
                     // itself off the control without the page or a static holding a `Rect` for it.
-                    let anchor = [rect.x, rect.y, rect.w, rect.h].map(f32::to_bits);
-                    let panel = if ctl == hero::HeroCtl::Version {
-                        ContentPanel::Versions { anchor }
-                    } else {
-                        ContentPanel::AltSources { anchor }
+                    [rect.x, rect.y, rect.w, rect.h].map(f32::to_bits)
+                });
+                if let Some(anchor) = menu_anchor.or(drawn) {
+                    // The control the panel grows out of and drains back into: the `…` button when the
+                    // menu handed the row over (`menu_anchor`), else the control's own disc.
+                    let opener = (self.entry, if menu_anchor.is_some() { hero::ELEM_MORE } else { ctl.elem() });
+                    let panel = match ctl {
+                        hero::HeroCtl::Version => ContentPanel::Versions { anchor, opener },
+                        hero::HeroCtl::AudioSubtitles => ContentPanel::PreplayTracks { anchor, opener },
+                        _ => ContentPanel::AltSources { anchor },
                     };
                     self.content(fx, ContentReq::Panel(panel));
                 }
@@ -4862,7 +4951,7 @@ impl DetailScreen {
                             } else {
                                 plx_data::viewstate::Write::Unwatched
                             },
-                            guid: if hero::hero_episode(d).is_some() { String::new() } else { d.guid.clone() },
+                            guid: if d.resume_episode().is_some() { String::new() } else { d.guid.clone() },
                         }),
                     )));
                 }
@@ -4872,6 +4961,27 @@ impl DetailScreen {
 
     /// Play what the hero is about. `version` is a pick off the Play Version panel
     /// ([`hero_versions`]): on a show page it is a version of the episode the hero plays.
+    /// **Select `media` as the file this page's Play takes**: reported as a request for the app to
+    /// remember (`ContentReq::SelectVersion`), keyed by the item Play plays (the page's movie or
+    /// episode; on a show page the hero's episode, never the show), then a redraw, since the facts
+    /// line reads the choice. Refused for a version the item does not have.
+    fn select_version<H: ContentLike>(
+        &mut self,
+        media: plx_plex::plex::MediaId,
+        fx: &mut Effects<'_, H>,
+        meta: plx_data::metadata::MetadataView<'_>,
+    ) {
+        let Some(d) = self.detail(meta) else { return };
+        let rk = d.play_rk();
+        if !hero_versions(d).iter().any(|v| v.id == media) {
+            return;
+        }
+        let sid = plx_media::route::item_sid(d.sid);
+        let rk = rk.to_owned();
+        self.content(fx, ContentReq::SelectVersion { sid, rk, media });
+        fx.invalidate(Provenance::Input);
+    }
+
     fn play_hero<H: ContentLike>(
         &mut self,
         from_start: bool,
@@ -4881,7 +4991,7 @@ impl DetailScreen {
     ) -> bool {
         let Some(d) = self.detail(meta) else { return false };
         if d.is_show {
-            let i = hero::hero_episode(d).and_then(|ep| d.episodes.position(&ep.rk));
+            let i = d.resume_episode().and_then(|ep| d.episodes.position(&ep.rk));
             match i {
                 Some(i) => self.play_episode_at(i, from_start, version, fx, meta),
                 None => self.play_episode_value(
@@ -5008,8 +5118,8 @@ impl DetailScreen {
 /// `None` for the controls that only navigate or open a menu or a panel (Go to Show, Also available, Play
 /// Version, More): the control itself acts on no title. The panel or menu one of them opens has rows of its
 /// own, each guarded by its own subject: a library item's menu (`itemmenu.*`) carries its title's key, and the
-/// Play Version panel's `versions.row.<n>` (`versions_panel.rs`, OK delivers `AppMsg::PlayVersion`, which plays)
-/// carries [`play_subject`], this function's answer for Play. Exhaustive, so a new control must be placed here.
+/// Select Version panel's `versions.row.<n>` (`versions_panel.rs`, OK delivers `AppMsg::SelectVersion`, which selects)
+/// carries [`Detail::play_rk`], this function's answer for Play. Exhaustive, so a new control must be placed here.
 pub(crate) fn hero_control_subject<'a>(
     ctl: hero::HeroCtl,
     d: &'a Detail,
@@ -5017,22 +5127,11 @@ pub(crate) fn hero_control_subject<'a>(
 ) -> Option<&'a str> {
     use hero::HeroCtl;
     match ctl {
-        HeroCtl::Play | HeroCtl::Restart => Some(if d.is_show {
-            d.play_episode().map_or(d.rk.as_str(), |ep| ep.rk.as_str())
-        } else {
-            selected.map_or(d.rk.as_str(), |m| m.rk.as_str())
-        }),
-        HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => Some(hero::hero_episode(d).map_or(d.rk.as_str(), |ep| ep.rk.as_str())),
+        HeroCtl::Play | HeroCtl::Restart => Some(if d.is_show { d.play_rk() } else { selected.map_or(d.play_rk(), |m| m.rk.as_str()) }),
+        HeroCtl::MarkWatched | HeroCtl::MarkUnwatched => Some(d.resume_episode().map_or(d.rk.as_str(), |ep| ep.rk.as_str())),
         HeroCtl::Watchlist | HeroCtl::Trailer | HeroCtl::Favorite | HeroCtl::Unfavorite => Some(d.rk.as_str()),
-        HeroCtl::GoToShow | HeroCtl::Alt | HeroCtl::Version | HeroCtl::More => None,
+        HeroCtl::GoToShow | HeroCtl::Alt | HeroCtl::Version | HeroCtl::AudioSubtitles | HeroCtl::More => None,
     }
-}
-
-/// **The ratingKey the hero's Play plays** ([`hero_control_subject`] of Play, with no loaded card to prefer): what the
-/// Play Version panel's rows play too, since a committed row plays the hero's title in that version
-/// (`AppMsg::PlayVersion`, [`DetailScreen::play_hero`]).
-pub(crate) fn play_subject(d: &Detail) -> Option<&str> {
-    hero_control_subject(hero::HeroCtl::Play, d, None)
 }
 
 /// The versions the hero's Play chooses among, for its Play Version disc and panel: the page's
@@ -5043,6 +5142,12 @@ pub(crate) fn hero_versions(d: &Detail) -> &[plx_data::pms::MediaVersion] {
     } else {
         &d.versions
     }
+}
+
+/// **The version Play takes now**, the row of the Select Version list that wears the check mark: the profile's
+/// choice for the hero's item while its media is still there, else what plays unasked (`route::taken_version`).
+pub(crate) fn taken_version(d: &Detail) -> Option<plx_plex::plex::MediaId> {
+    plx_media::route::taken_version(hero_versions(d), plx_media::route::chosen_for(d))
 }
 
 /// A presented preview must leave the framebuffer transparent. The player route punches this

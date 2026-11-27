@@ -242,6 +242,10 @@ impl Placement {
         ),
     };
 
+    /// [`under_or_above_fit`]'s: [`Self::UNDER_OR_ABOVE`]'s sides in its order, and a panel taller than the room either
+    /// side takes the roomier one and is cut to it (the list scrolls inside), so it stays hung off its opener.
+    pub const UNDER_OR_ABOVE_FIT: Placement = Placement { overflow: Overflow::ClampToRoom, ..Placement::UNDER_OR_ABOVE };
+
     /// The in-player menus' (Tracks, More): toward the centre, hung from the opener's outer edge,
     /// never over the opener, inside the safe frame.
     pub const PLAYER_MENU: Placement = Placement {
@@ -250,6 +254,24 @@ impl Placement {
         overflow: Overflow::ClampToRoom,
         keep: crate::consts::SAFE,
     };
+
+    /// A panel with no opener, in the safe frame's top-right corner ([`corner_panel`]): below the
+    /// corner point, hung from its right edge, the height cut to the room under it.
+    pub const CORNER: Placement = Placement {
+        order: SideOrder::Fixed(&[Side::Below]),
+        cross: Cross::Hang,
+        overflow: Overflow::ClampToRoom,
+        keep: crate::consts::SAFE,
+    };
+}
+
+/// **A panel that no control opened, in the safe frame's top-right corner** (Live TV's number entry,
+/// SPEC-5: right 96, top 54): [`anchor_panel`] over a zero-size anchor at the corner, so the panel's
+/// right edge is the frame's and its top is the frame's. `size` is the panel's own `(w, h)`; the side
+/// is `Below`, so [`Popover::rise_offset`] settles it down into place.
+pub fn corner_panel(w: f32, h: f32) -> Anchored {
+    let keep = Placement::CORNER.keep;
+    anchor_panel(Rect::new(keep.x + keep.w, keep.y, 0.0, 0.0), (w, h), h, 0.0, Placement::CORNER)
 }
 
 /// [`anchor_panel`]'s answer: the panel's rect and the side of the anchor it took (which is where
@@ -342,9 +364,9 @@ pub fn anchor_panel(anchor: Rect, size: (f32, f32), need_h: f32, gap: f32, how: 
     Anchored { rect, side }
 }
 
-/// **A menu panel anchored to the control that opened it** (the Detail hero's *Also available*
-/// pill and Play Version disc): under the control when there is room, above it when there is not,
-/// never over it, so the control stays readable beside its own list. Horizontally it hangs off the
+/// **A menu panel anchored to the control that opened it**: under the control when there is room, above it when there is
+/// not. A list too tall for either side can end up over its opener here ([`Overflow::ClampTop`]); the Detail hosts use
+/// [`under_or_above_fit`], which never does, and this has no production caller. Horizontally it hangs off the
 /// control's left edge (the list and the label it came from share a margin), pulled inside the
 /// screen's keep-out. Pure (anchor + measured size in, rect out). A call of [`anchor_panel`] with
 /// [`Placement::UNDER_OR_ABOVE`], after the width and height clamps that are this caller's own.
@@ -353,6 +375,17 @@ pub fn under_or_above(a: Rect, content_w: f32, content_h: f32) -> Rect {
     let width = content_w.clamp(crate::table::MENU_MIN_W, crate::table::MENU_MAX_W);
     let h = content_h.clamp(120.0, SCR_H - 2.0 * PANEL_EDGE);
     anchor_panel(a, (width, h), h, PANEL_GAP, Placement::UNDER_OR_ABOVE).rect
+}
+
+/// [`under_or_above`] for a panel that may be taller than the room either side of its opener (a pushed page
+/// with a long list, from a control low on the screen): the same sides in the same order, but when neither
+/// holds the whole panel it takes the roomier side and is CUT to that room (the list scrolls inside), so it
+/// stays hung off its opener instead of being clamped to the top of the screen and covering it.
+pub fn under_or_above_fit(a: Rect, content_w: f32, content_h: f32) -> Rect {
+    use crate::consts::SCR_H;
+    let width = content_w.clamp(crate::table::MENU_MIN_W, crate::table::MENU_MAX_W);
+    let h = content_h.clamp(120.0, SCR_H - 2.0 * PANEL_EDGE);
+    anchor_panel(a, (width, h), h, PANEL_GAP, Placement::UNDER_OR_ABOVE_FIT).rect
 }
 
 /// **Where a header menu's panel of width `w` starts across, hung from its opener `pill`** (the
@@ -384,6 +417,23 @@ pub fn cover_opener(pill: Rect, size: (f32, f32), keep: Rect) -> Rect {
     let h = size.1.max(pill.h);
     let y = pill.y.min(keep.y + keep.h - h).max(keep.y.min(pill.y));
     Rect::new(hang_x(pill, w, keep), y, w, h)
+}
+
+/// **[`cover_opener`] that keeps clear of text above the opener** (owner report: the hero's panels
+/// slid UP over the description): the panel's top stays at or below `clear_y` (the foot of what must
+/// stay readable) whenever the whole panel fits between `clear_y` and the bottom of `keep`. When it
+/// cannot, the answer is plain [`cover_opener`]'s (the panel still covers its opener and stays
+/// inside `keep`); the caller does not choose between covering the text and cutting rows, the numbers
+/// decide, and a panel that does not fit says so by overlapping.
+pub fn cover_opener_clear(pill: Rect, size: (f32, f32), keep: Rect, clear_y: f32) -> Rect {
+    let top = keep.y.max(clear_y);
+    let below = Rect::new(keep.x, top, keep.w, (keep.y + keep.h - top).max(0.0));
+    let r = cover_opener(pill, size, below);
+    if r.y >= top - crate::consts::EDGE_TOL && r.y + r.h <= keep.y + keep.h + crate::consts::EDGE_TOL {
+        r
+    } else {
+        cover_opener(pill, size, keep)
+    }
 }
 
 /// The [`Opener::redraw`] of a popover with nothing to lift — a named fn rather than a closure, so

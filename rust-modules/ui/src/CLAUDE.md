@@ -132,6 +132,12 @@ arguments, and its time is the `dt` it is handed.
      (`push`/`place`), `next_x` for the lazy break. Never write `x += w + GAP` for a new row.
      The same stack top to bottom is `vstack::VStack`/`VFlow` (`Anchor::{Top,Bottom,Centre}`, `Item::before` for a
      gap that belongs to the item below it, `AlertHead` for the alert family's eyebrow/title/path ladder); never `y += h + GAP`.
+   - **Reordering rows**: `table::RowMove` (`Off | Pickable | Lifted | Waiting`, set per row with `Row::moving`) is the ONE
+     move-mode state; the table draws chevrons, lift, shadow and ink from it and glides rows to whatever order a
+     `FormTable` reinstall hands it (`TableView::glide_from`, seeded on a reorder only). The page decides the order.
+     Two kinds of row are not a stop (`Row::selectable`; neither key nor pointer lands on them): an `inert` row (`FormSection::inert`) is drawn at .45, and a `RowMove::Waiting` row, one that waits while another is held, keeps its own weight in secondary ink; do not dim it by hand.
+   - **A row of name pills with a ⋯** (the Library header, Settings' Library order preview): `page_header::{item, more_item,
+     plan_names, names_row}` (`names_row` is the ONE assembly: labels at room, visit slot, right cluster, ⋯ per `MoreOpener`; `joined_name` and `fit_name` are the shared name fit); never re-pack names by hand.
    - **Springs**: `Spring` (`lib.rs`) stepped at the shared stiffness (`consts::K_SCALE`,
      `K_SCROLL`, `K_SNAP`; `popover::K_APPEAR`), not a new constant or a hand-made easing.
 
@@ -466,6 +472,17 @@ presentation in a design pass.
    `Row::destructive(true)` and open the table with `TableView::open_sections`, whose
    `opening_row` is also the focus fallback when a focused row disappears.
 
+   **A menu with pages is `menu.rs`'s `Menu`, and a host only supplies rows.** The Detail hosts (the hero
+   and tile `…` menus, Select Version, Audio & Subtitles, Also available) build a `Menu<P, Id, A>` from a
+   `Host` (grows out of its control / glass beside a card / a sheet under its opener / a card over the
+   video plane: the legal combinations are the enum, so a morph with no opener or glass over the video is
+   not a value) and a `Class` (Action: BODY rows, the lightest dim; Picker: HEADLINE rows, the panel dim).
+   The stack, the card's resize and the page slide, the placement, the width rule, the 20 px radius, the
+   ground, the stop registration, the pointer hold and the dim are the menu's, never a host's. A row that
+   opens a page is a `RowKind::Nav`: OK and RIGHT push it, BACK and LEFT pop it (LEFT at the root is
+   inert), and every pushed page wears the header with the back mark (there is no way to have none). The
+   host maps keys with `menu::keyed`, feeds `Event`s to `Menu::step`, and acts on the `Out` it answers.
+
    **Popover open styles.** Two exist. `Appear` (default) is the shared `K_APPEAR` fade+slide.
    `Morph` (`Popover::morphing()` is the one selector; open with `open_from(opener.rect)`) is the glass opener's pill-to-panel
    morph in `popover_morph.rs`, fitted to a frame-by-frame measurement of iOS 26's glass menu (the
@@ -674,12 +691,21 @@ tried first. None of it is reconstructable from the code without repeating the m
 
 - **A MENU is glass on the frozen ground (DS6); nothing else is glass.** The scope is
   MENUS ONLY (owner decision, wave 2 review): Sort & Filter, the account menu, the item hold menu,
-  the Library menu (the player's "…" menu stands over the video plane and keeps its own ground).
+  the Library menu (the player's "…" menu stands over the video plane and keeps its own ground), and
+  Live TV's number entry (owner, 2026-11-27: glass while on the GUI). A `Ground::Menu` is glass only where a
+  frozen page is under it: the number entry declares `Scrim::over_host(DIM_COMPACT)`, the container owes that
+  dim to a style that holds its host (`Style::Compact`, the What's on page) and none to `Style::PlayerPanel`
+  (host live, the video plane behind), so over the player nothing latches and the panel is the sheet it was,
+  with no dim on the picture; and `popover_glass::draw_shadowed` refuses on any video-plane frame. The ground
+  follows the surface's style, fixed for its life, not the plane's bound bit, which changes under a panel
+  opened mid-tune.
   Every other `panel_ground` user — the alerts, About, Track information, the person bio, the
-  Also-available sheet, the decision alert — keeps the pre-DS6 ground, the latched underlay field
-  under the frost. The choice is explicit at each call, `widgets::Ground::Menu` or
-  `Ground::Sheet` (`panel_ground`'s last argument, `Popover::panel`'s too); there is no global
-  switch. A `Menu` ground's first act is `popover_glass::draw`: `fs_glass.frag`'s composite through
+  decision alert — keeps the pre-DS6 ground, the latched underlay field under the frost (the
+  Also-available sheet is a `menu::Host::Sheet`, which stands on it; the failure screen's picker is a
+  `menu::Host::Video`: flat over the player, never on this ground).
+  The choice is explicit at each call, `widgets::Ground::Menu` or `Ground::Sheet` (`panel_ground`'s
+  last argument, `Popover::panel`'s too), and for a Detail host it is `ui::menu`'s, derived from the
+  host (`Menu::surface`, one `match` over the `Host`); there is no global switch. A `Menu` ground's first act is `popover_glass::draw`: `fs_glass.frag`'s composite through
   `gfx::draw_glass_frozen`, wearing a gradient face (`FROST_FACE`, `theme::MENU_GLASS_TOP/BOT`,
   .36/.44), the 1 px `theme::GLASS_RIM`, the lit top edge `GLASS_RIM_LIGHT` and `GlassRim::Menu`,
   then a soft shadow cut out around the panel's rounded shape. **It reads no framebuffer** (owner
@@ -724,8 +750,10 @@ tried first. None of it is reconstructable from the code without repeating the m
   `GlassRim::Menu` over the LIVE path (`draw_blur_backdrop`) would turn on a per-frame sharp band
   copy; no menu takes that path any more. A source-grep test (`widgets_glass_budget_tests`) keeps `Glass` and
   `Painter::backdrop_blur` out of every file except the chrome list — no popover and no screen
-  names the blur path — and pins the scope: the menu files name `Ground::Menu`, the sheet files
-  `Ground::Sheet`, and none names the other.
+  names the blur path — and pins the scope: the menu files (number entry among them) name `Ground::Menu`, the sheet files
+  `Ground::Sheet`, and none names the other. The one exception is `ui/src/menu.rs`, which names both and
+  derives the choice from its `Host`; the four Detail hosts built on it (`item_menu`, `alt_sources`,
+  `versions_panel`, `preplay_panel`) name no ground and are asserted not to, so a host cannot choose one.
 
 - **Glass over a page stands on the frozen host; the page does not move while a menu is up, except
   under a menu that lets it reflow.**
@@ -1033,4 +1061,4 @@ nothing above draws a single pixel. For anything that moves pixels, capture the 
 cap-band re-centering are invisible until deployed.
 
 Note (library redesign): `cards::draw_label` is re-exported so screens can draw a poster caption
-through the shared label path; Settings > Libraries has two rows (Favorite libraries, Under posters).
+through the shared label path.

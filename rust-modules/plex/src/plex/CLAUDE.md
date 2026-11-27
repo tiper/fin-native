@@ -113,7 +113,7 @@ conservative choice) learn nothing. It lives in `Preferences::server_key_pins`, 
 `ProfileCreds`, which are cloned per profile), soft-parsed and skipped while empty.
 **It is in the PUBLIC preferences, so sign-out forgets it by an explicit rule, not with the
 credentials:** `Mutation::ClearTenure` retains `public.preferences` whole except the keys in
-`storage::state::ACCOUNT_BOUND_PREFERENCES` (the account's own lists, `server_key_pins` and `plaintext_consent`, issue #385, and every profile's remembered browsing and playback memory: `track_memory`, `subtitle_offsets`, `library_sorts` and `last_library`; read the constant for the current set), so sign-out — and "Delete all
+`storage::state::ACCOUNT_BOUND_PREFERENCES` (the account's own lists, `server_key_pins` and `plaintext_consent`, issue #385, and every profile's remembered browsing and playback memory: `track_memory`, `subtitle_offsets`, `version_choices`, `library_sorts` and `last_library`; read the constant for the current set), so sign-out — and "Delete all
 local data", which runs it first — leaves the stored record with no learned key, and the next account to sign in opens with none
 (`migration_tests::helper_signout_forgets_the_learned_server_keys_and_the_next_account_inherits_none`;
 for the answers, `helper_signout_forgets_the_plaintext_answers_and_signing_back_in_asks_again`).
@@ -379,6 +379,18 @@ The whole shared-source feature rests on keeping these apart:
   this same route (`SettingsPage::Favourites` — the enum lives in `screens/family.rs`, not
   `screens/settings.rs` — hosting the same screen type). Owner's ruling, 2026-08-21 — "it
   is separate for each profile" — and it hung off the whole `Session` (one per install) before that.
+  **Order is a fourth, separate question** and not a state: Settings' *Library order*
+  (`Preferences::library_order`, rules in `library_order.rs`, per profile, naming libraries by
+  `(machineIdentifier, section key)`) ranks the FAVOURITE libraries across servers and governs
+  exactly two surfaces, the order of Home's shelves (`pms::published_order`) and of the Library
+  header's pills (`DirectoryView::rows_for`), and it decides where a tab press lands when nothing was
+  visited or remembered (`section_of_kind`'s fallback and `repoint_cur` take the first-ordered favourite
+  of the type). It never changes which libraries are favourites, the tab strip's membership, Search or
+  the Sources picker, and an absent record is the server order (own servers first, then shares, each
+  server's directory order). One state, `library_order::OrderState`, says what the record is (none /
+  recorded / recorded and moving a favourite shown: recorded means the profile sees one or the
+  session still holds one, so Reset stays offered until the disk has none); the writer's `merged` keeps an offline server's entries (the grain is
+  the machine, like `pins::carry_forward`) and deletes a record only when it says nothing.
 - **reachable** — a fact about NOW: something answered at one of its addresses, *as the right
   machine*. It changes while nobody touches anything, and it is never a reason to forget the grant
   or the pin.
@@ -507,11 +519,11 @@ a dead source is **absent** from Home and states itself in its own library secti
   cache, not a per-call file transaction.
 - **Every preference key but `language` lives in ONE struct, `session/prefs.rs`'s `Preferences`**
   (the per-profile player settings' and `trailer_autoplay`'s FROZEN top-level keys, `profile_prefs` (their per-profile home, below), `auto_sign_in`, `last_hero_blur`, `hold_hint_taught`, the account-bound
-  `plaintext_consent` and `server_key_pins`, the per-profile `last_library` and `library_sorts` (cleared
+  `plaintext_consent` and `server_key_pins`, the per-profile `last_library`, `library_sorts` and `library_order` (cleared
   at sign-out like every `ACCOUNT_BOUND = true` row in `prefs::DESCRIPTORS`, but their records carry no
   account stamp, so the one login that is not a sign-out, a stored session that could not be activated
   in `app/boot.rs`, would leave them to the next account: `replace_after_reauthentication_guarded_with_outcome`
-  clears both, and the Home pins and recent searches, when the login's owner identity (`owner_identity`, the roster admin's plex.tv id; never the token, which every sign-in mints anew) differs from the stored one or either is unknown), and the three memory-door lists `track_memory`, `subtitle_offsets` and `recent_channels`, Live TV's per-profile Recent row), flattened (`#[serde(flatten)] prefs`) into BOTH on-disk
+  clears all three, and the Home pins and recent searches, when the login's owner identity (`owner_identity`, the roster admin's plex.tv id; never the token, which every sign-in mints anew) differs from the stored one or either is unknown), and the four memory-door lists `track_memory`, `subtitle_offsets`, `version_choices` and `recent_channels`, Live TV's per-profile Recent row), flattened (`#[serde(flatten)] prefs`) into BOTH on-disk
   forms — the legacy file's `Session` and the canonical preference record — declared before each
   form's own `extensions`, so the flatten takes its keys first and the unknown-key map still sees
   only keys nobody models. A new key of that kind is a `Preferences` field (its serde attributes
@@ -544,8 +556,8 @@ a dead source is **absent** from Home and states itself in its own library secti
   the table to the struct (T-fields), to the os layer's `ACCOUNT_BOUND_PREFERENCES` (T-account) and to
   each row's parse policy (T-parse), both ways; a field with no row, or a row with no field, fails
   there.
-  The three memory-door lists (`track_memory`: each profile's remembered audio and subtitle picks per
-  show, `prefs/track_memory.rs`; `subtitle_offsets`; `recent_channels`: Live TV's Recent row, capped
+  The four memory-door lists (`track_memory`: each profile's remembered audio and subtitle picks per
+  show, `prefs/track_memory.rs`; `subtitle_offsets`; `version_choices`, the file Resume and Play start for an item; `recent_channels`: Live TV's Recent row, capped
   at `MAX_RECENT`, written by `Bridge::note_live_tune` through `route::remember`) have no `Copy` value and no whole-list accessor:
   their markers implement `Row` only (not `ListRow`), and they are written only through
   `ProfileMemory::upsert_with`. `track_memory` is account-bound (no stamp, no write; a write prunes
@@ -588,6 +600,10 @@ a dead source is **absent** from Home and states itself in its own library secti
   replaces a sidecar on screen, and compares with what the landing SHOWS (read from the session after
   the sidecar restore, `settle_landing_selection`), not with the plan, which names no sidecar. Leaving
   Forced only is a remembered change even onto the very track it drew.
+  `version_choices` (`VersionChoiceEntry`, one `Media.id` per item and profile: what Resume and Play start, selected on the
+  Select Version list or played as a specific version, read by `route::chosen_version` and written by `route::choose_version`) is
+  account-bound from its first write, has NO count cap (`CAP = usize::MAX`) and is bounded by a household byte budget
+  (`VERSION_CHOICES_BUDGET_BYTES`, 16 KiB: oldest entry of the heaviest profile goes first) and by the document guard.
   `subtitle_offsets` is account-bound as well (since SO) under different rules: a record without a
   stamp is read as the signed-in account's own and is stamped at the list's next write
   (`MemoryEntry::ADOPTS_UNSTAMPED`), at the plex list a write with no account token is still
@@ -662,7 +678,7 @@ a dead source is **absent** from Home and states itself in its own library secti
   write onto an ABSENT record, a sign-in or a legacy import, is measured against the fresh state the
   helper starts from; the sealed credentials are sized as the helper will seal them, `Seal`: ACL-only,
   keymanager, or whichever of the two is larger when a fallback is permitted) and, if it
-  would not fit, sheds from the payload `track_memory`, then `subtitle_offsets`, then
+  would not fit, sheds from the payload `track_memory`, then `subtitle_offsets`, then `version_choices`, then
   `library_sorts` (`prefs::shed_memory`; the same oldest-from-the-largest-record rule as the
   household budget), only as far as it needs, and logs `prefs: evicted <n> <list> entries to fit
   the 256 KiB document`. The live session keeps what the payload lost until the next load. It never

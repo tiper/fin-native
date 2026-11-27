@@ -23,6 +23,7 @@ use std::os::raw::{c_char, c_int};
 pub mod qr;
 pub mod a11y; // accessibility ids: `<ns>.<path>` for every focusable element, so a UI test addresses one by id (plan a11y-ids D1, D2)
 pub mod anim;
+pub mod art_ground; // a programme's art full screen over the video plane's hole until the first frame (Live TV player)
 pub(crate) mod card_row;
 pub mod cards; // shared card sections (plan: shared-card-sections): Shelf, Grid, CardSource, and the card conformance suite
 pub mod marquee; // the focused run's looping glide: a tile's title and caption (card_row), cast name and role, menu rows (table)
@@ -53,6 +54,7 @@ pub mod glassload; // dev-only backdrop-glass LOAD DIAL + the blurred-route-tran
 pub mod hold_hint; // the standing "Hold [OK] for options" capsule: dwell/life schedule, hold-progress cap, fade + rise
 pub mod hit; // RESTRUCTURE (spec §7.6): the double-buffered hit map and the pointer gates
 pub mod placeholder; // placeholder accounting: a per-frame count at every placeholder DRAW + the #FF00FE pixel sentinel (feature `placeholder-sentinel`)
+pub mod art_fit; // how a picture meets a tile of another shape: cover, or contained over its own backdrop
 pub mod card_art; // the Continue Watching card's art: the pure composite (background + logo baked once), the cover/composite/type walk
 pub mod hero_logo; // the ONE clearLogo sizing rule + its fallback-to-title band (both heroes, the compact title)
 pub mod landing_hero; // shared landing hero geometry and scrim curve, also read by route/legibility checks
@@ -61,6 +63,8 @@ pub mod icons;
 pub mod form; // declared, ordered rows with stable keys: Form / FormTable (docs/settings-form.md)
 #[cfg(test)]
 mod form_tests;
+#[cfg(test)]
+mod table_move_tests; // the shared table's reorder surface: inert rows, RowMove, row glide
 #[cfg(test)]
 mod input_tests; // RESTRUCTURE (spec §15.1): the dispatcher's input path — engine, map, press, keyboard, legacy
 pub mod input; // RESTRUCTURE (spec §2.2): the Input machine — owner of the press (an `App` field)
@@ -74,7 +78,10 @@ pub mod master_detail; // RESTRUCTURE (spec §10): reusable two-region focus/ret
 // `Screen` mounted through `app::bridge` rather than a `Popover` reached through `app.rs`'s key
 // ladders. Its deletion readout now borrows the Session owner's immutable publication;
 // no module-level deletion counter remains for a newly mounted screen to poll.
-pub mod page_stack; // the drill-in page stack Tracks and More share
+pub mod page_stack; // the drill-in page stack and the focus-stop functions the menus share
+#[cfg(test)]
+mod menu_tests; // every transition of `menu`, and the illegal combinations
+pub mod menu; // THE menu component: a table of rows in glass / sheet / flat card, its page stack and motion (grew out of page_stack)
 pub mod panel_motion; // the resize/page-slide spring of the in-player table popovers (Tracks, More)
 
 pub mod breadcrumb; // 'Films > Collections' crumb (PR5)
@@ -82,6 +89,7 @@ pub mod hstack; // one gap between a run of measured items (UIStackView spacing)
 pub mod vstack; // the same stack top to bottom (VStack/VFlow over hstack's engine) + the alert head ladder
 pub mod page_header; // the page header row: one layout, paint, focus group and motion for the Library, Collections, Recommended and Watchlist pages
 pub mod page_regions; // the column NAV/HEADER/CONTENT/RAIL: one table for the pages' links, BACK and first seat
+pub mod time_grid; // every row of a list against one clock: the Live TV Guide's board (axis, cells, overlap travel, paging, paint)
 pub mod caption_policy; // "Under posters": what a focused poster's caption band shows and how tall it is (CONTRACT FREEZE: P3 fills)
 pub mod pill; // THE CAPSULE OUTLINE — three blended arcs per corner, solved; not a stadium
 pub(crate) mod poster_grid; // uniform six-column portrait geometry for collection-like pages
@@ -405,6 +413,26 @@ pub mod draw_census {
         RINGS.with(|l| *l.borrow_mut() = Some(Vec::new()));
         f();
         RINGS.with(|l| l.borrow_mut().take()).unwrap_or_default()
+    }
+
+    thread_local! {
+        static FITS: RefCell<Option<Vec<crate::art_fit::ArtFit>>> = const { RefCell::new(None) };
+    }
+    /// A card was asked to draw its art under `fit` ([`crate::widgets::card_fitted`], noted even for a
+    /// recording painter, which draws nothing): the one place a test reads which fit a row's tile
+    /// draw handed the shared card.
+    pub fn note_fit(fit: crate::art_fit::ArtFit) {
+        FITS.with(|l| {
+            if let Some(v) = l.borrow_mut().as_mut() {
+                v.push(fit);
+            }
+        });
+    }
+    /// Every fit a card was asked to draw under while `f` runs, in draw order.
+    pub fn capture_fits(f: impl FnOnce()) -> Vec<crate::art_fit::ArtFit> {
+        FITS.with(|l| *l.borrow_mut() = Some(Vec::new()));
+        f();
+        FITS.with(|l| l.borrow_mut().take()).unwrap_or_default()
     }
 
     thread_local! {
@@ -1670,6 +1698,48 @@ impl Painter {
             f,
             dy,
         );
+    }
+    /// [`tex_carded`](Self::tex_carded) for a card whose art is CONTAINED over its own backdrop
+    /// ([`art_fit::Placement::Contained`]): `tex` is the backdrop, windowed by `uv` to the whole card
+    /// and `inner_tex` the picture laid whole in `inner`, in ONE pass (both inked white, under this
+    /// painter's own fade: the backdrop's brightness is baked into the copy). A
+    /// FOCUSED card's rim glow, sheen crown and gloss ramp belong to that pass, so the picture has to
+    /// be composed inside it: a second quad over it paints over them. `false`, having drawn nothing,
+    /// for a resting card (no glow, crown or gloss to lose, and two plain quads are the cheaper program;
+    /// the picture's square edge does cover the constant 1px sheen where it touches the tile) or when the
+    /// specialization did not link: the caller draws the two quads then.
+    #[allow(clippy::too_many_arguments)]
+    pub fn tex_carded_inset(self, tex: u32, uv: [f32; 4], inner_tex: u32, inner: Rect,
+        r: Rect, rad: f32, f: f32) -> bool {
+        if f <= 0.0 { return false; }
+        #[cfg(any(test, feature = "test-support"))]
+        if self.records() {
+            draw_census::note_tex(inner_tex, self.place(inner), self.c(theme::TINT_WHITE)[3]);
+        }
+        if self.declare({ let (b,o,_,_)=card_shadow_params(r.h,f,theme::CARD_SHADOW[3]); Rect::new(r.x-b,r.y+o-b,r.w+2.0*b,r.h+2.0*b) }, 27, |data| {
+            use frame::backdrop::Value;
+            tex.record(data);
+            plx_gfx::gfx::tex_ledger::revision(tex).record(data);
+            inner_tex.record(data);
+            plx_gfx::gfx::tex_ledger::revision(inner_tex).record(data);
+            uv.record(data);
+            [inner.x, inner.y, inner.w, inner.h].record(data);
+            rad.record(data);
+            f.record(data);
+        }) { return true; }
+        if self.records() { return true; }
+        let t = self.c(theme::TINT_WHITE);
+        let (blur, _off, sa, off_l) = card_shadow_params(r.h, f, theme::CARD_SHADOW[3]);
+        let dy = self.px(f.clamp(0.0, 1.0) * off_l);
+        let blur = self.px(blur);
+        let shcol = self.c(theme::with_a(theme::CARD_SHADOW, sa));
+        let pad = blur + dy + 1.0;
+        let (m, mi) = (self.place(r), self.place(inner));
+        plx_gfx::gfx::draw_tex_carded_inset(
+            tex, inner_tex, [mi.x, mi.y, mi.w, mi.h], uv, m.x, m.y, m.w, m.h, self.px(rad),
+            t.as_ptr(), self.px(theme::CARD_SHEEN_W),
+            self.sheen_rim().as_ptr(), pad, blur, shcol.as_ptr(), f, dy,
+        )
     }
     /// A display-only card dissolving between equally sized images, using the card's own
     /// coverage, sheen and parent cascade once. Returns false if the optional program failed.

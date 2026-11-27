@@ -210,6 +210,9 @@ pub(crate) struct AppViews<'a> {
     /// are derived from, so no screen reads a clock. `None` before the first publication, under a
     /// replay and where the platform cannot say.
     pub(crate) wall: Option<plx_ui::fmt::Wall>,
+    /// **The Unix second of this frame's clock reading**, published with `wall` but present without the zone
+    /// offset `wall` needs (the guide's schedule is UTC: what Live TV lays a board against). `None` where there is no reading.
+    pub(crate) instant: Option<i64>,
     /// **The kind of page beneath the page these views are read for** on the navigation stack,
     /// folded in by the dispatcher per page ([`Host::views_over`]); `None` for a root, and for
     /// every context that is not a page's own. What a page that names where BACK goes reads
@@ -232,7 +235,7 @@ impl Bridge<'_> {
             search: self.retained.search.view(), metadata: self.stores.metadata_view(),
             person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session,
             transport_paused: self.retained.transport_paused,
-            today: self.retained.today, wall: self.retained.wall(), beneath: None }
+            today: self.retained.today, wall: self.retained.wall(), instant: self.retained.instant(), beneath: None }
     }
 }
 
@@ -301,6 +304,7 @@ impl plx_screens::registry::LiveTvLike for AppHost {
         cx.views.livetv
     }
     fn wall(cx: &Cx<'_, Self>) -> Option<plx_ui::fmt::Wall> { cx.views.wall }
+    fn instant(cx: &Cx<'_, Self>) -> Option<i64> { cx.views.instant }
 }
 
 impl plx_screens::registry::CollectionLike for AppHost {
@@ -351,6 +355,7 @@ fn execute_endpoint_outcomes_with(
 impl plx_screens::registry::PlayerLike for AppHost {
     fn session<'a>(cx: &Cx<'a, Self>) -> &'a plx_media::route::PlaybackSession { cx.views.session }
     fn transport_paused(cx: &Cx<'_, Self>) -> bool { cx.views.transport_paused }
+    fn lineup<'a>(cx: &Cx<'a, Self>) -> &'a [plx_data::livetv::Channel] { cx.views.livetv.channels }
 }
 
 impl plx_screens::registry::SearchLike for AppHost {
@@ -827,6 +832,11 @@ impl BridgeRetained {
         self.clock.and_then(super::clock::Reading::wall)
     }
 
+    /// The Unix second of this frame's clock reading, with or without the zone ([`super::clock::Reading::unix_s`]).
+    fn instant(&self) -> Option<i64> {
+        self.clock.map(super::clock::Reading::unix_s)
+    }
+
     /// **The Live TV store's captured input for this step**: the clients, the second of the frame's clock
     /// reading (`None` where the loop published none, which is not the epoch; present without the zone) and
     /// the seat the seat trigger last restored for, with the Recent list the memory door holds for it,
@@ -864,7 +874,7 @@ impl BridgeRetained {
             section_hubs: self.section_hubs.view(), search: self.search.view(),
             metadata: stores.metadata_view(), person: stores.person_view(), collection: stores.collection_view(),
             subtitle_search: stores.subtitle_search_view(), livetv: stores.livetv_view(), session: &self.playback,
-            transport_paused: self.transport_paused, today: self.today, wall: self.wall(), beneath: None }
+            transport_paused: self.transport_paused, today: self.today, wall: self.wall(), instant: self.instant(), beneath: None }
     }
 
     /// A Bridge booted from a controlled Home. It always runs the `Live` store runner, whatever
@@ -1732,7 +1742,7 @@ impl Bridge<'_> {
     pub(crate) fn publish_player_presentation(&mut self, ps: &plx_media::route::PlaybackSession) -> bool {
         // No Player replay domain exists: controlled owners retain explicit neutral/supplied facts.
         if !self.retained.live_screen_inputs { return false; }
-        let next = super::player_presentation::capture(ps);
+        let next = super::player_presentation::capture(ps, self.metadata_view());
         // The set the composition published: the screens read it to disable Play when none is composed.
         let backends = ps.backends();
         if self.retained.screen_inputs.player_presentation == next
@@ -1954,13 +1964,12 @@ impl Bridge<'_> {
             let sid = match &e.arg { AppArg::Content(ContentArg::Detail { sid, .. }) => *sid, _ => return None };
             let rect = page.focused_rect::<AppHost>(ret.focus, &cx, At::Drawn);
             let meta = <AppHost as plx_screens::registry::MetadataLike>::metadata(&cx);
-            if let Some((ep, mark)) = page.hero_menu_episode(ret.focus, meta) {
-                let mut arg = strip_menu_arg(sid, &ep.rk,
-                    ItemMenuKind::Episode { mark, versions: ep.versions.clone() }, entry, ret.focus, rect);
-                // The on-deck episode need not be in the loaded season window. The ordinary
-                // addressed item path fetches it, rather than the filmstrip's loaded-only path.
+            if let Some((rk, kind)) = d.nav.instance_of(entry).and_then(|opener| page.hero_overflow(ret.focus, meta, opener)) {
+                // The hero's …: the item Play from Start / Play Version act on may be the on-deck
+                // episode, which need not be in the loaded season window, so the ordinary
+                // addressed-item path fetches it rather than the filmstrip's loaded-only one.
+                let mut arg = strip_menu_arg(sid, &rk, kind, entry, ret.focus, rect);
                 arg.loaded_episode = false;
-                arg.watchlist = self.watchlist_face(page.watchlist_hex(), plx_data::watchlist::model::Kind::Show, true);
                 return Some(arg);
             }
             if let Some((rk, show_rk, index, mark)) = page.focused_season(ret.focus, meta) {
@@ -3013,8 +3022,26 @@ impl Bridge<'_> {
     /// **Publish this frame's clock reading** — the one publication of the clock (`AppViews::wall` and the
     /// Live TV store's `now` both come from it). Called once per iteration by the loop, beside
     /// [`Self::publish_today`], with `clock::reading()` (the loop is that door's one caller).
-    pub(crate) fn publish_clock(&mut self, reading: Option<super::clock::Reading>) {
+    ///
+    /// The bar's clock face is captured from the same reading ([`super::chrome::ChromeSnapshot::set_clock`]):
+    /// returns `true` when it CHANGED (a new minute), which the loop turns into the one frame that
+    /// minute owes ([`super::run`]'s `publish_product_frame`). The wall time is passed in and nothing
+    /// here reads a clock or schedules a wake: the minute edge is detected on the frame that first
+    /// carries it.
+    pub(crate) fn publish_clock(&mut self, reading: Option<super::clock::Reading>) -> bool {
         self.retained.clock = reading;
+        let wall = self.retained.wall();
+        self.retained.chrome.set_clock(wall, &self.retained.measure)
+    }
+
+    /// **The clock the bar shows this frame, or `None`: the ONE answer.** The top page wears the bar,
+    /// the bar is on screen ([`plx_ui::dispatch::Dispatcher::bar_presented`], the chrome pass's own
+    /// test, so a detail page, the player, a faded or tucked bar all answer `None`) and a wall time is
+    /// published. What the minute edge owes a frame (`run::publish_product_frame`) and what a dev
+    /// instrument on the bar's right end steps aside for (`run::fps_counter_right_x`) both ask this.
+    pub(crate) fn bar_clock(&self, pages: &plx_ui::dispatch::Dispatcher<AppHost>) -> Option<plx_ui::widgets::ClockRead<'_>> {
+        pages.bar_presented(Rig::navigation_presentation(self, &pages.nav))?;
+        self.retained.chrome.clock_read()
     }
 
     /// The wall time of the clock reading last published ([`Self::publish_clock`]; `None` without a
@@ -3088,7 +3115,7 @@ impl Bridge<'_> {
                 hubs: self.retained.hubs.view(), listing: self.retained.listing.view(), directory: self.retained.directory.view(),
                 section_hubs: self.retained.section_hubs.view(), search: self.retained.search.view(), metadata: self.stores.metadata_view(), person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session: &self.retained.playback,
                 transport_paused: self.retained.transport_paused,
-                today: self.retained.today, wall: self.retained.wall(), beneath: None,
+                today: self.retained.today, wall: self.retained.wall(), instant: self.retained.instant(), beneath: None,
             }, &self.retained.measure);
             let handled = self.session.step(event, &cx, fx);
             // #132: the owner logs nothing, and the Profiles screen cannot see a read-out that
@@ -3433,6 +3460,9 @@ impl Rig<AppHost> for Bridge<'_> {
         let p = plx_ui::Painter::root().alpha(nav.chrome_alpha).translate(0.0, -nav.chrome_lift);
         let chrome = self.retained.chrome.read(self.retained.strip.chip_expand_pos());
         self.retained.strip.draw(chrome.labels, p, glass.tab_band_mut(), nav);
+        // The clock is a status on the bar, so it rides the bar's painter (the tuck, fade and lift)
+        // and stays up when a menu consumes the chip below.
+        if let Some(clock) = chrome.clock { plx_ui::widgets::draw_top_bar_clock(p, clock); }
         // The chip a morphing menu consumed (`lifted`) is the lift's alone: left out here, it is not
         // under the dim and not in the host snapshot the panel's rim refracts.
         if lifted == Some(plx_ui::widgets::TAB_KEY_CHIP) { return; }
@@ -3482,7 +3512,7 @@ impl Rig<AppHost> for Bridge<'_> {
                 directory: self.retained.directory.view(),
                 section_hubs: self.retained.section_hubs.view(), search: self.retained.search.view(), metadata: self.stores.metadata_view(), person: self.stores.person_view(), collection: self.stores.collection_view(), livetv: self.stores.livetv_view(), subtitle_search: self.stores.subtitle_search_view(), session: &self.retained.playback,
                 transport_paused: self.retained.transport_paused,
-                today: self.retained.today, wall: self.retained.wall(), beneath: None,
+                today: self.retained.today, wall: self.retained.wall(), instant: self.retained.instant(), beneath: None,
             },
             measure: &self.retained.measure,
         }
@@ -3622,6 +3652,13 @@ impl Bridge<'_> {
                 plx_os::playback_trace::Status::Off)))));
             return;
         }
+        // Nor the live packet probe: a replay has none.
+        if self.retained.home_io.is_some() && matches!(fx,
+            InlineAppFx::PacketProbe(plx_os::tv::packet_probe::Command::Status)) {
+            out.push(Fx::Deliver(from, Delivery::Screen(ScreenEvent::App(AppMsg::PacketProbe(
+                plx_os::tv::packet_probe::Status::Unavailable)))));
+            return;
+        }
         if let Some(io) = &mut self.retained.home_io {
             if let Err(reason) = super::bootstrap::effects::inline(&fx) {
                 io.failure = Some(reason);
@@ -3634,6 +3671,10 @@ impl Bridge<'_> {
             InlineAppFx::PlaybackTrace(command) => {
                 let status = self.playback_trace_command(from, command);
                 out.push(Fx::Deliver(from, Delivery::Screen(ScreenEvent::App(AppMsg::PlaybackTrace(status)))));
+            }
+            InlineAppFx::PacketProbe(command) => {
+                let status = plx_os::tv::packet_probe::command(command);
+                out.push(Fx::Deliver(from, Delivery::Screen(ScreenEvent::App(AppMsg::PacketProbe(status)))));
             }
             InlineAppFx::Huds(command) => out.push(Fx::Deliver(MachineId::Huds, Delivery::Machine(AppMsg::Huds(command)))),
             InlineAppFx::Store(StoreId::Person, StoreCmd::Person(command)) => out.push(Fx::Deliver(
@@ -4471,6 +4512,56 @@ pub(crate) fn open_player_overlay(
     );
 }
 
+/// **Present the before-playback picker over the failed player** (`PlayerReq::OpenFailedTracks`): the
+/// item and the part are the failed attempt's, read off the session; the surface is a player panel that
+/// survives the failure, as the `…` popover's Quality page does.
+pub(crate) fn open_failed_tracks(ps: &plx_media::route::PlaybackSession, anchor: [u32; 4], d: &mut Dispatcher<AppHost>) {
+    let Some(InputOwner::Entry(entry)) = d.nav.input_owner() else { return };
+    let Some(host) = d.nav.instance_of(entry) else { return };
+    let arg = AppArg::PreplayPanel(plx_screens::preplay_panel::PreplayArg {
+        host,
+        sid: plx_media::route::cur_sid(ps),
+        rk: plx_media::route::cur_rk(ps),
+        anchor,
+        opener: None,
+        source: plx_screens::preplay_panel::Source::Failed { part_id: plx_media::route::cur_part_id(ps), pick: plx_media::route::failed_pick(ps) },
+    });
+    present_once(d, arg, Style::PlayerPanel { survives_failure: true });
+}
+
+/// **Present a surface that is only ever one**: refused when one of its kind is already up, and when one is already
+/// PARKED for this frame's commit (a surface mounts at the commit, once a frame, so two requests in one frame cannot
+/// see each other in the tree). A later request for a parked surface is folded into it ([`AppArg::absorb`]: number
+/// entry's later keys), not presented again.
+fn present_once(d: &mut Dispatcher<AppHost>, arg: AppArg, style: Style) {
+    let id = plx_ui::screen::ScreenArg::id(&arg);
+    if surface_up(d, move |up| plx_ui::screen::ScreenArg::id(up) == id) {
+        return;
+    }
+    if let Some(parked) = d.parked_present_mut(move |up| plx_ui::screen::ScreenArg::id(up) == id) {
+        parked.absorb(&arg);
+        return;
+    }
+    d.nav.next_style = style;
+    d.request(MachineId::Nav, NavOp::Present(arg));
+}
+
+/// **Present number entry over the live player** (`PlayerReq::OpenChannelEntry`): a `Style::PlayerPanel`, which leaves
+/// the player page live (`surface_policy`: host Live, panel Live), so the video plane keeps presenting under the panel
+/// where a `Sheet` or an `Alert` would freeze the host into the transparent hole. The pick comes back to the player
+/// instance as `AppMsg::LiveChannelPicked`. A second copy of the panel is never presented: one already up hears the
+/// key as input, and one parked for this frame's commit takes it as one more opening key ([`present_once`]).
+pub(crate) fn open_channel_entry(
+    first: u8,
+    playing: Option<plx_screens::channel_entry_panel::PlayingKey>,
+    d: &mut Dispatcher<AppHost>,
+) {
+    let Some(InputOwner::Entry(entry)) = d.nav.input_owner() else { return };
+    let Some(host) = d.nav.instance_of(entry) else { return };
+    let arg = AppArg::ChannelEntry(plx_screens::channel_entry_panel::ChannelEntryArg::opened_by(host, first, playing));
+    present_once(d, arg, Style::PlayerPanel { survives_failure: false });
+}
+
 /// Which player panel owns input right now, if one does.
 pub(crate) fn player_overlay_kind(
     d: &Dispatcher<AppHost>,
@@ -4619,12 +4710,7 @@ pub(crate) fn open_content_panel(
     // this function's is the PRESENTING: refuse a second copy of one already up, hand the
     // container the style through its one-shot handshake, and request the op.
     let Some((style, arg)) = panel.surface(host, subject) else { return };
-    let id = plx_ui::screen::ScreenArg::id(&arg);
-    if surface_up(d, move |up| plx_ui::screen::ScreenArg::id(up) == id) {
-        return;
-    }
-    d.nav.next_style = style;
-    d.request(MachineId::Nav, NavOp::Present(arg));
+    present_once(d, arg, style);
 }
 
 /// A rect as the bit-preserving anchor an argument carries — `LibraryMenuArg::anchor`'s rule, so
@@ -5458,6 +5544,17 @@ pub(crate) fn send_player_message(d: &mut Dispatcher<AppHost>, message: AppMsg) 
     d.emit(page, Fx::Deliver(page, Delivery::Screen(ScreenEvent::App(message))));
 }
 
+/// **Tell the Live TV page the player was launched from which channel the viewer left** (`AppMsg::LiveTvSeat`), so its
+/// restore seats that channel's card, not the one that was pressed. The page is covered while the player is up, and a
+/// covered page still receives an addressed command. A player launched from any other page names no channel to anyone.
+pub(crate) fn seat_live_channel(d: &mut Dispatcher<AppHost>, sid: plx_plex::plex::ServerId, dvr: String, channel: String) {
+    let Some(entry) = player(d).and_then(|p| p.origin).map(|o| o.entry) else { return };
+    if !d.nav.entry(entry).is_some_and(|e| matches!(e.arg, AppArg::LiveTv)) { return; }
+    let Some(instance) = d.nav.instance_of(entry) else { return };
+    let page = MachineId::Instance(instance);
+    d.emit(page, Fx::Deliver(page, Delivery::Screen(ScreenEvent::App(AppMsg::LiveTvSeat { sid, dvr, channel }))));
+}
+
 /// **Ask the player page to toggle a section** (Chapters, Info): the `toggle_section` command's performer
 /// (`app::playback::perform_hud_command`) addresses the page with `AppMsg::HudSection`. The page owns the
 /// sections, so it opens or closes under the package's policy and seats its own focus; the app writes nothing of
@@ -6053,6 +6150,9 @@ mod under_posters_band_route_tests;
 #[cfg(test)]
 #[path = "home_chrome_route_tests.rs"]
 mod home_chrome_route_tests;
+#[cfg(test)]
+#[path = "chrome_clock_route_tests.rs"]
+mod chrome_clock_route_tests;
 #[cfg(test)]
 #[path = "home_hero_route_tests.rs"]
 mod home_hero_route_tests;

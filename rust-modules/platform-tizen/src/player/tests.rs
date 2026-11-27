@@ -10,8 +10,8 @@ use crate::hosted::Drained;
 use plx_base::task::MainThread;
 use plx_media::player::adapter::PlayerAdapter;
 use plx_media::route::uri_preflight::{OriginalQualifier, OriginalRequest, PmsAudioOutput, PmsRecipe, PmsRequest, PmsVerdict,
-    ProductEvidence, ResolvePort, StandardDirectPlay, UriDecline, Verdict};
-use plx_playback_contract::uri::{DisplayReadiness, NativeTrackIndex, UriDriver, UriSource};
+    ProductEvidence, ResolvePort, SourceSubtitle, SourceSubtitleStream, StandardDirectPlay, UriDecline, Verdict};
+use plx_playback_contract::uri::{DisplayReadiness, NativeTrackCheck, NativeTrackIndex, UriDriver, UriSource};
 use plx_playback_contract::uri_conformance::{conforms, UriHarness};
 use plx_playback_contract::{AttemptId, BackendEvent, BackendKind, BackendSet, CommandId, ContentTime, DispatchResult,
     DriverEvent, DriverSet, ExitDisposition, Failure, Observation, Operation, Playback, ReleaseStatus, SourceKey,
@@ -29,6 +29,8 @@ struct Script {
     refuse_open: Option<Refusal>,
     refuse_verb: Option<Refusal>,
     overflow: bool,
+    cues: Vec<host_abi::HostCue>,
+    cues_dropped: usize,
     now: u64,
 }
 
@@ -80,6 +82,12 @@ impl HostPlayer for Fake {
         self.with(|s| {
             out.append(&mut s.inbox);
             Drained { overflowed: std::mem::take(&mut s.overflow), stale: 0 }
+        })
+    }
+    fn drain_cues(&mut self, out: &mut Vec<host_abi::HostCue>) -> usize {
+        self.with(|s| {
+            out.append(&mut s.cues);
+            std::mem::take(&mut s.cues_dropped)
         })
     }
     fn now_ms(&self) -> u64 {
@@ -564,27 +572,181 @@ fn a_start_needs_the_staged_source_of_its_own_attempt_and_one_attempt_at_a_time(
     assert_eq!(dispatch(&mut driver, attempt(4), 4, start), DispatchResult::Refused(Failure::Busy));
 }
 
-#[test]
-fn only_the_first_audio_stream_is_selectable_and_the_driver_says_so() {
-    let (mut driver, fake) = rig();
-    let first = TrackSelection { kind: TrackKind::Audio, id: 31342 };
-    let second = TrackSelection { kind: TrackKind::Audio, id: 31343 };
+/// The host's PREPARED-time report of one native audio track's language: `b` is the code's ASCII bytes, first
+/// character in the lowest byte (`plx_host.h`, PLAYER_AUDIO_LANGUAGE).
+fn language_word(code: &str) -> i64 {
+    let mut bytes = [0u8; 8];
+    bytes[..code.len()].copy_from_slice(code.as_bytes());
+    i64::from_le_bytes(bytes)
+}
+
+/// Start an attempt whose track map names `selection` at `ordinal`, with `check`, on a host whose player reports
+/// `native` as its audio tracks' languages ("" = no code) before PREPARED.
+fn prepared_with(driver: &mut TizenUriDriver<Fake>, fake: &Fake, selection: TrackSelection, ordinal: i64,
+    check: NativeTrackCheck, native: &[&str]) -> (AttemptId, u32) {
     let a = attempt(1);
-    stage_and_start(&mut driver, a, vec![NativeTrackIndex { selection: first, index: 0 }, NativeTrackIndex { selection: second, index: 1 }]);
-    fake.post(fake.epoch(), PlayerKind::Prepared, 1_000, 0);
-    poll(&mut driver);
-    assert!(driver.maps_track(first) && !driver.maps_track(second));
-    let pick = |id| Operation::SelectTrack { kind: TrackKind::Audio, choice: TrackChoice::Selected(id) };
+    let key = SourceKey::new(a.generation());
+    let source = UriSource::new(URL.into(), vec![NativeTrackIndex { selection, index: ordinal }]).with_check(selection, check);
+    assert_eq!(driver.stage_source(a, key, source), Ok(()));
+    let start = Operation::Start { source: key, requirements: plain_requirements() };
+    assert_eq!(dispatch(driver, a, 1, start), DispatchResult::Queued);
+    let epoch = fake.epoch();
+    for (index, code) in native.iter().enumerate() {
+        fake.post(epoch, PlayerKind::AudioLanguage, index as i64, if code.is_empty() { 0 } else { language_word(code) });
+    }
+    fake.post(epoch, PlayerKind::Prepared, 1_000, 0);
+    poll(driver);
+    (a, epoch)
+}
+
+const SECOND: TrackSelection = TrackSelection { kind: TrackKind::Audio, id: 31343 };
+
+fn pick(id: u64) -> Operation {
+    Operation::SelectTrack { kind: TrackKind::Audio, choice: TrackChoice::Selected(id) }
+}
+
+fn german() -> NativeTrackCheck {
+    NativeTrackCheck::Language("ger".into())
+}
+
+/// **The selected audio stream is asked of the host and settles on its answer.** The ordinal's native track has the
+/// stream's language, so the driver sends `VERB_AUDIO_TRACK` with that index and the command id, and the selection
+/// settles only when the host's `PLAYER_TRACK` echoes the command with that index. A refusal (`b = -1`), another
+/// index, an unanswered request and a refused verb are the command's typed refusal; a stream the map does not name
+/// is `Unsupported` and asks nothing.
+#[test]
+fn the_selected_audio_stream_is_asked_of_the_host_and_settles_on_its_answer() {
+    let (mut driver, fake) = rig();
+    let unmapped = TrackSelection { kind: TrackKind::Audio, id: 31342 };
+    let (a, epoch) = prepared_with(&mut driver, &fake, SECOND, 1, german(), &["eng", "ger"]);
+    assert!(driver.maps_track(SECOND) && !driver.maps_track(unmapped));
+
+    assert_eq!(dispatch(&mut driver, a, 3, pick(31343)), DispatchResult::Queued);
+    assert_eq!(fake.verbs(), [Verb::AudioTrack { index: 1, command: 3 }]);
+    assert!(poll(&mut driver).is_empty(), "nothing settles before the host answers");
+    fake.post(epoch, PlayerKind::Track, 3, 1);
+    assert_eq!(poll(&mut driver), [
+        observation(a, Observation::TrackSelected(seen(SECOND))),
+        DriverEvent::TrackSettled { attempt: a, command: cmd(3), kind: TrackKind::Audio, choice: TrackChoice::Selected(31343) },
+    ]);
+
+    // The host refused it, or answered with another index: the command's refusal, and the attempt keeps playing.
+    for (command, b) in [(4, -1), (5, 0)] {
+        assert_eq!(dispatch(&mut driver, a, command, pick(31343)), DispatchResult::Queued);
+        fake.post(epoch, PlayerKind::Track, command as i64, b);
+        assert_eq!(poll(&mut driver), [DriverEvent::ControlRefused { attempt: a, command: cmd(command), operation: pick(31343),
+            failure: Failure::Refused }], "b = {b}");
+    }
+
+    // No answer by the control deadline.
+    assert_eq!(dispatch(&mut driver, a, 6, pick(31343)), DispatchResult::Queued);
+    fake.advance(TIMING.control_timeout_ms);
+    assert_eq!(poll(&mut driver), [DriverEvent::ControlRefused { attempt: a, command: cmd(6), operation: pick(31343),
+        failure: Failure::TimedOut }]);
+
+    // The host refused the verb at the door.
+    fake.with(|s| s.refuse_verb = Some(Refusal::Busy));
+    assert_eq!(dispatch(&mut driver, a, 7, pick(31343)), DispatchResult::Refused(Failure::Busy));
+    fake.with(|s| s.refuse_verb = None);
+    assert!(poll(&mut driver).is_empty(), "a refused verb leaves nothing pending");
+
+    // A stream the map does not name, and a subtitle, ask nothing of the host.
+    let asked = fake.verbs().len();
+    assert_eq!(dispatch(&mut driver, a, 8, pick(31342)), DispatchResult::Refused(Failure::Unsupported));
+    assert_eq!(dispatch(&mut driver, a, 9, Operation::SelectTrack { kind: TrackKind::Subtitle, choice: TrackChoice::Selected(1) }),
+        DispatchResult::Refused(Failure::Unsupported));
+    assert_eq!(fake.verbs().len(), asked);
+}
+
+/// **The track is chosen by its language, not trusted by its position** (review of #1566: LG's service ordered a
+/// four-track file differently from PMS). The ordinal is used when its native track has the stream's language;
+/// otherwise the ONE native track with that language; otherwise (several, none, or no language known on either
+/// side) the request is refused before the host is asked, so a wrong track never settles as the viewer's pick.
+#[test]
+fn the_native_track_is_the_one_whose_language_is_the_streams() {
+    for (native, ordinal, want) in [
+        (&["eng", "ger"][..], 1, Some(1)),        // the ordinal's language matches
+        (&["ger", "eng"][..], 1, Some(0)),        // it does not; one other track has it
+        (&["eng", "ger", "ger"][..], 1, Some(1)), // several have it, the ordinal among them
+        (&["ger", "ger", "eng"][..], 2, None),    // several, the ordinal not among them: ambiguous
+        (&["eng", "fre"][..], 1, None),           // none has it
+        (&["eng", ""][..], 1, None),              // the ordinal's language is unknown and none other has it
+        (&["eng", "und"][..], 1, None),           // "und" is no language
+        (&[][..], 1, None),                       // the player reported no tracks
+    ] {
+        let (mut driver, fake) = rig();
+        let (a, _) = prepared_with(&mut driver, &fake, SECOND, ordinal, german(), native);
+        let answer = dispatch(&mut driver, a, 2, pick(31343));
+        match want {
+            Some(index) => {
+                assert_eq!(answer, DispatchResult::Queued, "{native:?} at {ordinal}");
+                assert_eq!(fake.verbs(), [Verb::AudioTrack { index, command: 2 }], "{native:?} at {ordinal}");
+            }
+            None => {
+                assert_eq!(answer, DispatchResult::Refused(Failure::Unsupported), "{native:?} at {ordinal}");
+                assert!(fake.verbs().is_empty(), "nothing asked of the host for {native:?} at {ordinal}");
+            }
+        }
+    }
+    // A stream whose own language PMS does not state cannot be told apart either.
+    for unknown in ["", "und"] {
+        let (mut driver, fake) = rig();
+        let (a, _) = prepared_with(&mut driver, &fake, SECOND, 1, NativeTrackCheck::Language(unknown.into()), &["eng", "ger"]);
+        assert_eq!(dispatch(&mut driver, a, 2, pick(31343)), DispatchResult::Refused(Failure::Unsupported), "{unknown:?}");
+    }
+}
+
+/// **A sole audio stream is settled by construction, with no host call** (review round 2 of #1566). The player plays
+/// the only track it has, so asking it is no evidence and a firmware that reports no track in READY (a count of 0, a
+/// failed read, a missing `player_select_track`) would answer -1 and halt the start of every single-audio title, the
+/// kind that already plays on the retail set. It settles as main settled it: `TrackSelected` and `TrackSettled` at
+/// once, no `VERB_AUDIO_TRACK`. A `Sole` check at any ordinal but 0 is no single stream and is refused.
+#[test]
+fn a_sole_audio_stream_settles_by_construction_without_asking_the_host() {
+    let first = TrackSelection { kind: TrackKind::Audio, id: 31342 };
+    let (mut driver, fake) = rig();
+    let (a, _) = prepared_with(&mut driver, &fake, first, 0, NativeTrackCheck::Sole, &[]);
     assert_eq!(dispatch(&mut driver, a, 2, pick(31342)), DispatchResult::Queued);
+    assert!(fake.verbs().is_empty(), "no verb for a sole stream: {:?}", fake.verbs());
     assert_eq!(poll(&mut driver), [
         observation(a, Observation::TrackSelected(seen(first))),
         DriverEvent::TrackSettled { attempt: a, command: cmd(2), kind: TrackKind::Audio, choice: TrackChoice::Selected(31342) },
     ]);
-    assert_eq!(dispatch(&mut driver, a, 3, pick(31343)), DispatchResult::Refused(Failure::Unsupported));
-    assert_eq!(dispatch(&mut driver, a, 4, Operation::SelectTrack { kind: TrackKind::Subtitle, choice: TrackChoice::Selected(1) }),
-        DispatchResult::Refused(Failure::Unsupported));
-    assert!(poll(&mut driver).is_empty(), "a refused selection is the planner's typed answer: it fails and tears down nothing");
-    assert!(fake.verbs().is_empty(), "no track verb exists on the host: nothing was asked of it");
+
+    let (mut driver, fake) = rig();
+    let (a, _) = prepared_with(&mut driver, &fake, first, 1, NativeTrackCheck::Sole, &[]);
+    assert_eq!(dispatch(&mut driver, a, 2, pick(31342)), DispatchResult::Refused(Failure::Unsupported));
+    assert!(fake.verbs().is_empty());
+}
+
+/// PMS states a stream's language as ISO 639-2 (`ger`, `fre`, `cze`: the B codes Plex writes) and a container can
+/// tag it as ISO 639-1 (`de`) or 639-2/T (`deu`, `fra`, `ces`): the driver folds both sides through the shared
+/// table (`plx_data::metadata::lang_matches`), so every spelling of one language is one language.
+#[test]
+fn every_spelling_of_one_language_is_one_language() {
+    for (pms, native) in [("ger", "de"), ("ger", "deu"), ("deu", "ger"), ("fre", "fr"), ("fre", "fra"), ("eng", "en"),
+        ("cze", "ces"), ("dut", "nld"), ("chi", "zho"), ("ENG", "eng")] {
+        let (mut driver, fake) = rig();
+        let (a, _) = prepared_with(&mut driver, &fake, SECOND, 1, NativeTrackCheck::Language(pms.into()), &["xxx", native]);
+        assert_eq!(dispatch(&mut driver, a, 2, pick(31343)), DispatchResult::Queued, "{pms} ~ {native}");
+        assert_eq!(fake.verbs(), [Verb::AudioTrack { index: 1, command: 2 }], "{pms} ~ {native}");
+    }
+    let (mut driver, fake) = rig();
+    let (a, _) = prepared_with(&mut driver, &fake, SECOND, 1, german(), &["xxx", "dan"]);
+    assert_eq!(dispatch(&mut driver, a, 2, pick(31343)), DispatchResult::Refused(Failure::Unsupported), "ger is not dan");
+}
+
+/// A track request the host still holds when the player closes is answered as refused before the release.
+#[test]
+fn a_track_request_unanswered_at_the_close_is_refused_before_the_release() {
+    let (mut driver, fake) = rig();
+    let (a, epoch) = prepared_with(&mut driver, &fake, SECOND, 1, german(), &["eng", "ger"]);
+    assert_eq!(dispatch(&mut driver, a, 2, pick(31343)), DispatchResult::Queued);
+    fake.post(epoch, PlayerKind::Closed, 0, 0);
+    assert_eq!(poll(&mut driver), [
+        DriverEvent::ControlRefused { attempt: a, command: cmd(2), operation: pick(31343), failure: Failure::Refused },
+        DriverEvent::Release { attempt: a, status: ReleaseStatus::Released },
+    ]);
 }
 
 #[test]
@@ -602,8 +764,10 @@ fn the_capabilities_are_progressive_pause_and_seek_and_the_display_rests_on_the_
     assert_eq!(driver.capabilities(BackendKind::Uri), Some(CAPS));
     assert_eq!(driver.capabilities(BackendKind::Feed), None);
     assert!(CAPS.progressive_uri && CAPS.pause && CAPS.seek);
-    assert!(!CAPS.hls_uri && !CAPS.packet_feed && !CAPS.subtitle_track && !CAPS.audio_off);
-    assert!(CAPS.subtitle_off, "the host player is given no subtitle, so Off holds by construction");
+    assert!(!CAPS.hls_uri && !CAPS.packet_feed && !CAPS.audio_off);
+    assert!(CAPS.subtitle_track, "a text subtitle is selected on the host and its cues drawn by the app");
+    assert!(CAPS.subtitle_off, "the host player draws no subtitle, so Off holds by construction");
+    assert!(driver.delivers_captions(), "the app draws the subtitle from the host's cues");
     assert_eq!(driver.display().tag, DISPLAY_TAG);
     assert!(driver.display().is_ready() && !driver.display().preview_rectangle);
     fake.with(|s| s.unavailable = Some("no player"));
@@ -795,7 +959,9 @@ fn request(standard: StandardDirectPlay, audio_sid: i64, audio_ordinal: Option<i
         audio_codec: "aac".into(),
         audio_ordinal,
         has_multiple_audio_tracks: false,
+        audio_language: String::new(),
         subtitle_source: None,
+        subtitle_streams: Default::default(),
         subtitle_choice: TrackChoice::Unspecified,
         source_kbps: None,
         raster: None,
@@ -871,29 +1037,35 @@ fn a_dts_or_non_direct_play_source_is_refused_with_its_typed_reason_and_no_conve
     }
 }
 
-/// The host player has no track verb, so a play that selects any audio stream but the first is declined instead
-/// of started on the wrong track, and a play whose position is unknown is too.
+/// **A source with several audio streams is certified for the one the play selects** (discussion #1460: every multi-audio
+/// title was refused on the first retail set). The offer's track map names that stream at its position among the Part's
+/// audio streams (`audio_ordinal`), which is the index the driver asks the host player to select. A play that selects a
+/// stream whose position is unknown is still declined: there would be no index to ask for.
 #[test]
-fn a_play_that_selects_another_audio_stream_is_declined() {
-    for ordinal in [Some(1), Some(3), None] {
-        let verdict = resolver().qualify(&off(), request(plays(), 31343, ordinal));
-        assert!(matches!(verdict, Verdict::Unknown(UriDecline::NotCertified)), "ordinal {ordinal:?}");
+fn a_source_with_several_audio_streams_is_certified_for_the_selected_stream() {
+    for (sid, ordinal) in [(31342, 0), (31343, 1), (31345, 3)] {
+        let mut req = request(plays(), sid, Some(ordinal));
+        req.has_multiple_audio_tracks = true;
+        req.audio_language = "ger".into();
+        let Verdict::Known(known) = resolver().qualify(&off(), req) else { panic!("audio {sid} at {ordinal} is certified") };
+        assert_eq!(known.requirements.audio_track, TrackChoice::Selected(sid as u64));
+        let selection = TrackSelection { kind: TrackKind::Audio, id: sid as u64 };
+        assert_eq!(known.source.check_of(selection), Some(&NativeTrackCheck::Language("ger".into())),
+            "a multi-audio offer carries the stream's language for the driver to match");
+        let (_, tracks) = known.source.into_parts();
+        assert_eq!(tracks, [NativeTrackIndex { selection: TrackSelection { kind: TrackKind::Audio, id: sid as u64 }, index: ordinal }]);
+    }
+    for multiple in [false, true] {
+        let mut unknown = request(plays(), 31343, None);
+        unknown.has_multiple_audio_tracks = multiple;
+        assert!(matches!(resolver().qualify(&off(), unknown), Verdict::Unknown(UriDecline::NotCertified)),
+            "a selected stream with no position (multiple {multiple})");
     }
     // No selected stream at all (a silent file) needs no track.
     assert!(matches!(resolver().qualify(&off(), request(plays(), 0, None)), Verdict::Known(_)));
-}
-
-/// Which stream the retail player starts on when a source has several is unmeasured, so a source with more than one
-/// audio stream is not certified, whichever stream is selected (the webOS precedent `ManyAudioTracksExported`).
-#[test]
-fn a_source_with_several_audio_streams_is_not_certified() {
-    for (sid, ordinal) in [(31342, Some(0)), (31343, Some(1)), (0, None)] {
-        let mut req = request(plays(), sid, ordinal);
-        req.has_multiple_audio_tracks = true;
-        let verdict = resolver().qualify(&off(), req);
-        assert!(matches!(verdict, Verdict::Unknown(UriDecline::NotCertified)), "audio {sid}");
-    }
-    assert!(matches!(resolver().qualify(&off(), request(plays(), 31342, Some(0))), Verdict::Known(_)), "one stream is");
+    // A single-stream offer says so: its ordinal is the track, with no language to match.
+    let Verdict::Known(single) = resolver().qualify(&off(), request(plays(), 31342, Some(0))) else { panic!("one stream") };
+    assert_eq!(single.source.check_of(TrackSelection { kind: TrackKind::Audio, id: 31342 }), Some(&NativeTrackCheck::Sole));
 }
 
 /// The emulator has no audio device, so its runs serve VIDEO-ONLY media (the mock's `--extra-media-video-only`). The planner
@@ -966,13 +1138,303 @@ fn the_viewer_refusals_end_the_play_before_the_qualifier_is_asked() {
     assert!(matches!(verdict, Verdict::Refused(UriDecline::AudioEnhancement)), "boost dialog");
 }
 
-/// A track selection the contract states for a subtitle is outside the capabilities: no offer carries one.
-#[test]
-fn a_selected_subtitle_is_not_offered() {
+fn text_sub(sid: u64, ordinal: i64, codec: &str, language: &str) -> SourceSubtitleStream {
+    SourceSubtitleStream { sid, ordinal, codec: codec.into(), language: language.into() }
+}
+
+/// A play that selects the embedded subtitle `sid` among `streams` (the reproduction: a server-selected SubRip track).
+fn subtitled(streams: Vec<SourceSubtitleStream>, sid: u64) -> OriginalRequest {
+    let codec = streams.iter().find(|s| s.sid == sid).map_or_else(String::new, |s| s.codec.clone());
     let mut req = request(plays(), 31342, Some(0));
-    req.subtitle_choice = TrackChoice::Selected(9);
-    req.selection.subtitle_sid = 9;
-    assert!(!matches!(resolver().qualify(&off(), req), Verdict::Known(_)));
+    req.subtitle_choice = TrackChoice::Selected(sid);
+    req.selection.subtitle_sid = sid as i64;
+    req.subtitle_source = Some(SourceSubtitle { codec, embedded: true });
+    req.subtitle_streams = streams.into();
+    req
+}
+
+/// **A selected embedded text subtitle is offered** (it was declined with `SubtitleNotCarried` before, so every
+/// title with a server-selected subtitle stayed off the URI engine). Every embedded subtitle stream of the Part is mapped
+/// at its ordinal with its identity check, the selected one is the requirement, and the certificate carries its render.
+/// A Part with one subtitle stream maps it `Sole`; with several, each by its language.
+#[test]
+fn a_selected_embedded_text_subtitle_is_offered_with_every_stream_mapped() {
+    let Verdict::Known(known) = resolver().qualify(&off(), subtitled(vec![text_sub(9, 0, "srt", "eng")], 9)) else {
+        panic!("a sole SubRip track is certified");
+    };
+    assert_eq!(known.requirements.subtitle_track, TrackChoice::Selected(9));
+    assert!(CAPS.supports(known.requirements));
+    let nine = TrackSelection { kind: TrackKind::Subtitle, id: 9 };
+    assert_eq!(known.source.check_of(nine), Some(&NativeTrackCheck::Sole));
+    assert_eq!(known.source.check_of(TrackSelection { kind: TrackKind::Audio, id: 31342 }), Some(&NativeTrackCheck::Sole),
+        "the audio stream's check survives the subtitle map");
+    assert_eq!(known.certified_subtitle_source, Some(SourceSubtitle { codec: "srt".into(), embedded: true }));
+
+    let three = vec![text_sub(11, 0, "srt", "eng"), text_sub(12, 1, "srt", "fre"), text_sub(13, 2, "ass", "ger")];
+    let Verdict::Known(known) = resolver().qualify(&off(), subtitled(three, 12)) else { panic!("text siblings") };
+    assert_eq!(known.source.check_of(TrackSelection { kind: TrackKind::Subtitle, id: 12 }),
+        Some(&NativeTrackCheck::Language("fre".into())));
+    let (_, tracks) = known.source.into_parts();
+    let subs: Vec<_> = tracks.iter().filter(|t| t.selection.kind == TrackKind::Subtitle).map(|t| (t.selection.id, t.index)).collect();
+    assert_eq!(subs, [(11, 0), (12, 1), (13, 2)], "every stream is mapped, so a pick mid-play can be asked for");
+
+    // Subtitles Off on such a Part still maps them: a later pick has its index.
+    let mut off_choice = request(plays(), 31342, Some(0));
+    off_choice.subtitle_choice = TrackChoice::Off;
+    off_choice.subtitle_streams = vec![text_sub(9, 0, "srt", "eng")].into();
+    let Verdict::Known(known) = resolver().qualify(&off(), off_choice) else { panic!("off is certified") };
+    assert_eq!(known.source.check_of(nine), Some(&NativeTrackCheck::Sole));
+    assert_eq!(known.certified_subtitle_source, None, "nothing selected, nothing to render");
+}
+
+/// **A picture subtitle, an unmeasured codec, or no stream list keeps a selected subtitle declined.** PGS and VobSub
+/// carry no cue text, and whether the player counts one among its TEXT tracks is not measured, so a sibling of that kind
+/// leaves a text track's native index unproven; `mov_text` was not measured raising cues. A burned subtitle is still
+/// refused before the qualifier.
+#[test]
+fn a_picture_or_unmeasured_subtitle_keeps_the_selected_subtitle_declined() {
+    for (streams, sid, why) in [
+        (vec![text_sub(9, 0, "pgs", "eng")], 9, "a selected PGS track"),
+        (vec![text_sub(9, 0, "srt", "eng"), text_sub(10, 1, "pgs", "eng")], 9, "a SubRip track with a PGS sibling"),
+        (vec![text_sub(9, 0, "vobsub", "eng"), text_sub(10, 1, "srt", "eng")], 10, "a SubRip track with a VobSub sibling"),
+        (vec![text_sub(9, 0, "mov_text", "eng")], 9, "mov_text, not measured"),
+        (vec![], 9, "no stream list"),
+    ] {
+        let verdict = resolver().qualify(&off(), subtitled(streams, sid));
+        assert!(matches!(verdict, Verdict::Unknown(UriDecline::SubtitleNotCarried)), "{why}");
+    }
+    let mut burned = subtitled(vec![text_sub(9, 0, "srt", "eng")], 9);
+    burned.requires_subtitle_burn = true;
+    assert!(matches!(resolver().qualify(&off(), burned), Verdict::Refused(UriDecline::SubtitleBurn)));
+}
+
+const SUB_EN: TrackSelection = TrackSelection { kind: TrackKind::Subtitle, id: 11 };
+const SUB_FR: TrackSelection = TrackSelection { kind: TrackKind::Subtitle, id: 12 };
+
+fn pick_sub(id: u64) -> Operation {
+    Operation::SelectTrack { kind: TrackKind::Subtitle, choice: TrackChoice::Selected(id) }
+}
+
+fn cue(epoch: u32, position_ms: i64, duration_ms: i64, text: &str) -> host_abi::HostCue {
+    host_abi::HostCue { epoch, position_ms, duration_ms, text: text.into() }
+}
+
+/// Start an attempt whose map names two subtitle streams (English at 0, French at 1, each by language) on a host whose
+/// player reports `native` as its TEXT tracks' languages before PREPARED.
+fn prepared_with_subtitles(driver: &mut TizenUriDriver<Fake>, fake: &Fake, native: &[&str]) -> (AttemptId, u32) {
+    let a = attempt(1);
+    let key = SourceKey::new(a.generation());
+    let source = UriSource::new(URL.into(), vec![NativeTrackIndex { selection: SUB_EN, index: 0 },
+        NativeTrackIndex { selection: SUB_FR, index: 1 }])
+        .with_check(SUB_EN, NativeTrackCheck::Language("eng".into()))
+        .with_check(SUB_FR, NativeTrackCheck::Language("fre".into()));
+    assert_eq!(driver.stage_source(a, key, source), Ok(()));
+    let start = Operation::Start { source: key, requirements: plain_requirements() };
+    assert_eq!(dispatch(driver, a, 1, start), DispatchResult::Queued);
+    let epoch = fake.epoch();
+    for (index, code) in native.iter().enumerate() {
+        fake.post(epoch, PlayerKind::TextLanguage, index as i64, language_word(code));
+    }
+    fake.post(epoch, PlayerKind::Prepared, 60_000, 0);
+    poll(driver);
+    (a, epoch)
+}
+
+fn captions(driver: &mut TizenUriDriver<Fake>) -> Vec<(u64, u64, u64, String)> {
+    let mut out = Vec::new();
+    driver.drain_captions(&mut out);
+    out.into_iter().map(|c| (c.track.id, c.start.as_millis(), c.duration_ms, c.text)).collect()
+}
+
+/// **A selected subtitle is asked of the host and its cues become the app's captions** (the emulator run of
+/// 2026-11-26: the player raises a text track's cues, draws nothing, and switches tracks mid-play). The stream is matched
+/// to its native TEXT track by language, as audio is, `VERB_TEXT_TRACK` carries that index, and the request settles on the
+/// host's `PLAYER_TRACK`. Only from then are cues handed over: each with text and a duration is a caption of that track at
+/// the player's position, the empty "cue ended" ones and the cues of another epoch are not. Off settles with no host call
+/// and drops the cues from then on; a stream whose native track cannot be told is refused before the host is asked.
+#[test]
+fn a_selected_subtitle_is_asked_of_the_host_and_its_cues_become_captions() {
+    let (mut driver, fake) = rig();
+    let (a, epoch) = prepared_with_subtitles(&mut driver, &fake, &["fr", "en"]);
+    assert!(driver.maps_track(SUB_EN) && driver.maps_track(SUB_FR));
+    fake.with(|s| s.cues.push(cue(epoch, 1_000, 1_500, "before any selection")));
+    assert!(poll(&mut driver).is_empty());
+    assert!(captions(&mut driver).is_empty(), "no cue is handed over before the host settled a track");
+
+    // English sits at ordinal 0 but the player lists it second: the language picks native track 1.
+    assert_eq!(dispatch(&mut driver, a, 2, pick_sub(11)), DispatchResult::Queued);
+    assert_eq!(fake.verbs(), [Verb::TextTrack { index: 1, command: 2 }]);
+    fake.post(epoch, PlayerKind::Track, 2, 1);
+    assert_eq!(poll(&mut driver), [
+        observation(a, Observation::TrackSelected(seen(SUB_EN))),
+        DriverEvent::TrackSettled { attempt: a, command: cmd(2), kind: TrackKind::Subtitle, choice: TrackChoice::Selected(11) },
+    ]);
+    fake.with(|s| s.cues.extend([cue(epoch, 2_003, 1_500, "TWO 01 top\nTWO 01 bottom"), cue(epoch, 3_501, 0, ""),
+        cue(epoch + 1, 4_000, 1_500, "another epoch"), cue(epoch, 4_001, 1_500, "{brace} kept")]));
+    assert!(poll(&mut driver).is_empty());
+    assert_eq!(captions(&mut driver), [(11, 2_003, 1_500, "TWO 01 top\nTWO 01 bottom".to_owned()),
+        (11, 4_001, 1_500, "{brace} kept".to_owned())]);
+    assert!(captions(&mut driver).is_empty(), "drained once");
+
+    // A refused switch keeps the settled track's cues flowing.
+    assert_eq!(dispatch(&mut driver, a, 3, pick_sub(12)), DispatchResult::Queued);
+    fake.post(epoch, PlayerKind::Track, 3, -1);
+    assert_eq!(poll(&mut driver), [DriverEvent::ControlRefused { attempt: a, command: cmd(3), operation: pick_sub(12),
+        failure: Failure::Refused }]);
+    fake.with(|s| s.cues.push(cue(epoch, 6_001, 1_500, "still English")));
+    assert!(poll(&mut driver).is_empty());
+    assert_eq!(captions(&mut driver), [(11, 6_001, 1_500, "still English".to_owned())]);
+
+    // Off: settled at once, no host call, and the cues stop.
+    let asked = fake.verbs().len();
+    let off_pick = Operation::SelectTrack { kind: TrackKind::Subtitle, choice: TrackChoice::Off };
+    assert_eq!(dispatch(&mut driver, a, 4, off_pick), DispatchResult::Queued);
+    fake.with(|s| s.cues.push(cue(epoch, 8_001, 1_500, "after off")));
+    assert_eq!(poll(&mut driver), [DriverEvent::TrackSettled { attempt: a, command: cmd(4), kind: TrackKind::Subtitle,
+        choice: TrackChoice::Off }]);
+    assert_eq!(fake.verbs().len(), asked, "Off asks nothing of the host");
+    assert!(captions(&mut driver).is_empty(), "no caption after Off");
+
+    // A full host queue is logged and nothing else changes.
+    fake.with(|s| s.cues_dropped = 3);
+    assert!(poll(&mut driver).is_empty());
+}
+
+/// **A cue is never drawn as the old track's after a switch** (review of #1575). The host selects the new native track and
+/// only then posts `PLAYER_TRACK`, so cues of the NEW track can reach the library while the old one is still the settled
+/// subtitle; and cues have a queue of their own, so one drained in the same poll as the settle has no order against it.
+/// While a subtitle `TextTrack` is unanswered no cue is handed over, and a poll hands its cues over before the events it
+/// settles: a cue is dropped rather than labelled with a track it may not belong to.
+#[test]
+fn a_cue_raised_while_a_subtitle_switch_is_unanswered_is_never_the_old_tracks() {
+    let (mut driver, fake) = rig();
+    let (a, epoch) = prepared_with_subtitles(&mut driver, &fake, &["fr", "en"]);
+    assert_eq!(dispatch(&mut driver, a, 2, pick_sub(11)), DispatchResult::Queued);
+    fake.post(epoch, PlayerKind::Track, 2, 1);
+    poll(&mut driver);
+    fake.with(|s| s.cues.push(cue(epoch, 2_000, 1_500, "ENGLISH 01")));
+    poll(&mut driver);
+    assert_eq!(captions(&mut driver), [(11, 2_000, 1_500, "ENGLISH 01".to_owned())]);
+
+    // The switch to French (native text track 0): the player already raises French cues before the host answers.
+    assert_eq!(dispatch(&mut driver, a, 3, pick_sub(12)), DispatchResult::Queued);
+    fake.with(|s| s.cues.push(cue(epoch, 4_000, 1_500, "FRENCH 02")));
+    assert!(poll(&mut driver).is_empty());
+    assert!(captions(&mut driver).is_empty(), "a cue raised during the switch is not the English track's");
+
+    // The answer and one more cue in the same poll: the cue has no order against the settle, so it is not handed over.
+    fake.post(epoch, PlayerKind::Track, 3, 0);
+    fake.with(|s| s.cues.push(cue(epoch, 6_000, 1_500, "FRENCH 03")));
+    assert_eq!(poll(&mut driver), [
+        observation(a, Observation::TrackSelected(seen(SUB_FR))),
+        DriverEvent::TrackSettled { attempt: a, command: cmd(3), kind: TrackKind::Subtitle, choice: TrackChoice::Selected(12) },
+    ]);
+    assert!(captions(&mut driver).iter().all(|(track, ..)| *track == 12), "never labelled English");
+
+    // From the next poll on, the cues are French.
+    fake.with(|s| s.cues.push(cue(epoch, 8_000, 1_500, "FRENCH 04")));
+    poll(&mut driver);
+    assert_eq!(captions(&mut driver), [(12, 8_000, 1_500, "FRENCH 04".to_owned())]);
+}
+
+/// **A newer subtitle request supersedes an unanswered one** (final review of #1575). The contract lets a second
+/// `SelectTrack` go out while the first is pending, and only the newer one completes. So Off, picked while the host has not
+/// yet answered a pick, turns the cues off for good: the stale `PLAYER_TRACK` that follows neither makes that track the
+/// captioned one nor reports it selected. A newer pick supersedes the same way, and only ITS answer settles.
+#[test]
+fn off_or_a_newer_pick_supersedes_an_unanswered_subtitle_pick() {
+    let (mut driver, fake) = rig();
+    let (a, epoch) = prepared_with_subtitles(&mut driver, &fake, &["fr", "en"]);
+    // English (native 1) is asked; before the host answers, the viewer picks Off.
+    assert_eq!(dispatch(&mut driver, a, 2, pick_sub(11)), DispatchResult::Queued);
+    let off_pick = Operation::SelectTrack { kind: TrackKind::Subtitle, choice: TrackChoice::Off };
+    assert_eq!(dispatch(&mut driver, a, 3, off_pick), DispatchResult::Queued);
+    assert_eq!(poll(&mut driver), [DriverEvent::TrackSettled { attempt: a, command: cmd(3), kind: TrackKind::Subtitle,
+        choice: TrackChoice::Off }]);
+    // The host's late answer to the English pick, then English cues.
+    fake.post(epoch, PlayerKind::Track, 2, 1);
+    assert!(poll(&mut driver).is_empty(), "the superseded pick neither settles nor reports a selection");
+    fake.with(|s| s.cues.push(cue(epoch, 2_000, 1_500, "ENGLISH 01")));
+    poll(&mut driver);
+    assert!(captions(&mut driver).is_empty(), "Off stays off: no caption of the superseded track");
+
+    // English, then French before English is answered: only French's answer settles, and its cues are French.
+    assert_eq!(dispatch(&mut driver, a, 4, pick_sub(11)), DispatchResult::Queued);
+    assert_eq!(dispatch(&mut driver, a, 5, pick_sub(12)), DispatchResult::Queued);
+    fake.post(epoch, PlayerKind::Track, 4, 1);
+    assert!(poll(&mut driver).is_empty(), "the superseded English pick reports nothing");
+    fake.post(epoch, PlayerKind::Track, 5, 0);
+    assert_eq!(poll(&mut driver), [
+        observation(a, Observation::TrackSelected(seen(SUB_FR))),
+        DriverEvent::TrackSettled { attempt: a, command: cmd(5), kind: TrackKind::Subtitle, choice: TrackChoice::Selected(12) },
+    ]);
+    fake.with(|s| s.cues.push(cue(epoch, 4_000, 1_500, "FRENCH 02")));
+    poll(&mut driver);
+    assert_eq!(captions(&mut driver), [(12, 4_000, 1_500, "FRENCH 02".to_owned())]);
+}
+
+/// **A pick the HOST refuses supersedes nothing** (review of #1579). The newer pick's `TextTrack` verb can be refused by the
+/// host's queue (Busy, Stale, Args); the older pick is then still the one the contract holds pending, so it must still
+/// settle (or time out) on the host's answer, and no cue is handed over while it is unanswered.
+#[test]
+fn a_pick_whose_verb_the_host_refuses_leaves_the_earlier_pick_pending() {
+    for answer in [true, false] {
+        let (mut driver, fake) = rig();
+        let (a, epoch) = prepared_with_subtitles(&mut driver, &fake, &["fr", "en"]);
+        // French (native 0) is the settled track.
+        assert_eq!(dispatch(&mut driver, a, 2, pick_sub(12)), DispatchResult::Queued);
+        fake.post(epoch, PlayerKind::Track, 2, 0);
+        poll(&mut driver);
+        // English (native 1) is asked; a pick of French again is then refused by the host's queue.
+        assert_eq!(dispatch(&mut driver, a, 3, pick_sub(11)), DispatchResult::Queued);
+        fake.with(|s| s.refuse_verb = Some(Refusal::Busy));
+        assert_eq!(dispatch(&mut driver, a, 4, pick_sub(12)), DispatchResult::Refused(Failure::Busy));
+        fake.with(|s| s.refuse_verb = None);
+        // The player already raises English cues: with English unanswered none is handed over as French's.
+        fake.with(|s| s.cues.push(cue(epoch, 1_000, 1_500, "ENGLISH 00")));
+        assert!(poll(&mut driver).is_empty());
+        assert!(captions(&mut driver).is_empty(), "no cue while the earlier pick is unanswered (answer: {answer})");
+        if answer {
+            fake.post(epoch, PlayerKind::Track, 3, 1);
+            assert_eq!(poll(&mut driver), [
+                observation(a, Observation::TrackSelected(seen(SUB_EN))),
+                DriverEvent::TrackSettled { attempt: a, command: cmd(3), kind: TrackKind::Subtitle,
+                    choice: TrackChoice::Selected(11) },
+            ], "the earlier pick still settles");
+            fake.with(|s| s.cues.push(cue(epoch, 2_000, 1_500, "ENGLISH 01")));
+            poll(&mut driver);
+            assert_eq!(captions(&mut driver), [(11, 2_000, 1_500, "ENGLISH 01".to_owned())]);
+        } else {
+            fake.advance(TIMING.control_timeout_ms);
+            assert_eq!(poll(&mut driver), [DriverEvent::ControlRefused { attempt: a, command: cmd(3),
+                operation: pick_sub(11), failure: Failure::TimedOut }], "the earlier pick still times out");
+        }
+    }
+}
+
+/// The subtitle's native track is told by its language exactly as an audio stream's is: a language no native TEXT track
+/// reports, or two that do with the ordinal not among them, is refused before the host is asked.
+#[test]
+fn a_subtitle_whose_native_track_cannot_be_told_is_refused_before_the_host_is_asked() {
+    for native in [&["de", "it"][..], &[][..], &["fr", "fr"][..]] {
+        let (mut driver, fake) = rig();
+        let (a, _) = prepared_with_subtitles(&mut driver, &fake, native);
+        assert_eq!(dispatch(&mut driver, a, 2, pick_sub(11)), DispatchResult::Refused(Failure::Unsupported), "{native:?}");
+        assert!(fake.verbs().is_empty(), "{native:?}");
+    }
+    // A sole stream needs no language, but is still asked: the verb is what turns its cues on.
+    let (mut driver, fake) = rig();
+    let a = attempt(1);
+    let key = SourceKey::new(a.generation());
+    let source = UriSource::new(URL.into(), vec![NativeTrackIndex { selection: SUB_EN, index: 0 }])
+        .with_check(SUB_EN, NativeTrackCheck::Sole);
+    assert_eq!(driver.stage_source(a, key, source), Ok(()));
+    assert_eq!(dispatch(&mut driver, a, 1, Operation::Start { source: key, requirements: plain_requirements() }),
+        DispatchResult::Queued);
+    fake.post(fake.epoch(), PlayerKind::Prepared, 60_000, 0);
+    poll(&mut driver);
+    assert_eq!(dispatch(&mut driver, a, 2, pick_sub(11)), DispatchResult::Queued);
+    assert_eq!(fake.verbs(), [Verb::TextTrack { index: 0, command: 2 }]);
 }
 
 /// **A track pick the Tizen driver cannot carry does not replace the playing title.** Through the Tizen composition's

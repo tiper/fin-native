@@ -10,6 +10,8 @@
 //    so a late callback names its own player; the library drops an event whose epoch is no longer live (the nuvio session-counter rule, Video.cs).
 //  * Position is POLLED here, about every 250 ms while playing, on a thread of its own and off the request queue: the native read can take
 //    seconds on some firmware, and a read that has not returned after StallMs posts PLAYER_STALL once. There is no synchronous position call.
+//  * Subtitle CUES (plx_host.h, CUE) go from the player's own subtitle thread straight to plx_host_post_cue, stamped with the host's estimate
+//    of the play position (the last poll plus the time since, while playing): the callback makes no native call and touches no queue.
 //
 // MEASURED on the emulator 2026-11-22 (TV 10.0 x86_64; a probe on a scratch branch, a local clip): prepared, buffering and completed callbacks fire
 // on ONE native thread per player instance that is not the main thread (a new thread for each player), so they only post events and never touch
@@ -72,12 +74,38 @@ namespace PlxHost
             // Every command id is answered before its epoch ends: by landing, by refusal or expiry, or by Release / a failed open (b = -1).
             internal Seek SeekNow;
             internal Seek SeekLater;
+            // An audio track asked for before PREPARED (the native call needs a prepared player): applied in OnPrepared before PREPARED is
+            // posted. The newest index wins and the older command ids are folded into it; every one gets its PLAYER_TRACK.
+            internal Track TrackLater;
+            // The audio tracks as read at PREPARED (ReadTracks); null before it. Video thread only.
+            internal NativeTracks Tracks;
+            // The same two for the text tracks (VERB_TEXT_TRACK).
+            internal Track TextLater;
+            internal NativeTracks TextTracks;
+            // Set (video thread) once a text track was answered with an index: from then on the subtitle callback posts this epoch's cues. Read
+            // by the callback, on the player's subtitle thread.
+            internal volatile bool CuesOn;
+            internal bool CueCallbackSet; // video thread
+            // The play position the cues are stamped with: the last one known (a poll, a landed seek, a pause) and when it was known, in
+            // Stopwatch ticks. Written by the poller and the video thread, read by the subtitle callback, all under PositionGate.
+            internal readonly object PositionGate = new object();
+            internal long PositionMs;
+            internal long PositionTicks;
             // Held by anything that calls into the native player on this handle off the video thread (position reads, the display bind). The
             // video thread takes it, with a bound, before it destroys the handle.
             internal readonly object HandleGate = new object();
 
             internal Session(uint epoch) { Epoch = epoch; }
         }
+
+        private sealed class Track
+        {
+            internal int Index;
+            internal readonly List<long> Commands = new List<long>();
+        }
+
+        // PLAYER_TRACK's b when the track was not selected (plx_host.h, PLAYER_TRACK).
+        private const long TrackRefused = -1;
 
         private sealed class Seek
         {
@@ -116,6 +144,8 @@ namespace PlxHost
             (percent, user) => PlxApp.PostPlayer((uint)Native.PLX_HOST_EVENT_PLAYER_BUFFERING, EpochOf(user), percent, 0);
         private static readonly MediaPlayerNative.IntCallback InterruptedCb =
             (code, user) => PlxApp.PostPlayer((uint)Native.PLX_HOST_EVENT_PLAYER_INTERRUPTED, EpochOf(user), code, 0);
+
+        private static readonly MediaPlayerNative.SubtitleCallback SubtitleCb = (duration, text, user) => Instance.OnCue(EpochOf(user), duration, text);
 
         private static IntPtr UserOf(uint epoch) { return new IntPtr(unchecked((int)epoch)); }
         private static uint EpochOf(IntPtr user) { return unchecked((uint)user.ToInt64()); }
@@ -222,6 +252,8 @@ namespace PlxHost
                 case Native.PLX_HOST_PLAYER_VERB_PLAY:
                 case Native.PLX_HOST_PLAYER_VERB_PAUSE:
                 case Native.PLX_HOST_PLAYER_VERB_SEEK:
+                case Native.PLX_HOST_PLAYER_VERB_AUDIO_TRACK:
+                case Native.PLX_HOST_PLAYER_VERB_TEXT_TRACK:
                     if (Interlocked.Read(ref latestEpoch) != epoch) return Native.PLX_HOST_PLAYER_E_STALE;
                     return TryEnqueue(epoch, () => DoVerb(epoch, (int)verb, arg0, arg1));
                 default:
@@ -353,6 +385,7 @@ namespace PlxHost
                 {
                     s.OpenFailed = true;
                     AnswerSeeks(s);
+                    AnswerTracks(s);
                 }
             }
         }
@@ -421,8 +454,10 @@ namespace PlxHost
             if (s == null || s.Epoch != epoch) return;
             if (s.Handle == IntPtr.Zero || s.Closing || s.OpenFailed)
             {
-                // A dead player still owes its seek an answer (the library waits for every command id).
+                // A dead player still owes its seek or track an answer (the library waits for every command id).
                 if (verb == Native.PLX_HOST_PLAYER_VERB_SEEK) Post((uint)Native.PLX_HOST_EVENT_PLAYER_SEEK_DONE, s.Epoch, arg1, SeekRefused);
+                if (verb == Native.PLX_HOST_PLAYER_VERB_AUDIO_TRACK || verb == Native.PLX_HOST_PLAYER_VERB_TEXT_TRACK)
+                    Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, arg1, TrackRefused);
                 return;
             }
             switch (verb)
@@ -430,7 +465,249 @@ namespace PlxHost
                 case Native.PLX_HOST_PLAYER_VERB_PLAY: DoPlay(s); break;
                 case Native.PLX_HOST_PLAYER_VERB_PAUSE: DoPause(s); break;
                 case Native.PLX_HOST_PLAYER_VERB_SEEK: DoSeek(s, arg0, arg1); break;
+                case Native.PLX_HOST_PLAYER_VERB_AUDIO_TRACK: DoTrack(s, false, arg0, arg1); break;
+                case Native.PLX_HOST_PLAYER_VERB_TEXT_TRACK: DoTrack(s, true, arg0, arg1); break;
             }
+        }
+
+        // An audio or text track: held until PREPARED (the native call needs a prepared player), then applied at once.
+        private void DoTrack(Session s, bool text, long index, long command)
+        {
+            Track held = text ? s.TextLater : s.TrackLater;
+            if (held == null) held = new Track();
+            held.Index = (int)Math.Max(-1, Math.Min(index, int.MaxValue));
+            held.Commands.Add(command);
+            if (text) s.TextLater = held; else s.TrackLater = held;
+            ApplyHeldTrack(s, text);
+        }
+
+        // Select the held track and answer its command ids with the index now selected, or TrackRefused. A refusal is not a PLAYER_ERROR: the
+        // player keeps the track it had. It reads nothing of its own: the count and the current index are the PREPARED-time snapshot (ReadTracks),
+        // kept current by the selections made here. A TEXT track answered with an index also turns the epoch's cues on. The subtitle callback
+        // was registered at PREPARED (RegisterCueCallback: never later, in PLAYING, which nothing measured), and a player that refused it
+        // refuses every text track (a track the app cannot draw is not selected).
+        private static void ApplyHeldTrack(Session s, bool text)
+        {
+            Track track = text ? s.TextLater : s.TrackLater;
+            if (!s.Prepared || track == null) return;
+            if (text) s.TextLater = null; else s.TrackLater = null;
+            string what = text ? "text" : "audio";
+            int type = text ? MediaPlayerNative.STREAM_TYPE_TEXT : MediaPlayerNative.STREAM_TYPE_AUDIO;
+            long answer = TrackRefused;
+            NativeTracks tracks = (text ? s.TextTracks : s.Tracks) ?? new NativeTracks();
+            if (track.Index < 0)
+            {
+                PlxApp.Log("player: epoch " + s.Epoch + ": " + what + " track " + track.Index + " is no index");
+            }
+            else if (tracks.RcCount == 0 && tracks.Count == 0)
+            {
+                PlxApp.Log("player: epoch " + s.Epoch + ": " + what + " track " + track.Index + " asked of a source with no " + what + " track");
+            }
+            else if (text && !s.CueCallbackSet)
+            {
+                PlxApp.Log("player: epoch " + s.Epoch + ": text track " + track.Index + " refused: the subtitle callback was not registered at PREPARED");
+            }
+            else if (tracks.RcCurrent == 0 && tracks.Current == track.Index)
+            {
+                answer = track.Index; // already the current track: nothing to call
+            }
+            else if (track.Index == 0 && tracks.RcCount == 0 && tracks.Count == 1)
+            {
+                answer = 0; // the only track is the one the player plays, whatever it says of the current index
+            }
+            else if (tracks.RcCount == 0 && track.Index >= tracks.Count)
+            {
+                PlxApp.Log("player: epoch " + s.Epoch + ": " + what + " track " + track.Index + " is not one of the " + tracks.Count + " tracks");
+            }
+            else
+            {
+                try
+                {
+                    int rc = MediaPlayerNative.player_select_track(s.Handle, type, track.Index);
+                    if (rc == 0) { answer = track.Index; tracks.Current = track.Index; tracks.RcCurrent = 0; }
+                    else PlxApp.Log("player: epoch " + s.Epoch + ": player_select_track(" + what + ", " + track.Index + ") returned " + rc);
+                }
+                catch (Exception e)
+                {
+                    // An entry point missing on some firmware is a refused track, not a failed player (plx_host.h, PLAYER_TRACK).
+                    PlxApp.Log("player: epoch " + s.Epoch + ": player_select_track threw " + e.GetType().Name + ": " + e.Message);
+                }
+            }
+            if (text && answer >= 0) s.CuesOn = true;
+            PlxApp.Log("player: epoch " + s.Epoch + ": " + what + " track " + track.Index + " -> " + answer);
+            foreach (long command in track.Commands) Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, command, answer);
+        }
+
+        // Registers the subtitle callback ONCE, at PREPARED, for a source with a text track (video thread; MEASURED working in READY on the
+        // emulator, 2026-11-26; registering in PLAYING was not measured, so a text track picked mid-play with subtitles Off from the start
+        // finds the callback already there). Its cues are posted only once a text track was answered (CuesOn), so a play that never shows a
+        // subtitle hands over none. Logged and left unset when the player refuses it or the entry point is missing on this firmware.
+        private static void RegisterCueCallback(Session s)
+        {
+            if (s.CueCallbackSet || s.TextTracks == null || s.TextTracks.Count == 0) return;
+            try
+            {
+                int rc = MediaPlayerNative.player_set_subtitle_updated_cb(s.Handle, SubtitleCb, UserOf(s.Epoch));
+                if (rc != 0) { PlxApp.Log("player: epoch " + s.Epoch + ": player_set_subtitle_updated_cb returned " + rc); return; }
+            }
+            catch (Exception e)
+            {
+                PlxApp.Log("player: epoch " + s.Epoch + ": player_set_subtitle_updated_cb threw " + e.GetType().Name + ": " + e.Message);
+                return;
+            }
+            s.CueCallbackSet = true;
+        }
+
+        // Answers the held tracks' command ids with TrackRefused and forgets them: the epoch is ending or never prepared. Cues stop too.
+        private static void AnswerTracks(Session s)
+        {
+            s.CuesOn = false;
+            foreach (Track held in new[] { s.TrackLater, s.TextLater })
+            {
+                if (held == null) continue;
+                foreach (long command in held.Commands) Post((uint)Native.PLX_HOST_EVENT_PLAYER_TRACK, s.Epoch, command, TrackRefused);
+            }
+            s.TrackLater = null;
+            s.TextLater = null;
+        }
+
+        // ---- subtitle cues (the player's subtitle thread) -------------------------------------------------------------------------------------
+
+        // The longest cue the library takes, in UTF-8 bytes (plx_host.h, PLX_HOST_CUE_TEXT_MAX).
+        private const int CueTextMax = Native.PLX_HOST_CUE_TEXT_MAX;
+
+        // One cue as the player raised it: stamped with the position estimate and posted for the epoch, the text read in place (the library
+        // copies it before plx_host_post_cue returns). Nothing here calls the native player, waits on a queue, or allocates the text.
+        private void OnCue(uint epoch, UIntPtr duration, IntPtr text)
+        {
+            try
+            {
+                Session s = published;
+                if (s == null || s.Epoch != epoch || !s.CuesOn || s.Closing) return;
+                uint len = text == IntPtr.Zero ? 0 : CueLength(text);
+                ulong raw = duration.ToUInt64();
+                long durationMs = len == 0 ? 0 : (long)Math.Min(raw, (ulong)int.MaxValue);
+                PlxApp.PostCue(epoch, EstimatePosition(s), durationMs, text, len);
+            }
+            catch (Exception e)
+            {
+                PlxApp.Log("player: subtitle callback: " + e.GetType().Name + ": " + e.Message);
+            }
+        }
+
+        // The UTF-8 length of a NUL-terminated cue, at most CueTextMax: a longer text is cut at the last character boundary at or below it
+        // (never inside a multi-byte sequence). Reads at most CueTextMax + 1 bytes.
+        private static uint CueLength(IntPtr text)
+        {
+            int n = 0;
+            while (n <= CueTextMax && Marshal.ReadByte(text, n) != 0) n++;
+            if (n <= CueTextMax) return (uint)n;
+            n = CueTextMax;
+            while (n > 0 && (Marshal.ReadByte(text, n) & 0xC0) == 0x80) n--; // byte n starts the first character that is cut
+            return (uint)n;
+        }
+
+        // The play position the cue is stamped with: the last one known, plus the time since while playing.
+        private static long EstimatePosition(Session s)
+        {
+            lock (s.PositionGate)
+            {
+                if (!s.Playing || s.PositionTicks == 0) return s.PositionMs;
+                long elapsed = (System.Diagnostics.Stopwatch.GetTimestamp() - s.PositionTicks) * 1000 / System.Diagnostics.Stopwatch.Frequency;
+                return s.PositionMs + Math.Max(0, elapsed);
+            }
+        }
+
+        // A position just known (a poll, a landed seek); `ms` < 0 keeps the position and only restarts the clock (a start).
+        private static void NotePosition(Session s, long ms)
+        {
+            lock (s.PositionGate)
+            {
+                if (ms >= 0) s.PositionMs = ms;
+                s.PositionTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            }
+        }
+
+        // A pause: the estimate is frozen where it is.
+        private static void FreezePosition(Session s)
+        {
+            long ms = EstimatePosition(s);
+            NotePosition(s, ms);
+        }
+
+        // A native call that threw (an entry point missing on some firmware) reads as a failed call, so a play is never failed by a read.
+        private const int NativeThrew = int.MinValue;
+
+        // The most native audio tracks whose languages are read and reported (plx_host.h, PLAYER_AUDIO_LANGUAGE).
+        private const int LanguageReports = Native.PLX_HOST_AUDIO_LANGUAGE_REPORTS;
+
+        // The player's audio (or text) tracks as read ONCE at PREPARED: the count, the current index and each track's language code in the player's own
+        // order (null = none given). The language reads are what the library's track choice needs; the log line is built from the same read.
+        private sealed class NativeTracks
+        {
+            internal int RcCount = NativeThrew, Count;
+            internal int RcCurrent = NativeThrew, Current = -1;
+            internal readonly List<string> Languages = new List<string>();
+            internal readonly List<string> Notes = new List<string>(); // for the log line: why a language is missing
+        }
+
+        private static NativeTracks ReadTracks(Session s, int type)
+        {
+            var tracks = new NativeTracks();
+            try { tracks.RcCount = MediaPlayerNative.player_get_track_count(s.Handle, type, out tracks.Count); }
+            catch (Exception e) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_track_count threw " + e.GetType().Name); }
+            if (tracks.RcCount != 0) tracks.Count = 0;
+            try { tracks.RcCurrent = MediaPlayerNative.player_get_current_track(s.Handle, type, out tracks.Current); }
+            catch (Exception e) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_current_track threw " + e.GetType().Name); }
+            for (int i = 0; i < tracks.Count && i < LanguageReports; i++)
+            {
+                // The string is the library's (malloc'd) only when the call returned 0: only then is it read and freed.
+                IntPtr code = IntPtr.Zero;
+                string lang = null, note = null;
+                int rcLang;
+                try { rcLang = MediaPlayerNative.player_get_track_language_code(s.Handle, type, i, out code); }
+                catch (Exception e) { rcLang = NativeThrew; note = "threw " + e.GetType().Name; }
+                if (rcLang == 0 && code != IntPtr.Zero)
+                {
+                    try { lang = ReadUtf8(code); } finally { Marshal.FreeHGlobal(code); }
+                }
+                else if (rcLang != NativeThrew) note = "rc " + rcLang;
+                tracks.Languages.Add(lang);
+                tracks.Notes.Add(note);
+            }
+            return tracks;
+        }
+
+        // A language code as PLAYER_AUDIO_LANGUAGE carries it: the primary subtag's two or three ASCII letters, the first in the lowest byte; 0
+        // for anything else, which the library reads as unknown.
+        private static long LanguageWord(string code)
+        {
+            if (code == null) return 0;
+            string primary = code.Trim().Split('-', '_')[0];
+            if (primary.Length < 2 || primary.Length > 3) return 0;
+            long word = 0;
+            for (int i = 0; i < primary.Length; i++)
+            {
+                char c = primary[i];
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) return 0;
+                word |= (long)c << (8 * i);
+            }
+            return word;
+        }
+
+        // One line with the native audio tracks in the player's own order (count, current, each one's language), so a retail log can be compared
+        // with the title's audio list in Plex. Built from the PREPARED-time read; it reads nothing.
+        private static void LogTracks(Session s, string what, NativeTracks tracks)
+        {
+            if (tracks.RcCount != 0) { PlxApp.Log("player: epoch " + s.Epoch + ": player_get_track_count(" + what + ") returned " + tracks.RcCount); return; }
+            var languages = new StringBuilder();
+            for (int i = 0; i < tracks.Languages.Count; i++)
+            {
+                if (i > 0) languages.Append(',');
+                languages.Append(i).Append('=').Append(tracks.Languages[i] ?? tracks.Notes[i] ?? "?");
+            }
+            PlxApp.Log("player: epoch " + s.Epoch + ": " + what + " tracks count=" + tracks.Count + " current="
+                + (tracks.RcCurrent == 0 ? tracks.Current.ToString() : "rc " + tracks.RcCurrent) + " [" + languages + "]");
         }
 
         private void DoPlay(Session s)
@@ -440,6 +717,7 @@ namespace PlxHost
             s.PlayPending = false;
             int rc = MediaPlayerNative.player_start(s.Handle);
             if (rc != 0) { Fail(s, "player_start", rc); return; }
+            NotePosition(s, -1);
             s.Playing = true;
             Post((uint)Native.PLX_HOST_EVENT_PLAYER_STARTED, s.Epoch, 0, 0);
         }
@@ -451,6 +729,7 @@ namespace PlxHost
             if (!s.Prepared) return;
             int rc = MediaPlayerNative.player_pause(s.Handle);
             if (rc != 0) { Fail(s, "player_pause", rc); return; }
+            FreezePosition(s);
             s.Playing = false;
             Post((uint)Native.PLX_HOST_EVENT_PLAYER_PAUSED, s.Epoch, 0, 0);
         }
@@ -532,9 +811,27 @@ namespace PlxHost
         private void OnPrepared(Session s)
         {
             s.Prepared = true;
+            // ONE read of the audio tracks: each one's language goes to the library before PREPARED (its track choice needs them), and the same
+            // read answers a held track and makes the log line.
+            s.Tracks = ReadTracks(s, MediaPlayerNative.STREAM_TYPE_AUDIO);
+            for (int i = 0; i < s.Tracks.Languages.Count; i++)
+            {
+                Post((uint)Native.PLX_HOST_EVENT_PLAYER_AUDIO_LANGUAGE, s.Epoch, i, LanguageWord(s.Tracks.Languages[i]));
+            }
+            // The text tracks the same way (VERB_TEXT_TRACK), at most TEXT_LANGUAGE_REPORTS of them.
+            s.TextTracks = ReadTracks(s, MediaPlayerNative.STREAM_TYPE_TEXT);
+            for (int i = 0; i < s.TextTracks.Languages.Count && i < Native.PLX_HOST_TEXT_LANGUAGE_REPORTS; i++)
+            {
+                Post((uint)Native.PLX_HOST_EVENT_PLAYER_TEXT_LANGUAGE, s.Epoch, i, LanguageWord(s.TextTracks.Languages[i]));
+            }
+            RegisterCueCallback(s);
+            ApplyHeldTrack(s, false); // a track asked for before PREPARED is selected before the library hears PREPARED
+            ApplyHeldTrack(s, true);
             int duration;
             int rc = MediaPlayerNative.player_get_duration(s.Handle, out duration);
             Post((uint)Native.PLX_HOST_EVENT_PLAYER_PREPARED, s.Epoch, rc == 0 ? duration : 0, 0);
+            LogTracks(s, "audio", s.Tracks); // after PREPARED: a diagnostic, off the start path
+            LogTracks(s, "text", s.TextTracks);
             int width, height;
             if (MediaPlayerNative.player_get_video_size(s.Handle, out width, out height) == 0 && width > 0 && height > 0)
             {
@@ -550,6 +847,7 @@ namespace PlxHost
             if (landed == null) return;
             s.SeekNow = null;
             DisarmSeek(landed);
+            NotePosition(s, landed.TargetMs);
             foreach (long command in landed.Commands)
             {
                 Post((uint)Native.PLX_HOST_EVENT_PLAYER_SEEK_DONE, s.Epoch, command, landed.TargetMs);
@@ -583,6 +881,7 @@ namespace PlxHost
             s.Closing = true;
             s.Playing = false;
             AnswerSeeks(s); // every command id is answered before PLAYER_CLOSED (the caller posts it after this returns)
+            AnswerTracks(s);
             if (s.Handle == IntPtr.Zero) return;
             // A position read or the display bind may be inside the handle: wait for it, with a bound. A read that never returns leaks the handle
             // (the process exit is its teardown) rather than destroying it under the read.
@@ -630,6 +929,7 @@ namespace PlxHost
                 {
                     int rc = MediaPlayerNative.player_pause(s.Handle);
                     if (rc != 0) { Fail(s, "player_pause (home)", rc); return; }
+                    FreezePosition(s);
                     s.Playing = false;
                     s.HostPaused = true;
                     PlxApp.Log("player: epoch " + s.Epoch + ": paused for the Home screen");
@@ -724,6 +1024,7 @@ namespace PlxHost
             if (ms >= 0)
             {
                 s.StallSent = false;
+                NotePosition(s, ms);
                 if (!s.Closing) Post((uint)Native.PLX_HOST_EVENT_PLAYER_POSITION, s.Epoch, ms, 0);
             }
         }

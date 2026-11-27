@@ -254,5 +254,10 @@
   "widgets.failure.change_quality": "Minőség módosítása",
   "widgets.watch.intro": "Bevezető megtekintése",
   "widgets.verdict.tuners_busy": "Minden tuner foglalt",
-  "widgets.live.channel_context": "{number} · {programme}"
+  "widgets.live.channel_context": "{number} · {programme}",
+  "widgets.live.badge": "ÉLŐ",
+  "widgets.live.next_at": "Következik: {time}",
+  "widgets.live.entry_none": "Nincs {number} csatorna",
+  "widgets.live.entry_more": "+{count} további · ▲ ▼ a görgetéshez",
+  "widgets.live.playing": "Játszik"
 }

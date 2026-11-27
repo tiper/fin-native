@@ -50,7 +50,7 @@ fn number(path: &str) -> usize {
 
 struct Spy;
 impl Source for Spy {
-    fn probe(&self, _: u16, path: &str, _: i32, _: i32, _: bool) -> Option<PosterKey> {
+    fn probe(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> Option<PosterKey> {
         let n = number(path);
         LOG.with(|l| {
             let mut l = l.borrow_mut();
@@ -64,10 +64,10 @@ impl Source for Spy {
         });
         None
     }
-    fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool) -> Warm {
+    fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> Warm {
         Warm::Known
     }
-    fn warm_ahead(&self, _: u16, path: &str, _: i32, _: i32, _: bool) -> Warm {
+    fn warm_ahead(&self, _: u16, path: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> Warm {
         let n = number(path);
         LOG.with(|l| {
             let mut l = l.borrow_mut();
@@ -174,8 +174,8 @@ impl Rig {
         for i in 0..self.src.len() {
             let x = STYLE.margin_x + i as f32 * pitch - self.shelf.scroll();
             if crate::on_axis(x, STYLE.w, crate::consts::SCR_W, 0.0) {
-                let (srv, path, w, h) = widgets::card_art_request(&self.src.art(i)).unwrap();
-                tex::resolve_wh_on(srv, path, w, h, false);
+                let q = widgets::card_art_request(&self.src.art(i)).unwrap();
+                tex::resolve_wh_on(q.srv, q.path, q.w, q.h, q.png);
             }
         }
     }

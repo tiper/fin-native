@@ -1,0 +1,17 @@
+{
+  "library_order.title": "Könyvtárak sorrendje",
+  "library_order.value_server": "Szerver sorrendje",
+  "library_order.value_first": "{title} elöl",
+  "library_order.row_detail": "Állítsd be a kedvenc könyvtáraid sorrendjét a Kezdőlapon és a Könyvtár fejlécében.",
+  "library_order.reset": "Visszaállítás",
+  "library_order.state_idle": "Az OK gombbal mozgathatod felfelé vagy lefelé ezt: {title}. A Kezdőlap és a(z) {kind} fejléce ebben a sorrendben mutatja a kedvenc könyvtáraidat.",
+  "library_order.state_reset": "Visszaállítja a kedvenc könyvtáraidat abba a sorrendbe, ahogy a szerverek listázzák őket.",
+  "library_order.state_moving": "Mozgatás: {title}. A Fel és a Le gomb módosítja a helyét, az OK megerősíti, a Vissza megszakítja.",
+  "library_order.state_unnamed": "{title} még nem mozgatható: a szervere még nem fejezte be a csatlakozást.",
+  "library_order.state_dropped": "{title} most {home} áll a Kezdőlapon, {header} pedig a(z) {kind} fejlécében.",
+  "library_order.state_confirm": "Nyomd meg még egyszer az OK gombot, hogy a kedvenc könyvtáraid visszaálljanak a szerverek sorrendjére. Bármelyik másik gomb megtartja a sorrendedet.",
+  "library_order.state_reset_done": "A kedvenc könyvtáraid visszaálltak abba a sorrendbe, ahogy a szerverek listázzák őket.",
+  "library_order.state_unsaved": "A sorrendet nem sikerült elmenteni; a PlxNative újraindításáig érvényes.",
+  "library_order.preview_caption": "{kind} · Könyvtár fejléce",
+  "library_order.preview_more": "A nem elférő könyvtárak a … mögött vannak."
+}

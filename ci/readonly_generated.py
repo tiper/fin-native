@@ -13,7 +13,7 @@ import re
 from readonly_dependencies import _local_sha, _sha, _json, _manifest_paths, _configs, _workspace_hashes, WORKSPACE_HASHING
 
 CERTIFICATE_PATH = Path(__file__).with_name('proofs') / 'platform-generated-enums.json'
-CERTIFICATE_SHA256 = '8a090f6783057abbbc90a865bf6457624c3541f7a473305e8f19ea48ca23b43e'
+CERTIFICATE_SHA256 = '4f862de1b438b5d955b7fd2bc7e61a274055830fd8c1810e377dcd31be1bc20f'
 SOURCES = ['os/Cargo.toml', 'os/src/lib.rs', 'os/src/i18n/mod.rs',
            'os/build.rs', 'os/build_support/catalog.rs', 'build_support/install_identities.rs',
            'machine/src/lib.rs', 'machine/src/machine.rs']
@@ -38,8 +38,9 @@ I18N_SOURCES = ['40a13d07a43c772b10587e510a69502684abfa1f582ce355b22fd935a8c46f4
                 '82ee1803e4a6339772a175da2f256a7d6a313619e242f76f47c345cdd8199e92',
                 '17a2cff5ffb5bf95a46a2a0c12b13c0b7a02c1f7554656fa0f59557b7afca2ec',
                 '3a51ceeb41a6027d177b205a5c66ac7c4b039291cc216a6ebb4a171afff25b83',
+                '9cfedcf1aa68bc126966a701a2616e4c3e63c96a1bbc2558db0969b29325a52a',
                 # FinNative: only CONTRIBUTE_URL names the fork.
-                'c83861ff08c64da40ee5d598bee4ab1504b2c70c8830c056e96eaec8b3eb9498']
+                'e093746da3d0dcfce51783d296046c1b69265d05a0bf2085e9c69a503bae311d']
 
 def source_hashes(root):
     sources = {p: _local_sha((root / p).read_bytes()) for p in SOURCES}

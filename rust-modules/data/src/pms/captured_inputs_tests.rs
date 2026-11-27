@@ -4,7 +4,7 @@ use crate::captured_store_fixture::{key, roster};
 #[test]
 fn empty_captured_home_pins_do_not_republish_on_directory_generation_alone() {
     let keys = ClientKeys::default();
-    let scope = |sections_gen| BrowseScope { sections_gen, pins: &[],
+    let scope = |sections_gen| BrowseScope { verdicts: &[], order: crate::pms::HomeOrder::Natural, sections_gen, pins: &[],
         clients: std::borrow::Cow::Borrowed(&keys) };
     let mut state = PmsState::default();
     sync_roster_with_scope(&mut state, &scope(0));
@@ -20,7 +20,7 @@ fn captured_home_pin_content_changes_are_seen_even_when_directory_generation_rep
     let keys = ClientKeys::default();
     let a = [(ServerId::from_raw(7), 11, true)];
     let b = [(ServerId::from_raw(7), 11, false)];
-    let scope = |pins| BrowseScope { sections_gen: 3, pins,
+    let scope = |pins| BrowseScope { verdicts: &[], order: crate::pms::HomeOrder::Natural, sections_gen: 3, pins,
         clients: std::borrow::Cow::Borrowed(&keys) };
     let mut state = PmsState::default();
     sync_roster_with_scope(&mut state, &scope(&a));

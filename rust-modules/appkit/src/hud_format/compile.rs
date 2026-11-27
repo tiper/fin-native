@@ -911,6 +911,8 @@ pub struct Compiled {
     /// does a playbar of the package declare the finish-time lane (`playbar.end_time_width`, HUD format 1.1)?
     /// Read once, here, by [`Compiled::declares_end_time`]
     end_time: bool,
+    /// where the live-channel banner stands (`layout.live`, HUD format 1.2): the package's, else classic's
+    live: crate::player_hud::live::LiveLayout,
 }
 
 /// Which dimensions of a compile the package names.
@@ -938,6 +940,7 @@ impl Default for Compiled {
             findings: Vec::new(),
             assets: Vec::new(),
             end_time: false,
+            live: crate::player_hud::live::LiveLayout::CLASSIC,
         }
     }
 }
@@ -967,6 +970,12 @@ impl Compiled {
     /// compute anything the HUD would not draw.
     pub fn declares_end_time(&self) -> bool {
         self.end_time
+    }
+
+    /// **Where the live-channel banner stands** (`layout.live`, HUD format 1.2): what the package declares, else
+    /// classic's placement, so a package written before 1.2 still draws a banner where classic's stands.
+    pub fn live(&self) -> crate::player_hud::live::LiveLayout {
+        self.live
     }
 
     /// Every state, in `reach`'s order (valuation by valuation, breadth first from the root).
@@ -1093,6 +1102,7 @@ pub fn compile(package: &Package, measure: &dyn Measure, ctx: CompileCtx) -> Com
         findings,
         assets: package.assets.clone(),
         end_time,
+        live: crate::player_hud::live::LiveLayout::read(package.layout.get("live").and_then(Val::as_object)),
     };
     let band = compiled
         .compact_band_extents()

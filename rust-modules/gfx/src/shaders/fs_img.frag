@@ -98,6 +98,13 @@ uniform sampler2D u_tex;
 uniform sampler2D u_next;
 uniform float u_mix;
 #endif
+#ifdef PLX_INSET
+#ifndef PLX_FOCUS
+#error PLX_INSET composes inside the focus program: it reads u_focus.z and v_gloss
+#endif
+uniform sampler2D u_next; // the picture, laid whole inside the card
+uniform highp vec4 u_inset; // (its centre from the card's centre in px, 1 / its size in px)
+#endif
 #ifndef PLX_STILL_GROUND
 uniform vec4 u_tint;
 #endif
@@ -124,6 +131,16 @@ vec4 stillOver(vec3 rgb, float alpha, float coverage, float ramp){
 #endif
 void main(){
   vec4 c = texture2D(u_tex, v_cuv);
+#ifdef PLX_INSET
+  // A picture CONTAINED in the card (`art_fit::ContainOnBlur`): `u_tex` is the card's backdrop
+  // (the blurred copy, cover-windowed to the whole card by `u_uvrect`) and `u_next` the picture,
+  // laid whole in a centred box. Composing the layers HERE, before everything below, is
+  // the point: the rim glow, the 1px sheen/glare crown and the gloss ramp are computed from the
+  // CARD's own SDF and projection further down and light the whole tile exactly as they light a
+  // covered one; drawing the picture as a second quad over the card pass instead painted over them
+  // inside its box. `vp` is the card-centred coordinate (see the FOCUS note: `v_p` is quad-centred).
+  highp vec2 ip = (vec2(v_p.x, v_p.y + u_focus.z) - u_inset.xy) * u_inset.zw + 0.5;
+#endif
 #ifdef PLX_DISSOLVE
   // Mix the images BEFORE coverage and parent opacity: identical HUD ink stays fixed,
   // with neither the dark midpoint nor the double opacity of two faded quads.
@@ -136,6 +153,15 @@ void main(){
 #else
   vec3 tex = c.rgb*u_tint.rgb;
   float ta = c.a*u_tint.a;
+#ifdef PLX_INSET
+  // The backdrop is opaque (a blurred copy already at its brightness, or a flat ground); the picture
+  // goes over it by ITS OWN alpha (a channel's logo has a transparent ground), under the same ink.
+  // The card's alpha is the backdrop's times the fade, exactly as for a covered card.
+  if (ip.x >= 0.0 && ip.x <= 1.0 && ip.y >= 0.0 && ip.y <= 1.0) {
+    vec4 pic = texture2D(u_next, ip);
+    tex = mix(tex, pic.rgb*u_tint.rgb, pic.a);
+  }
+#endif
 #endif
 #ifdef PLX_STILL_GROUND
   float ramp = u_still_col.a * clamp(v_still_ramp, 0.0, 1.0);

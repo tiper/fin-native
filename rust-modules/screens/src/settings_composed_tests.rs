@@ -743,10 +743,10 @@ fn audio_subtitles_pushed_from_the_root_seats_its_first_row_when_rows_land() {
     plx_plex::plex::session::publish_profile_for_test(Some(user.clone()), 72);
     let (request, snapshot) = PreferenceRequest::fixture_for_test(user, 72, AudioPreferences::default());
     let (mut d, mut rig, id) = opened();
-    // Audio & Subtitles is the signed-in root's fourth row (Favorite libraries, Under posters,
-    // Video & playback, Audio & subtitles): walk DOWN three times.
+    // Audio & Subtitles is the signed-in root's fifth row (Favorite libraries, Library order, Under
+    // posters, Video & playback, Audio & subtitles): walk DOWN four times.
     let mut ms = 32;
-    for _ in 0..3 {
+    for _ in 0..4 {
         frame(&mut d, &mut rig, ms, vec![key(Key::Down, tick(ms))]);
         ms += 16;
     }

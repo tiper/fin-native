@@ -354,8 +354,8 @@ class SubjectBearing(unittest.TestCase):
     tools/tv-session.sh's `a11y_subject_bearing` is the same list."""
 
     SUBJECT_IDS = ["home.shelf.2.card.5", "home.continue.card.0", "watchlist.grid.card.7", "library.grid.card.3",
-                   "collection.card.1", "detail.related.card.0", "detail.episodes.still.3", "detail.episodes.text.3",
-                   "detail.season.2", "filmography.row.4", "catalog.primary", "home.hero.play", "home.hero.info",
+                   "collection.card.1", "livetv.recent.card.0", "livetv.on_now.card.4", "detail.related.card.0", "detail.episodes.still.3", "detail.episodes.text.3",
+                   "detail.season.2", "filmography.row.4", "livetv.guide.4", "catalog.primary", "home.hero.play", "home.hero.info",
                    "home.hero.watchlist", "detail.hero.play", "detail.hero.restart", "detail.hero.trailer",
                    "detail.hero.mark_watched", "detail.hero.mark_unwatched", "detail.hero.watchlist",
                    "itemmenu.play", "itemmenu.watchlist_remove", "itemmenu.version.0", "versions.row.0", "versions.row.3",
@@ -426,6 +426,7 @@ class SubjectBearing(unittest.TestCase):
             "screens/src/detail/mod.rs": (1, "detail.season.<i>, detail.episodes.still|text.<i>, the six detail.hero.* "
                                               "controls that play or write (one closure)"),
             "screens/src/filmography.rs": (1, "filmography.row.<i>"),
+            "screens/src/livetv.rs": (1, "livetv.guide.<n>: the Guide's cells (OK tunes the channel where it is airing)"),
             "screens/src/catalog.rs": (1, "catalog.primary"),
             "screens/src/home/mod.rs": (1, "home.hero.play|info|watchlist (not the failure read-out's action)"),
             "screens/src/item_menu.rs": (1, "itemmenu.<row>, itemmenu.version.<n> (not a Catalog menu's rows)"),
@@ -457,7 +458,7 @@ class SubjectBearing(unittest.TestCase):
                      "more.fold.previous", "more.fold.next", "more.fold.from_beginning", "more.rung.*", "menu.audio.*", "menu.sub.*", "menu.off",
                      "menu.forced", "menu.hit.*"):
             self.assertIn(glob, a11y.SUBJECT_BEARING)
-        self.assertEqual(len(a11y.SUBJECT_BEARING), 36)  # FinNative: + the favourite toggle's two faces
+        self.assertEqual(len(a11y.SUBJECT_BEARING), 37)  # FinNative: + the favourite toggle's two faces
         self.assertNotIn("menu.*", a11y.SUBJECT_BEARING)
         self.assertNotIn("home.hero.*", a11y.SUBJECT_BEARING)
         self.assertNotIn("detail.hero.*", a11y.SUBJECT_BEARING)
@@ -515,7 +516,6 @@ class SubjectBearing(unittest.TestCase):
         "screens/src/player/overlay.rs": ("more.fold.previous", "more.fold.next", "more.fold.from_beginning",
                                           "more.rung.*", "menu.audio.*", "menu.sub.*", "menu.off", "menu.forced",
                                           "menu.hit.*"),
-        "screens/src/versions_panel.rs": ("versions.row.*",),
         "appkit/src/track_menu.rs": ("menu.hit.*",),   # a search result's OK asks the download; the overlay names the title
     }
 
@@ -569,7 +569,7 @@ class SubjectBearing(unittest.TestCase):
         exactly the controls with a subject: a control added to one side and not the other fails here."""
         hero = (ROOT / "rust-modules" / "screens" / "src" / "detail" / "hero.rs").read_text()
         names = dict(re.findall(r'HeroCtl::(\w+) => "(\w+)",', hero.split("pub const fn a11y_name", 1)[1].split("}", 1)[0]))
-        self.assertEqual(len(names), 12, names)  # FinNative: + the favourite toggle's two faces
+        self.assertEqual(len(names), 13, names)  # FinNative: + the favourite toggle's two faces
         tests = (ROOT / "rust-modules" / "screens" / "src" / "detail" / "tests.rs").read_text()
         table = tests.split("fn the_hero_controls_that_play_or_write_have_a_subject_and_the_rest_have_none", 1)[1].split("\n}\n", 1)[0]
         acts = dict(re.findall(r"\(hero::HeroCtl::(\w+), (true|false)\)", table))

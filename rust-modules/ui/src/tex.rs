@@ -7,7 +7,7 @@
 //!
 //! **The result handler only ACCEPTS** (`accept`: owned pixels into the pending queue, no GL).
 //! **Upload happens in PREPARE** (`prepare`: §3.3 step 9, after `glViewport`, inside the
-//! presented frame's GL scope, one `Budget::take` per upload, `warm` on each). A frame that does
+//! presented frame's GL scope, one `Budget::take` per entry, the picture warmed). A frame that does
 //! not present uploads nothing and the queue waits — and it does not wait long, because
 //! `note_queued` publishes the queue to the budget before the present decision reads it, so
 //! pending work is itself a reason to present. The class of a take is chosen by the decoded byte
@@ -49,6 +49,7 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::frame::{Budget, Class};
+use crate::art_fit::{Derive, Ink};
 use plx_machine::machine::{PosterKey, PresentHandle};
 use plx_machine::present::{PresentEvent, Provenance, ResourceKind};
 
@@ -69,7 +70,8 @@ pub enum Warm {
 }
 
 /// The application's SOURCE half of image caching (spec §10), as the library sees it: an
-/// interning of `(server, path, w, h, png)` into an opaque [`PosterKey`], a fetch it starts on a
+/// interning of `(server, path, w, h, png, derive)` (the request plus what it asks derived from the picture)
+/// into an opaque [`PosterKey`], a fetch it starts on a
 /// miss, and a decoded image it hands back through [`accept`]. `srv` is the server's raw id —
 /// the library never names an application type. Installed once at boot ([`install`]).
 pub trait Source {
@@ -81,14 +83,19 @@ pub trait Source {
     /// the cache must go on drawing its placeholder without inferring that work is under way —
     /// asking again next frame is how a deferred request is eventually honoured. Touches the
     /// source's LRU.
-    fn probe(&self, srv: u16, path: &str, w: i32, h: i32, png: bool) -> Option<PosterKey>;
+    ///
+    /// `derive` is what this request wants derived from the picture and delivered with it: a blurred
+    /// copy, or its ink box ([`crate::art_fit::Derive`] is one or the other; `None` asks for nothing). It is part of
+    /// the request's identity: the same art asked for with and without is two entries, so a request can
+    /// never be answered with a picture that lacks what it declared.
+    fn probe(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> Option<PosterKey>;
     /// The prefetch twin: start the fetch, take nothing, protect nothing.
-    fn warm(&self, srv: u16, path: &str, w: i32, h: i32, png: bool) -> Warm;
+    fn warm(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> Warm;
     /// The AT-REST lookahead twin of [`warm`](Self::warm): the same request, but the claimed slot
     /// is kept (see [`AHEAD_SET_MAX`]) instead of being the next miss's first victim. A source
     /// with no such distinction answers as `warm` does.
-    fn warm_ahead(&self, srv: u16, path: &str, w: i32, h: i32, png: bool) -> Warm {
-        self.warm(srv, path, w, h, png)
+    fn warm_ahead(&self, srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> Warm {
+        self.warm(srv, path, w, h, png, derive)
     }
     /// An item's clearLogo, at the source's one logo request box. `logo` is a stamped path
     /// or a legacy rating key.
@@ -268,13 +275,36 @@ pub fn resolve_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> u32 {
 
 /// [`resolve_on`] plus the decoded pixel size — `(0, 0.0, 0.0)` until resident. Same one probe.
 pub fn resolve_wh_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> (u32, f32, f32) {
+    let a = resolve_art_on(srv, path, w, h, png, None);
+    (a.id, a.w, a.h)
+}
+
+/// What a tile's draw asks of the cache for one picture: the texture, its decoded size, and the
+/// texture of its backdrop ([`Decoded::backdrop`]: a blurred copy, or the flat ground of a picture with
+/// transparency), `0` when the picture has none, and its [`Ink`] ([`Decoded::ink`]) when the request asked.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct ArtTex {
+    pub id: u32,
+    pub w: f32,
+    pub h: f32,
+    pub backdrop: u32,
+    pub ink: Option<Ink>,
+}
+
+/// [`resolve_wh_on`] with what the request asks derived (`derive`): the same ONE probe and
+/// ONE use stamp, so a tile that draws the picture and its backdrop asks the source once, as any
+/// tile does.
+pub fn resolve_art_on(srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> ArtTex {
     if path.is_empty() {
-        return (0, 0.0, 0.0);
+        return ArtTex::default();
     }
-    let Some(key) = with_source(|s| s.probe(srv, path, w, h, png), None) else {
-        return (0, 0.0, 0.0);
+    let Some(key) = with_source(|s| s.probe(srv, path, w, h, png, derive), None) else {
+        return ArtTex::default();
     };
-    resolve_key(key)
+    CACHE.with(|c| match c.borrow_mut().resolve_art(key) {
+        Some(r) => ArtTex { id: r.tex.id, w: r.tex.w as f32, h: r.tex.h as f32, backdrop: r.backdrop.map_or(0, |b| b.id), ink: r.ink },
+        None => ArtTex::default(),
+    })
 }
 
 fn resolve_key(key: PosterKey) -> (u32, f32, f32) {
@@ -291,11 +321,11 @@ pub fn resident(key: PosterKey) -> bool {
 
 /// The prefetch twin of [`resolve_on`]: same arguments on purpose, so a screen warms EXACTLY the
 /// key it will later resolve.
-pub fn warm_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> Warm {
+pub fn warm_on(srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> Warm {
     if path.is_empty() {
         return Warm::Known;
     }
-    with_source(|s| s.warm(srv, path, w, h, png), Warm::Known)
+    with_source(|s| s.warm(srv, path, w, h, png, derive), Warm::Known)
 }
 
 /// The most cards a screen may ask [`warm_ahead_on`] to keep resident at once. A source holds a
@@ -313,11 +343,11 @@ pub const ON_SCREEN_ART_MAX: usize = 30;
 /// The at-rest lookahead twin of [`warm_on`]: the same arguments (so the same key a card will
 /// later resolve), a claim that outlives the next miss. For a screen at rest only, one card per
 /// frame, nearest first, stopping at the first [`Warm::Claimed`] or [`Warm::Full`].
-pub fn warm_ahead_on(srv: u16, path: &str, w: i32, h: i32, png: bool) -> Warm {
+pub fn warm_ahead_on(srv: u16, path: &str, w: i32, h: i32, png: bool, derive: Option<Derive>) -> Warm {
     if path.is_empty() {
         return Warm::Known;
     }
-    with_source(|s| s.warm_ahead(srv, path, w, h, png), Warm::Known)
+    with_source(|s| s.warm_ahead(srv, path, w, h, png, derive), Warm::Known)
 }
 
 /// An item's clearLogo as a texture plus its TRUE pixel size; `None` while pending or absent.
@@ -408,6 +438,19 @@ pub struct Decoded {
     pub w: u16,
     pub h: u16,
     pub rgba: Box<[u8]>,
+    /// The tiny backdrop of this picture ([`crate::art_fit::attach_derived`]) that its request
+    /// asked for ([`crate::art_fit::Derive`]): a blurred copy, or for a picture with
+    /// transparency a one-texel flat ground. Made once when the picture arrives. It is
+    /// uploaded with the picture, held in the same [`Entry`] and freed with it, so it never outlives
+    /// or lags the texture it was made from. `None` when the request asked for none, or the picture
+    /// needs none.
+    pub backdrop: Option<Box<Decoded>>,
+    /// What the request found of this picture's ink ([`crate::art_fit::ink_of`]) when its request asked for
+    /// it ([`crate::art_fit::Derive::INK`]): found once when the picture arrives, held in the same
+    /// [`Entry`] and gone with it. `None` when the request did not ask for the box, or the buffer was unreadable. A
+    /// picture with no visible texel is NOT `None`: it answers `Some(Ink::Clear)`, and a plate draws the channel's
+    /// name for it, where `None` draws the whole texture.
+    pub ink: Option<Ink>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -440,12 +483,26 @@ pub trait Uploader {
     fn free(&mut self, t: Tex);
 }
 
+/// What [`TexCache::resolve_art`] answers for a resident picture.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Resident {
+    pub tex: Tex,
+    pub backdrop: Option<Tex>,
+    pub ink: Option<Ink>,
+}
+
 struct Entry {
     tex: Tex,
+    /// The texture of the picture's blurred copy ([`Decoded::backdrop`]), uploaded and freed with
+    /// `tex`.
+    backdrop: Option<Tex>,
+    /// The picture's [`Decoded::ink`], held for as long as the entry is.
+    ink: Option<Ink>,
     last_used: u64,
-    /// The decoded bytes this entry accounts for in [`TexCache::bytes`]. Carried on the entry
-    /// rather than recomputed from `tex.w * tex.h * 4` at each release, so the accumulator is
-    /// conserved by construction: what a release subtracts is exactly what the upload added.
+    /// The decoded bytes this entry accounts for in [`TexCache::bytes`] (the picture's and its blurred
+    /// copy's). Carried on the entry rather than recomputed from `tex.w * tex.h * 4` at each release,
+    /// so the accumulator is conserved by construction: what a release subtracts is exactly what the
+    /// upload added.
     bytes: usize,
     /// The [`TexCache::frame`] serial as of this entry's most recent [`TexCache::resolve`], or
     /// `0` (the sentinel) if it has never been drawn since it was uploaded. DISTINCT from
@@ -456,6 +513,16 @@ struct Entry {
     /// which always runs (and so reaches at least `1`) before the first `resolve` that could
     /// possibly touch a freshly-inserted entry — see [`TexCache::prepare`]'s doc.
     drawn_frame: u64,
+}
+
+impl Entry {
+    /// Free the picture's texture and its blurred copy's: the one place an entry's textures go.
+    fn release(&self, up: &mut dyn Uploader) {
+        up.free(self.tex);
+        if let Some(b) = self.backdrop {
+            up.free(b);
+        }
+    }
 }
 
 pub struct TexCache<K> {
@@ -581,7 +648,7 @@ impl<K: Copy + Eq + Hash> TexCache<K> {
                 break;
             }
             let (_, d) = self.pending.pop_front().expect("front() was Some");
-            let bytes = d.rgba.len();
+            let bytes = d.rgba.len() + d.backdrop.as_ref().map_or(0, |b| b.rgba.len());
             // a key already resident is replaced in place and needs no ROOM, but its new pixels
             // still count against the byte budget — `protect` keeps the key being replaced out of
             // its own eviction, so making room for a bigger re-upload never evicts itself.
@@ -602,6 +669,10 @@ impl<K: Copy + Eq + Hash> TexCache<K> {
             }
             let tex = up.upload(&d);
             up.warm(tex);
+            // Uploaded, not warmed: a texture this small has no first-sample stall to move off the
+            // back buffer, and a warm is an offscreen pass of its own.
+            let backdrop = d.backdrop.as_deref().map(|b| up.upload(b));
+            let ink = d.ink;
             self.clock += 1;
             self.bytes += bytes;
             match self.resident.get_mut(&key) {
@@ -610,13 +681,15 @@ impl<K: Copy + Eq + Hash> TexCache<K> {
                 // automatically — there is no separate "carry it forward" step to get right.
                 Some(old) => {
                     self.bytes = self.bytes.saturating_sub(old.bytes);
-                    up.free(old.tex);
+                    old.release(up);
                     old.tex = tex;
+                    old.backdrop = backdrop;
+                    old.ink = ink;
                     old.bytes = bytes;
                     old.last_used = self.clock;
                 }
                 None => {
-                    self.resident.insert(key, Entry { tex, last_used: self.clock, bytes, drawn_frame: 0 });
+                    self.resident.insert(key, Entry { tex, backdrop, ink, last_used: self.clock, bytes, drawn_frame: 0 });
                 }
             }
             n += 1;
@@ -631,7 +704,7 @@ impl<K: Copy + Eq + Hash> TexCache<K> {
     pub fn free(&mut self, k: K, up: &mut dyn Uploader) {
         if let Some(e) = self.resident.remove(&k) {
             self.bytes = self.bytes.saturating_sub(e.bytes);
-            up.free(e.tex);
+            e.release(up);
         }
         self.pending.retain(|(pk, _)| *pk != k);
         self.unresident.retain(|(ek, _)| *ek != k);
@@ -640,7 +713,7 @@ impl<K: Copy + Eq + Hash> TexCache<K> {
     /// Free everything (exit).
     pub fn drain_all(&mut self, up: &mut dyn Uploader) {
         for (_, e) in self.resident.drain() {
-            up.free(e.tex);
+            e.release(up);
         }
         self.pending.clear();
         self.unresident.clear();
@@ -718,7 +791,7 @@ impl<K: Copy + Eq + Hash> TexCache<K> {
         for &(k, _, _) in &victims[..take] {
             if let Some(e) = self.resident.remove(&k) {
                 self.bytes = self.bytes.saturating_sub(e.bytes);
-                up.free(e.tex);
+                e.release(up);
                 self.unresident.push_back((k, false));
             }
         }
@@ -730,13 +803,20 @@ impl<K: Copy + Eq + Hash> TexCache<K> {
     /// next `prepare`); a miss is the absent-resource rule's cue (§8.2): draw the placeholder at
     /// the final geometry and request once.
     pub fn resolve(&mut self, k: K) -> Option<Tex> {
+        self.resolve_art(k).map(|r| r.tex)
+    }
+
+    /// [`resolve`](Self::resolve) with the picture's blurred copy ([`Decoded::backdrop`]) and ink box
+    /// ([`Decoded::ink`]) when it has them: the same one use and draw stamp, so a tile that draws both
+    /// quads asks once.
+    pub fn resolve_art(&mut self, k: K) -> Option<Resident> {
         self.clock += 1;
         let clock = self.clock;
         let frame = self.frame;
         self.resident.get_mut(&k).map(|e| {
             e.last_used = clock;
             e.drawn_frame = frame;
-            e.tex
+            Resident { tex: e.tex, backdrop: e.backdrop, ink: e.ink }
         })
     }
 
@@ -798,7 +878,7 @@ mod tests {
     fn sized(k: u32, bytes: usize) -> PosterReady<u32> {
         PosterReady {
             key: k,
-            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; bytes].into_boxed_slice() }),
+            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; bytes].into_boxed_slice(), backdrop: None, ink: None }),
         }
     }
 
@@ -809,8 +889,112 @@ mod tests {
                 w: 2,
                 h: 2,
                 rgba: vec![0; 16].into_boxed_slice(),
+                backdrop: None,
+                ink: None,
             }),
         }
+    }
+
+    /// A picture with a blurred copy of `copy` bytes riding on it.
+    fn with_copy(k: u32, bytes: usize, copy: usize) -> PosterReady<u32> {
+        PosterReady {
+            key: k,
+            result: Ok(Decoded {
+                w: 1,
+                h: 1,
+                rgba: vec![0; bytes].into_boxed_slice(),
+                backdrop: Some(Box::new(Decoded { w: 1, h: 1, rgba: vec![0; copy].into_boxed_slice(), backdrop: None, ink: None })),
+                ink: None,
+            }),
+        }
+    }
+
+    fn land(c: &mut TexCache<u32>, up: &mut StubUp, frame_us: u64) {
+        let mut present = Present::new();
+        let mut b = Budget::new();
+        b.begin_frame(frame_us);
+        c.prepare(&mut b, up, &mut PresentHandle(&mut present), || frame_us);
+    }
+
+    /// The blurred copy lives and dies with its picture: uploaded with it (the copy is not warmed), answered by
+    /// the same one resolve, counted in the entry's bytes, and freed with the entry however the
+    /// entry goes (recycled, evicted under pressure, replaced in place, shut down).
+    #[test]
+    fn a_pictures_blurred_copy_is_uploaded_resolved_counted_and_freed_with_it() {
+        let mut c: TexCache<u32> = TexCache::new(2);
+        let mut up = StubUp { next: 0, freed: vec![], warmed: vec![] };
+        c.accept(with_copy(1, 100, 10));
+        c.accept(sized(2, 100));
+        land(&mut c, &mut up, 0);
+        let r = c.resolve_art(1).expect("resident");
+        assert_eq!((r.tex.id, r.backdrop.map(|b| b.id)), (1, Some(2)), "the picture, then its copy, uploaded in that order");
+        assert_eq!(c.resolve_art(2).map(|r| (r.tex.id, r.backdrop)), Some((3, None)), "a picture with no copy answers none");
+        assert_eq!(up.warmed, vec![1, 3], "the pictures are warmed; a 1 KB copy has nothing to warm");
+        assert_eq!(c.resident_bytes(), 210, "the copy's bytes are the entry's");
+
+        // replaced in place by a picture with no copy: the old copy goes, the bytes follow
+        c.accept(sized(1, 100));
+        land(&mut c, &mut up, 20_000);
+        assert_eq!(up.freed, vec![1, 2], "the old picture and the old copy");
+        assert_eq!(c.resolve_art(1).map(|r| r.backdrop), Some(None));
+        assert_eq!(c.resident_bytes(), 200);
+
+        // recycled by the source
+        c.accept(with_copy(5, 100, 10));
+        c.free(1, &mut up);
+        up.freed.clear();
+        land(&mut c, &mut up, 40_000);
+        c.free(5, &mut up);
+        assert_eq!(up.freed.len(), 2, "a recycled slot frees the picture and its copy");
+
+        // pressure: a third key evicts the oldest, copy and all
+        let mut up = StubUp { next: 0, freed: vec![], warmed: vec![] };
+        let mut c: TexCache<u32> = TexCache::new(2);
+        c.accept(with_copy(1, 100, 10));
+        c.accept(sized(2, 100));
+        land(&mut c, &mut up, 0);
+        c.accept(sized(3, 100));
+        land(&mut c, &mut up, 20_000);
+        assert_eq!(up.freed, vec![1, 2], "the evicted entry's copy goes with it");
+        assert_eq!(c.resident_bytes(), 200);
+    }
+
+    /// The ink box is found once, before the cache ever sees the picture, and is the entry's from then on:
+    /// answered by the same one resolve, replaced with the picture, gone with the entry however it goes. It
+    /// is not pixels, so it adds nothing to the entry's bytes.
+    #[test]
+    fn a_pictures_ink_box_is_resolved_with_it_replaced_with_it_and_gone_with_it() {
+        let boxed = Ink::Box(crate::art_fit::InkBox { x: 1, y: 2, w: 3, h: 4 });
+        let with_ink = |k: u32| {
+            let mut r = sized(k, 100);
+            if let Ok(d) = r.result.as_mut() { d.ink = Some(boxed); }
+            r
+        };
+        let mut c: TexCache<u32> = TexCache::new(2);
+        let mut up = StubUp { next: 0, freed: vec![], warmed: vec![] };
+        c.accept(with_ink(1));
+        c.accept(sized(2, 100));
+        land(&mut c, &mut up, 0);
+        assert_eq!(c.resolve_art(1).map(|r| r.ink), Some(Some(boxed)));
+        assert_eq!(c.resolve_art(2).map(|r| r.ink), Some(None), "a picture whose request did not ask has none");
+        assert_eq!(c.resident_bytes(), 200, "a box is not pixels");
+        // replaced in place by a picture with none: the old box does not outlive its picture
+        c.accept(sized(1, 100));
+        land(&mut c, &mut up, 20_000);
+        assert_eq!(c.resolve_art(1).map(|r| r.ink), Some(None));
+        // recycled by the source: nothing answers for the key
+        c.accept(with_ink(1));
+        land(&mut c, &mut up, 40_000);
+        assert_eq!(c.resolve_art(1).map(|r| r.ink), Some(Some(boxed)));
+        c.free(1, &mut up);
+        assert!(c.resolve_art(1).is_none());
+        // evicted under pressure
+        let mut c: TexCache<u32> = TexCache::new(1);
+        c.accept(with_ink(1));
+        land(&mut c, &mut up, 60_000);
+        c.accept(sized(2, 100));
+        land(&mut c, &mut up, 80_000);
+        assert!(c.resolve_art(1).is_none(), "the evicted entry answers nothing, box included");
     }
 
     #[test]
@@ -819,7 +1003,7 @@ mod tests {
         let old_cache = mutate_cache(|c| std::mem::replace(c, TexCache::with_budget(8, 32)));
         let image = |key, bytes| PosterReady {
             key: PosterKey(key),
-            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; bytes].into_boxed_slice() }),
+            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; bytes].into_boxed_slice(), backdrop: None, ink: None }),
         };
         let mut up = StubUp { next: 0, freed: vec![], warmed: vec![] };
         let mut present = Present::new();
@@ -1049,7 +1233,7 @@ mod tests {
         let mut b = Budget::new();
         a.accept(PosterReady {
             key: 1,
-            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; 2_000_000].into_boxed_slice() }),
+            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; 2_000_000].into_boxed_slice(), backdrop: None, ink: None }),
         });
         b.begin_frame(0);
         let mut ph = PresentHandle(&mut present);
@@ -1070,11 +1254,11 @@ mod tests {
         let mut b = Budget::new();
         c.accept(PosterReady {
             key: 2,
-            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; 400_000].into_boxed_slice() }),
+            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; 400_000].into_boxed_slice(), backdrop: None, ink: None }),
         });
         c.accept(PosterReady {
             key: 3,
-            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; 400_000].into_boxed_slice() }),
+            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; 400_000].into_boxed_slice(), backdrop: None, ink: None }),
         });
         b.begin_frame(0);
         let mut ph = PresentHandle(&mut present);
@@ -1083,7 +1267,7 @@ mod tests {
 
         c.accept(PosterReady {
             key: 4,
-            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; 2_000_000].into_boxed_slice() }),
+            result: Ok(Decoded { w: 1, h: 1, rgba: vec![0; 2_000_000].into_boxed_slice(), backdrop: None, ink: None }),
         });
         b.begin_frame(20_000);
         let mut ph = PresentHandle(&mut present);
@@ -1123,7 +1307,7 @@ mod tests {
         const FITS: usize = 17; // the ceiling holds one poster fewer than the screen draws
         let poster = |k: u32| PosterReady {
             key: k,
-            result: Ok(Decoded { w: 250, h: 375, rgba: vec![0; IMG].into_boxed_slice() }),
+            result: Ok(Decoded { w: 250, h: 375, rgba: vec![0; IMG].into_boxed_slice(), backdrop: None, ink: None }),
         };
         let mut c: TexCache<u32> = TexCache::with_budget(64, FITS * IMG);
         let mut up = StubUp { next: 0, freed: vec![], warmed: vec![] };
@@ -1206,6 +1390,8 @@ mod tests {
                 w: 2,
                 h: 2,
                 rgba: vec![0; 16].into_boxed_slice(),
+                backdrop: None,
+                ink: None,
             }),
         });
         note_queued(&mut b);
@@ -1255,6 +1441,8 @@ mod tests {
                 w: 1280,
                 h: 720,
                 rgba: vec![0; 1280 * 720 * 4].into_boxed_slice(),
+                backdrop: None,
+                ink: None,
             }),
         };
         let mut c: TexCache<u32> = TexCache::new(8);

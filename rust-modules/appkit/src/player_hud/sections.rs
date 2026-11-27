@@ -77,12 +77,6 @@ pub(super) fn image(f: &Frame<'_>, q: Painter, rect: Rect, bind: &str, radius: f
     if bind != "info.still" {
         return;
     }
-    if f.model.is_live {
-        if let Some(info) = plx_media::route::live_info(f.ps) {
-            still(q, rect, radius, info.channel.sid.raw(), &info.channel.now_thumb, plx_ui::placeholder::Reason::InfoPanelStill);
-        }
-        return;
-    }
     let Some(c) = info_content(f.meta) else { return };
     still(q, rect, radius, plx_media::route::item_sid(plx_media::route::cur_sid(f.ps)).raw(), &c.thumb, plx_ui::placeholder::Reason::InfoPanelStill);
 }
@@ -104,30 +98,12 @@ pub(super) fn text_of(f: &Frame<'_>, bind: &str) -> Option<String> {
     match bind {
         "title.main" => Some(f.meta.now_playing().filter(|n| n.is_real_episode).map_or_else(|| words(plx_media::route::title_cptr(f.ps)), |n| n.title.clone())),
         "title.kicker" => Some(f.meta.now_playing().filter(|n| n.is_real_episode).map_or_else(|| words(plx_media::route::ctxline_cptr(f.ps)), |n| plx_ui::fmt::episode_kicker(n.season, n.index, &n.ep_title))),
-        "info.title" if f.model.is_live => Some(plx_media::route::live_info(f.ps).map_or_else(
-            || words(plx_media::route::title_cptr(f.ps)),
-            |info| format!("{} {}", info.channel.vcn, info.channel.name).trim().to_owned())),
-        "info.summary" if f.model.is_live => plx_media::route::live_info(f.ps).map(|info| live_summary(info, f.model.wall)),
         "info.title" => info_content(f.meta).map(|c| c.title),
         "info.summary" => info_content(f.meta).map(|c| c.summary),
         "label.info" => tab_labels(false)[0].map(str::to_owned),
         "label.chapters" => tab_labels(true)[1].map(str::to_owned),
         _ => None,
     }
-}
-
-/// The live info panel's summary: the programme, its airing line and its description. The airing line
-/// is worded here, at draw, from the guide's raw begin and end and the frame's `wall` time
-/// (`plx_ui::fmt::airing_line`, the one wording every Live TV surface shares); no wall time (a replay)
-/// is no line, never a guessed one.
-fn live_summary(info: &plx_media::route::LiveInfo, wall: Option<plx_ui::fmt::Wall>) -> String {
-    let mut lines = Vec::new();
-    if !info.channel.now.is_empty() { lines.push(info.channel.now.clone()); }
-    if let Some(airing) = wall.and_then(|wall| plx_ui::fmt::airing_line(plx_ui::fmt::Airing::Banner, info.channel.begins_at, info.channel.ends_at, wall)) {
-        lines.push(airing);
-    }
-    if !info.channel.now_summary.is_empty() { lines.push(info.channel.now_summary.clone()); }
-    lines.join("\n")
 }
 
 /// Whether `bind` is one of the section text binds [`text`] draws.
@@ -193,7 +169,6 @@ pub(super) fn facts_run(
     bold: &Live<bool>,
     ink: &Live<Rgba>,
 ) -> Option<FactsRun> {
-    if f.model.is_live { return None; }
     let c = info_content(f.meta)?;
     let (order, badges): (Vec<&str>, Vec<&str>) = (order.iter().map(String::as_str).collect(), badges.iter().map(String::as_str).collect());
     let shape = FactsShape {
@@ -385,51 +360,5 @@ where
     match held {
         Some(card) => shelf.paint_held(df, q, &src, at, Some(card)),
         None => shelf.paint(df, q, &src, at),
-    }
-}
-
-#[cfg(test)]
-mod live_summary_tests {
-    use super::live_summary;
-    use plx_ui::fmt::Wall;
-
-    /// 2026-11-25 21:00:00 UTC.
-    const NINE_PM: i64 = 1_795_640_400;
-
-    fn info(begin: i64, end: i64) -> plx_media::route::LiveInfo {
-        let channel = plx_data::livetv::Channel {
-            sid: plx_plex::plex::ServerId::from_raw(0), dvr: "7".into(), channel: "C101.242.ersatztv.org".into(),
-            vcn: "101".into(), name: "Family Channel".into(), thumb: String::new(), now: "Family Show".into(),
-            now_thumb: String::new(), now_summary: "About the show".into(), begins_at: begin, ends_at: end,
-        };
-        plx_media::route::LiveInfo { channel }
-    }
-
-    /// The airing line is worded at draw from the raw begin and end and the model's wall time, so it
-    /// moves with the clock without the published info being rewritten.
-    #[test]
-    fn the_airing_line_is_worded_from_the_wall_time_at_draw() {
-        let _locale = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
-        let info = info(NINE_PM, NINE_PM + 3_600);
-        let at = |now: i64| live_summary(&info, Some(Wall::from_secs(now, 0)));
-        let lines = |text: String| text.lines().map(str::to_owned).collect::<Vec<_>>();
-        let early = lines(at(NINE_PM + 38 * 60));
-        let later = lines(at(NINE_PM + 50 * 60));
-        assert_eq!(early[0], "Family Show");
-        assert_eq!(early[2], "About the show");
-        assert_eq!(early[1], plx_ui::fmt::airing_line(plx_ui::fmt::Airing::Banner, NINE_PM, NINE_PM + 3_600,
-            Wall::from_secs(NINE_PM + 38 * 60, 0)).unwrap());
-        assert_ne!(early[1], later[1], "the same info, worded for a later second");
-        assert_eq!(later[0], "Family Show");
-    }
-
-    /// No wall time (a replay), or an airing the guide does not have, is no time line at all.
-    #[test]
-    fn no_wall_time_or_no_airing_is_no_time_line() {
-        let _locale = plx_os::i18n::language_on_this_thread_for_test(plx_os::i18n::Preference::En);
-        let timed = info(NINE_PM, NINE_PM + 3_600);
-        assert_eq!(live_summary(&timed, None), "Family Show\nAbout the show");
-        let wall = Some(Wall::from_secs(NINE_PM + 60, 0));
-        assert_eq!(live_summary(&info(0, 0), wall), "Family Show\nAbout the show");
     }
 }

@@ -20,10 +20,10 @@ thread_local! {
 
 struct LateArt;
 impl Source for LateArt {
-    fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool) -> Option<PosterKey> {
+    fn probe(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> Option<PosterKey> {
         LANDED.with(Cell::get).then_some(PosterKey(41))
     }
-    fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool) -> Warm { Warm::Known }
+    fn warm(&self, _: u16, _: &str, _: i32, _: i32, _: bool, _: Option<crate::art_fit::Derive>) -> Warm { Warm::Known }
     fn logo(&self, _: u16, _: &str) -> Option<PosterKey> { None }
     fn logo_warm(&self, _: u16, _: &str) -> Warm { Warm::Known }
     fn unresident(&self, _: PosterKey, _: bool) {}
@@ -46,7 +46,7 @@ fn rig() {
     LANDED.with(|l| l.set(false));
     crate::tex::accept(PosterReady {
         key: PosterKey(41),
-        result: Ok(Decoded { w: 16, h: 24, rgba: vec![0; 16 * 24 * 4].into_boxed_slice() }),
+        result: Ok(Decoded { w: 16, h: 24, rgba: vec![0; 16 * 24 * 4].into_boxed_slice(), backdrop: None, ink: None }),
     });
     let mut budget = crate::frame::Budget::new();
     budget.begin_frame(0);

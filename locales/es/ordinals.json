@@ -1,0 +1,13 @@
+{
+  "ordinal.first": "primero",
+  "ordinal.second": "segundo",
+  "ordinal.third": "tercero",
+  "ordinal.fourth": "cuarto",
+  "ordinal.fifth": "quinto",
+  "ordinal.sixth": "sexto",
+  "ordinal.seventh": "séptimo",
+  "ordinal.eighth": "octavo",
+  "ordinal.ninth": "noveno",
+  "ordinal.tenth": "décimo",
+  "ordinal.other": "n.º {n}"
+}
