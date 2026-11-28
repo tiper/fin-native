@@ -1683,6 +1683,9 @@ pub struct Plan {
     pub tsession: String,
     pub sess: String,
     pub part_id: i64,
+    /// The key of the Part this plan plays: the caller's, the one read from the item for a row
+    /// that carried none (a FinNative row, played by its key), or the picked version's.
+    pub part: String,
     /// The played version's `mediaIndex`: 0 for the default, else the picked version's position
     /// in the item this resolve fetched. `part_id` and the source codecs are that version's too.
     pub media_index: usize,
@@ -1901,6 +1904,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             sid: env.sid,
             direct_play_mode: env.direct_play_mode,
             part_id: part_id_of(part),
+            part: part.to_owned(),
             src_vcodec: vcodec.to_string(),
             src_acodec: acodec.to_string(),
             // Early failures carry no negative claim about the decoder.
@@ -1989,6 +1993,7 @@ pub(super) fn build_stream(off: &plx_base::task::OffFrame, rk: &str, part: &str,
             if let Some(v) = played.as_ref() {
                 plan.media_index = v.index;
                 plan.part_id = part_id_of(part);
+                plan.part = part.to_owned();
                 plan.src_vcodec = vcodec.to_string();
                 plan.src_acodec = acodec.to_string();
             }

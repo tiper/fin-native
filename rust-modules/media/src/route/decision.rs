@@ -540,6 +540,9 @@ pub struct PlaybackSession {
     /// the playing item's Part id (from the part key), so an audio switch can PUT the
     /// server-side stream selection — the transcoder encodes the part's SELECTED audio.
     cur_part_id: i64,
+    /// The playing Part's key, as the plan resolved it: the request's, or the one read from the
+    /// item for a row played by its key (a FinNative row carries none). What the side reader reads.
+    cur_part: String,
     /// Opaque internal playback generation, regenerated on each play_movie/play_episode. It is
     /// also the first encoder's PMS session id. Adaptive replacements keep this app generation
     /// stable but use their own coupled PMS wire id; the active encoder mutex supplies timeline,
@@ -2056,6 +2059,7 @@ impl PlaybackSession {
         sub_mode: SubMode::Track,
         track_ctx: None,
         cur_part_id: 0,
+        cur_part: String::new(),
         sess: String::new(),
         machine_id: String::new(),
         machine_sid: ServerId::UNSET,
@@ -2178,6 +2182,7 @@ impl PlaybackSession {
             sub_mode,
             track_ctx: _,
             cur_part_id,
+            cur_part,
             sess,
             machine_id,
             machine_sid,
@@ -2277,6 +2282,7 @@ impl PlaybackSession {
             sub_mode: *sub_mode,
             track_ctx: None,
             cur_part_id: *cur_part_id,
+            cur_part: cur_part.clone(),
             sess: sess.clone(),
             machine_id: machine_id.clone(),
             machine_sid: *machine_sid,
@@ -12990,6 +12996,7 @@ fn apply_plan(ps: &mut PlaybackSession, meta: &mut plx_data::stores::metadata::M
             sub_mode,
             track_ctx: plan.track_ctx,
             cur_part_id: plan.part_id,
+            cur_part: plan.part.clone(),
             sess: plan.sess,
             machine_id,
             machine_sid,
@@ -13468,7 +13475,7 @@ fn side_reader_refusal(ps: &PlaybackSession) -> Option<&'static str> {
         if !ps.cur_contract.remux { return Some("not a remux"); }
         if ps.cur_sub_ordinal < 0 { return Some("no ordinal"); }
         if ps.tsession.is_empty() { return Some("no session"); }
-        if ps.request.as_ref().is_none_or(|r| r.part.is_empty()) { return Some("no request part"); }
+        if ps.cur_part.is_empty() { return Some("no part"); }
         None
     })
 }
@@ -14227,13 +14234,12 @@ pub fn side_reader_target(ps: &PlaybackSession) -> Option<SideReaderTarget> {
     } else {
         return None;
     };
-    let request = ps.request.as_ref()?;
-    if request.part.is_empty() || ps.tsession.is_empty() {
+    if ps.cur_part.is_empty() || ps.tsession.is_empty() {
         return None;
     }
     Some(SideReaderTarget {
         sid: ps.cur_sid,
-        part: request.part.clone(),
+        part: ps.cur_part.clone(),
         session: ps.tsession.clone(),
         part_kbps: u32::try_from(ps.cur_transport_kbps).unwrap_or(0),
         ordinal,

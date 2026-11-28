@@ -30,9 +30,15 @@ pub fn is_direct_container(container: &str) -> bool {
     DIRECT_CONTAINERS.split(',').any(|c| c == container)
 }
 
-/// Text subtitle formats the player draws itself, embedded or as a sidecar. Image formats (PGS,
-/// VobSub, DVB) are left out on purpose, so the server burns them in.
+/// Text subtitle formats the player draws itself, embedded or as a sidecar.
 const TEXT_SUBTITLES: [&str; 7] = ["srt", "subrip", "ass", "ssa", "vtt", "webvtt", "mov_text"];
+
+/// Picture subtitle formats (PGS, VobSub, DVB) the player decodes and draws itself, in the names
+/// Jellyfin gives them. Embedded only: the server matches an embedded track to a profile by codec
+/// name, so without these it burns the track in and re-encodes a film that would otherwise play as
+/// it is (#49). The app reads no picture subtitle from a separate file, so an external one still
+/// has no profile and the server burns it.
+const IMAGE_SUBTITLES: [&str; 3] = ["pgssub", "dvdsub", "dvbsub"];
 
 /// What the device decodes, in the server's codec names: the same lists the player's own
 /// direct-play gate reads (`plx_plex::plex::direct_play_video_codecs`, `devcaps::Caps::audio`).
@@ -89,6 +95,7 @@ pub fn device_profile(d: &Device<'_>) -> Value {
         subtitles.push(json!({"Format": f, "Method": "Embed"}));
         subtitles.push(json!({"Format": f, "Method": "External"}));
     }
+    subtitles.extend(IMAGE_SUBTITLES.iter().map(|f| json!({"Format": f, "Method": "Embed"})));
     json!({
         "Name": "FinNative",
         "MaxStreamingBitrate": PROFILE_MAX_BPS,
@@ -269,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn the_profile_names_the_devices_codecs_and_no_image_subtitles() {
+    fn the_profile_names_the_devices_codecs_and_its_subtitles() {
         let p = device_profile(&device());
         assert_eq!(p["DirectPlayProfiles"][0]["VideoCodec"], "h264,hevc");
         assert_eq!(p["DirectPlayProfiles"][0]["AudioCodec"], "aac,ac3,eac3");
@@ -280,7 +287,6 @@ mod tests {
         assert_eq!(p["CodecProfiles"][0]["Conditions"][0]["Value"], "3840");
         let subs: Vec<&str> = p["SubtitleProfiles"].as_array().unwrap().iter().filter_map(|s| s["Format"].as_str()).collect();
         assert!(subs.contains(&"srt") && subs.contains(&"ass"));
-        assert!(!subs.iter().any(|f| ["pgssub", "pgs", "dvdsub", "dvbsub", "vobsub"].contains(f)));
         let h264_only = device_profile(&Device { video: vec!["h264"], ..device() });
         assert_eq!(h264_only["TranscodingProfiles"][0]["VideoCodec"], "h264");
     }
@@ -320,6 +326,46 @@ mod tests {
         assert_eq!(roomy["CodecProfiles"].as_array().unwrap().len(), 1, "a roomier row adds nothing");
         let unlisted = device_profile(&Device { rows: vec![("av1", 1920, 1080)], ..device() });
         assert_eq!(unlisted["CodecProfiles"].as_array().unwrap().len(), 1, "no row for a codec not listed");
+    }
+
+    /// The server's choice for one subtitle track, as Jellyfin's `StreamBuilder.GetSubtitleProfile`
+    /// makes it for a direct play: an embedded track takes the first `Embed` profile whose format is
+    /// its codec (any case) and whose text-ness is its own; any track takes an `External` profile of
+    /// its format; anything else is burned in (`Encode`, the reason `SubtitleCodecNotSupported`).
+    fn server_method(profile: &Value, codec: &str, external: bool) -> &'static str {
+        let text = |f: &str| TEXT_SUBTITLES.contains(&f.to_ascii_lowercase().as_str());
+        let profiles = profile["SubtitleProfiles"].as_array().unwrap();
+        let matches = |method: &str| {
+            profiles.iter().any(|p| {
+                let f = p["Format"].as_str().unwrap();
+                p["Method"] == method && f.eq_ignore_ascii_case(codec) && text(f) == text(codec)
+            })
+        };
+        if !external && matches("Embed") {
+            "Embed"
+        } else if matches("External") {
+            "External"
+        } else {
+            "Encode"
+        }
+    }
+
+    /// #49: a film with an embedded VobSub track was burned in and re-encoded, because the profile
+    /// offered no picture format. Every embedded picture track, in the codec names Jellyfin reports
+    /// (`PGSSUB`, `dvdsub`, `DVBSUB`), is now the player's to draw, so the film plays as it is; an
+    /// external picture file, which the app does not read, is still the server's to burn.
+    #[test]
+    fn an_embedded_picture_subtitle_plays_as_it_is_and_an_external_one_is_burned() {
+        let p = device_profile(&device());
+        for codec in ["dvdsub", "PGSSUB", "pgssub", "DVBSUB"] {
+            assert_eq!(server_method(&p, codec, false), "Embed", "embedded {codec}");
+            assert_eq!(server_method(&p, codec, true), "Encode", "external {codec}");
+        }
+        assert_eq!(server_method(&p, "subrip", false), "Embed");
+        assert_eq!(server_method(&p, "srt", true), "External");
+        // The player knows a picture track by its model codec (`image_codec_badge`).
+        let model: Vec<String> = IMAGE_SUBTITLES.iter().map(|f| crate::jellyfin::translate::codec_name(f)).collect();
+        assert_eq!(model, ["pgs", "vobsub", "dvbsub"]);
     }
 
     #[test]

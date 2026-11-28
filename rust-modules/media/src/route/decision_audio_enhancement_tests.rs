@@ -4169,10 +4169,13 @@ fn subtitles_burned_false_only_for_client_over_remux() {
 fn admit_side_reader(ps: &mut PlaybackSession) {
     ps.auto_original.as_mut().expect("a candidate").probe_part = "/library/parts/960001/1/file.mkv".into();
     ps.cur_transport_kbps = 7_400;
+    // The Part the plan resolved; the request names none, as a FinNative row played by its key
+    // (#49): the reader reads the resolved Part, not the request's.
+    ps.cur_part = "/library/parts/960001/1/file.mkv".into();
     ps.request = Some(PlaybackRequest {
         sid: ps.cur_sid,
         rk: "5".into(),
-        part: "/library/parts/960001/1/file.mkv".into(),
+        part: String::new(),
         vcodec: "hevc".into(),
         acodec: "truehd".into(),
         title: String::new(),
@@ -4236,7 +4239,7 @@ fn part_over_30mbps_burns() {
     assert_eq!(side_reader_refusal(&ps), Some("part bitrate"), "the log names the refused term");
     ps.cur_transport_kbps = 30_000;
     assert_eq!(subtitle_presenter(&ps), SubtitlePresenter::ClientOverRemux, "the bound is inclusive");
-    assert_eq!(side_reader_refusal(&ps).filter(|why| !matches!(*why, "no session" | "no request part")), None);
+    assert_eq!(side_reader_refusal(&ps).filter(|why| !matches!(*why, "no session" | "no part")), None);
     live.finish();
     cleanup(&mut ps);
 }

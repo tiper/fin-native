@@ -62,13 +62,22 @@ pub fn side_reader_dev_armed_ordinal(ps: &PlaybackSession) -> Option<i32> {
 /// The route only says what it wants (a readout event); the pump hands it to the feed on its next
 /// frame (`FeedCommand::SyncSideReader`).
 ///
-/// A reader begun mid-play starts at the display base the live sample carries.
+/// A reader begun mid-play starts where the live remux began in the film ([`remux_start_ns`]).
 pub fn sync_side_reader(ps: &mut PlaybackSession, target: Option<SideReaderTarget>) {
     if !ps.backends().feed { return; }
     let want = target
-        .and_then(|t| super::subside::spec_for(&t, ps.readout().raw().disp_base))
+        .and_then(|t| super::subside::spec_for(&t, remux_start_ns(ps.readout().raw())))
         .map(std::sync::Arc::new);
     ps.step_readout(super::readout::ReadoutEvent::SideReaderWanted(want));
+}
+
+/// Where the live remux began in the film, as the live sample carries it: its display base, or,
+/// for a conversion that keeps the file's timestamps, the keyframe it landed on. That conversion is
+/// re-anchored to display base 0, so its display base names no start, and a reader begun from it
+/// scanned the Part from the film's start for a keyframe minutes later, matched none and moved
+/// every cue by the whole offset (#49).
+fn remux_start_ns(raw: &plx_playback_contract::feed::FeedRaw) -> i64 {
+    raw.conversion_keyframe_ns.unwrap_or(raw.disp_base)
 }
 
 #[cfg(test)]
@@ -76,6 +85,18 @@ mod tests {
     use super::*;
     use crate::player::readout::ReadoutEvent;
     use plx_playback_contract::adaptive::FailureEdit;
+    use plx_playback_contract::feed::FeedRaw;
+
+    /// A reader begun mid-play over a conversion that keeps the file's timestamps scans from the
+    /// keyframe the conversion landed on (a reporter's resume at 66.5 s landed on 66.358 s, display
+    /// base 0); a remux labelled by its display base keeps that.
+    #[test]
+    fn a_reader_begun_mid_play_starts_where_the_remux_began() {
+        let anchored = FeedRaw { conversion_keyframe_ns: Some(66_358_000_000), disp_base: 0, ..FeedRaw::IDLE };
+        assert_eq!(remux_start_ns(&anchored), 66_358_000_000);
+        let labelled = FeedRaw { disp_base: 600_000_000_000, ..FeedRaw::IDLE };
+        assert_eq!(remux_start_ns(&labelled), 600_000_000_000);
+    }
 
     /// A replacement source leaving a failed Original probe forgets the reason, in the session's
     /// readout, in every build: it names no backend and holds no Feed state.
