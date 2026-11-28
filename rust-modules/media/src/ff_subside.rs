@@ -344,6 +344,30 @@ impl Delivery {
     }
 }
 
+/// The anchor keyframe's pts as the pipeline is fed it. [`Anchor::pts_ns`] is the DEMUXED pts,
+/// which the feed moves by `pts_shift` (the landed keyframe to 0) before the pipeline sees it, and
+/// [`playhead_of`] reads a fed pts. A remux whose keyframe is stamped near 0 hid the difference; a
+/// conversion that keeps the file's timestamps stamps it in film time, and read as fed it drew
+/// every cue a whole seek offset late.
+fn anchor_fed_pts(anchor_pts_ns: i64, pts_shift: i64) -> i64 {
+    anchor_pts_ns.saturating_add(pts_shift)
+}
+
+/// The Part-minus-remux delta a keyframe scan gives, and the assumed one: from the byte-exact
+/// match `matched` when there is one, else from the keyframe at or before the offset `k_le`, else 0.
+/// `anchor_pts_ns` is the anchor's demuxed pts and `clock` the remux's `(pts_shift, disp_base)`.
+fn measured_delta(matched: Option<i64>, k_le: Option<i64>, anchor_pts_ns: i64, clock: (i64, i64)) -> (i64, Option<i64>) {
+    let (pts_shift, disp_base) = clock;
+    let fed = anchor_fed_pts(anchor_pts_ns, pts_shift);
+    let assumed = k_le.map(|k| delta_assumed(k, fed, pts_shift, disp_base));
+    let chosen = match (matched, assumed) {
+        (Some(t), _) => delta_exact(t, fed, pts_shift, disp_base),
+        (None, Some(a)) => a,
+        (None, None) => 0,
+    };
+    (chosen, assumed)
+}
+
 /// One pass of the side reader: open the Part, map its clock onto the remux's (the first pass only:
 /// `delta` is kept across a reopen), then decode the drawn track's cues from `resume_part_ns()` on,
 /// staying [`plx_playback_contract::subtitle::WINDOW_NS`] ahead of the playhead. Returns when stopped or on failure; a Part that
@@ -376,12 +400,7 @@ pub(crate) fn read_once(
             None => return if stop.is_set() { RunEnd::Stopped } else { RunEnd::Failed },
         };
         let (pts_shift, disp_base) = clock();
-        let assumed = scan.k_le.map(|k| delta_assumed(k, anchor.pts_ns, pts_shift, disp_base));
-        let chosen = match (scan.matched, assumed) {
-            (Some(t), _) => delta_exact(t, anchor.pts_ns, pts_shift, disp_base),
-            (None, Some(a)) => a,
-            (None, None) => 0,
-        };
+        let (chosen, assumed) = measured_delta(scan.matched, scan.k_le, anchor.pts_ns, (pts_shift, disp_base));
         plx_base::eventlog::log(&anchor_line(
             scan.matched, anchor.pts_ns, disp_base, pts_shift, chosen, assumed,
             scan.bytes, started.elapsed().as_millis(),
@@ -402,7 +421,7 @@ pub(crate) fn read_once(
     let mut delivery = Delivery::new();
     let judged = || {
         let (pts_shift, disp_base) = clock();
-        let anchor_playhead = playhead_of(anchor.pts_ns, pts_shift, disp_base);
+        let anchor_playhead = playhead_of(anchor_fed_pts(anchor.pts_ns, pts_shift), pts_shift, disp_base);
         judged_clock(playpos(), anchor_playhead, crate::player::subtitle_offset_ns())
     };
     loop {
@@ -603,6 +622,23 @@ mod tests {
         // the playhead formula is fed - pts_shift + disp_base
         assert_eq!(playhead_of(5_000, 2_000, 10_000), 13_000);
         assert_eq!(delta_exact(20_000, 5_000, 2_000, 10_000), 7_000);
+    }
+
+    /// A conversion that keeps the file's timestamps (Jellyfin's CopyTimestamps): after a seek the
+    /// remux's first keyframe is demuxed at its film time, the feed moves it to 0 (`pts_shift` =
+    /// -pts) and the display base stays 0. The Part keyframe that matches it is at the same film
+    /// time, so the cues need no move, and the anchor's playhead is that film time. Numbers from a
+    /// reporter's log (issue 49): `pts=1970635ms -> pts_shift=-1970635000000`, `disp_base=0ms`.
+    /// The demuxed pts read as fed gave a delta of minus the offset, and no cue was ever drawn.
+    #[test]
+    fn a_film_time_conversion_keyframe_maps_the_part_one_to_one() {
+        let k = 1_970_635_000_000;
+        assert_eq!(measured_delta(Some(k), Some(k), k, (-k, 0)), (0, Some(0)));
+        assert_eq!(playhead_of(anchor_fed_pts(k, -k), -k, 0), k, "the anchor's playhead is its film time");
+        // A remux stamped from 0 and labelled by its display base (a PMS remux at 600 s) reads as before.
+        let offset = 600_000_000_000;
+        assert_eq!(measured_delta(Some(598_500_000_000), None, 0, (0, offset)).0, -1_500_000_000);
+        assert_eq!(measured_delta(None, None, 0, (0, offset)), (0, None));
     }
 
     #[test]
