@@ -349,6 +349,37 @@ fn wait_for_anchor(stop: &SideStop) -> Option<Anchor> {
     }
 }
 
+/// How long the reader waits for the feed to land the remux's first keyframe before it scans.
+const FILM_TIME_WAIT: Duration = Duration::from_secs(1);
+
+/// Whether a remux that keeps the file's timestamps landed on the anchor itself, without reading
+/// the Part: the feed publishes the keyframe such a conversion landed on in film time
+/// (`conversion_keyframe_ns`), and when that is the anchor the remux's clock is the Part's, so the
+/// delta is 0. The keyframe scan it replaces read 20 to 50 MB of the Part, 3 to 5 s on a slow
+/// server, before the first cue (#49). A restart that is not anchored (`anchor_rebase` never
+/// armed, a remux stamped from 0) answers at once; one whose keyframe does not land within the
+/// wait is scanned as before.
+fn wait_for_film_time(anchor: &Anchor, stop: &SideStop) -> bool {
+    let until = Instant::now() + FILM_TIME_WAIT;
+    loop {
+        let landed = FEED_SHARED.conversion_keyframe_ns.load(Ordering::Relaxed);
+        if film_time_landed(anchor.pts_ns, landed) {
+            plx_base::eventlog::log(&format!("subside: anchor match=film-time remux_kf_ms={} delta_ms=0", anchor.pts_ns / 1_000_000));
+            return true;
+        }
+        let pending = landed < 0 && FEED_SHARED.anchor_rebase.load(Ordering::Relaxed);
+        if !pending || stop.is_set() || Instant::now() >= until {
+            return false;
+        }
+        nap(stop, POLL);
+    }
+}
+
+/// [`wait_for_film_time`]'s answer for one sample of the landed keyframe (`-1` when none).
+fn film_time_landed(anchor_pts_ns: i64, landed_ns: i64) -> bool {
+    landed_ns >= 0 && landed_ns == anchor_pts_ns
+}
+
 fn playpos() -> i64 {
     FEED_SHARED.playpos_ns.load(Ordering::Relaxed)
 }
@@ -396,7 +427,11 @@ fn run(spec: Spec, stop: Arc<SideStop>, job: &dyn SideReaderJobPort) {
         kbps: spec.part_kbps,
         clock_only,
     };
-    let mut delta: Option<i64> = spec.delta;
+    let mut delta: Option<i64> = spec.delta.or_else(|| wait_for_film_time(&anchor, &stop).then_some(0));
+    // A film-time remux runs on the Part's own clock: a clock-only run has nothing to find.
+    if clock_only && delta.is_some() {
+        return;
+    }
     let from_playhead = spec.from_playhead;
     let save = |d: Option<i64>| *LAST_DELTA.lock().unwrap_or_else(|e| e.into_inner()) = d;
     let mut reopens = 0;
@@ -446,6 +481,16 @@ fn run(spec: Spec, stop: Arc<SideStop>, job: &dyn SideReaderJobPort) {
 
 #[cfg(test)]
 mod tests {
+    /// The anchor is the keyframe a film-time conversion landed on: delta 0, no scan. Any other
+    /// keyframe, or none landed, is scanned.
+    #[test]
+    fn a_film_time_conversion_needs_no_keyframe_scan() {
+        assert!(film_time_landed(66_358_000_000, 66_358_000_000));
+        assert!(film_time_landed(0, 0), "a film-time start at 0");
+        assert!(!film_time_landed(66_358_000_000, -1), "nothing landed in film time");
+        assert!(!film_time_landed(66_358_000_000, 64_356_000_000), "another keyframe");
+    }
+
     use super::*;
 
     /// The player's side of the counted failure: the readout's edge rule (`counted != 0 && counted
