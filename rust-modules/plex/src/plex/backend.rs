@@ -219,7 +219,8 @@ pub trait Backend: Send + Sync {
     fn epg_channels(&self, epg: &str) -> (Option<i32>, Option<Vec<crate::plex::EpgChannel>>) {
         (None, None)
     }
-    /// `Client::epg_guide`: per channel the airing on at `now` (Unix seconds) and the ones that
+    /// `Client::epg_guide`: per channel the airings that aired inside the Guide's window
+    /// (`livetv::window_start` of `now`, Unix seconds), the one on at `now` and the ones that
     /// follow up to `until`.
     fn epg_guide(&self, epg: &str, now: i64, until: i64) -> Option<Vec<Metadata>> {
         None

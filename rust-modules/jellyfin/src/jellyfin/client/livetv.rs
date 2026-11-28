@@ -31,7 +31,7 @@ impl JfClient {
             .ok()
     }
 
-    /// The guide's programmes from `now` to `until` (unix seconds) on every channel
+    /// The guide's programmes from the window `now` falls in to `until` (unix seconds) on every channel
     /// ([`livetv::programs_path`]). `None` when the server could not be asked.
     pub fn live_programs(&self, now: i64, until: i64) -> Option<Vec<BaseItemDto>> {
         self.get::<QueryResult<BaseItemDto>>(&livetv::programs_path(self.user_id(), now, until)).map(|r| r.items)

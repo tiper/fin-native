@@ -13,7 +13,7 @@ use plx_plex::plex::urlenc_str as enc;
 use super::playback_info::Response;
 use super::time::{iso_to_unix, unix_to_iso};
 use super::translate::primary_image;
-use plx_plex::plex::livetv::{LivePlay, LiveSession};
+use plx_plex::plex::livetv::{window_start, LivePlay, LiveSession};
 use plx_plex::plex::{Dvr, EpgChannel, Media, Metadata};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -106,13 +106,14 @@ pub fn channels_path(user_id: &str) -> String {
     )
 }
 
-/// `GET`: the guide's programmes that have not ended by `now` and start by `until` (unix seconds),
-/// on every channel, in start order: per channel the one on now and the ones that follow.
+/// `GET`: the guide's programmes that have not ended before the Guide's window starts
+/// ([`window_start`] of `now`) and start by `until` (unix seconds), on every channel, in start
+/// order: per channel the ones that aired inside the window, the one on now and the ones that follow.
 pub fn programs_path(user_id: &str, now: i64, until: i64) -> String {
     format!(
         "/LiveTv/Programs?userId={}&minEndDate={}&maxStartDate={}&sortBy=StartDate&fields=Overview&enableUserData=false&enableTotalRecordCount=false&enableImages=true&enableImageTypes=Primary&imageTypeLimit=1",
         enc(user_id),
-        enc(&unix_to_iso(now)),
+        enc(&unix_to_iso(window_start(now))),
         enc(&unix_to_iso(until))
     )
 }
@@ -195,6 +196,14 @@ mod tests {
         let media = &m.media[0];
         assert_eq!((media.channel_identifier.as_str(), media.channel_vcn.as_str()), ("ab12", "101"));
         assert_eq!(media.ends_at - media.begins_at, 1800);
+    }
+
+    #[test]
+    fn the_guide_asks_from_the_windows_start_so_what_aired_inside_it_is_kept() {
+        // 10:20: the window starts at 10:00, and a programme that ended at 10:10 is still drawn.
+        let path = programs_path("u1", 1_764_152_400, 1_764_156_600);
+        assert!(path.contains("minEndDate=2025-11-26T10%3A00%3A00Z"), "{path}");
+        assert!(path.contains("maxStartDate=2025-11-26T11%3A30%3A00Z"), "{path}");
     }
 
     #[test]
