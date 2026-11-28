@@ -855,6 +855,11 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Machine<H> for PlayerScreen 
                 Handled::Yes
             }
             ScreenEvent::App(AppMsg::PlayerFollowRow { slot, now }) => {
+                // Seat reads `self.slot`. The loop publishes that occupant again in a later
+                // message; leaving the discs in place until then makes the engine park on
+                // Previous when the queue has no successor. Previous is index 0, and index 0 of
+                // the automatic pair is Watch, so the countdown reads the seat as a decline.
+                self.slot = *slot;
                 let offer = slot.offer();
                 let fresh = offer.is_some() && offer != self.hud.last_offer;
                 if offer.is_some() { self.hud.last_offer = offer; }
@@ -941,6 +946,18 @@ impl<H: PlayerLike + crate::registry::MetadataLike> Machine<H> for PlayerScreen 
                         self.hud.nav.focus = GROUP_ROW;
                         self.hud.nav.btn = btn;
                         self.scrub.cancel();
+                        // Watch is the cancel of an automatic intro. A restore or a reconcile can
+                        // land there while the row is still the discs (Previous is also index 0);
+                        // that seat is not the viewer reaching for Watch. A direction, a pointer
+                        // and an accessibility move are. A paused or loading intro still waits and
+                        // resumes its countdown, as it always has.
+                        if self.slot.is_automatic_skip()
+                            && btn == up_next::BTN_CREDITS
+                            && !self.model.paused && !self.model.loading
+                            && matches!(*by, By::Dir | By::Pointer | By::Script)
+                        {
+                            self.decline_pair();
+                        }
                     }
                 } else {
                     self.hud.nav.focus = group;
@@ -1242,15 +1259,14 @@ impl PlayerScreen {
             .map(|marker| plx_appkit::skip_policy::OfferId { scope: self.model.marker_prefs.scope,
                 entry: self.entry.0, playback: self.model.playback_id, marker });
         if self.model.seeking || self.scrub.ns >= 0 { self.auto_skip.reset(); }
-        // Taking hold of the prompt refuses the countdown for this segment. On the Up Next pair every way of
-        // engaging the transport is that (`countdown_may_run`); on the Automatic skip prompt only reaching
-        // for its Watch button is, so a paused or covered intro still waits and resumes as it always has.
-        let held = if self.slot.is_up_next_pair() {
-            !up_next::countdown_may_run(self.watch_visible(), self.hud.nav.focus == GROUP_ROW,
-                self.hud.nav.btn == up_next::BTN_NEXT)
-        } else {
-            self.watch_visible() && self.hud.nav.focus == GROUP_ROW && self.hud.nav.btn == up_next::BTN_CREDITS
-        };
+        // Taking hold of the Up Next pair refuses its countdown (`countdown_may_run` reads the
+        // cursor as a steady state: every way of leaving Next is that). The automatic intro's
+        // Watch button is not that steady state. A restore seats the row and can land on index 0
+        // for a reason that is not the viewer; only a deliberate move onto Watch
+        // (`FocusMoved` with `By::Dir`, `By::Pointer` or `By::Script`) declines it.
+        let held = self.slot.is_up_next_pair()
+            && !up_next::countdown_may_run(self.watch_visible(), self.hud.nav.focus == GROUP_ROW,
+                self.hud.nav.btn == up_next::BTN_NEXT);
         if self.slot.automatic_marker().is_some() && !self.model.paused && !self.model.loading
             && (self.drawn_watch.is_some_and(|shown| Some(shown) == id)
                 || (id.is_some() && self.auto_skip.id() == id && self.auto_skip.progress() > 0.0))
@@ -6771,19 +6787,100 @@ mod automatic_marker_tests {
         assert_eq!((handled, reqs), (Handled::Yes, vec![PlayerReq::CancelAutoSkip(id)]));
     }
     /// Reaching for the cancel button is taking hold of the prompt: the countdown stops, as it does on the pair.
+    /// A restore that happens to name Watch is not that reach, and putting the cursor back on Skip
+    /// does not restart a countdown the viewer already refused.
     #[test]
     fn arrowing_to_the_intro_watch_button_stops_its_countdown_and_back_to_skip_does_not_restart_it() {
         let _guard = plx_base::testlock::serial();
         let (mut page, meta, id) = page();
-        page.hud.nav.btn = up_next::BTN_CREDITS;
+        let mut rig = Rig::on(&page, EntryId(42));
+        rig.deliver(&mut page, ScreenEvent::FocusMoved {
+            from: Some(FocusKey { entry: EntryId(42), elem: player_hud::control_elem(up_next::BTN_NEXT) }),
+            to: FocusKey { entry: EntryId(42), elem: player_hud::control_elem(up_next::BTN_CREDITS) },
+            by: By::Restore,
+        });
+        assert!(!page.pair_declined(), "a restore onto Watch is the seat, not the viewer");
+        page.auto_skip.presented();
         assert!(step(&mut page, &meta, 1_000).is_empty());
-        assert!(page.pair_declined(), "the countdown is refused for this segment");
+        assert!(!page.pair_declined());
+        rig.deliver(&mut page, ScreenEvent::FocusMoved {
+            from: Some(FocusKey { entry: EntryId(42), elem: player_hud::control_elem(up_next::BTN_NEXT) }),
+            to: FocusKey { entry: EntryId(42), elem: player_hud::control_elem(up_next::BTN_CREDITS) },
+            by: By::Dir,
+        });
+        assert!(page.pair_declined(), "walking onto Watch refuses the countdown");
         page.hud.nav.btn = up_next::BTN_NEXT;
         page.auto_skip.presented();
         assert!(step(&mut page, &meta, 10_000_000).is_empty(), "a refused countdown stays refused");
         assert!(!page.accepts_auto_skip(id));
         assert_eq!(page.slot.items(), 2, "…and the filled Skip stays available");
     }
+    /// The HUD is down and the queue has a previous episode but no successor. The discs' primary
+    /// is Previous, index 0, which on the automatic pair is Watch. The offer must seat Skip, let
+    /// the countdown finish, and seek — a restore onto Previous is not the viewer choosing Watch.
+    #[test]
+    fn a_hidden_intro_with_previous_and_no_next_seats_skip_and_seeks() {
+        let _guard = plx_base::testlock::serial();
+        let mut page = PlayerScreen::new(EntryId(42), plx_appkit::player_hud::loaded::classic_for_test());
+        let marker = plx_data::metadata::Marker {
+            kind: plx_data::metadata::MarkerKind::Intro,
+            start_ms: 35_000,
+            end_ms: 90_000,
+            final_seg: false,
+        };
+        let mut meta = plx_data::stores::metadata::MetadataStore::default();
+        plx_data::metadata::set_playing_markers_for_test(meta.state_mut(), vec![marker]);
+        page.model.marker_prefs = MarkerPrefsView {
+            scope: 7,
+            intro_granted: true,
+            intro: Automatic,
+            ..Default::default()
+        };
+        page.model.controls = player_hud::Controls { previous: true, next: false };
+        page.model.is_episode = true;
+        page.model.playback_id = 3;
+        page.model.playpos_ns = 36_000_000_000;
+        page.model.duration_ns = 1_400_000_000_000;
+        page.model.advancing = true;
+        page.slot = ControlSlot::Discs(page.model.controls);
+        page.hud.nav.focus = GROUP_SCRUB;
+        page.hud.dismissed = true;
+        page.hud.until = 0;
+        assert_eq!(page.row_primary(), up_next::BTN_CREDITS, "control: the discs park on Previous, index 0");
+
+        let offer = player_hud::slot_for_preferences(
+            Some(marker),
+            true,
+            false,
+            plx_media::route::NextEpisodeMode::Off,
+            page.model.marker_prefs,
+        );
+        assert!(offer.is_automatic_skip(), "control: the offer is the Watch/Skip pair");
+        assert_eq!(offer.primary_btn(), up_next::BTN_NEXT);
+
+        let mut rig = Rig::on(&page, EntryId(42));
+        let (_, reqs) = rig.deliver(
+            &mut page,
+            ScreenEvent::App(AppMsg::PlayerFollowRow { slot: offer, now: 36_000 }),
+        );
+        assert!(reqs.is_empty());
+        assert_eq!(page.hud.nav.focus, GROUP_ROW);
+        assert_eq!(page.hud.nav.btn, up_next::BTN_NEXT, "the offer seats Skip, not the discs' Previous");
+        assert_eq!(rig.current(), Some(player_hud::control_elem(up_next::BTN_NEXT)));
+        assert!(!page.hud.dismissed, "the hidden transport comes back for the offer");
+        assert!(!page.pair_declined(), "seating Skip is not the viewer choosing Watch");
+
+        let id = OfferId { scope: 7, entry: 42, playback: 3, marker };
+        assert!(step(&mut page, &meta, 0).is_empty(), "the first tick arms the offer and counts nothing");
+        rig.deliver(&mut page, presented(AppMsg::PlayerPresented { watch: Some(id), paired: false }));
+        assert_eq!(page.drawn_watch, Some(id));
+        assert_eq!(
+            step(&mut page, &meta, plx_appkit::skip_policy::COUNTDOWN_US),
+            vec![PlayerReq::AutoSkip { id, reply: MachineId::Instance(InstanceId(3)) }],
+            "five presented seconds on Skip seek out of the intro"
+        );
+    }
+
     #[test]
     fn automatic_marker_fires_once_and_freezes_while_paused_or_covered() {
         let _guard = plx_base::testlock::serial(); let (mut page, meta, id) = page();
