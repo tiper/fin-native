@@ -385,7 +385,7 @@ fn no_popover_panel_uses_the_blur_path_and_every_one_stands_on_the_field() {
     );
 
     // …and the glass scope is exactly the MENUS (owner decision, wave 2 review) and Live TV's number entry
-    // (owner, 2026-11-27: glass while on the GUI): Sort & Filter, the account menu, the item hold menu and
+    // (owner, 2026-11-27: glass while on the GUI): the item hold menu and
     // number entry name `Ground::Menu`; every other panel (alerts, About,
     // Tracks, the person bio, the Also-available sheet, the decision alert) names `Ground::Sheet`.
     // The player's "…" menu stands over the video plane and draws no `panel_ground` at all.
@@ -398,7 +398,7 @@ fn no_popover_panel_uses_the_blur_path_and_every_one_stands_on_the_field() {
         let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
         (code.contains("Ground::Menu"), code.contains("Ground::Sheet"))
     };
-    for rel in ["screens/src/account_menu.rs", "screens/src/library/menu.rs", "screens/src/channel_entry_panel.rs"] {
+    for rel in ["screens/src/channel_entry_panel.rs"] {
         assert_eq!(ground_of(rel), (true, false), "{rel} is a MENU: `Ground::Menu` and nothing else");
     }
     for rel in [
@@ -409,7 +409,8 @@ fn no_popover_panel_uses_the_blur_path_and_every_one_stands_on_the_field() {
     ] {
         assert_eq!(ground_of(rel), (false, true), "{rel} is a SHEET: `Ground::Sheet` and nothing else");
     }
-    // The Detail hosts (the item menu, Also available, Select Version, Audio & Subtitles) stand on `ui::menu`,
+    // The Detail hosts (the item menu, Also available, Select Version, Audio & Subtitles), the Library's Sort & Filter,
+    // Genre and Sources, the account menu and the Watchlist options stand on `ui::menu`,
     // which derives the ground from the host: glass for a menu that grows out of its control or stands beside
     // its card, a sheet for one hung under its opener. None of them names a ground, so none can choose one.
     assert_eq!(ground_of("ui/src/menu.rs"), (true, true), "`ui::menu` owns both grounds, by host");
@@ -418,6 +419,10 @@ fn no_popover_panel_uses_the_blur_path_and_every_one_stands_on_the_field() {
         "screens/src/alt_sources.rs",
         "screens/src/versions_panel.rs",
         "screens/src/preplay_panel.rs",
+        "screens/src/account_menu.rs",
+        "screens/src/library/menu.rs",
+        "screens/src/watchlist/menu.rs",
+        "screens/src/watchlist/options.rs",
     ] {
         let src = std::fs::read_to_string(root.join(rel)).expect("read host source");
         let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");

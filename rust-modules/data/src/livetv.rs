@@ -4,7 +4,7 @@ use crate::stores::fanout::{Fanout, Standing};
 use plx_machine::job::{Job, Port};
 use plx_machine::machine::{Addr, MachineId, RequestId};
 use plx_plex::plex::livetv::{self, LiveChannel};
-pub use plx_plex::plex::livetv::LiveAiring;
+pub use plx_plex::plex::livetv::{Airings, LiveAiring};
 use plx_plex::plex::{Client, ClientKey, ClientKeys, ServerId};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
@@ -33,29 +33,23 @@ pub struct Channel {
     pub vcn: String,
     pub name: String,
     pub thumb: String,
-    pub now: String,
-    pub now_thumb: String,
-    pub now_summary: String,
-    pub begins_at: i64,
-    pub ends_at: i64,
-    /// The programmes after the current one that begin by the end the guide was last read to (the Guide's
-    /// window, or further while it is scrolled ahead: [`LiveTvCmd::Reach`]), earliest first (empty: the guide
-    /// has none, or no data at all).
-    pub later: Vec<LiveAiring>,
+    /// **Every programme the held reads kept** for the channel, in start order, the one on now among them: the ones
+    /// that have aired inside the Guide's earliest window, the one on now and the ones to come, up to the end the held
+    /// reads asked for (the live window's, or the far read's while a page reaches further: [`LiveTvCmd::Reach`]).
+    /// What is on now is read from it ([`Airings::on_air`]) and stored nowhere else. Empty: the guide has no data.
+    pub airings: Airings,
 }
 
 impl Channel {
     fn of(sid: ServerId, ch: &LiveChannel) -> Self {
         Self { sid, dvr: ch.dvr.clone(), channel: ch.channel.clone(), vcn: ch.vcn.clone(),
-            name: ch.name.clone(), thumb: ch.thumb.clone(), now: ch.now.clone(),
-            now_thumb: ch.now_thumb.clone(), now_summary: ch.now_summary.clone(), begins_at: ch.begins_at, ends_at: ch.ends_at,
-            later: ch.later.clone() }
+            name: ch.name.clone(), thumb: ch.thumb.clone(), airings: ch.airings.clone() }
     }
 }
 
 pub fn channel_tile(ch: &Channel) -> PmsMovie {
     PmsMovie { sid: ch.sid, kind: KIND_LIVE_CHANNEL, rk: format!("livetv:{}:{}", ch.dvr, ch.channel),
-        title: format!("{} {}", ch.vcn, ch.name).trim().to_owned(), show_title: ch.now.clone(),
+        title: format!("{} {}", ch.vcn, ch.name).trim().to_owned(), show_title: ch.airings.now_title().to_owned(),
         // The unnumbered identity is retained for Play, including a channel with no vcn.
         summary: ch.name.clone(), thumb: ch.thumb.clone(), still: ch.thumb.clone(), ..Default::default() }
 }
@@ -101,11 +95,13 @@ impl<'a> LiveTvView<'a> {
 pub enum LiveTvCmd {
     Reset,
     Retry,
-    /// **How far ahead the Guide shows**: the Unix second the guide must be read to (the far end of the window the
-    /// Guide is on, a step more so the next shift has its programmes), or `0` when nothing shows beyond the live
-    /// window. It is the screen's to set and to release; the store holds it, reads a guide that was read to less
-    /// again by the one re-read rule ([`Guide::due`]) and asks every read it makes for at least this much. Setting
-    /// what it already holds, or less than a guide has been read to, reads nothing.
+    /// **How far ahead a page shows**: the Unix second the guide must be read to (the far end of the window the Guide is
+    /// on, a step more so the next shift has its programmes, or the end of the local day under Browse's Later today), or
+    /// `0` when nothing shows beyond the live window. It is the screen's to set and to release; the store holds it and reads
+    /// a guide that was read to less again by the one re-read rule ([`Guide::due`]). That far read is made when the reach
+    /// grows and again every [`FAR_STEP_SECONDS`]; the scheduled reads of what is on now ask the live window alone and keep
+    /// the far programmes the last far read answered ([`merge_far`]). Setting what it already holds, or less than a guide
+    /// has been read to, reads nothing.
     Reach(i64),
 }
 
@@ -127,8 +123,12 @@ pub struct LiveTvInput<'a> {
 struct Guide { dvr: String, provider: String, channels: Vec<LiveChannel>, refresh_at: i64, retry_cd: u32,
     /// Consecutive failed grid reads, which set the next wait ([`Guide::backoff`]).
     strikes: u32,
-    /// The far end the last read asked for ([`LiveTvReq::until`]): the guide is due again while the reach is past it.
-    until: i64 }
+    /// The far end the programmes held after the live window were read to ([`LiveTvReq::until`]): the guide is due again
+    /// while the reach is past it. `0` while it holds none.
+    until: i64,
+    /// When those far programmes are read again: [`FAR_STEP_SECONDS`] after they were. The scheduled reads in between
+    /// ask for the live window alone and keep what the far read answered ([`merge_far`]). `0` while it holds none.
+    far_at: i64 }
 impl Guide {
     /// A grid that keeps failing is asked again at the lineup's doubling interval
     /// ([`RETRY_DOUBLINGS`]), not every [`RETRY_FRAMES`] for as long as the server is down.
@@ -136,26 +136,70 @@ impl Guide {
         self.retry_cd = RETRY_FRAMES << self.strikes.min(RETRY_DOUBLINGS);
         self.strikes = self.strikes.saturating_add(1);
     }
-    /// Due when its time has come, or when the Guide reaches further than it was read to (`reach`).
-    fn due(&self, now: i64, reach: i64) -> bool { self.retry_cd == 0 && (now >= self.refresh_at || self.until < reach) }
+    /// Is the far span (the live window's end to `reach`) owed a read: the reach is past what was read, or what was read is
+    /// [`FAR_STEP_SECONDS`] old? Nothing is owed while nothing reaches past the live window.
+    fn far_due(&self, now: i64, reach: i64) -> bool { reach > 0 && (self.until < reach || (self.far_at > 0 && now >= self.far_at)) }
+    /// Due when its time has come, or when the far span is owed (`reach`: the Guide, or Browse's Later today, reaches further).
+    fn due(&self, now: i64, reach: i64) -> bool { self.retry_cd == 0 && (now >= self.refresh_at || self.far_due(now, reach)) }
     /// When the guide is next read: when the soonest airing on now ends, or when the Guide's window next
     /// moves (every half hour, [`livetv::window_start`]) if that comes first, so a programme that enters the
     /// window's far end is asked for the half hour it does and not only when some airing happens to end.
     fn next_refresh(channels: &[LiveChannel], now: i64) -> i64 {
         let roll = livetv::window_start(now).saturating_add(livetv::WINDOW_STEP_SECONDS);
-        channels.iter().filter_map(|c| (c.ends_at > now).then_some(c.ends_at)).min()
+        channels.iter().filter_map(|c| (c.airings.ends_at() > now).then_some(c.airings.ends_at())).min()
             .unwrap_or_else(|| now.saturating_add(GUIDE_POLL_SECONDS)).min(roll)
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Work { Discover, Grid(Guide) }
+impl Work {
+    /// How far this read asks: the reach when it is the first read, the far span is owed ([`Guide::far_due`]) or the reach
+    /// ends inside the live window, else the live window alone (`0`), so a scheduled refresh of what is on now does not read
+    /// the span to the reach again. A reach inside the live window has no far span and so no far read to hold apart
+    /// ([`far_at`] is `0`): the read carries the reach itself and the guide stays read to it, where `0` would let
+    /// [`merge_far`] drop what it was read to and owe a second read straight after.
+    fn until(&self, now: i64, reach: i64) -> i64 {
+        match self {
+            Work::Grid(guide) if !guide.far_due(now, reach) && reach > livetv::window_end(now) => 0,
+            _ => reach,
+        }
+    }
+}
+
+/// How long the programmes read past the live window are held before they are read again (the Guide's window step).
+const FAR_STEP_SECONDS: i64 = livetv::WINDOW_STEP_SECONDS;
+
+/// When the far programmes a read to `until` at `now` answered are read again: [`FAR_STEP_SECONDS`] on, or `0` when the
+/// read reached no further than the live window.
+fn far_at(now: i64, until: i64) -> i64 {
+    if until > livetv::window_end(now) { now.saturating_add(FAR_STEP_SECONDS) } else { 0 }
+}
+
+/// **A scheduled read answers the live window; the far programmes an earlier read answered stay**: `fresh` is the guide as
+/// the live read left it, `held` as it was before, `now` the read's instant. While the far read is current (`held.far_at`
+/// not reached) each channel keeps the programmes the live window ends before, so the set a far reach shows does not shrink
+/// to the window between its own reads; once it is stale they go (nothing asks for them any more, or the far read is due).
+fn merge_far(fresh: &mut Guide, held: &Guide, now: i64) {
+    if held.until == 0 || now >= held.far_at {
+        fresh.until = 0;
+        fresh.far_at = 0;
+        return;
+    }
+    let live_end = livetv::window_end(now);
+    for (channel, old) in fresh.channels.iter_mut().zip(&held.channels) {
+        channel.airings.extend_later(old.airings.all().iter().filter(|airing| airing.begins_at > live_end).cloned());
+    }
+    fresh.until = held.until;
+    fresh.far_at = held.far_at;
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct LiveTvReq {
     sid: ServerId, key: ClientKey, now: i64, work: Work,
-    /// The far end the grid is read to: the store's reach when the read was made (`0` for the live window, which the
-    /// read widens to the window's own end).
+    /// The far end this read asks: the store's reach for the first read, when the far span is owed
+    /// ([`Guide::far_due`]) or when the reach ends inside the live window ([`Work::until`]), else `0`, the live window
+    /// alone (the read widens it to the window's own end), so a scheduled refresh does not read the far span again.
     until: i64,
 }
 impl LiveTvReq {
@@ -235,7 +279,8 @@ pub struct LiveTvState {
     /// The Recent mode the last seat input put the store in, and the row it resolves to (see [`recent`]).
     recent: Recent,
     recent_row: Vec<Channel>,
-    /// How far ahead the Guide shows ([`LiveTvCmd::Reach`]); `0` when it shows no more than the live window.
+    /// How far ahead the page shows ([`LiveTvCmd::Reach`]: the Guide's window and a step, or Browse's Later today, the end
+    /// of the local day); `0` when it shows no more than the live window.
     reach: i64,
     pub(crate) jobs: Vec<crate::stores::StoreJob>,
 }
@@ -350,7 +395,7 @@ impl LiveTvState {
                 s.adapter.fetch.claim(s.request);
                 self.jobs.push(crate::stores::StoreJob::LiveTv(Job {
                     addr: Addr { to: MachineId::Store(crate::stores::StoreId::LiveTv.ord()), req: RequestId(s.request) },
-                    req: LiveTvReq { sid: s.sid, key, now, work, until: reach },
+                    req: LiveTvReq { sid: s.sid, key, now, until: work.until(now, reach), work },
                 }, LiveTvPort(Arc::clone(&s.adapter))));
             }
         }
@@ -470,14 +515,17 @@ fn read(client: &impl LiveTvIo, req: &LiveTvReq) -> Option<ReadResult> {
                 log_lineup(req.sid, &dvr.key, status, mapped, channels.len());
                 if channels.is_empty() {
                     result.guides.push(Guide { dvr: dvr.key.clone(), provider: dvr.epg_identifier.clone(), channels,
-                        refresh_at: i64::MAX, retry_cd: 0, strikes: 0, until: req.until });
+                        refresh_at: i64::MAX, retry_cd: 0, strikes: 0, until: 0, far_at: 0 });
                     continue;
                 }
                 let airings = client.guide(&dvr.epg_identifier, req.now, req.until);
                 if let Some(airings) = airings.as_deref() { livetv::update_airings(&mut channels, airings, req.now); }
                 let refresh_at = if airings.is_some() { Guide::next_refresh(&channels, req.now) }
                     else { result.retry = true; req.now };
-                result.guides.push(Guide { dvr: dvr.key.clone(), provider: dvr.epg_identifier.clone(), channels, refresh_at, retry_cd: if airings.is_some() { 0 } else { RETRY_FRAMES }, strikes: 0, until: req.until });
+                // A grid that was not read holds no far programmes: the far span stays owed, as an empty lineup's does.
+                let (until, far) = if airings.is_some() { (req.until, far_at(req.now, req.until)) } else { (0, 0) };
+                result.guides.push(Guide { dvr: dvr.key.clone(), provider: dvr.epg_identifier.clone(), channels, refresh_at, retry_cd: if airings.is_some() { 0 } else { RETRY_FRAMES }, strikes: 0,
+                    until, far_at: far });
             }
             Some(result)
         }
@@ -487,7 +535,12 @@ fn read(client: &impl LiveTvIo, req: &LiveTvReq) -> Option<ReadResult> {
             livetv::update_airings(&mut updated.channels, &airings, req.now);
             updated.refresh_at = Guide::next_refresh(&updated.channels, req.now);
             updated.strikes = 0;
-            updated.until = req.until;
+            if req.until > 0 {
+                updated.until = req.until;
+                updated.far_at = far_at(req.now, req.until);
+            } else {
+                merge_far(&mut updated, guide, req.now);
+            }
             Some(ReadResult { guides: vec![updated], roster: None, complete: true, retry: false })
         }
     }

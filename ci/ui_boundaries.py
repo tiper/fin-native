@@ -124,7 +124,7 @@ def presentation_helper_violations(source):
     imports = ';'.join(re.findall(r'\buse\s+[^;]+;', code(tokens)))
     pending = ['busy', 'transport_hidden', 'busy_surface', 'busy_surface_with', 'captured', 'draw_readout', 'draw_failed_readout']
     seen, errors = set(), []
-    forbidden = r'\b(?:devtrig|error_now|error_captured|error_caption|failure_context|failure_context_captured|audio_switching)\b|\bplayer::state\b'
+    forbidden = r'\b(?:devtrig|observe_failure|audio_switching)\b|\bplayer::state\b'
     player_modules = {'player'} | set(re.findall(r'\bplayer\s+as\s+(\w+)', imports))
     while pending:
         name = pending.pop()
@@ -162,9 +162,9 @@ def screen_violations(source):
     errors = []
     if re.search(r'\bdevtrig\b', text):
         errors.append('screen runtime devtrig access/import must be a captured input')
-    # Known transitive failure resolvers sample player globals/diagnostics even when
-    # handed a Session. Imports and function values must not hide them in step helpers.
-    if re.search(r'\b(?:error_now|error_caption|error_captured|failure_context|failure_context_captured)\b', text):
+    # The failure's one writer derives it from the session and the sampled dev trigger, so a screen that called it
+    # would be a second capture. Imports and function values must not hide it in step helpers.
+    if re.search(r'\bobserve_failure\b', text):
         errors.append('screen failure decisions require the complete captured presentation')
     # Imports, aliases and function values count too, so a helper cannot hide the read.
     if re.search(r'\b(?:std|alloc)::(?:fs|\{[^;]*\bfs\b)|\bfs::|\b(?:File|OpenOptions)::|\.(?:read_to_string|read_to_end)\(', text):

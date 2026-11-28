@@ -299,5 +299,10 @@
   "browse.livetv.empty": "Nema dostupnih kanala",
   "browse.livetv.guide": "Vodič",
   "browse.livetv.guide_range": "Kanali {from}–{to} od {total}",
-  "browse.livetv.no_guide": "Nema podataka o programu"
+  "browse.livetv.no_guide": "Nema podataka o programu",
+  "browse.livetv.browse": "Pregledaj",
+  "browse.livetv.filter_just_started": "Upravo počelo",
+  "browse.livetv.filter_ending_soon": "Uskoro završava",
+  "browse.livetv.filter_later_today": "Kasnije danas",
+  "browse.livetv.browse_empty": "Ništa ne odgovara ovom filtru"
 }

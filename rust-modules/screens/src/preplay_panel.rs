@@ -33,7 +33,7 @@ use plx_machine::machine::{
 };
 use plx_plex::plex::ServerId;
 use plx_ui::a11y::{A11y, A11yPath};
-use plx_ui::menu::{Host, Menu, Out};
+use plx_ui::menu::{Host, Menu, Out, Shade};
 use plx_ui::popover::Placement;
 use plx_ui::page_stack;
 use plx_ui::screen::{
@@ -117,7 +117,7 @@ impl LogicalState for PreplayArg {
 /// (glass, over the control), else hangs under or above its opener on the sheet ground.
 pub(crate) fn host_of(arg: &PreplayArg) -> Host {
     match (arg.source, arg.opener) {
-        (Source::Failed { .. }, _) => Host::Video { anchor: arg.anchor, placement: Placement::UNDER_OR_ABOVE_FIT },
+        (Source::Failed { .. }, _) => Host::Video { anchor: arg.anchor, placement: Placement::UNDER_OR_ABOVE_FIT, shade: Shade::Sheet, need_h: None },
         (Source::Page, Some(_)) => plx_ui::detail_layout::hero_host(arg.anchor),
         (Source::Page, None) => Host::Sheet { anchor: arg.anchor },
     }
@@ -150,7 +150,7 @@ impl PreplayPanelScreen {
     /// picker and committed (a drill-in is a page the menu pushed). The row is the event's own (`Glued::elem`).
     fn run<H: AppLike<Memory = PageMemory>>(&mut self, out: Out<()>, elem: Option<u32>, fx: &mut Effects<'_, H>) {
         match out {
-            Out::Stay | Out::Moved => {}
+            Out::Stay | Out::Moved | Out::Edge => {}
             Out::Dismiss => self.dismiss(fx),
             Out::Picked(()) => {
                 if let Some(sel) = elem.and_then(|key| self.picker.pick(key)) {
@@ -240,6 +240,8 @@ impl<H: AppLike<Memory = PageMemory> + MetadataLike> Focusable<H> for PreplayPan
             PickRow::OpenAudio => A11yPath::new().name("audio"),
             PickRow::OpenSubtitles => A11yPath::new().name("subtitles"),
             PickRow::SubOff => A11yPath::new().name("subtitle").name("off"),
+            PickRow::OpenOther => A11yPath::new().name("subtitle").name("other"),
+            PickRow::OpenLang(lang) => A11yPath::new().name("subtitle").name("lang").index(lang.slot),
             PickRow::Audio(i) => A11yPath::new().name("audio").index(i),
             PickRow::Sub(i) => A11yPath::new().name("subtitle").index(i),
         })

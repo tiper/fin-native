@@ -480,7 +480,7 @@ class SubjectBearing(unittest.TestCase):
     ITEM_MENU_ALIAS = re.compile(r"ItemMenuAction as (\w+)")
     TITLE_ACTING = re.compile(
         r"\b(ContentReq::Play\b|HomeReq::Play\b|LibraryReq::Play\b|AppMsg::PlayVersion|"
-        r"PlayerReq::(?:Command|StandIn|RetryPlayback|PlayAutomatically|More|CommitTrack)\b|SubSearchCmd::Download\b|"
+        r"PlayerReq::(?:Command|StandIn|Recover|More|CommitTrack)\b|SubSearchCmd::Download\b|"
         r"Write::(?:Watched|Unwatched|RemoveFromDeck)\b|"
         r"ItemMenuAction::" + ITEM_MENU_ACTIONS + r"\b|"
         r"WatchlistAdd\b|WatchlistRemove\b|AppFx::Catalog\b|PlayIntent::\w+)")
@@ -516,6 +516,7 @@ class SubjectBearing(unittest.TestCase):
         "screens/src/player/overlay.rs": ("more.fold.previous", "more.fold.next", "more.fold.from_beginning",
                                           "more.rung.*", "menu.audio.*", "menu.sub.*", "menu.off", "menu.forced",
                                           "menu.hit.*"),
+        "screens/src/versions_panel.rs": ("versions.row.*",),   # on the failure screen a row asks the recovery door
         "appkit/src/track_menu.rs": ("menu.hit.*",),   # a search result's OK asks the download; the overlay names the title
     }
 

@@ -86,6 +86,7 @@ pub fn hero_host(anchor: [u32; 4]) -> super::menu::Host {
         clear_y: Some(f32::from_bits(anchor[1]) - SYNOPSIS_FOOT_ABOVE_ACTIONS),
         fill: Some(theme::ACCENT),
         morph: super::menu::Morph::FromPill,
+        width: super::menu::GrowWidth::Catch,
     }
 }
 

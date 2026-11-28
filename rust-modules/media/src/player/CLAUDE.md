@@ -1056,6 +1056,16 @@ something.
   a picture on the panel" wants `player::seen_frame()`, not `frames() > 0`. `frames` counts libpf's
   5 Hz POSITION updates, not presented pictures, and the Dolby Vision guard's watch
   (`dv_start::Guard::step`) reads it as exactly that: no position update since the landing.
+- **The failure read-out's row is one table, and *Select Version* is its last fix.** `failure_actions` offers it wherever a
+  retry can happen and the failed item has more than one file (`LiveOffers::versions_available`, read per frame from
+  `PlayingItem.versions`, because the metadata can land after the failure), but only while the row has a slot left
+  (`FAILURE_ROW_SLOTS`, held equal to the UI's `STATUS_ROW_MAX` by a `screens::player` test): a row already holding
+  *Try again* or *Play automatically*, a rung and the track picker goes without it, because five pills are wider than
+  the screen in Belarusian, German and Hungarian. A pick is `Recovery::PickVersion`, through `route::begin_recovery`
+  like every recovery; `retry_current_play` puts it on the request, and it is remembered for the profile
+  (`route::choose_version`) only once that attempt is PLAYING (`PlaybackSession.version_on_trial`, taken by
+  `route::remember_version_that_played`, which the app's per-frame step calls on `player::is_playing`, the state both
+  backends derive: a URI attempt never reaches the Feed pump's decoded-frame door), never when it is asked for.
 - **A remembered track choice is written back to PMS on the first decoded frame, never at the
   landing.** `route::apply_plan` only PARKS it (`PlaybackSession.write_back`: installing a URL is not
   evidence the television accepted it, and a refused direct play's rescue PUTs its own selection);
@@ -1087,6 +1097,45 @@ something.
   its own PUT as before. It holds itself to the
   subtitle the landing put on screen (`owed.landed_sub`, settled from the session by
   `settle_landing_selection`), so it never replaces a remembered sidecar the restore drew.
+- **A track pick the server refuses is not kept, on the server or in the show's memory (#1522).** A
+  pick that needs a conversion (a burn, a transcoded audio, a displaced pick under an Original) PUTs
+  the Part's selection BEFORE `/decision` answers, so a refusal has to undo what the claim wrote.
+  `PlaybackSession::server_selection` (`route/server_selection.rs`) is the ONE value for what the
+  server holds: seeded from the fetched item's `selected` streams as the resolve read them BEFORE the viewer's pick
+  or a retry's override rewrote the flags (`Plan::selection_fetched`; an item from the detail page's
+  cache carries the flags of the fetch that produced it), plus the resolve's own PUTs; reset by another Part, and moved only by a selection PUT: a claim worker records its PUTs
+  (`PutTrail`) and the landing settles them (`FlightSelection::settle`, in `install_claim_landing` and
+  `take_ready_recovery_flight`), the serial queue's sites record theirs at queue time
+  (`queue_session_selection`, `note_queued_selection`; that worker has no way back, so a PUT it fails
+  stays recorded). It is NOT `source_selection` (source intent, overwritten at the pick's commit) and
+  not the applied projection (a fall-through auto-pick is shown and never PUT). A REFUSED claim writes
+  back only the fields its PUT changed and the value knows (an unknown audio is never guessed, the
+  wire drops `audioStreamID` for 0), through `queue_selection` on the main thread at the landing, field by field: a field the main thread
+  wrote since the claim captured the selection, to a value that is neither the captured one nor the
+  claim's own, is the newer word and is left (an in-place subtitle pick's PUT names the subtitle only, so under
+  one a refused audio rebuild is still undone). Every selection PUT goes out on the ONE serial queue: a
+  claim or resolve worker's `put_selection` is queued behind what the serial worker holds and waits for
+  its answer, so a restore queued before it is always sent first and the server ends on the newest PUT. **A start's own PUT
+  (the resolve's, before its `/decision`: a failure-screen pick the retry carries, a remembered choice) is provisional until the attempt shows a
+  picture**: the landing installs it with what the server held before it (`PlaybackSession::provisional_selection`, from
+  `Plan::selection_sent` and `Plan::selection_fetched`), and `route::settle_start_selection`, which the app asks beside the failure's
+  capture (`capture_failure`), drops it once `player::state` is Playing (the state both backends derive, the one
+  `remember_version_that_played` reads) and settles it as a refused claim is (`FlightSelection::settle`, through the serial queue)
+  once the state is Error before that. A transient failure reverts too. The value is then `TakenBack` (`StartPut`, one value,
+  two phases), and a retry that PUTs the pick again (a converting resolve) replaces it, while a retry that plays the pick
+  WITHOUT converting (a direct play PUTs nothing) gets it written again once it plays (`FlightSelection::replay`: one PUT of the
+  fields that differ, only when the playback is of the same Part, the pick is what plays and the server's value is not a newer
+  word); a play whose pick the server already holds sends nothing extra. A visit's stop (or a fresh request) clears it; a
+  replacement stop keeps it for its retry. The show's
+  track memory is not touched by it. The memo half rides the claim: `PlayerControl::pending_memos` (beside
+  `pending_user`, latest wins, merged on coalesce, taken into `claimed_user`, handed back on teardown)
+  is written by `finish_route_action(Prepared)`, or at `install_claim_landing`'s `OriginalRecovery`
+  arm (a displaced pick under an Original lands through `original_tail`, which never settles
+  `Prepared`), and dropped on Rejected or Cancelled. A pick applied in place or natively writes at
+  commit, as before, and supersedes an older rebuild memo of the same half, queued or in flight
+  (`supersede_pick_memos`: the newest pick is the show's memory) (`commit_audio_pick`, `commit_subtitle_pick`; a subtitle rides a rebuild only when
+  `transcoding && !in_place`), and a pick deferred behind a pending Original holds its memo in
+  `PendingOriginal::deferred_audio_memo` for `apply_deferred_original_effects` to write.
 - **App-switch lifecycle** (handled in `app/run.rs`, the frame loop; the machine is
   `player/lifecycle.rs`, its drivers (`drive_foreground` and the `poll_`/`park_` fns) are
   `player/foreground.rs`, and the transport-pause contract is `player/transport.rs`; `app::lifecycle`

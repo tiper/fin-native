@@ -277,7 +277,9 @@ pub fn send_parked_write_back(ps: &mut PlaybackSession) {
         parked.audio.map_or_else(|| "-".to_string(), |a| a.to_string()),
         subtitle.map_or_else(|| "-".to_string(), |s| s.to_string()),
     ));
-    queue_selection(parked.sid, parked.part_id, parked.audio.unwrap_or(0), subtitle, true);
+    if queue_selection(parked.sid, parked.part_id, parked.audio.unwrap_or(0), subtitle, true) {
+        note_queued_selection(ps, ServerSelection::put(parked.part_id, parked.audio.unwrap_or(0), subtitle));
+    }
 }
 
 /// **Carry the parked write to a subtitle the first frame's re-match put on screen** (W6,
@@ -401,16 +403,35 @@ pub fn remember_accepted_source_subtitle(ps: &PlaybackSession, memo: SubtitleMem
 ///
 /// Automatic picks do NOT come through here: the start-of-play auto-pick, a retry, a rescue and
 /// Switch to Auto call [`commit_audio_selection`] or build a plan directly, and write no memory.
-/// A pick deferred behind a pending Original handoff was accepted, and so remembered, when the
-/// viewer made it; [`apply_deferred_original_effects`] only replays it and writes nothing.
+/// A pick that rides a server rebuild is remembered when its claim is ACCEPTED ([`PickMemos`],
+/// [`settle_claim_memos`]), a pick the route applies in place or natively at once, and a pick
+/// deferred behind a pending Original handoff when [`apply_deferred_original_effects`] replays it.
 pub fn commit_audio_pick(ps: &mut PlaybackSession, audio: CarriedAudio, memo: Option<AudioMemo>) -> bool {
-    let accepted = commit_audio_selection(ps, audio);
-    if accepted {
-        if let Some(memo) = memo {
-            remember_track_pick(ps, TrackPick::Audio(memo));
+    match commit_audio_selection_routed(ps, audio) {
+        PickRoute::Refused => return false,
+        // The server was not asked for a conversion: nothing can refuse the pick.
+        PickRoute::Applied => {
+            if let Some(memo) = memo {
+                supersede_pick_memos(true, false);
+                remember_track_pick(ps, TrackPick::Audio(memo));
+            }
         }
+        // A rebuild's memory rides its claim and is written when the server accepts it.
+        PickRoute::Rebuild => queue_pick_memos(PickMemos::audio(memo)),
+        PickRoute::Deferred => hold_deferred_audio_memo(memo),
     }
-    accepted
+    true
+}
+
+/// Write what the claim that just landed accepted carried ([`PickMemos`]): the one write of a pick that
+/// rode a server rebuild.
+pub(super) fn write_pick_memos(ps: &PlaybackSession, memos: PickMemos) {
+    if let Some(memo) = memos.audio {
+        remember_track_pick(ps, TrackPick::Audio(memo));
+    }
+    if let Some(memo) = memos.subtitle {
+        remember_track_pick(ps, TrackPick::Subtitle(memo));
+    }
 }
 
 /// A URI native selection is applied only after the common owner accepts its exact command's
@@ -424,7 +445,7 @@ pub fn confirm_uri_audio_pick(ps: &mut PlaybackSession, audio: CarriedAudio, mem
     }
     ps.selection_known = true;
     ps.cur_memory_note = false;
-    queue_put_selection(cur_sid(ps), cur_part_id(ps), cur_audio_sid(ps), cur_sub_sid(ps));
+    queue_session_selection(ps);
     if let Some(memo) = memo { remember_track_pick(ps, TrackPick::Audio(memo)); }
 }
 
@@ -447,7 +468,7 @@ pub fn confirm_uri_subtitle_pick(ps: &mut PlaybackSession, ordinal: i32, stream_
     // (`UriDriver::delivers_captions`) has the app draw the embedded track at `ordinal`.
     ps.cur_sub_client_drawable = app_draws && stream_id > 0 && ordinal >= 0;
     ps.cur_memory_note = false;
-    queue_put_selection(cur_sid(ps), cur_part_id(ps), cur_audio_sid(ps), cur_sub_sid(ps));
+    queue_session_subtitle(ps);
     if let Some(memo) = memo.filter(|_| changed) {
         remember_track_pick(ps, TrackPick::Subtitle(memo));
     }
@@ -478,8 +499,19 @@ pub fn commit_subtitle_pick(
     // only is a change even onto the stream it drew (the forced track's own row) or onto nothing
     // (Off while no forced track matched): same stream id, different state.
     let changed = subtitle_pick_changed(ps.cur_sub_sid, stream_id, ps.sub_mode == SubMode::ForcedOnly);
-    commit_subtitle_selection(ps, sub_idx, stream_id, client_renderable);
+    let rebuilds = commit_subtitle_selection_routed(ps, sub_idx, stream_id, client_renderable);
     if let Some(memo) = memo.filter(|_| changed) {
+        remember_subtitle_pick(ps, memo, rebuilds);
+    }
+}
+
+/// A subtitle pick's memo: written now when the pick applied in place, carried by the rebuild's claim
+/// when it burns ([`PickMemos`]).
+fn remember_subtitle_pick(ps: &PlaybackSession, memo: SubtitleMemo, rebuilds: bool) {
+    if rebuilds {
+        queue_pick_memos(PickMemos::subtitle(Some(memo)));
+    } else {
+        supersede_pick_memos(false, true);
         remember_track_pick(ps, TrackPick::Subtitle(memo));
     }
 }
@@ -499,13 +531,13 @@ pub fn commit_forced_only_pick(
     lang: &str,
     changed: bool,
 ) {
-    commit_subtitle_selection(ps, sub_idx, stream_id, client_renderable);
+    let rebuilds = commit_subtitle_selection_routed(ps, sub_idx, stream_id, client_renderable);
     ps.sub_mode = SubMode::ForcedOnly;
     if changed {
         if let Some(ctx) = ps.track_ctx.as_mut() {
             ctx.forced_lang = lang.to_string();
         }
-        remember_track_pick(ps, TrackPick::Subtitle(SubtitleMemo::ForcedOnly { lang: lang.to_string() }));
+        remember_subtitle_pick(ps, SubtitleMemo::ForcedOnly { lang: lang.to_string() }, rebuilds);
     }
 }
 
@@ -657,6 +689,26 @@ pub fn on_decoded_frame(ps: &mut PlaybackSession) {
     send_parked_write_back(ps);
 }
 
+/// Is a version picked on the failure screen still waiting to be proven by a picture ([`remember_version_that_played`])?
+/// The per-frame caller asks this before the (dearer) question whether a picture is playing.
+pub fn version_on_trial_pending(ps: &PlaybackSession) -> bool {
+    ps.version_on_trial.is_some()
+}
+
+/// **A version picked on the failure screen is remembered once the attempt that asked for it is playing**
+/// (`Recovery::PickVersion`), not when it is asked for ([`PlaybackSession::version_on_trial`]): a version that fails must
+/// not become what Play starts next time. The caller is the app's per-frame step, on the state both backends derive
+/// (`player::is_playing`: the Feed's presented frame, the URI service's Playing), so a URI set remembers it too; the
+/// Feed-only [`on_decoded_frame`] would never have seen one. Taken whatever the outcome, so it writes once; only while
+/// the request in force still asks for exactly that version of that item.
+pub fn remember_version_that_played(ps: &mut PlaybackSession) {
+    let Some((sid, rk, media)) = ps.version_on_trial.take() else { return };
+    let current = ps.request.as_ref().is_some_and(|r| r.sid == sid && r.rk == rk && r.version == Some(media));
+    if current {
+        choose_version(sid, &rk, media);
+    }
+}
+
 /// What the before-playback picker ([`commit_preplay_pick`]) is told about the item whose tracks it
 /// chose, none of it read from a session (there is none yet).
 pub struct PreplayItem<'a> {
@@ -738,6 +790,64 @@ pub fn hold_pick_for_retry(ps: &mut PlaybackSession, pick: &plx_data::metadata::
     };
     let selection = super::HeldSelection { part_id: pick.part_id, audio_sid: pick.audio_sid, sub_sid };
     ps.held_pick = Some(super::HeldPick { item, selection });
+}
+
+/// **The ONE door of the failure read-out's recoveries** (`player::Recovery`): the viewer chose to do something about
+/// the failure that stands, and this decides whether it may be done and what it changes about the retry.
+///
+/// * No failure stands, or its row does not offer the recovery's control (`player::failure_actions`, the table the row
+///   is drawn from, with `live` its three live inputs): refused, logged, nothing touched. A recovery is never defaulted
+///   into a retry the row never offered.
+/// * A track pick is held on the session BEFORE the retry starts ([`hold_pick_for_retry`]): the retry consumes it, a
+///   retry that is refused or cancelled leaves it held for *Try again*, and the panel keeps reading it.
+/// * Otherwise the overrides the retry applies ([`retry_current_play`]): the Direct Play mode and the attempt's origin.
+///
+/// The app performs everything else a recovery means: the preference it writes, the stop of the failed attempt and the
+/// resolve (`app::playback::perform_recovery`).
+pub fn begin_recovery(
+    ps: &mut PlaybackSession,
+    live: crate::player::LiveOffers,
+    failed_media: Option<plx_plex::plex::MediaId>,
+    recovery: &crate::player::Recovery,
+) -> Result<crate::player::RetryOverrides, crate::player::Refused> {
+    use crate::player::Refused;
+    let refused = match ps.failure.as_ref() {
+        None => Refused::NoFailure,
+        Some(failure) if !crate::player::recovery_offered(failure, live, recovery) => Refused::NotOffered(recovery.action()),
+        Some(failure)
+            if matches!(recovery, crate::player::Recovery::PickVersion(media)
+                if Some(*media) == failed_media && crate::player::version_repeat_refused(failure)) =>
+        {
+            Refused::SameVersion
+        }
+        Some(_) => {
+            if let crate::player::Recovery::PickTracks(pick) = recovery {
+                hold_pick_for_retry(ps, pick);
+            }
+            return Ok(recovery.overrides());
+        }
+    };
+    crate::player::log(&format!("recovery refused: {recovery:?}: {refused:?}"));
+    Err(refused)
+}
+
+/// **The version the failed attempt asked for** (the request's: the viewer's pick, else the profile's remembered choice,
+/// `None` for the server's default), which *Select Version* over the failure screen checks as the one that just failed
+/// ([`taken_version`](super::taken_version) turns it into the row that plays unasked). It places the check mark; the file
+/// that is "the same" for the door is [`attempt_media`].
+pub fn attempt_version(ps: &PlaybackSession) -> Option<plx_plex::plex::MediaId> {
+    ps.request.as_ref().and_then(|r| r.version)
+}
+
+/// **The file the failed attempt actually landed on**, of the item's `versions` (the metadata store's
+/// `failed_versions`): the plan's `mediaIndex` (a position in `Media[]`, installed by `apply_plan` for a refused plan too)
+/// read against the list. It is what *Select Version* means by "the same file": the request's own version
+/// ([`attempt_version`]) is `None` when none was named and may be a file that is gone, where the default played. `None`
+/// when no plan landed for the request's item, or the list does not hold that position.
+pub fn attempt_media(ps: &PlaybackSession, versions: &[plx_data::pms::MediaVersion]) -> Option<plx_plex::plex::MediaId> {
+    let request = ps.request.as_ref()?;
+    (ps.cur_sid == request.sid && ps.cur_rk == request.rk).then_some(())?;
+    versions.get(ps.cur_media_index).map(|v| v.id)
 }
 
 /// **What the failure screen's picker starts from**: the held pick, else the attempt's standing

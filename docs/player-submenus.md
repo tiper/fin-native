@@ -11,8 +11,8 @@ state) and PR 3 (Other languages, the language pages, the image-subtitle badge) 
 panel resize and page slide for Tracks and More, `ui::panel_motion`, plus the device frame-time
 scene) and PR 5 (More -> Quality on the shared `ui::page_stack::PageStack`, the `more-quality-osc`
 scene) are what this repository has. (The Detail hosts' pages, the hero and tile `…` menus, Select Version
-and Audio & Subtitles, are on `PageStack` too, driven by `ui::menu::Menu` (one machine for the push, pop, slide, placement and stops)
-instead of the per-popover code the Tracks and More menus still use; the player's menus move onto it in a later change.) The replay anchors were re-recorded for PR 2 and again for PR 5
+and Audio & Subtitles (with the same Other languages drill-in as here), are on `PageStack` too, driven by `ui::menu::Menu` (one machine for the push, pop, slide, placement and stops)
+and so are the player's Tracks and More menus: there is no per-popover code left.) The replay anchors were re-recorded for PR 2 and again for PR 5
 because the overlay's state shape changed on purpose.
 
 ## Behaviour
@@ -118,10 +118,13 @@ re-recorded.
   the id the table was on, then fallback, then the old-order neighbour) and `restore` (a pop: reinstate saved scroll and selection). `set` stays Settings'
   snap-and-reset. They differ because "the page changed", "its data changed" and "a page came
   back" want different scroll and pill behaviour.
-- **Page stack** (`TrackMenuState::pages`, `TrackPage`): one `FormTable` serves the active page;
+- **Page stack** (`TrackMenuState::menu`, a `ui::menu::Menu`, which owns the `PageStack`; `TrackPage`): one `FormTable` serves the active page;
   a push saves the opener's `TrackRow` and the scroll, a pop restores both. To add a page: a
-  `TrackPage` variant (with a `title` and a stable `code`), its form in `page_form`, its explicit
-  `page_initial`, a Nav row whose `Dest` is the variant, and the `TrackRow`s it needs.
+  `TrackPage` variant (with a stable `code`), its `Page` (rows, title, explicit initial id) in
+  `TrackCore::build_page`, a Nav row whose `Dest` is the variant, and the `TrackRow`s it needs. The
+  track pages (Audio, Subtitles, Other languages, a language) are not built there but in
+  `appkit::track_rows`, which Detail's Audio & Subtitles picker builds from too (`TrackCx::Preplay`,
+  adapted with `Form::map`, which carries the language aliases): one place turns an item's tracks into rows.
 - **Form extensions**, reusable by Settings PRs 3-5 (`docs/settings-form.md`): a Nav row gets the
   chevron from its kind; Choice rows derive `checked` from a current-value predicate; an item can be
   disabled (`Row::disabled`: focusable, ghost pill under focus, inert).
@@ -143,7 +146,7 @@ re-recorded.
   animates only the panel rect and the two content layers' x offset and alpha under the clip stack.
   One panel background, no backdrop capture or transition textures. Key presses act on the logical
   state immediately (a push during a push retargets; push then pop mid-slide reverses).
-  Built as `ui::panel_motion::PanelMotion`, owned by `TrackMenuState` and `MoreMenuState`: the
+  Built as `ui::panel_motion::PanelMotion`, owned by `ui::menu::Menu` (the Tracks and More menus each hold a `Menu`; `PanelMotion::new` is `pub(crate)`, so no host builds one): the
   natural layout is cached against `TableView::layout_rev` (re-stamped by every content change) and
   only recomputed then; springs animate the panel's top and left edges (bottom and right stay
   anchored, so the card grows and shrinks away from the HUD); a push or pop hands the OUTGOING page's
@@ -230,7 +233,7 @@ not been measured on the TV. The menu-closed control on the same clip graded 25.
   from the playing item's UltraBlur corners, paid again on every open. That envelope has since been
   removed altogether: the player's menu dim is the flat neutral ink (`Scrim::over_video`), so there
   is nothing to latch. `navcommit` is ~6 ms, of which `tmnew` is under 1 ms. Then come the root
-  page's first strings, which the overlay's `prepare` queues on the mount frame (`warm_open`): the
+  page's first strings, which the overlay's `prepare` queues on the mount frame (`Menu::prepare`): the
   open frame measured 17.8-21.7 ms on the 2026-10-02 capture (below), the rest being `after_step`'s
   focus seat.
 - **Playback start.** The Play/ACB call and single Starfish `Feed()` calls block for 5–28 ms in

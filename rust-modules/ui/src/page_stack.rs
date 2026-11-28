@@ -5,9 +5,9 @@
 //!
 //! It owns no UI and no table: the popover keeps its own [`FormTable`] and calls
 //! [`PageStack::push`] / [`PageStack::pop`] around the form operations (`FormTable::open` on a push,
-//! `FormTable::restore` on a pop). `plx_appkit::track_menu::TrackMenuState` (Subtitles' Style and
-//! language pages) and `plx_appkit::more_menu::MoreMenuState` (Quality) both stand on it, so the
-//! two cannot drift on what a push saves or what the replay canon says about it.
+//! `FormTable::restore` on a pop). [`crate::menu::Menu`] is the one popover that stands on it, for every host
+//! (the Tracks and More menus of the player among them), so no two menus can drift on what a push saves or what the
+//! replay canon says about it.
 //!
 //! The root is the EMPTY stack, not a value of `P`.
 use crate::a11y::{A11y, A11yPath, Role};
@@ -49,7 +49,8 @@ pub struct PageStack<P, R> {
 }
 
 impl<P: Copy, R> PageStack<P, R> {
-    pub const fn new() -> Self {
+    /// Menus own their stack: only [`crate::menu::Menu`] builds one.
+    pub(crate) const fn new() -> Self {
         Self { saved: Vec::new() }
     }
 
@@ -128,10 +129,8 @@ where
 
 /// **What a popover must expose for its focus stops to be shared**: the form it shows, its
 /// [`PanelMotion`], and the two rects the card is laid out and drawn at. The
-/// `Focusable`/`Part` impls of `plx_appkit::track_menu::TrackMenuPart` and
-/// `plx_appkit::more_menu::MoreMenuPart` differ only in `reconcile`; everything else is the
-/// `popover_*` functions below, so the two cannot drift on where a stop is, what it clips to, or
-/// which way a key steps.
+/// `Focusable` answers of [`crate::menu::Menu`] are the `popover_*` functions below, so no two menus can
+/// drift on where a stop is, what it clips to, or which way a key steps.
 pub trait PopoverPanel {
     type Id: PartialEq + Clone;
     type Act: Clone;
@@ -145,8 +144,7 @@ pub trait PopoverPanel {
 }
 
 /// The popover's one `Column` group: UP/DOWN stop at the ends; LEFT (pop a page) and RIGHT (enter
-/// a Nav row) are the owning screen's (`PlayerOverlayScreen::edge_key`), so both are
-/// [`EdgeRule::Screen`].
+/// a Nav row) are the host's ([`crate::menu::keyed`]), so both are [`EdgeRule::Screen`].
 pub fn popover_groups<S: PopoverPanel>(
     s: &S,
     group: GroupId,
@@ -177,8 +175,8 @@ pub fn popover_group_of<S: PopoverPanel, E: IndexElem>(
 /// **The accessibility projection of one popover row** (`a11y`): the id `name` gives the row's
 /// identity, and the role its [`RowKind`] says (a drill-in or a choice is a `Row`, a switch a
 /// `Toggle`, a command a `Button`). The title band's pointer-only key is not a row and projects
-/// nothing. The one implementation every popover shares (`plx_appkit::more_menu::MoreMenuPart`,
-/// `plx_appkit::track_menu::TrackMenuPart`, the Library's sort and view menu); each names its own
+/// nothing. The one implementation every popover shares (the player's `more_menu` and `track_menu`,
+/// the Library's sort and view menu); each names its own
 /// rows. It takes the popover's FORM, not a [`PopoverPanel`], because a menu that is itself a screen
 /// (the Library's) has the form and no panel.
 pub fn popover_a11y<Id: PartialEq + Clone, A: Clone, D: Clone, E: IndexElem>(
@@ -235,7 +233,7 @@ pub fn popover_neighbour<S: PopoverPanel, E: IndexElem>(
 }
 
 /// Where a stop is DRAWN: the page's slide offset on x and the animated card as the clip, the same
-/// numbers [`popover_register_stops`] registers (replay compares the two). `rest_rect` is the
+/// numbers [`register_stops`] registers (replay compares the two). `rest_rect` is the
 /// layout, where the row settles. The title band's pointer-only key is placed too, because replay
 /// and hit validation must be able to.
 pub fn popover_place<S: PopoverPanel, E: IndexElem>(
@@ -269,8 +267,8 @@ pub fn popover_seat<S: PopoverPanel, E: IndexElem>(s: &S, entry: EntryId) -> Foc
 /// the D-pad column; a click pops). Only the ACTIVE page registers, where it is drawn this frame: `natural`
 /// is the layout the rows are framed in, `shown` the animated card (the clip), `dx` the slide's x offset;
 /// the pointer is held while either moves. `p` is the painter the stops are registered through and
-/// `activate` how a click on one acts (`Direct` for the player's popovers, which act on the press;
-/// `Immediate` for [`crate::menu::Menu`], whose surface steps the press itself); `key_at(i)` is the focus
+/// `activate` how a click on one acts ([`Activate::Immediate`] for [`crate::menu::Menu`], whose surface steps the
+/// press itself); `key_at(i)` is the focus
 /// key of row `i` (`None`: not a stop).
 #[allow(clippy::too_many_arguments)]
 pub fn register_stops<H: Host>(
@@ -318,18 +316,4 @@ pub fn register_stops<H: Host>(
             },
         );
     }
-}
-
-/// [`register_stops`] for the player's popovers: the root painter, a click that acts on the press.
-pub fn popover_register_stops<S: PopoverPanel, H: Host>(
-    s: &S,
-    entry: EntryId,
-    f: &mut DrawFrame<'_, '_, H>,
-) where
-    H::Elem: IndexElem,
-{
-    let r = s.panel_rect(f.measure);
-    let (shown, dx) = (s.shown_rect(f.measure), s.motion().live_dx());
-    let form = s.form();
-    register_stops(f, entry, Painter::root(), Activate::Direct, &form.table, r, shown, dx, &|i| form.key_at(i).map(|k| k.0));
 }

@@ -1438,3 +1438,25 @@ fn the_watchlist_raises_no_damage_coming_back_from_under_a_cover_unless_what_it_
     assert!(h.damages(ScreenEvent::FocusMoved { from: Some(held), to: h.key(next), by: By::Dir }));
     assert!(h.damages(ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(GroupId(0)) })));
 }
+
+/// **The Sort & Filter menu follows its control**: the control rides the page, and a page that glides under the open menu (focus
+/// on the pill brings it home) moves it, so the menu takes the control's drawn plate from the dispatcher each frame
+/// (`Screen::opener_rect` -> `Menu::track_opener`) and grows out of, and drains back into, the pill where it stands. Red while the
+/// menu held the anchor it was opened with.
+#[test]
+fn the_sort_filter_menu_follows_its_pill_as_the_page_moves() {
+    use super::cards_harness::WatchHost;
+    use super::menu::WatchlistMenuScreen;
+    use plx_machine::machine::EntryId;
+    use plx_ui::screen::Screen;
+    let opened_at = plx_ui::Rect::new(1595.0, 146.0, 198.0, 60.0);
+    let arg = crate::registry::WatchlistMenuArg {
+        host: EntryId(2),
+        options: WatchlistOptionsState::default(),
+        anchor: [opened_at.x, opened_at.y, opened_at.w, opened_at.h].map(f32::to_bits),
+    };
+    let mut menu = WatchlistMenuScreen::new(EntryId(3), arg);
+    let plate = plx_ui::Rect::new(1600.0, 96.0, 188.0, 50.0);
+    Screen::<WatchHost>::opener_rect(&mut menu, plate);
+    assert_eq!(menu.glass_opener(), Some(plx_ui::widgets::focus_pill(plate)), "the glass grows out of the control where it is drawn now");
+}

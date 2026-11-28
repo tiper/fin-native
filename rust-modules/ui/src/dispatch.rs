@@ -2418,6 +2418,23 @@ where
         // snapshot before), so nothing about it changes while the menu is up.
         self.settle_lift();
         let lift_parts = page_lift.map(|(entry, focus)| self.opener_parts(entry, focus));
+        // A page element's opener (a header pill) rides the page that carries it: the surface hanging from it is told where the
+        // control is DRAWN before every draw, as a bar member's is, so its morph starts and ends on the live control and not on
+        // where it stood when the menu opened (`Menu::track_opener`).
+        let page_opener = page_lift.zip(lift_parts.as_ref()).and_then(|((entry, focus), lift_parts)| {
+            let key = focus?;
+            let host = self.nav.tabs.stack.top().filter(|e| e.id == entry)?.inst.as_ref()?;
+            let Split { views, measure, .. } = rig.split();
+            let cx = lift_parts.page_cx::<H>(views, measure, entry, lift_parts.focus.clone(), self.nav.tabs.stack.beneath_id(entry));
+            Some((key, Focusable::<H>::place(&*host.screen, &key.elem, &cx, At::Drawn)?.rect))
+        });
+        if let Some((key, rect)) = page_opener {
+            for s in &mut self.nav.modals.surfaces {
+                if let Some(inst) = s.entry.inst.as_mut().filter(|i| i.screen.opener().is_some_and(|(entry, opener)| entry == key.entry && opener == Some(key))) {
+                    inst.screen.opener_rect(rect);
+                }
+            }
+        }
         let (_, host_render) = self.nav.modals.host_policy();
         // §9: armed for the LENGTH OF THE DRAW, and restored rather than cleared, exactly as the
         // page freeze is. Every framebuffer-sampling door is refused while it is up.

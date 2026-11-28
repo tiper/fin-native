@@ -3,8 +3,14 @@
 //! programmes of that channel laid along a time ruler; the window is [`Axis`], a start, a length and a ruler step in
 //! Unix seconds (the Guide's is 90 minutes from a half hour, which moves a half hour at a time), and a programme
 //! stands from where it begins (or where the window does, for one that began before it) to where it ends, less
-//! [`CELL_GAP`]. The now line, its shade and its chip are drawn only while now is in the window, and the chip hides
-//! the ruler label it would cover.
+//! [`CELL_GAP`]. The now line and its chip are drawn only while now is in the window, and the chip hides the ruler
+//! label it would cover. **The time already aired is shaded cell by cell**, not as one block over the board: each
+//! programme that began before now is shaded from its left edge to the now line (or to its own right edge, when it is
+//! over), in that cell's own outline, so no ink stands outside a cell, in the gaps between rows and cells or at the
+//! board's edge. The shape comes from the cell's one placed rect, never from a width or radii of the shade's own: a
+//! cell wholly aired is shaded by its own rounded rect, and a cell the now line cuts (at most one a row) by a flat
+//! shade left of the line under the shared rounded clip of the cell's rect, so the corners are the cell's wherever the
+//! line falls, a corner zone or a sliver included. A window that is wholly past is shaded whole, cell by cell.
 //!
 //! **Why this is a widget of its own.** Nothing else here lays things out along a TIME axis: a card shelf
 //! ([`cards`](crate::cards)) and the poster grid are lattices of equal cells, and an [`HStack`](crate::hstack)
@@ -36,7 +42,7 @@ use plx_machine::machine::Measure;
 
 use crate::fmt;
 use crate::label::HAlign;
-use crate::screen::Dir;
+use crate::screen::{ClipScope, Dir};
 use crate::text_view::TextView;
 use crate::{card_shadow_params, theme, Painter, Rect};
 
@@ -373,26 +379,37 @@ impl TimeGrid {
     /// **Where a focus lands when the board under it is rebuilt or its window moves**: the cell of `row` that shares the
     /// most time with the cell the focus stood on (`from`, its span; the same programme where it is still there), or, for
     /// a focus that stood on an unscheduled row (`None`, which says nothing about where the reader was), the cell on `now`.
+    /// **Time that has aired does not count while `now` is in the window** (see [`TimeGrid::nearest`]), so a landing is on
+    /// what is on air or ahead, and not on a programme that has aired and ties with the live one. UP, DOWN and the page
+    /// turn land by the same rule.
     pub fn land(&self, row: usize, from: Option<Span>, now: i64) -> Option<Cell> {
-        self.nearest(row, from.unwrap_or_else(|| self.instant(now)))
+        self.nearest(row, from.unwrap_or_else(|| self.instant(now)), now)
     }
 
-    /// The cell of `row` that shares the most time with `from` (clipped to the window), the earliest on a tie; when
-    /// `from` shares none with any of them (a gap in the guide), the nearest in time.
-    fn nearest(&self, row: usize, from: Span) -> Option<Cell> {
+    /// **The one landing rule**: the cell of `row` that shares the most time with `from` (clipped to the window), the
+    /// earliest on a tie; when `from` shares none with any of them (a gap in the guide), the nearest in time. While `now`
+    /// is in the window the overlap is measured over the part of `from` from `now` on (the part before it has aired, and
+    /// nothing on it can be tuned), so a move lands on what is on air or ahead; only when nothing of the row overlaps
+    /// that part (every cell has aired, or the row has a gap there) is the whole window's overlap used, as before.
+    fn nearest(&self, row: usize, from: Span, now: i64) -> Option<Cell> {
         let window = self.axis.window();
         let from = Span::new(from.begins.max(window.begins), from.ends.min(window.ends));
-        (0..self.cells(row))
-            .filter_map(|index| {
-                let span = self.span(Cell { row, index })?;
-                Some((std::cmp::Reverse(from.overlap(span)), from.gap(span), index))
-            })
-            .min()
-            .map(|(_, _, index)| Cell { row, index })
+        let ahead = if window.contains(now) { Span::new(from.begins.max(now), from.ends) } else { from };
+        let best = |from: Span| {
+            (0..self.cells(row))
+                .filter_map(|index| {
+                    let span = self.span(Cell { row, index })?;
+                    Some((std::cmp::Reverse(from.overlap(span)), from.gap(span), index))
+                })
+                .min()
+        };
+        let onward = best(ahead).filter(|&(shared, ..)| shared.0 > 0);
+        onward.or_else(|| best(from)).map(|(_, _, index)| Cell { row, index })
     }
 
     /// **A move**: LEFT and RIGHT to the cell before or after in the row (`None` at its ends); UP and DOWN to the
-    /// cell of the row above or below that shares the most time with this one (from an unscheduled row, the one on
+    /// cell of the row above or below that shares the most time with what is left of this one ([`TimeGrid::land`]'s rule,
+    /// the time that has aired not counting while `now` is in the window; from an unscheduled row, the one on
     /// `now`). `None` at the first and last row.
     pub fn step(&self, at: Cell, dir: Dir, now: i64) -> Option<Cell> {
         match dir {
@@ -403,7 +420,7 @@ impl TimeGrid {
                 if row >= self.rows.len() {
                     return None;
                 }
-                self.nearest(row, self.leaving(at, now)?)
+                self.nearest(row, self.leaving(at, now)?, now)
             }
         }
     }
@@ -418,7 +435,7 @@ impl TimeGrid {
             return None;
         }
         let row = (want * PAGE_ROWS + at.row % PAGE_ROWS).min(self.rows.len() - 1);
-        self.nearest(row, self.leaving(at, now)?)
+        self.nearest(row, self.leaving(at, now)?, now)
     }
 
     /// **The cell a board is entered on** from outside it (DOWN from the header): the first row of the page showing, at
@@ -435,8 +452,9 @@ impl TimeGrid {
     }
 
     /// **Paint the board** at the frame's own coordinates (translate `p` for a page that scrolls): the indicator and the
-    /// ruler, the page's rows (the channel cell, then the programmes, the focused one lit), the shade over the time
-    /// already aired, and the now line and chip, the last two while `now` is in the window. `offset` is the zone's
+    /// ruler, the page's rows (the channel cell, then the programmes, the focused one lit, each with the shade over
+    /// its own aired part, [`TimeGrid::draw_aired`]), and the now line and chip, the last two while `now` is in the
+    /// window. The channel cell is never shaded and neither are the gaps. `offset` is the zone's
     /// UTC offset: without it (the platform could not say) there are no clock words, no ruler labels, programme
     /// times or chip, and the board is otherwise the same. `focus` is the focused cell, if it is the board's.
     #[allow(clippy::too_many_arguments)]
@@ -446,6 +464,7 @@ impl TimeGrid {
         let chip = in_window.then(|| self.chip(measure, offset, now)).flatten();
         self.draw_ruler(p, measure, offset, words.indicator, chip.as_ref().map(|(rect, _)| *rect));
         let shown = self.shown();
+        let now_x = self.axis.x_of(now);
         for row in shown.clone() {
             let Some(at) = self.channel_rect(row) else { continue };
             let focused_row = focus.is_some_and(|cell| cell.row == row);
@@ -455,18 +474,13 @@ impl TimeGrid {
                 let cell = Cell { row, index };
                 let Some(rect) = self.placed(cell).filter(|r| r.w > 0.0) else { continue };
                 self.draw_cell(p, measure, offset, words, content, cell, rect, focus == Some(cell));
+                Self::draw_aired(p, rect, now_x);
             }
         }
         if shown.is_empty() {
             return;
         }
         let rows_bottom = FIRST_ROW_Y + (shown.len() - 1) as f32 * ROW_PITCH + CELL_H;
-        let now_x = self.axis.x_of(now);
-        // time already aired: shaded over every row, from the axis' left edge to the now line (none while the window is
-        // still ahead of now)
-        if now_x > AXIS_X0 {
-            p.rrect(Rect::new(AXIS_X0, FIRST_ROW_Y, now_x - AXIS_X0, rows_bottom - FIRST_ROW_Y), 0.0, 0.0, theme::GUIDE_AIRED_SHADE);
-        }
         if !in_window {
             return;
         }
@@ -508,6 +522,30 @@ impl TimeGrid {
         p.rrect(chip, CHIP_H * 0.5, CHIP_H * 0.5, theme::GUIDE_NOW);
         TextView::new(label, micro, theme::GUIDE_CELL_FOCUS_INK).bold().h(HAlign::Center).with_measure(measure)
             .draw(p, Rect::new(chip.x, chip.cy() - measure.cap_h(micro) * 0.5, chip.w, 0.0));
+    }
+
+    /// **The shade over a cell's aired part**, from its left edge to the now line (`now_x`) or to its own right edge, if
+    /// that comes first; none for a cell the line has not reached (the window still ahead of now). It takes its shape
+    /// from the cell's one placed rect and never from its own width: a cell wholly aired is shaded by the cell's own
+    /// rounded rect, and a cell the line cuts (at most one a row) by a flat shade left of the line under the rounded
+    /// clip of the cell's rect ([`ClipScope::open_rounded_in`]), so the shade has the cell's corners wherever the line
+    /// falls, a corner zone or a sliver included. Drawn right after the cell, so the cell's text is shaded too and the
+    /// now line and chip, drawn last, stand over it.
+    fn draw_aired(p: Painter, rect: Rect, now_x: f32) {
+        let right = (rect.x + rect.w).min(now_x);
+        if right <= rect.x {
+            return;
+        }
+        if now_x >= rect.x + rect.w {
+            // the whole cell has aired: the shade is the cell's own rounded rect
+            p.rrect(rect, CELL_RADIUS, CELL_RADIUS, theme::GUIDE_AIRED_SHADE);
+            return;
+        }
+        // the line cuts the cell: a flat shade left of it, cut by the cell's own rounded outline (the shared rounded
+        // clip), so wherever the line falls, in a corner zone included, the shade has the cell's corners and no
+        // radius of its own to disagree with them
+        let _cell = ClipScope::open_rounded_in(p, rect, CELL_RADIUS);
+        p.rrect(Rect::new(rect.x, rect.y, right - rect.x, rect.h), 0.0, 0.0, theme::GUIDE_AIRED_SHADE);
     }
 
     #[allow(clippy::too_many_arguments)]

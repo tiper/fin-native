@@ -165,6 +165,30 @@ fn a_bar_opener_is_lifted_once_per_frame_by_the_opener_pass_on_the_live_presenta
         "the surface is handed the live drawn rect of the opener");
 }
 
+/// **A page element's surface is handed the opener's live drawn rect on every frame, as a bar member's is**: a header pill rides
+/// its page, so a page that glides while the menu is up (focus on the pill brings it home; a wheel moves it) moves the control the
+/// glass grows out of and drains back into. `Screen::opener_rect` is the one way a surface learns it (`Menu::track_opener`); an anchor
+/// taken once, when the menu opened, is frozen where the control stood then. Red while the dispatcher told only a bar opener's surface.
+#[test]
+fn a_page_openers_surface_is_handed_the_openers_drawn_rect_every_frame() {
+    let _guard = plx_base::testlock::serial();
+    let (mut d, mut rig, _) = booted();
+    let id = open_modal(&mut d, &mut rig, Style::Compact, 16);
+    let host = d.nav.top_page().map(|e| e.id).expect("the booted page");
+    let pill = FocusKey { entry: host, elem: 2 };
+    modal_mut(&mut d, id).opener = Some((host, Some(pill)));
+    d.frame(&mut rig, tick(32), vec![], vec![], &mut NoTap);
+    d.draw(&mut rig, true);
+    assert_eq!(modal_of(&d, id).opener_seen.last().copied(), Some(crate::Rect::new(400.0, 100.0, 180.0, 180.0)),
+        "the surface is handed where the control is drawn");
+    // the page glides: the control is drawn 40 px up, and the next frame says so
+    let page = d.nav.tabs.stack.top_mut().unwrap().inst.as_mut().unwrap().screen.as_any_mut().unwrap();
+    page.downcast_mut::<crate::fixture::FixtureScreen>().expect("fixture screen").set_drawn_dy(-40.0);
+    d.draw(&mut rig, true);
+    assert_eq!(modal_of(&d, id).opener_seen.last().copied(), Some(crate::Rect::new(400.0, 60.0, 180.0, 180.0)),
+        "and follows it as the page moves");
+}
+
 /// **A bar member a surface hangs from is left OUT of the chrome pass, as a page leaves its opener
 /// out of its own** (owner, 2026-11-17: the profile chip is CONSUMED by its morph). The lift pass is
 /// the member's only copy, at the morph's alpha, so a chip the menu has consumed is not drawn by the

@@ -78,6 +78,21 @@ arguments, and its time is the `dt` it is handed.
    nothing here is close — and then it lands *here*, as a reusable `View`, so the next screen gets
    it for free.
 
+   **Every menu goes through `plx_ui::menu::Menu`; there is no second door.** A host supplies rows
+   (a `Page`, a `Host`, a `Class`) and acts on the `Out` `Menu::step` answers. It never pushes or pops
+   a page, sets a title band (`TableView::set_title`), builds its own `PageStack` or `PanelMotion`,
+   sizes the panel, or handles BACK itself. The size class has ONE vocabulary, `menu::Class`: a
+   table's class is fixed at construction (`TableView::with_class(Class)` /
+   `FormTable::with_class(band, Class)`, which `Menu::new` calls with the menu's own class), `compact`
+   is private and read with `is_compact()`, and there is no bool constructor. Visibility enforces it
+   outside the crate (`set_title`, `PageStack::new` and `PanelMotion::new` are `pub(crate)`), and
+   `ci/check-deps.sh`'s `menudoors` rule enforces it inside the ui crate: `set_title(`, `.compact =`,
+   `with_compact(`, `PageStack::new` and `PanelMotion::new` appear only in `menu.rs`, `menu_tests.rs`
+   and the three types' own modules. A menu that does not fit `Menu` is a change to `Menu`, not a menu
+   built beside it. Live TV's number entry (`channel_entry_panel.rs`) is a `FormTable` host, not a
+   `Menu`: it is a lineup-entry machine, and it takes its size class from `Class` like everything
+   else (`FormTable::with_class(BAND, Class::Action)`), with no named constructor of its own.
+
    **A new focusable element answers an accessibility id.** Tests and agents reach it with
    `focus:<id>` / `press:<id>` (`tools/a11y.py`), not by walking keys to it, so an element that
    cannot be named cannot be tested. An element whose press ACTS ON a title it names (it plays, restarts,
@@ -118,7 +133,7 @@ arguments, and its time is the `dt` it is handed.
      in its first drawn frame, and never write a screen-local warm loop.
    - **A row of pills** (selection and focus capsules that travel): `widgets::TabStrip` and
      `SelMark` (`widgets.rs`), the nav bar's own motion.
-   - **Menus**: `Popover` (`popover.rs`) around a `TableView` (`table.rs`). A menu placed beside the
+   - **Menus**: `menu::Menu` (`menu.rs`, rule 4), which owns a `Popover` (`popover.rs`) around a `TableView` (`table.rs`). A menu placed beside the
      control that opened it takes its rect from `popover::anchor_panel` with a `Placement`
      (`under_or_above` and the player menus are calls of it; a header menu's cross axis is `hang_x`),
      never from a screen's own arithmetic. **Strips and grids of
@@ -473,15 +488,17 @@ presentation in a design pass.
    `opening_row` is also the focus fallback when a focused row disappears.
 
    **A menu with pages is `menu.rs`'s `Menu`, and a host only supplies rows.** The Detail hosts (the hero
-   and tile `…` menus, Select Version, Audio & Subtitles, Also available) build a `Menu<P, Id, A>` from a
+   and tile `…` menus, Select Version, Audio & Subtitles, Also available, and the player's Tracks and More menus, a
+   flat card over the video plane) build a `Menu<P, Id, A>` from a
    `Host` (grows out of its control / glass beside a card / a sheet under its opener / a card over the
    video plane: the legal combinations are the enum, so a morph with no opener or glass over the video is
    not a value) and a `Class` (Action: BODY rows, the lightest dim; Picker: HEADLINE rows, the panel dim).
    The stack, the card's resize and the page slide, the placement, the width rule, the 20 px radius, the
    ground, the stop registration, the pointer hold and the dim are the menu's, never a host's. A row that
-   opens a page is a `RowKind::Nav`: OK and RIGHT push it, BACK and LEFT pop it (LEFT at the root is
-   inert), and every pushed page wears the header with the back mark (there is no way to have none). The
-   host maps keys with `menu::keyed`, feeds `Event`s to `Menu::step`, and acts on the `Out` it answers.
+   opens a page is a `RowKind::Nav`: OK and RIGHT push it, BACK and LEFT pop it (LEFT at the root, and RIGHT
+   on a row that opens no page, answer `Out::Edge`, the host's own key: the player's tab switch), and every pushed page wears the header with the back mark (there is no way to have none). The
+   host maps keys with `menu::keyed`, feeds `Event`s to `Menu::step`, and acts on the `Out` it answers. Nothing builds a menu
+   beside `Menu`: see rule 4 of the component rules above, and the `menudoors` gate.
 
    **Popover open styles.** Two exist. `Appear` (default) is the shared `K_APPEAR` fade+slide.
    `Morph` (`Popover::morphing()` is the one selector; open with `open_from(opener.rect)`) is the glass opener's pill-to-panel
@@ -522,7 +539,7 @@ presentation in a design pass.
    `Popover::panel` (the glass at the morphing rect) and `Popover::morph_rows` (the rows, scaled
    about the panel anchor by their own lens spring (`K_LENS`) on an open, and by the shrinking
    slab's height on a close). The morph draws no opener face: every header
-   opener, the profile chip included, is the lift pass's, and the morph starts and ends on the opener's LIVE drawn rect (`Screen::opener_rect` -> `Popover::track_opener`, so the chip follows the bar's tuck). The morph is not
+   opener, the profile chip included, is the lift pass's, and the morph starts and ends on the opener's LIVE drawn rect (`Screen::opener_rect` -> `Menu::track_opener`, which moves the panel laid over it and the glass's `Popover::track_opener`, so the chip follows the bar's tuck; a header pill's menu is handed the pill's `place(At::Drawn)` plate the same way, so a page that glides under an open menu moves the glass with it, and no menu holds an anchor taken at open). The morph is not
    faded by the container's appear: the surface begins and ends as the opener. A held surface is ticked with no time, so a morph starts on the first
    frame anyone sees. The item hold menu keeps lift+appear. A new morph constant is named in
    `popover_morph.rs`. A menu whose opener is a flat focused pill names that fill

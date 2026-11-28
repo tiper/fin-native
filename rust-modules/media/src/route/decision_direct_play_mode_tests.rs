@@ -149,6 +149,31 @@ fn the_play_automatically_retry_resolves_under_auto_not_the_failed_force() {
     assert_eq!(retry_context_with(&ps, 123, Some(DirectPlayMode::Auto)).resume_ns, 123);
 }
 
+/// **The recovery door's overrides reach the resolve the retry hands its worker**: on a session whose failed attempt
+/// ran under Force, *Play automatically* (through [`begin_recovery`]) builds a resolve under Auto, while *Try again*
+/// builds the SAME request, under the failed attempt's own Force. This reads the NEW attempt's mode (`ResolveEnv`),
+/// not the live preference cell, which Play automatically has already moved to Auto and so cannot tell the two apart.
+#[test]
+fn the_recovery_doors_overrides_set_the_mode_the_retry_resolves_under() {
+    use crate::player::{FailureKind, FrozenOffers, LiveOffers, PlaybackFailure, Recovery};
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    ps.direct_play_mode = DirectPlayMode::Forced;
+    seed_request_for_test(&mut ps, "m1");
+    // a transient cause under Force: the row draws both *Try again* and *Play automatically*
+    record_failure(&mut ps, PlaybackFailure::for_test(
+        FailureKind::MediaSource, DirectPlayMode::Forced, FrozenOffers { can_retry: true, quality_carriable: true }));
+    let live = LiveOffers { repair_idle: true, tracks_available: false, versions_available: false };
+    let request = ps.request.clone().expect("seeded");
+    let resolves_under = |ps: &mut PlaybackSession, recovery: Recovery| {
+        let overrides = begin_recovery(ps, live, None, &recovery).expect("the Force failure offers both");
+        let retry = retry_context_with(ps, 0, overrides.direct_play);
+        request_env(ps, plx_data::stores::metadata::MetadataStore::default().view(), &request, Some(retry)).direct_play_mode
+    };
+    assert_eq!(resolves_under(&mut ps, Recovery::RetrySame), DirectPlayMode::Forced, "Try again repeats the failed attempt");
+    assert_eq!(resolves_under(&mut ps, Recovery::PlayAutomatically), DirectPlayMode::Auto, "Play automatically resolves under Auto");
+}
+
 /// Issue #951: an LG B8 refused a 96 kHz AAC Load, and a 96 kHz AAC also reaches the player
 /// without the server's `/decision` having seen it: the track menu's mark, a mid-play pick, the
 /// displaced pick's legacy reload. They all ask `audio_track_direct_plays`, so each must send

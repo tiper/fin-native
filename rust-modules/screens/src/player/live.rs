@@ -36,7 +36,10 @@ fn no_frame(ps: &plx_media::route::PlaybackSession) -> bool {
 
 /// The picture a channel's art ground draws: its programme's still, else its logo.
 fn art_key(ch: &Channel) -> &str {
-    if ch.now_thumb.is_empty() { &ch.thumb } else { &ch.now_thumb }
+    match ch.airings.now_thumb() {
+        "" => &ch.thumb,
+        art => art,
+    }
 }
 
 impl PlayerScreen {

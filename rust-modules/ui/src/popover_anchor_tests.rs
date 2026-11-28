@@ -5,7 +5,7 @@ use crate::consts::{SAFE, SCR_H, SCR_W};
 const GAP: f32 = 28.0;
 
 fn menu(anchor: Rect, w: f32, h: f32, need_h: f32) -> Anchored {
-    anchor_panel(anchor, (w, h), need_h, GAP, Placement::PLAYER_MENU)
+    anchor_panel(anchor, (w, h), need_h, Placement::PLAYER_MENU)
 }
 
 fn bottom(r: Rect) -> f32 {
@@ -95,14 +95,14 @@ fn a_panel_too_tall_for_above_and_below_opens_on_the_side_facing_the_centre() {
 #[test]
 fn a_fixed_order_flips_to_the_next_side_that_holds_the_panel() {
     let keep = Rect::new(0.0, 0.0, 1000.0, 1000.0);
-    let how = |order| Placement { order: SideOrder::Fixed(order), cross: Cross::Leading, overflow: Overflow::ClampToRoom, keep };
+    let how = |order| Placement { order: SideOrder::Fixed(order), cross: Cross::Leading, overflow: Overflow::ClampToRoom, keep, gap: 20.0 };
     let top = Rect::new(300.0, 10.0, 100.0, 40.0);
-    let r = anchor_panel(top, (300.0, 400.0), 400.0, 20.0, how(&[Side::Above, Side::Below]));
+    let r = anchor_panel(top, (300.0, 400.0), 400.0, how(&[Side::Above, Side::Below]));
     assert_eq!(r.side, Side::Below, "no room above the top edge");
     assert_eq!(r.rect.y, 70.0);
 
     let near_left = Rect::new(100.0, 400.0, 100.0, 40.0);
-    let r = anchor_panel(near_left, (300.0, 200.0), 200.0, 20.0, how(&[Side::Start, Side::End]));
+    let r = anchor_panel(near_left, (300.0, 200.0), 200.0, how(&[Side::Start, Side::End]));
     assert_eq!(r.side, Side::End, "100 px to the left cannot hold 300 + 20");
     assert_eq!(r.rect.x, 220.0);
 }
@@ -135,10 +135,10 @@ fn a_panel_is_clamped_inside_the_safe_frame() {
 #[test]
 fn when_no_side_holds_the_panel_the_most_room_wins_and_the_height_is_clamped_to_it() {
     let keep = Rect::new(0.0, 0.0, 1000.0, 1000.0);
-    let how = Placement { order: SideOrder::Facing, cross: Cross::Hang, overflow: Overflow::ClampToRoom, keep };
+    let how = Placement { order: SideOrder::Facing, cross: Cross::Hang, overflow: Overflow::ClampToRoom, keep, gap: 20.0 };
     let opener = Rect::new(100.0, 600.0, 100.0, 100.0);
     // room above 600 - 20 = 580, below 1000 - 720 = 280; END has 780 wide but only 600 fit, and the frame is 1000 tall: ask 900
-    let r = anchor_panel(opener, (900.0, 900.0), 900.0, 20.0, how);
+    let r = anchor_panel(opener, (900.0, 900.0), 900.0, how);
     assert_eq!(r.side, Side::Above, "the larger vertical room");
     assert_eq!(r.rect.h, 580.0, "height clamped to the room");
     assert_eq!(bottom(r.rect), opener.y - 20.0);
@@ -146,7 +146,7 @@ fn when_no_side_holds_the_panel_the_most_room_wins_and_the_height_is_clamped_to_
     assert!(inside(r.rect, keep));
 
     let low = Rect::new(100.0, 100.0, 100.0, 100.0);
-    let r = anchor_panel(low, (900.0, 950.0), 950.0, 20.0, how);
+    let r = anchor_panel(low, (900.0, 950.0), 950.0, how);
     assert_eq!(r.side, Side::Below);
     assert_eq!(r.rect.h, 1000.0 - 220.0);
     assert!(apart(r.rect, low));
@@ -183,7 +183,7 @@ fn anchors_ending_at_one_segment_edge_share_the_panels_edge() {
 /// The placer is a pure function of the anchor and the sizes: the same inputs give the same rect
 /// however often it is asked, and a different anchor gives a different one. This is the half of the
 /// latch the placer owns (it reads nothing live); the other half, that a menu keeps the anchor it
-/// was opened with, is structural (`with_anchor` sets a private field once) and is pinned where
+/// was opened with, is structural (the host carries it in `Host::Video { anchor, .. }` and no setter moves it) and is pinned where
 /// the menus are, by `every_menu_arm_latches_the_anchor_it_is_handed` and the menus' own tests.
 #[test]
 fn the_same_anchor_and_size_place_the_same_panel_every_time() {

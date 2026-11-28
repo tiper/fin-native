@@ -235,6 +235,7 @@ fn content_request(request: &plx_screens::registry::ContentReq) -> Result<Value,
             ContentPanel::Bio => json!("bio"),
             ContentPanel::CollectionAbout => json!("collection_about"),
             ContentPanel::ChannelEntry { first } => json!({"channel_entry":first}),
+            ContentPanel::LiveTvFilter { chosen, anchor, .. } => json!({"livetv_filter":{"chosen":chosen.code(),"anchor":anchor}}),
         }}),
         // Full playback still needs its own controlled bootstrap and resource/result contract.
         ContentReq::Play { .. } => return Err("unsupported controlled playback effect"),

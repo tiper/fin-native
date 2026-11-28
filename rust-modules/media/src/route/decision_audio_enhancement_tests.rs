@@ -816,7 +816,7 @@ fn a_stale_release_landing_installs_nothing_and_stops_both_encoders() {
     // The two halves the claim worker would run, driven by hand so the race is deterministic.
     let plan = plan_original_recovery(&mut ps, &action.ticket, 60, RecoveryCause::EnhancementReleased)
         .expect("a release the session allows");
-    let OriginalRecoveryNet::Remux(prepared) = run_original_recovery(&plx_base::task::OffFrame::for_test(), &plan).expect("the server answers") else {
+    let OriginalRecoveryNet::Remux(prepared) = run_original_recovery(&plx_base::task::OffFrame::for_test(), &plan, &mut PutTrail::default()).expect("the server answers") else {
         panic!("a remux candidate releases to a remux");
     };
     let replacement = prepared.replacement.clone();
@@ -827,6 +827,7 @@ fn a_stale_release_landing_installs_nothing_and_stops_both_encoders() {
         owner: FlightOwner::Claim(action.clone()),
         pending_seek: -1,
         user_target: 0,
+        selection: None,
         result: RetranscodeClaimResult::OriginalRecovery(Box::new(OriginalRecoveryLanding {
             plan,
             net: OriginalRecoveryNet::Remux(prepared),
@@ -2650,6 +2651,7 @@ fn the_stale_arms_of_the_drain_stop_their_encoder_off_the_frame_thread() {
         }),
         pending_seek: -1,
         user_target: 0,
+        selection: None,
         result: RetranscodeClaimResult::Retranscode(AppliedRetranscode {
             recovery_offer: None,
             qsess: qsess.to_owned(),
@@ -2774,6 +2776,7 @@ fn a_stale_landing_at_drain_time_stops_the_leaked_encoder_instead_of_installing_
         owner: FlightOwner::Claim(action.clone()),
         pending_seek: -1,
         user_target: 0,
+        selection: None,
         result: RetranscodeClaimResult::Retranscode(AppliedRetranscode {
             recovery_offer: None,
             qsess: "leaked-worker-session".to_string(),
@@ -2839,6 +2842,7 @@ fn a_deferred_audio_pick_replayed_from_settle_route_start_does_not_trip_the_bloc
         DeferredOriginalEffects {
             quality: None,
             audio: Some(a3()),
+            audio_memo: None,
             reconcile: false,
         },
     ));

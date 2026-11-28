@@ -418,7 +418,7 @@ impl AltSourcesScreen {
     /// need not be the row the cursor was already resting on.
     fn run<H: AppLike>(&mut self, out: Out<Action>, fx: &mut Effects<'_, H>) {
         let action = match out {
-            Out::Stay | Out::Moved => return,
+            Out::Stay | Out::Moved | Out::Edge => return,
             Out::Picked(action) => action,
             Out::Dismiss => Action::None,
         };

@@ -1409,7 +1409,8 @@ pub const GUIDE_CELL_FOCUS_INK: [f32; 4] = COOL_900;
 pub const GUIDE_CELL_FOCUS_INK_QUIET: [f32; 4] = with_a(COOL_900, 0.72);
 /// The Guide's now line and now chip (`SPEC-3` item 4): white at .95.
 pub const GUIDE_NOW: [f32; 4] = with_a(WHITE, 0.95);
-/// Time already aired, over the cells of every row (`SPEC-3` item 4): black at .22.
+/// Time already aired (`SPEC-3` item 4): black at .22, over the aired part of each programme cell in that cell's own
+/// outline (never over the gaps between cells).
 pub const GUIDE_AIRED_SHADE: [f32; 4] = with_a(BLACK, 0.22);
 /// Softer selection panel — the lightest weight on the overlay ramp, and deliberately NOT
 /// [`TAB_PLATE_IDLE`]'s .08 one step up. The design project briefly resolved this role to that .08

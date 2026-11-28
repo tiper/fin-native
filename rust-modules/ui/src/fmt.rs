@@ -204,7 +204,7 @@ pub enum Airing {
 
 /// Minutes after its start a programme still counts as "just started" (whole minutes: the tenth
 /// minute lasts until the eleventh begins).
-const JUST_STARTED_MINUTES: i64 = 10;
+pub const JUST_STARTED_MINUTES: i64 = 10;
 
 /// Whether the guide gave a programme an airing at all: both ends known and in order.
 fn has_airing(begin: i64, end: i64) -> bool {

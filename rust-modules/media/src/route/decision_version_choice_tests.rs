@@ -195,3 +195,103 @@ fn a_request_carries_the_remembered_version_and_remembers_a_named_one() {
     assert_eq!(play(&mut ps, &mut meta, "12", None), Some(Some(MediaId(3082))), "the next play of it takes it");
     tidy();
 }
+
+/// **Select Version on the failure read-out** (`Recovery::PickVersion`): the retry asks for the picked file, and the
+/// pick is remembered once it is playing (either backend), not when it is asked for. A version that fails must not
+/// become what Play starts next time.
+#[test]
+fn a_version_picked_on_the_failure_screen_is_remembered_once_it_plays() {
+    use crate::player::{FailureKind, FrozenOffers, LiveOffers, PlaybackFailure, Recovery};
+    use std::time::Duration;
+    let (_g, _session, sid) = seated();
+    let mut ps = PlaybackSession::IDLE;
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    seed_request_for_test(&mut ps, "10");
+    ps.request.as_mut().expect("seeded").sid = sid;
+    record_failure(&mut ps, PlaybackFailure::for_test(
+        FailureKind::MediaSource, DirectPlayMode::Auto, FrozenOffers { can_retry: true, quality_carriable: true }));
+    let live = LiveOffers { repair_idle: true, tracks_available: false, versions_available: true };
+
+    // The door answers the pick as an override: the retry's request names that file.
+    let overrides = begin_recovery(&mut ps, live, None, &Recovery::PickVersion(MediaId(3086))).expect("two files: the row offers it");
+    assert_eq!(overrides.version, Some(MediaId(3086)));
+    assert!(retry_current_play(&mut ps, &mut meta, 0, overrides), "the pick starts a new attempt");
+    assert_eq!(attempt_version(&ps), Some(MediaId(3086)), "the attempt asks for the picked file");
+    assert_eq!(chosen_version(sid, "10"), None, "asking for a version remembers nothing");
+
+    // Playing remembers it, once.
+    remember_version_that_played(&mut ps);
+    assert_eq!(chosen_version(sid, "10"), Some(MediaId(3086)), "it played: that is the file Play starts next");
+    assert!(choose_version(sid, "10", MediaId(3082)));
+    assert!(!version_on_trial_pending(&ps));
+    remember_version_that_played(&mut ps);
+    assert_eq!(chosen_version(sid, "10"), Some(MediaId(3082)), "the trial is spent: later frames write nothing");
+    // The retry's resolve is withdrawn before its worker lands, the way the request test above does it, so no stop for
+    // it can reach a later test's server.
+    cancel_play(&mut ps);
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
+    tidy();
+}
+
+/// A picked version whose attempt never reaches a frame is not remembered: the next request replaced it (or a failure
+/// ended the attempt), so a frame of ANOTHER file finds the trial and drops it.
+#[test]
+fn a_picked_version_that_never_plays_is_not_remembered() {
+    use crate::player::{FailureKind, FrozenOffers, LiveOffers, PlaybackFailure, Recovery};
+    use std::time::Duration;
+    let (_g, _session, sid) = seated();
+    let mut ps = PlaybackSession::IDLE;
+    let mut meta = plx_data::stores::metadata::MetadataStore::default();
+    seed_request_for_test(&mut ps, "10");
+    ps.request.as_mut().expect("seeded").sid = sid;
+    record_failure(&mut ps, PlaybackFailure::for_test(
+        FailureKind::MediaSource, DirectPlayMode::Auto, FrozenOffers { can_retry: true, quality_carriable: true }));
+    let live = LiveOffers { repair_idle: true, tracks_available: false, versions_available: true };
+    let overrides = begin_recovery(&mut ps, live, None, &Recovery::PickVersion(MediaId(3086))).expect("offered");
+    assert!(retry_current_play(&mut ps, &mut meta, 0, overrides));
+    // The request in force is now another file of the item (the viewer picked again, or Try again named none).
+    ps.request.as_mut().expect("in force").version = Some(MediaId(3082));
+    remember_version_that_played(&mut ps);
+    assert_eq!(chosen_version(sid, "10"), None, "the file that was asked for never played");
+    cancel_play(&mut ps);
+    assert!(wait_resolve_workers_for_test(Duration::from_secs(10)));
+    tidy();
+}
+
+/// **A refusal repeats, so picking the file that just failed is refused at the door** (`Refused::SameVersion`): the row
+/// withholds *Try again* there, and *Select Version* of the same file would be that retry. Another file is accepted, and a
+/// transient failure keeps the same file selectable (it is *Try again* there). "The same file" is the one the attempt
+/// LANDED on (`attempt_media`), not the one the request named: with no version named the server's default played.
+#[test]
+fn a_refusal_does_not_take_the_same_version_again_but_a_stall_does() {
+    use crate::player::{FailureKind, FrozenOffers, LiveOffers, PlaybackFailure, Recovery, Refused};
+    let mut ps = PlaybackSession::IDLE;
+    let _g = fresh_registry(&mut ps);
+    seed_request_for_test(&mut ps, "10");
+    ps.cur_rk = "10".into();
+    let versions = [MediaVersion { id: MediaId(3082), ..Default::default() }, MediaVersion { id: MediaId(3086), ..Default::default() }];
+    let live = LiveOffers { repair_idle: true, tracks_available: false, versions_available: true };
+    let offers = FrozenOffers { can_retry: true, quality_carriable: true };
+
+    // No version named: the plan took the default (position 0), and that is the file a refusal repeats.
+    assert_eq!(attempt_version(&ps), None, "the request names no file");
+    assert_eq!(attempt_media(&ps, &versions), Some(MediaId(3082)), "the default file is the one that landed");
+    let landed = attempt_media(&ps, &versions);
+    record_failure(&mut ps, PlaybackFailure::for_test(FailureKind::DecisionRefused, DirectPlayMode::Auto, offers));
+    assert!(matches!(begin_recovery(&mut ps, live, landed, &Recovery::PickVersion(MediaId(3082))), Err(Refused::SameVersion)),
+        "the server-default file the refused request landed on repeats it");
+    assert!(begin_recovery(&mut ps, live, landed, &Recovery::PickVersion(MediaId(3086))).is_ok(), "another file is a different request");
+    record_failure(&mut ps, PlaybackFailure::for_test(FailureKind::MediaSource, DirectPlayMode::Auto, offers));
+    assert!(begin_recovery(&mut ps, live, landed, &Recovery::PickVersion(MediaId(3082))).is_ok(), "a stall may be tried again, on the same file too");
+
+    // A named version that landed at its own position is the same file.
+    ps.request.as_mut().expect("seeded").version = Some(MediaId(3086));
+    ps.cur_media_index = 1;
+    assert_eq!(attempt_media(&ps, &versions), Some(MediaId(3086)));
+    // Nothing landed for this request's item (another item's plan, or a position the list does not hold): no file is "the same".
+    ps.cur_media_index = 5;
+    assert_eq!(attempt_media(&ps, &versions), None, "a position the list does not hold");
+    ps.cur_media_index = 1;
+    ps.cur_rk = "11".into();
+    assert_eq!(attempt_media(&ps, &versions), None, "the plan is another item's");
+}

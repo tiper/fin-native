@@ -312,10 +312,12 @@ pub trait Screen<H: Host>: Machine<H, Ev = ScreenEvent<H>> + Focusable<H> {
     fn bar_opener(&self) -> Option<H::Elem> {
         None
     }
-    /// **Where the bar member this surface hangs from is DRAWN this frame** (its rest rect through
-    /// the host page's tuck, the same rect the lift draws at), handed to the surface before every
-    /// draw so its morph starts and ends on the live opener, not on a rect measured once at mount.
-    /// Called only for a surface that answers [`bar_opener`](Self::bar_opener).
+    /// **Where the opener this surface hangs from is DRAWN this frame**, handed to the surface before every
+    /// draw so its morph starts and ends on the live opener, not on a rect measured once at mount: a bar
+    /// member's rect through the host page's tuck (the same rect the lift draws at), or, for a page element
+    /// ([`opener`](Self::opener)), the host page's `Focusable::place` of it at `At::Drawn` (the control's plate:
+    /// a header pill that rides its page moves under its menu). Called only for a surface that answers one of
+    /// the two.
     fn opener_rect(&mut self, _drawn: crate::Rect) {}
     /// **How much of the opener this surface leaves**, 1.0 (whole, the default) .. 0.0 (consumed):
     /// the lift pass (`Z::OPENER`) paints the opener it lifts at this alpha. A MORPHING menu answers
@@ -1392,6 +1394,9 @@ pub struct Clip {
 pub struct ClipScope {
     prev: Option<Clip>,
     active: bool,
+    /// A recording painter's rounded scope, noted in the draw census (and popped there on drop).
+    #[cfg(any(test, feature = "test-support"))]
+    noted: bool,
 }
 
 thread_local! {
@@ -1426,6 +1431,11 @@ impl ClipScope {
     /// the scissor still intersects.
     pub fn open_rounded_in(p: Painter, r: Rect, radius: f32) -> Self {
         if !crate::frame::backdrop::discovering() && p.is_recording() {
+            #[cfg(any(test, feature = "test-support"))]
+            if p.px(radius) >= 0.5 {
+                crate::draw_census::open_round(p.place(r), p.px(radius));
+                return Self { prev: None, active: false, noted: true };
+            }
             return Self::inert();
         }
         let radius = p.px(radius);
@@ -1443,11 +1453,11 @@ impl ClipScope {
         let clip = Clip { scissor, round: round.or(prev.and_then(|c| c.round)) };
         CLIP_STACK.with(|c| c.set(Some(clip)));
         apply_scissor(Some(clip));
-        Self { prev, active: true }
+        Self { prev, active: true, #[cfg(any(test, feature = "test-support"))] noted: false }
     }
 
     fn inert() -> Self {
-        Self { prev: None, active: false }
+        Self { prev: None, active: false, #[cfg(any(test, feature = "test-support"))] noted: false }
     }
 
     /// The scissor in force (the innermost open scope), for tests and instruments.
@@ -1463,6 +1473,10 @@ impl ClipScope {
 
 impl Drop for ClipScope {
     fn drop(&mut self) {
+        #[cfg(any(test, feature = "test-support"))]
+        if self.noted {
+            crate::draw_census::close_round();
+        }
         if !self.active {
             return;
         }

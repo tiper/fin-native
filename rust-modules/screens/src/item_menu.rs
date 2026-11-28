@@ -77,7 +77,7 @@ use plx_data::pms::{MediaVersion, PmsMovie};
 use plx_media::route::DeckPress;
 use crate::registry::{tile_facts, RepeatGate, PANEL_REPEAT_MS};
 use crate::registry::{commit_pick, hero_face, AppFx, AppLike, AppMsg, HeroCtl, ItemMenuArg, ItemMenuKind, ItemMenuReq, PreplaySource};
-use plx_ui::form::{Form, FormId, FormSection, FormTable, RowKey, RowKind};
+use plx_ui::form::{Form, FormId, FormSection, FormTable, Rebind, RowKey, RowKind};
 use plx_ui::icons::Icon;
 use plx_machine::machine::{
     Canon, Cx, Edge, Effects, EntryId, FocusKey, Fx, GroupId, Handled, InputKind, Key,
@@ -746,7 +746,7 @@ fn build_versions(rk: &str, versions: &[MediaVersion], checked: Option<plx_plex:
     Form::new().section(plx_appkit::version_list::section("", versions, ItemRow::Version, |v| Action::SelectVersion {
         rk: rk.to_string(),
         media: v.id,
-    }, checked, unavailable))
+    }, checked, None, unavailable))
 }
 
 /// The anchor a menu with no rect to hang off falls back to — a centred card. The headless trigger
@@ -772,18 +772,6 @@ pub fn fallback_anchor() -> Rect {
 pub enum MenuPage {
     Versions,
     Tracks(PickPage),
-}
-
-impl MenuPage {
-    /// The page's header (drawn after the back mark, which every pushed page has): Select Version's, and the
-    /// Audio & Subtitles pages' (its root named as the row that opened it is).
-    fn title(self) -> String {
-        match self {
-            MenuPage::Versions => plx_appkit::version_list::title().to_string(),
-            MenuPage::Tracks(PickPage::Root) => tracks::title().to_string(),
-            MenuPage::Tracks(page) => PickerCore::title_of(page).unwrap_or_default(),
-        }
-    }
 }
 
 /// **The state only a hero control's menu has**: the content of the pages its rows open, Select Version's
@@ -902,45 +890,33 @@ impl PageSource<'_> {
         (versions, plx_media::route::taken_version(versions, chosen), true)
     }
 
-    /// The rows of `page` (`None`: the menu's own), by the code the standalone panels use.
-    fn form(&self, page: Option<MenuPage>) -> ItemForm {
-        match page {
-            None => self.root_form(),
-            Some(MenuPage::Versions) => {
-                let (versions, taken, can_play) = self.versions();
-                build_versions(&self.arg.rk, versions, taken, can_play)
-            }
-            Some(MenuPage::Tracks(page)) => self.hero.map_or_else(Form::new, |hero| {
-                hero.tracks.page_form(page).map(|b| {
-                    let id = ItemRow::Pick(b.id);
-                    Some(plx_ui::form::Binding {
-                        key: id.key(),
-                        id,
-                        // a drill-in pushes the page it names, by the menu's one rule
-                        kind: match b.kind {
-                            RowKind::Nav(page) => RowKind::Nav(MenuPage::Tracks(page)),
-                            RowKind::Toggle => RowKind::Toggle,
-                            RowKind::Choice => RowKind::Choice,
-                            RowKind::Button => RowKind::Button,
-                        },
-                        action: Action::Pick(b.id),
-                        disabled: b.disabled,
-                    })
-                })
-            }),
-        }
+    /// **Select Version's page**: the rows by the code the standalone panel uses, its header, and focus opening on
+    /// the check mark's row, so the viewer sees what is chosen.
+    fn versions_page(&self) -> Page<ItemRow, Action, MenuPage> {
+        let (versions, taken, can_play) = self.versions();
+        let initial = taken.and_then(|id| versions.iter().position(|v| v.id == id)).map(|n| ItemRow::Version(n as u16));
+        Page::new(build_versions(&self.arg.rk, versions, taken, can_play), plx_appkit::version_list::title()).initial(initial)
     }
 
-    /// Where focus opens on `page`: the check mark's row, so the viewer sees what is chosen.
-    fn initial(&self, page: MenuPage) -> Option<ItemRow> {
-        match page {
-            MenuPage::Versions => {
-                let (versions, taken, _) = self.versions();
-                let n = taken.and_then(|id| versions.iter().position(|v| v.id == id))?;
-                Some(ItemRow::Version(n as u16))
-            }
-            MenuPage::Tracks(page) => self.hero?.tracks.page_initial(page).map(ItemRow::Pick),
-        }
+    /// An Audio & Subtitles page of the picker's core ([`PickerCore::page`]) as this menu's: its rows
+    /// re-identified as [`ItemRow::Pick`] and committing [`Action::Pick`], a drill-in pushing the page it names by the
+    /// menu's one rule. `None` off a hero menu, and for a language the item no longer offers.
+    fn pick_page(&self, page: PickPage) -> Option<Page<ItemRow, Action, MenuPage>> {
+        let built = self.hero?.tracks.page(page)?;
+        let form = built.form.map(
+            |id| Some(ItemRow::Pick(*id)),
+            |pick, id, kind, ()| Rebind {
+                key: id.key(),
+                kind: match kind {
+                    RowKind::Nav(page) => RowKind::Nav(MenuPage::Tracks(page)),
+                    RowKind::Toggle => RowKind::Toggle,
+                    RowKind::Choice => RowKind::Choice,
+                    RowKind::Button => RowKind::Button,
+                },
+                action: Action::Pick(*pick),
+            },
+        );
+        Some(Page::new(form, built.title).initial(built.initial.map(ItemRow::Pick)))
     }
 
     /// `page` ready to show (`None`: the root): its rows, its header and where focus opens. The size class is
@@ -948,7 +924,14 @@ impl PageSource<'_> {
     fn page(&self, page: Option<MenuPage>) -> Option<Page<ItemRow, Action, MenuPage>> {
         Some(match page {
             None => Page::root(self.root_form()),
-            Some(page) => Page::new(self.form(Some(page)), page.title()).initial(self.initial(page)),
+            Some(MenuPage::Versions) => self.versions_page(),
+            // the Audio & Subtitles root is named as the row that opened it is; the pages under it name themselves
+            Some(MenuPage::Tracks(PickPage::Root)) => {
+                let mut page = self.pick_page(PickPage::Root)?;
+                page.title = tracks::title().to_string();
+                page
+            }
+            Some(MenuPage::Tracks(page)) => self.pick_page(page)?,
         })
     }
 }
@@ -1081,7 +1064,7 @@ impl ItemMenuScreen {
     /// into its button), a pick acts.
     fn run<H: AppLike>(&mut self, out: Out<Action>, elem: Option<u32>, fx: &mut Effects<'_, H>) {
         match out {
-            Out::Stay | Out::Moved => {}
+            Out::Stay | Out::Moved | Out::Edge => {}
             Out::Dismiss => self.dismiss(fx),
             Out::Picked(act) if self.hero.is_some() => self.activate_hero_menu(act, elem, fx),
             Out::Picked(act) => self.commit(act, fx),
@@ -1267,6 +1250,8 @@ impl<H: AppLike> Focusable<H> for ItemMenuScreen {
                 PickRow::OpenAudio => A11yPath::new().name("tracks").name("audio"),
                 PickRow::OpenSubtitles => A11yPath::new().name("tracks").name("subtitles"),
                 PickRow::SubOff => A11yPath::new().name("tracks").name("subtitle").name("off"),
+                PickRow::OpenOther => A11yPath::new().name("tracks").name("subtitle").name("other"),
+                PickRow::OpenLang(lang) => A11yPath::new().name("tracks").name("subtitle").name("lang").index(lang.slot),
                 PickRow::Audio(i) => A11yPath::new().name("tracks").name("audio").index(i),
                 PickRow::Sub(i) => A11yPath::new().name("tracks").name("subtitle").index(i),
             },
@@ -1392,7 +1377,8 @@ pub(crate) mod tests {
     /// screen does — by identity — instead of through a parallel vector.
     struct Built(FormTable<ItemRow, Action, MenuPage>);
     fn built(form: ItemForm) -> Built {
-        let mut table = FormTable::new(crate::registry::BAND);
+        // the item menus are action menus (the class `ItemMenu` builds its `Menu` with)
+        let mut table = FormTable::with_class(crate::registry::BAND, Class::Action);
         table.set(form, None);
         Built(table)
     }
@@ -2046,10 +2032,18 @@ pub(crate) mod tests {
         let got =
             with_cx(|cx| <ItemMenuScreen as Focusable<HostFixture>>::reconcile(&screen, want, cx));
         assert_eq!(got.elem, ItemRow::GoToItem.key().0, "…the first real row is where it lands");
+        // the menu's own cursor is where focus belongs (a moved focus reaches it first, `Event::Focused`): a row it was
+        // never seated on is not kept
         let live = FocusKey { entry: EntryId(7), elem: ItemRow::MarkWatched.key().0 };
+        let unseated =
+            with_cx(|cx| <ItemMenuScreen as Focusable<HostFixture>>::reconcile(&screen, live, cx));
+        assert_eq!(unseated.elem, ItemRow::GoToItem.key().0, "the cursor wins over a live row the menu never saw");
+        let mut screen = screen;
+        screen.menu.step(Event::Focused(live.elem), &mut |_| None);
+        assert_eq!(screen.menu.form().selected_key().map(|k| k.0), Some(live.elem));
         let kept =
             with_cx(|cx| <ItemMenuScreen as Focusable<HostFixture>>::reconcile(&screen, live, cx));
-        assert_eq!(kept.elem, live.elem, "a live row is left where it is");
+        assert_eq!(kept.elem, live.elem, "a row the cursor is on is left where it is");
     }
 
     /// **The menu carries the row it was opened on**, and it is the ENTRY's argument now rather
@@ -2167,8 +2161,7 @@ pub(crate) mod tests {
         let measure = MenuMeasure;
         for preference in plx_os::i18n::SHIPPED {
             let locale = LocaleContext::resolve(preference, None, None, None, None);
-            let mut form: FormTable<ItemRow, Action, MenuPage> = FormTable::new(crate::registry::BAND);
-            form.table.compact = true;
+            let mut form: FormTable<ItemRow, Action, MenuPage> = FormTable::with_class(crate::registry::BAND, Class::Action);
             form.set(Form::new().section(FormSection::new("")
                 .item(ItemRow::MarkWatched, RowKind::Button, Action::MarkWatched("1".into()),
                     Row::new(plx_os::i18n::msg::widgets_action_mark_watched_in(&locale)).licon(Icon::CheckCircleFill))
@@ -2707,8 +2700,6 @@ pub(crate) mod tests {
         for language in SHIPPED {
             let _guard = language_on_this_thread_for_test(language);
             for (name, menu) in all_menus() {
-                let mut menu = menu;
-                menu.0.table.compact = true;
                 let table = &menu.0.table;
                 out.extend(table.menu_cap_failure(&measure, &format!("{} {name}", language.tag())));
                 out.extend(table.app_fit_failures(widest, &format!("{} {name}", language.tag())));
@@ -2852,8 +2843,7 @@ pub(crate) mod tests {
         for language in SHIPPED {
             let _guard = language_on_this_thread_for_test(language);
             for state in [TileState::Available, TileState::ComingSoon] {
-                let mut menu = built(super::build_catalog(state, plx_data::watchlist::model::Kind::Movie, "1", "g", plx_data::catalog::Membership::On));
-                menu.0.table.compact = true;
+                let menu = built(super::build_catalog(state, plx_data::watchlist::model::Kind::Movie, "1", "g", plx_data::catalog::Membership::On));
                 let name = format!("{} catalog {state:?}", language.tag());
                 let table = &menu.0.table;
                 out.extend(table.menu_cap_failure(&measure, &name));
@@ -3202,6 +3192,48 @@ pub(crate) mod tests {
         menu
     }
 
+    /// **Other languages is a drill-in in this menu too**, and its pages keep the aliases the shared builder
+    /// declares: a language that shrinks to one track under the viewer (the chosen track is a sidecar the app
+    /// cannot draw, so it is listed while chosen) is now a direct row, and the pop out of its page lands on it.
+    #[test]
+    fn other_languages_drill_in_and_a_shrunk_language_keeps_its_pop_alias() {
+        let mut menu = hero_menu_with_pages();
+        let stream = |id: i64, lang: &str, code: &str| plx_data::metadata::Stream {
+            id,
+            lang: lang.into(),
+            lang_code: code.into(),
+            ..plx_data::metadata::Stream::default()
+        };
+        let mut pgs = stream(303, "French", "fra");
+        pgs.external = true;
+        pgs.codec = "pgs".into();
+        menu.hero.as_mut().expect("a hero menu").tracks = PickerCore::new(plx_data::metadata::PreplayTracks {
+            sid: plx_plex::plex::ServerId::from_raw(1),
+            rk: "42".into(),
+            kind: "movie".into(),
+            show_rk: String::new(),
+            part: "/library/parts/9001/1/file.mkv".into(),
+            audio: vec![stream(101, "English", "eng")],
+            subs: vec![stream(201, "English", "eng"), stream(302, "French", "fra"), pgs],
+            pick: None,
+        });
+        let other = |menu: &ItemMenuScreen| source!(menu).pick_page(PickPage::OtherLanguages).expect("the page").form;
+        fn hero(menu: &mut ItemMenuScreen) -> &mut PickerCore {
+            &mut menu.hero.as_mut().expect("a hero menu").tracks
+        }
+        hero(&mut menu).select(Pick::Subtitle(Some(2))).expect("the sidecar is chosen");
+        let open = other(&menu)
+            .slots()
+            .iter()
+            .flatten()
+            .map(|b| b.id)
+            .find(|id| matches!(id, ItemRow::Pick(PickRow::OpenLang(_))))
+            .expect("French holds two tracks while the sidecar is chosen: a drill-in");
+        assert_eq!(source!(menu).pick_page(PickPage::Subtitles).expect("the page").form.slots().iter().flatten().count(), 3, "Off, English, Other languages");
+        hero(&mut menu).select(Pick::Subtitle(Some(1))).expect("the embedded track picks");
+        assert_eq!(other(&menu).stands_for(&open), ItemRow::Pick(PickRow::Sub(1)), "the pop lands on the language's direct row");
+    }
+
     /// Run `f` against a fresh effect sink and answer what it emitted.
     fn emitted(f: impl FnOnce(&mut Effects<'_, HostFixture>)) -> Vec<plx_machine::machine::Stamped<HostFixture>> {
         let mut out = Vec::new();
@@ -3296,7 +3328,7 @@ pub(crate) mod tests {
         assert!(menu.form().index_of_key(RowKey(ItemRow::Pick(PickRow::OpenSubtitles).key().0)).is_some(), "the root lists Audio and Subtitles");
         press_row(&mut menu, ItemRow::Pick(PickRow::OpenSubtitles));
         assert_eq!(depth(&menu), 2, "Subtitles pushes further in the same glass");
-        assert_eq!(menu.form().table.title(), PickerCore::title_of(PickPage::Subtitles).as_deref());
+        assert_eq!(menu.form().table.title(), Some(plx_os::i18n::msg::widgets_tracks_subtitles()));
         press_back(&mut menu);
         assert_eq!((depth(&menu), selected(&menu)), (1, Some(ItemRow::Pick(PickRow::OpenSubtitles).key().0)), "back to the A&S root on Subtitles");
         press_back(&mut menu);

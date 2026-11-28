@@ -252,24 +252,24 @@ class BoundaryTests(unittest.TestCase):
         for source in (
             'fn busy() { devtrig::flag("failtest"); }',
             'fn transport_hidden() { busy(); } fn busy() { sample(); } fn sample() { std::fs::read("x"); }',
-            'use plx_media::player::error_now as shape; fn captured() { shape(ps); }',
-            'fn draw_readout() { wrapper(); } fn wrapper() { plx_media::player::error_caption(ps); }',
+            'use plx_media::player::observe_failure as shape; fn captured() { shape(ps); }',
+            'fn draw_readout() { wrapper(); } fn wrapper() { plx_media::player::observe_failure(ps); }',
             'fn busy_surface_with() { plx_media::player::audio_switching(); }',
             'use plx_media::player as engine; fn busy() { engine::state(ps); }',
-            'use plx_media::player::error_captured as read; fn busy() { read(ps, captured); }',
+            'use plx_media::player::observe_failure as read; fn busy() { read(ps, captured); }',
         ):
             with self.subTest(source=source):
                 self.assertTrue(boundary.presentation_helper_violations(source))
         self.assertEqual(boundary.presentation_helper_violations('fn busy(p: &Presentation) { p.busy } fn transport_hidden(p: &Presentation) { readout_owns_frame(p.busy); }'), [])
-        self.assertEqual(boundary.presentation_helper_violations('fn capture() { devtrig::read("failtest"); player::error_now(ps); }'), [])
+        self.assertEqual(boundary.presentation_helper_violations('fn capture() { devtrig::read("failtest"); player::observe_failure(ps); }'), [])
         self.assertEqual(boundary.presentation_helper_violations('#[cfg(test)] fn busy() { std::fs::read("fixture"); }'), [])
 
     def test_adjacent_machine_steps_cannot_resample_player_failure(self):
         for source in (
-            'impl Machine for PlayerScreen { fn step() { player::error_now(ps); } }',
-            'use plx_media::player::failure_context as context; fn step() { context(ps); }',
-            'use plx_media::player as engine; fn helper() { let sample = engine::error_captured; }',
-            'fn step() { wrapper(); } fn wrapper() { player::error_caption(ps); }',
+            'impl Machine for PlayerScreen { fn step() { player::observe_failure(ps); } }',
+            'use plx_media::player::observe_failure as context; fn step() { context(ps); }',
+            'use plx_media::player as engine; fn helper() { let sample = engine::observe_failure; }',
+            'fn step() { wrapper(); } fn wrapper() { player::observe_failure(ps); }',
         ):
             with self.subTest(source=source):
                 self.assertTrue(boundary.screen_violations(source))

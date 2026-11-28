@@ -150,8 +150,7 @@ impl ChannelEntryScreen {
             })
             .collect();
         let machine = NumberEntry::open_digits(&arg.digits);
-        let mut form = FormTable::new(crate::registry::BAND);
-        form.table.compact = true;
+        let mut form = FormTable::with_class(crate::registry::BAND, plx_ui::menu::Class::Action);
         form.table.lineup(true);
         let mut screen = Self { entry, arg, lineup: channels.to_vec(), cands, machine, form };
         screen.rebuild();

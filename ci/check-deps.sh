@@ -119,6 +119,16 @@
 #              `navcommit` when the flash was slow (`fps:modal-ramp`, device-measured 2026-09-09).
 #              Nothing failed: both doors return a `Session` and the difference is invisible at the
 #              call site, which is exactly what a grep gate is for. Count is zero.
+#   menudoors — every menu goes through `plx_ui::menu::Menu`, so the doors a host used to build
+#              one by hand are shut: `set_title(`, an assignment to `.compact`, a bool size-class
+#              constructor (`with_compact(`: the one size-class vocabulary is `menu::Class`, taken by
+#              `TableView::with_class` / `FormTable::with_class`), `PageStack::new` and
+#              `PanelMotion::new` are spelled ONLY in the component's own files (ui/src/menu.rs,
+#              menu_tests.rs, and the three types' own modules table.rs, page_stack.rs,
+#              panel_motion.rs). Visibility already refuses them outside the ui crate (`compact` is
+#              private, the other three are `pub(crate)`, no `with_compact` exists); this rule is the half visibility cannot
+#              see, ui-crate code outside those files. Zero, no allowlist: a screen that wants a
+#              menu builds a `Menu` (the size class is `menu::Class`, the title is the page's).
 # Plex paging rule:
 #   paging   — `X-Plex-Container-` is spelled in production Rust ONLY by `paged_path`'s file,
 #              rust-modules/plex/src/plex/paging.rs. Every other window is built through it. Zero,
@@ -195,7 +205,7 @@ ok()   { echo "  ok — $*"; }
 RULES=(browse-owner viewstate-owner person-owner search-owner hubs-owner metadata-owner libm ticks wall
   fpflags present effect mutators mutators-visibility nav ui-owner-legacy ui-owner-files owned-damage
   owned-wake cards layer sessionwrite screen-runtime-io uistorage legacypage sibling textmeasure dt ladder hittest frame
-  sink route fnlen testmod threads blocking workers globals forks fxlanes tmppath paging allowlist-counts)
+  sink route fnlen testmod threads blocking workers globals forks fxlanes tmppath menudoors paging allowlist-counts)
 deps_usage() {
   echo "check-deps: $*" >&2
   echo "usage: ci/check-deps.sh [--only RULE[,RULE...] | --list-rules]" >&2
@@ -1774,6 +1784,17 @@ else
 fi
 fi # tmppath
 
+
+# menudoors: see the rule comment at the top. The doors' own files are named here, by design and
+# not by allowlist: they are the component and the three types it is built from.
+if want menudoors; then
+menudoors_hits=$(grep_code '\bset_title\(|\bwith_compact\(|\.compact[[:space:]]*=[^=]|\b(PageStack|PanelMotion)(::<[^>]*>)?::(new|default)\b' "$SRC" "$SRC_BASE" "$SRC_MACHINE" "$SRC_OS" "$SRC_GFX" "$SRC_NET" "$SRC_UI" "$SRC_PLEX" "$SRC_TELEMETRY" "$SRC_DATA" "$SRC_SESSION" "$SRC_MEDIA" "$SRC_PLAYBACK_CONTRACT" "$SRC_PLAY_URI" "$SRC_PLAY_FEED" "$SRC_MEDIA_CODECS" "$SRC_APPKIT" "$SRC_SCREENS" "$SRC_OWP" "$SRC_SHELL_SDL" "$SRC_PLATFORM_WEBOS" "$SRC_PLATFORM_DESKTOP" "$SRC_PLATFORM_TIZEN" \
+  | grep -vE "^$SRC_UI/(menu|menu_tests|table|page_stack|panel_motion)\.rs:" || true)
+if [ -z "$menudoors_hits" ]; then ok "menudoors"; else
+  echo "$menudoors_hits" | sed 's/^/    /'
+  fail "menudoors: $(echo "$menudoors_hits" | wc -l | tr -d ' ') line(s) build a menu outside plx_ui::menu::Menu (set_title / .compact = / with_compact / PageStack::new / PanelMotion::new)"
+fi
+fi # menudoors
 
 # paging: the two Plex paging parameter names are spelled in ONE non-test file, the `paged_path`
 # primitive (rust-modules/plex/src/plex/paging.rs). Any other production string that spells one is a
