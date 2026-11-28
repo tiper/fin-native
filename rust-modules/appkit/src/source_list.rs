@@ -466,7 +466,7 @@ mod tests {
         use plx_ui::table::TableView;
         // the library panel is a menu table; the favourites editor is a route page's table
         let widths: [(&str, f32, fn() -> TableView); 2] = [
-            ("library panel", plx_ui::table::MENU_MAX_W, || { let mut t = TableView::new(); t.compact = false; t }),
+            ("library panel", plx_ui::table::MENU_MAX_W, TableView::new),
             ("favourites editor", RouteLayout::screen().sectioned_table().w, TableView::page),
         ];
         let groups = vec![
@@ -536,7 +536,6 @@ mod tests {
                         let mut g = group(state, tier, handle);
                         g.name = name.into();
                         let mut table = TableView::new();
-                        table.compact = false;
                         table.set_sections(one_group_sections(g), 0, false);
                         out.extend(table.app_fit_failures(plx_ui::table::MENU_MAX_W, &format!("{} {state:?} {handle:?}", language.tag())));
                     }

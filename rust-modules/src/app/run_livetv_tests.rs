@@ -92,8 +92,8 @@ fn background_after_leaving_live_keeps_the_page_the_viewer_chose() {
 /// Recent row seeds the lineup again after the frames it ran.
 fn lineup_the_rig_channel(rig: &mut Rig) {
     let channel = plx_data::livetv::Channel { sid: rig.sid, dvr: "7".into(), channel: "C101".into(),
-        vcn: "101".into(), name: "Family Channel".into(), thumb: String::new(), now: String::new(),
-        now_thumb: String::new(), now_summary: String::new(), begins_at: 0, ends_at: 0, later: Vec::new() };
+        vcn: "101".into(), name: "Family Channel".into(), thumb: String::new(),
+        airings: plx_data::livetv::Airings::default() };
     rig.app.runtime.bridge(&mut rig.app.bridge).stores.livetv.install_for_test(vec![channel]);
 }
 

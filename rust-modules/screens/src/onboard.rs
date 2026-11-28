@@ -1937,7 +1937,7 @@ pub(crate) mod tests {
         ] {
             assert!(s.form.table.n_rows() > 0, "{what}: the fixture puts rows in the table");
             assert!(s.form.table.is_board(), "{what}: board measures");
-            assert!(!s.form.table.compact, "{what}: full-height rows");
+            assert!(!s.form.table.is_compact(), "{what}: full-height rows");
             assert_eq!(s.form.table.header_ink, theme::TEXT_READING, "{what}: reading-ink headers");
         }
     }

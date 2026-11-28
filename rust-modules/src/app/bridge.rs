@@ -1235,7 +1235,7 @@ impl Bridge<'_> {
         let cx = parts.cx::<AppHost>(self.views(), &self.retained.measure);
         let card = screen.focused_card(&cx, focus, Some(At::Drawn))?;
         let item = card.item.downcast_ref::<plx_data::search::Item>()?.clone();
-        Some((item, plx_ui::popover::Opener { rect: Some(card.rest_rect?), ..plx_ui::popover::Opener::NONE }))
+        Some((item, plx_ui::popover::Opener { rect: Some(card.rest_rect?) }))
     }
 
     pub(crate) fn search_tab_available(&self, tab: HomeTab) -> bool {
@@ -1259,7 +1259,7 @@ impl Bridge<'_> {
         let cx = parts.cx::<AppHost>(self.views(), &self.retained.measure);
         let card = screen.focused_card(&cx, focus, Some(At::Drawn))?;
         let item = card.item.downcast_ref::<plx_data::pms::PmsMovie>()?.clone();
-        Some((item, plx_ui::popover::Opener { rect: Some(card.rest_rect?), ..plx_ui::popover::Opener::NONE }))
+        Some((item, plx_ui::popover::Opener { rect: Some(card.rest_rect?) }))
     }
 
     pub(crate) fn library_command(d: &mut Dispatcher<AppHost>, command: plx_screens::registry::LibraryCmd) {
@@ -1440,7 +1440,7 @@ impl Bridge<'_> {
             let cx = parts.cx::<AppHost>(self.views(), &self.retained.measure);
             screen.focused_card_rect(&cx, Some(key), At::Drawn)
         });
-        plx_ui::popover::Opener { rect, ..plx_ui::popover::Opener::NONE }
+        plx_ui::popover::Opener { rect }
     }
 
     /// Restore a detail page that is about to mount to a `Spot` no `ReturnState` holds — see
@@ -1735,6 +1735,13 @@ impl Bridge<'_> {
     fn publish_strip(&mut self, d: &mut Dispatcher<AppHost>, selected: i32) {
         self.retained.chrome.members(selected, Self::home_focus(d), self.retained.strip.scroll_pos(), &mut d.nav.tabs.strip);
         d.nav.tabs.strip_selected = self.retained.chrome.key_at(selected);
+    }
+
+    /// Does this host sample the dev triggers (`failtest`) for the player's failure? A controlled one (replay, a tape)
+    /// publishes explicit neutral facts and performs no IO to find more: the same line `publish_player_presentation`
+    /// draws.
+    pub(crate) fn samples_dev_triggers(&self) -> bool {
+        self.retained.live_screen_inputs
     }
 
     /// Capture registry facts once per publication boundary. Stable frames only clone Arcs or
@@ -4529,6 +4536,32 @@ pub(crate) fn open_failed_tracks(ps: &plx_media::route::PlaybackSession, anchor:
     present_once(d, arg, Style::PlayerPanel { survives_failure: true });
 }
 
+/// **Present the failed item's versions over the failed player** (`PlayerReq::OpenFailedVersions`): the item is the
+/// failed attempt's and the file it asked for is read off the session, so the list opens on it (else on what plays
+/// unasked), and, on a refusal, the file it landed on is a disabled row. A player panel that survives the failure, as `open_failed_tracks`; a pick comes back through
+/// `PlayerReq::Recover(Recovery::PickVersion)`, the one recovery door.
+pub(crate) fn open_failed_versions(ps: &plx_media::route::PlaybackSession, meta: plx_data::metadata::MetadataView<'_>, anchor: [u32; 4], d: &mut Dispatcher<AppHost>) {
+    let Some(InputOwner::Entry(entry)) = d.nav.input_owner() else { return };
+    let Some(host) = d.nav.instance_of(entry) else { return };
+    let arg = AppArg::VersionsPanel(plx_screens::versions_panel::VersionsArg {
+        host,
+        sid: plx_media::route::cur_sid(ps),
+        rk: plx_media::route::cur_rk(ps),
+        anchor,
+        opener: None,
+        source: plx_screens::versions_panel::Source::Failed {
+            attempted: plx_media::route::attempt_version(ps),
+            // The file that just failed, when picking it again would repeat a request the row withholds Try again for.
+            refused: plx_media::route::failure(ps)
+                .is_some_and(plx_media::player::version_repeat_refused)
+                .then(|| meta.failed_versions(plx_media::route::cur_sid(ps), &plx_media::route::cur_rk(ps)))
+                .flatten()
+                .and_then(|versions| plx_media::route::attempt_media(ps, versions)),
+        },
+    });
+    present_once(d, arg, Style::PlayerPanel { survives_failure: true });
+}
+
 /// **Present a surface that is only ever one**: refused when one of its kind is already up, and when one is already
 /// PARKED for this frame's commit (a surface mounts at the commit, once a frame, so two requests in one frame cannot
 /// see each other in the tree). A later request for a parked surface is folded into it ([`AppArg::absorb`]: number
@@ -5925,6 +5958,10 @@ mod session_stored_home_tests;
 #[cfg(all(test, feature = "sim"))]
 #[path = "restore_characterisation_tests.rs"]
 mod restore_characterisation_tests;
+
+#[cfg(all(test, feature = "sim"))]
+#[path = "failure_recovery_tests.rs"]
+mod failure_recovery_tests;
 
 #[cfg(test)]
 #[path = "bridge_test_support.rs"]

@@ -26,6 +26,10 @@
 //! - `detail_loading() -> bool`, `season_loading() -> bool` — status flags for a spinner/read-out.
 //! - `detail_request_status(sid, rk) -> Option<bool>` — the addressed detail request: `None` for
 //!   another target, `Some(true)` while pending, `Some(false)` after success or failure settles.
+//! - `detail_slot(sid, rk) -> DetailSlot` — what the page for that address has to show: `Loaded`
+//!   (its item, kept through a refresh that fails), `Failed` (the fetch settled with no item and
+//!   nothing is loaded for it: the page offers a retry) or `Waiting`. The fetch cannot say why it
+//!   failed, so `Failed` carries no cause.
 //! - `active_marker(head: Playhead) -> Option<Marker>`,
 //!   `synthesized_tail_marker(head: Playhead, has_next: bool) -> Option<Marker>` — the
 //!   skip-segment/Up-Next window logic; both take the playhead (`is_playing`, `playpos_ns`,

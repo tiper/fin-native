@@ -630,8 +630,9 @@ fn error_context_with_source(ps: &crate::route::PlaybackSession,
         Some(Stage::Decode) => TerminalStageClass::Decode,
         Some(Stage::Presentation) => TerminalStageClass::Presentation,
         Some(Stage::Release) => TerminalStageClass::Release,
-        _ if super::backend::handled_failure(super::error_now(ps).kind).stage
-            == Stage::Planning => TerminalStageClass::Planning,
+        _ if crate::route::failure(ps)
+            .is_some_and(|failure| super::backend::handled_failure(failure.kind()).stage == Stage::Planning) =>
+            TerminalStageClass::Planning,
         _ => TerminalStageClass::Unknown,
     };
     let facts = ps.attempt_view().facts();
@@ -1057,8 +1058,8 @@ fn tick_with(ps: &crate::route::PlaybackSession, report_preview_failures: bool,
         Some(What::Failed) => {
             SAW_FAIL.store(true, Relaxed);
             report_quality(ATTEMPT.load(Relaxed));
-            let shape = super::error_now(ps);
-            let kind = shape.kind.class();
+            let failure_kind = captured_kind(ps);
+            let kind = failure_kind.class();
             let trace = finish_trace(TraceEvent::Failed { kind });
             let context = match source {
                 Some(source) => error_context_with_source(ps, Some(source)),
@@ -1068,7 +1069,7 @@ fn tick_with(ps: &crate::route::PlaybackSession, report_preview_failures: bool,
             emit(DiagEvent::PlaybackFailed {
                 playback_id: ATTEMPT.load(Relaxed),
                 mode: mode(ps),
-                kind: shape.kind.code(),
+                kind: failure_kind.code(),
                 video: video_codec_class(&crate::route::stream_vcodec(ps)),
                 audio: audio_codec_class(&crate::route::stream_acodec(ps)),
                 pipeline_error: plx_telemetry::telemetry::classes::PipelineErrorClass::from_number(
@@ -1079,6 +1080,27 @@ fn tick_with(ps: &crate::route::PlaybackSession, report_preview_failures: bool,
             });
         }
         None => {}
+    }
+}
+
+/// The id of the attempt the report is following (`0` before any, and after its teardown): what a failure captured
+/// for the attempt ([`super::PlaybackFailure::attempt`]) is keyed on. A request mints a new one, retries included.
+pub fn attempt_id() -> i64 {
+    ATTEMPT.load(Relaxed)
+}
+
+/// **The cause of the failure being reported**: the session's captured failure ([`crate::route::failure`]), the one
+/// value the read-out names too. The app captures it ahead of every report observation
+/// (`player::observe_failure`), so an Error with none is a caller that skipped that; it is refused loudly in a
+/// debug build and reported as the honest "everything else" in a release one, never guessed from the session.
+fn captured_kind(ps: &crate::route::PlaybackSession) -> super::FailureKind {
+    match crate::route::failure(ps) {
+        Some(failure) => failure.kind(),
+        None => {
+            super::log("report: an Error with no captured failure is reported as unspecified");
+            debug_assert!(false, "the failure is captured (player::observe_failure) ahead of the report");
+            super::FailureKind::Unspecified
+        }
     }
 }
 
@@ -1099,7 +1121,7 @@ fn tick_preview(
         return;
     }
     PREVIEW_SAW_FAIL.store(true, Relaxed);
-    let kind = super::error_now(ps).kind.class();
+    let kind = captured_kind(ps).class();
     let trace = finish_trace(TraceEvent::Failed { kind });
     if report_failure {
         plx_telemetry::telemetry::playback::report_error(kind, error_context(ps), &trace);
@@ -1567,7 +1589,7 @@ mod tests {
             crate::route::PlayVerdict::PreviewNeedsDirectPlay { reason: PreviewRefusal::NotDirect },
         ] {
             let mut ps = crate::route::PlaybackSession::default();
-            crate::route::refuse_for_test(&mut ps, verdict.clone());
+            refuse(&mut ps, verdict.clone());
             let ctx = error_context(&ps);
             assert_eq!(ctx.delivery.code(), "unknown", "{verdict:?}: delivery was inferred");
             assert_eq!(ctx.backend, ErrorBackendClass::Unknown,
@@ -1697,7 +1719,7 @@ mod tests {
             crate::route::PlayVerdict::PreviewNeedsDirectPlay { reason: PreviewRefusal::NotDirect },
         ] {
             let mut ps = crate::route::PlaybackSession::default();
-            crate::route::refuse_for_test(&mut ps, verdict.clone());
+            refuse(&mut ps, verdict.clone());
             assert!(error_context(&ps).refusal.is_none(), "{verdict:?}");
         }
         let mut hls = crate::route::PlaybackSession::default();
@@ -1754,7 +1776,7 @@ mod tests {
         crate::route::refuse_by_server_for_test(&mut refused, "", Default::default(), true, false, "", "");
         assert_eq!(mode(&refused), "unknown");
         let mut policy = crate::route::PlaybackSession::default();
-        crate::route::refuse_for_test(&mut policy, crate::route::PlayVerdict::DirectPlayDisabled);
+        refuse(&mut policy, crate::route::PlayVerdict::DirectPlayDisabled);
         assert_eq!(mode(&policy), "unknown");
         assert_eq!(mode(&crate::route::PlaybackSession::default()), "direct");
         let mut transcode = crate::route::PlaybackSession::default();
@@ -1847,6 +1869,7 @@ mod tests {
         let generation = requested(&ps, plx_plex::plex::ServerId::UNSET, AttemptOrigin::Fresh);
         let set = |ps: &mut crate::route::PlaybackSession, state: S| {
             ps.step_readout(crate::player::readout::ReadoutEvent::StateDerived(state));
+            crate::player::observe_failure(ps, crate::player::FailureTrigger::NONE, attempt_id());
             tick(ps);
         };
         set(&mut ps, S::Connecting);
@@ -1897,7 +1920,7 @@ mod tests {
 
     /// The handled event a failure in `ps` would queue, as the telemetry serializer builds it.
     fn event_for(ps: &crate::route::PlaybackSession) -> serde_json::Value {
-        let kind = crate::player::error_now(ps).kind.class();
+        let kind = captured_kind(ps).class();
         serde_json::from_slice(&plx_telemetry::telemetry::playback::event_body(
             &"a".repeat(32),
             "0123456789abcdef",
@@ -1916,6 +1939,7 @@ mod tests {
     fn refused_preview() -> crate::route::PlaybackSession {
         let mut ps = crate::route::PlaybackSession::default();
         crate::route::resolve_refused_preview_for_test(&mut ps);
+        crate::player::observe_failure(&mut ps, crate::player::FailureTrigger::NONE, attempt_id());
         ps
     }
 
@@ -1946,7 +1970,7 @@ mod tests {
         let _g = plx_base::testlock::serial();
         for reason in PreviewRefusal::ALL {
             let mut ps = crate::route::PlaybackSession::default();
-            crate::route::refuse_for_test(&mut ps, crate::route::PlayVerdict::PreviewNeedsDirectPlay { reason });
+            refuse(&mut ps, crate::route::PlayVerdict::PreviewNeedsDirectPlay { reason });
             assert_eq!(error_context(&ps).preview_refusal, Some(reason));
             let v = event_for(&ps);
             assert_eq!(v["tags"]["playback.kind"], "preview_not_direct", "{reason:?}");
@@ -1958,7 +1982,7 @@ mod tests {
             crate::route::PlayVerdict::Server("Cannot convert this item.".into(), Default::default()),
         ] {
             let mut ps = crate::route::PlaybackSession::default();
-            crate::route::refuse_for_test(&mut ps, verdict.clone());
+            refuse(&mut ps, verdict.clone());
             assert_eq!(error_context(&ps).preview_refusal, None, "{verdict:?}");
             assert!(event_for(&ps)["tags"].get("playback.preview_refusal").is_none(), "{verdict:?}");
         }
@@ -2054,7 +2078,7 @@ mod tests {
         consented(|| {
             crate::player::preview::reset_for_test();
             let mut ps = crate::route::PlaybackSession::default();
-            crate::route::refuse_for_test(&mut ps, crate::route::PlayVerdict::DirectPlayDisabled);
+            refuse(&mut ps, crate::route::PlayVerdict::DirectPlayDisabled);
             requested(&ps, plx_plex::plex::ServerId::UNSET, AttemptOrigin::Fresh);
             observe(&mut ps, S::Resolving);
             observe(&mut ps, S::Error);
@@ -2063,6 +2087,31 @@ mod tests {
             let kind = v["tags"]["playback.kind"].as_str().expect("kind tag").to_owned();
             assert_eq!(v["fingerprint"], serde_json::json!(["playback-error", kind]));
             assert_eq!(v["tags"]["playback.attempt_origin"], "fresh");
+        });
+    }
+
+    /// **The report and the read-out name one cause**: both read the session's one captured failure, so the
+    /// `playback.kind` the report carries is the kind the read-out is built on. (The refinement a server's stop note
+    /// makes is graded in the pump's `a_server_stop_after_an_interrupted_capture_refines_it`.) Before the value, the
+    /// report derived the cause itself, a third time, on its own frame.
+    #[test]
+    fn the_report_and_the_readout_name_one_cause() {
+        let _g = plx_base::testlock::serial();
+        consented(|| {
+            crate::player::preview::reset_for_test();
+            let mut ps = crate::route::PlaybackSession::default();
+            refuse(&mut ps, crate::route::PlayVerdict::DirectPlayDisabled);
+            let named = |ps: &crate::route::PlaybackSession| {
+                let tag = event_for(ps)["tags"]["playback.kind"].as_str().expect("kind tag").to_owned();
+                let failure = crate::route::failure(ps).expect("captured");
+                assert_eq!(tag, failure.kind().code(), "the report's kind is the captured failure's");
+                failure.kind()
+            };
+            assert_eq!(named(&ps), crate::player::FailureKind::PlaybackPolicy);
+            // a different attempt's capture is a different value, and the report follows it
+            crate::route::refuse_for_test(&mut ps, crate::route::PlayVerdict::Server("Cannot convert this item.".into(), Default::default()));
+            crate::player::observe_failure(&mut ps, crate::player::FailureTrigger::NONE, attempt_id() + 1);
+            assert_eq!(named(&ps), crate::player::FailureKind::DecisionRefused);
         });
     }
 
@@ -2255,6 +2304,7 @@ mod tests {
             let (_, events) = plx_telemetry::diag::test_events::capture(|| {
                 preview_requested();
                 ps.step_readout(crate::player::readout::ReadoutEvent::StateDerived(S::Error));
+                crate::player::observe_failure(&mut ps, crate::player::FailureTrigger::NONE, attempt_id());
                 tick_with(&ps, false, None);
             });
             assert!(events.is_empty(), "no usage event: {events:?}");
@@ -2461,9 +2511,17 @@ mod tests {
         assert_eq!(map(Rung::Facet, r601, unknown).map(|c| c.channels), Some(ChannelBucket::Unknown));
     }
 
+    /// Refuse the play with `verdict` and capture the failure it makes, as the app does before it reports one.
+    fn refuse(ps: &mut crate::route::PlaybackSession, verdict: crate::route::PlayVerdict) {
+        crate::route::refuse_for_test(ps, verdict);
+        crate::player::observe_failure(ps, crate::player::FailureTrigger::NONE, attempt_id());
+    }
+
     /// Present `state` to the per-frame observer, as the main loop does once a frame.
     fn observe(ps: &mut crate::route::PlaybackSession, state: S) {
         ps.step_readout(crate::player::readout::ReadoutEvent::StateDerived(state));
+        // the app captures the failure ahead of every observation (`app::player_presentation::capture_failure`)
+        crate::player::observe_failure(ps, crate::player::FailureTrigger::NONE, attempt_id());
         tick(ps);
     }
 

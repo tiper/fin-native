@@ -42,10 +42,10 @@ use super::*;
 
 // Explicit fixture IO adapter; product helpers receive the already captured caption.
 fn busy_surface(ps: &plx_media::route::PlaybackSession, st: S, seen: bool) -> Busy {
-    super::busy_surface(plx_media::player::error_caption(ps), st, seen)
+    super::busy_surface(plx_media::player::error_for_test(ps).caption, st, seen)
 }
 fn busy_surface_with(ps: &plx_media::route::PlaybackSession, st: S, seen: bool, audio: bool) -> Busy {
-    super::busy_surface_with(plx_media::player::error_caption(ps), st, seen, audio)
+    super::busy_surface_with(plx_media::player::error_for_test(ps).caption, st, seen, audio)
 }
 use plx_ui::widgets::{StatusKind, StatusOverlay};
 use super::classic::*;
@@ -918,8 +918,10 @@ fn a_dead_producer_reads_out_whether_or_not_a_picture_was_up() {
 }
 
 fn readout_of(e: &plx_media::player::ErrorShape) -> FailureReadout {
-    let cx = plx_media::player::FailureContext { forced: true, direct_play_disabled: false, can_retry: true, quality_carriable: true, repair_idle: true, tracks_available: true };
-    FailureReadout::of(e, plx_media::player::failure_actions(e.kind, cx), "0.7.0 · webOS 4.5 · code".into())
+    let failure = plx_media::player::PlaybackFailure::for_test(e.kind, plx_plex::plex::session::DirectPlayMode::Forced,
+        plx_media::player::FrozenOffers { can_retry: true, quality_carriable: true });
+    let live = plx_media::player::LiveOffers { repair_idle: true, tracks_available: true, versions_available: false };
+    FailureReadout::of(e, plx_media::player::failure_actions(&failure, live), "0.7.0 · webOS 4.5 · code".into())
 }
 
 /// **Say it once.** Under Force the reason IS the route's verdict (what happened and why), no
@@ -928,8 +930,9 @@ fn readout_of(e: &plx_media::player::ErrorShape) -> FailureReadout {
 #[test]
 fn the_forced_readout_says_what_and_why_once_and_draws_the_diagnostics_as_the_footer() {
     use plx_media::player::FailureAction as A;
-    let verdict = plx_media::route::PlayVerdict::Forced(plx_media::route::ForcedFailure::Video).text().into_owned();
-    let e = plx_media::player::failtest_policy_shape_for_test(&verdict);
+    let forced = plx_media::route::PlayVerdict::Forced(plx_media::route::ForcedFailure::Video);
+    let verdict = forced.text().into_owned();
+    let e = plx_media::player::failtest_policy_shape_for_test(&forced);
     let r = readout_of(&e);
     assert_eq!(r.reason(), verdict.as_str());
     assert_eq!(r.note(), None, "the verdict already names the cause");
@@ -948,8 +951,8 @@ fn the_forced_readout_says_what_and_why_once_and_draws_the_diagnostics_as_the_fo
 #[test]
 fn the_diagnostics_footer_sits_below_the_row_inside_the_safe_bottom_band() {
     use plx_base::fontcov::advances::ShippedMeasure;
-    let verdict = plx_media::route::PlayVerdict::Forced(plx_media::route::ForcedFailure::Video).text().into_owned();
-    let e = plx_media::player::failtest_policy_shape_for_test(&verdict);
+    let forced = plx_media::route::PlayVerdict::Forced(plx_media::route::ForcedFailure::Video);
+    let e = plx_media::player::failtest_policy_shape_for_test(&forced);
     let r = readout_of(&e);
     let row_bottom = r.frames(&ShippedMeasure).iter().flatten().map(|f| f.y + f.h).fold(0.0, f32::max);
     assert!(row_bottom > 0.0, "the row was laid out");
@@ -978,6 +981,8 @@ fn every_failure_row_fits_the_screen_in_every_language() {
         }
     }
     assert!(rows.contains(&vec![A::PlayAutomatically, A::ChangeQuality, A::ChangeTracks, A::Back]), "the widest Disabled row is enumerated");
+    assert!(rows.contains(&vec![A::TryAgain, A::ChangeQuality, A::ChangeTracks, A::Back]), "the widest stall row is enumerated");
+    assert!(rows.iter().any(|r| r.contains(&A::SelectVersion)), "Select Version's rows are width-checked");
     let mut out = Vec::new();
     for language in plx_os::i18n::SHIPPED {
         let _guard = language_on_this_thread_for_test(language);
@@ -1041,6 +1046,55 @@ fn every_forced_verdict_fits_the_reason_slot_in_every_language() {
         }
     }
     assert!(out.is_empty(), "verdicts cut short:\n  {}", out.join("\n  "));
+}
+
+/// **The app's own refusals fit the two-line reason slot, in every shipped language**: the Direct Play
+/// Disabled verdict (the reason of a policy refusal, `FailureReadout::of`) and *No qualified backend*'s
+/// reason. Both are new in the slot the server's wording used to occupy.
+#[test]
+fn every_app_refusal_reason_fits_the_reason_slot_in_every_language() {
+    use plx_base::fontcov::advances::ShippedMeasure;
+    use plx_ui::fit::HEADROOM;
+    use plx_os::i18n::{language_on_this_thread_for_test, msg};
+    let mut out = Vec::new();
+    for language in plx_os::i18n::SHIPPED {
+        let _guard = language_on_this_thread_for_test(language);
+        for s in [msg::widgets_verdict_direct_play_disabled(), msg::widgets_reason_no_backend()] {
+            let c = std::ffi::CString::new(s).unwrap();
+            if StatusOverlay::failed_reason_truncates(&c, &ShippedMeasure, HEADROOM) {
+                out.push(format!("{}: {s}", language.tag()));
+            }
+        }
+    }
+    assert!(out.is_empty(), "app refusal reasons cut short:\n  {}", out.join("\n  "));
+}
+
+/// **The read-out of an app refusal says whose refusal it was**: Direct Play Disabled reads as the
+/// policy's verdict (its sentence is the reason, no note repeats it, *Play automatically* leads), and
+/// no qualified backend reads as the build's (its own reason, no note, *Back*): neither is captioned
+/// as the server's, and neither carries the server's quote line.
+#[test]
+fn the_app_refusal_readouts_name_the_policy_and_the_build_not_the_server() {
+    use plx_media::player::FailureAction as A;
+    let ps = plx_media::route::PlaybackSession::IDLE;
+    let live = plx_media::player::LiveOffers { repair_idle: true, tracks_available: true, versions_available: false };
+    // the words come from the arm's derivation; the offers are the ones a retryable Plex play makes, under Disabled
+    let readout = |arm: &str| {
+        let shape = plx_media::player::failure_under_for_test(&ps, Some(arm)).shape().clone();
+        let failure = plx_media::player::PlaybackFailure::for_test(shape.kind, plx_plex::plex::session::DirectPlayMode::Disabled,
+            plx_media::player::FrozenOffers { can_retry: true, quality_carriable: true });
+        FailureReadout::of(&shape, plx_media::player::failure_actions(&failure, live), String::new())
+    };
+
+    let r = readout("disabled");
+    assert_eq!(r.reason(), plx_media::route::PlayVerdict::DirectPlayDisabled.text());
+    assert_eq!(r.note(), None, "the verdict already names the cause");
+    assert_eq!(r.actions(), &[A::PlayAutomatically, A::Back]);
+
+    let r = readout("no_backend");
+    assert_eq!(r.reason(), plx_os::i18n::msg::widgets_reason_no_backend());
+    assert_eq!(r.note(), None);
+    assert_eq!(r.actions(), &[A::Back]);
 }
 
 /// …and when it does, it owns the WHOLE frame: `draw_hud` draws nothing — no scrim, no

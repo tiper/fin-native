@@ -551,9 +551,9 @@ fn rapid_filter_activations_invert_the_pending_desired_value() {
     let cx = fixture.cx(None);
     menu.refresh(&cx);
     let elem = menu
-        .form
+        .menu.form()
         .index_of(&"unwatched".to_string())
-        .and_then(|i| menu.form.key_at(i))
+        .and_then(|i| menu.menu.form().key_at(i))
         .unwrap()
         .0;
     let mut output = Vec::new();

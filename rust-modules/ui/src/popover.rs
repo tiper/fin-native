@@ -34,7 +34,7 @@
 //!
 //! - **The snapshot is the UNDIMMED host page.** [`host::live`] captures on its first call of a
 //!   frame, which is by construction the moment before the first popover draws anything — its
-//!   scrim included. The scrim and the [`Opener`] lift stay LIVE above the quad, which they must:
+//!   scrim included. The scrim and the opener lift stay LIVE above the quad, which they must:
 //!   the scrim ramps with the appear spring, and a lift baked into the snapshot would then be
 //!   dimmed by the live scrim drawn over it, which is the exact bug the lift exists to fix.
 //! - **A MENU's ground is glass on the frozen host (DS6), a sheet's ground never is glass, and
@@ -52,7 +52,7 @@
 //!   [`host_refresh`] combines the captured page damage and page motion.
 //! - **The opener's card is not in the snapshot at all.** A hold the app takes leaves the card
 //!   springing from its press dip up to its pop beneath the item menu. The card sections leave the
-//!   lifted element out of the page pass (`DrawFrame::lifted`) and the [`Opener`] lift draws the
+//!   lifted element out of the page pass (`DrawFrame::lifted`) and the opener lift draws the
 //!   one copy live above the snapshot at the press's own scale, so that spring is not page damage
 //!   (`Press::tick` raises none while the lift owns the card) and the snapshot is taken ONCE: no
 //!   frame on which the page, the snapshot and the lift disagree, and no capture per frame of the
@@ -122,28 +122,19 @@ pub fn host_refresh(fading_only: bool, page_dirty: bool, page_moving: bool) -> b
     page_dirty || (fading_only && page_moving)
 }
 
-/// The element a popover was opened FROM — where it is, and how to put it back on screen.
+/// The element a popover was opened FROM — where it is on screen.
 ///
 /// A modal scrim is ONE full-screen quad, so it dims the whole page INCLUDING the card or chip the
-/// menu is about: the one thing on screen the panel is talking about recedes with everything else.
-/// Fixing that needs no new machinery — the renderer is immediate-mode and z-order IS call order,
-/// so "above the scrim" literally means "drawn after the scrim call".
-///
-/// **Both halves come from the HOST, which is why they travel together.** Only the screen that drew
-/// the element knows where it landed (a shelf's scroll spring and the cell's own focus pop are
-/// invisible from here) and only that screen can draw it again. A bare `fn()` rather than a closure,
-/// because this is stored beside the open panel in a `static mut` — the same shape `ui::nav` carries
-/// an outgoing page's teardown as.
+/// menu is about; the dispatcher lifts that element back above the dim (`Dispatcher::lifted_opener`,
+/// `Z::OPENER`), so the one thing the panel is talking about stays at full strength. What the panel
+/// itself needs of it is the rect it is anchored beside, which only the screen that drew the element
+/// knows (a shelf's scroll spring and the cell's own focus pop are invisible from here).
 #[derive(Clone, Copy)]
 pub struct Opener {
     /// The element's drawn rect in screen coords — what the panel is anchored beside. `None` when
     /// the host has no element to point at (the hero view has no card; a headless trigger opens the
     /// menu with nothing focused), which is a placement fallback and never an error.
     pub rect: Option<Rect>,
-    /// Re-draw that element exactly as its page drew it, ABOVE the scrim. It builds its own root
-    /// painter, because which alpha it belongs on is the host's business: a page element rides
-    /// `nav::page_alpha`, a piece of the shared top bar rides `nav::chrome_alpha`.
-    pub redraw: fn(),
 }
 
 /// The two ways a popover panel can arrive; the ONE selector is [`Popover::morphing`].
@@ -225,6 +216,9 @@ pub struct Placement {
     pub overflow: Overflow,
     /// The frame the panel must stay inside.
     pub keep: Rect,
+    /// The air between the anchor and the panel (a rung of the player's own, [`PLAYER_MENU_GAP`](crate::theme::layout::PLAYER_MENU_GAP),
+    /// or [`PANEL_GAP`]): the caller's rule, so every placement of one menu agrees on it.
+    pub gap: f32,
 }
 
 impl Placement {
@@ -240,6 +234,7 @@ impl Placement {
             crate::consts::SCR_W - 2.0 * PANEL_EDGE_X,
             crate::consts::SCR_H - 2.0 * PANEL_EDGE,
         ),
+        gap: PANEL_GAP,
     };
 
     /// [`under_or_above_fit`]'s: [`Self::UNDER_OR_ABOVE`]'s sides in its order, and a panel taller than the room either
@@ -253,6 +248,7 @@ impl Placement {
         cross: Cross::Hang,
         overflow: Overflow::ClampToRoom,
         keep: crate::consts::SAFE,
+        gap: crate::theme::layout::PLAYER_MENU_GAP,
     };
 
     /// A panel with no opener, in the safe frame's top-right corner ([`corner_panel`]): below the
@@ -262,6 +258,7 @@ impl Placement {
         cross: Cross::Hang,
         overflow: Overflow::ClampToRoom,
         keep: crate::consts::SAFE,
+        gap: 0.0,
     };
 }
 
@@ -271,7 +268,7 @@ impl Placement {
 /// is `Below`, so [`Popover::rise_offset`] settles it down into place.
 pub fn corner_panel(w: f32, h: f32) -> Anchored {
     let keep = Placement::CORNER.keep;
-    anchor_panel(Rect::new(keep.x + keep.w, keep.y, 0.0, 0.0), (w, h), h, 0.0, Placement::CORNER)
+    anchor_panel(Rect::new(keep.x + keep.w, keep.y, 0.0, 0.0), (w, h), h, Placement::CORNER)
 }
 
 /// [`anchor_panel`]'s answer: the panel's rect and the side of the anchor it took (which is where
@@ -285,7 +282,7 @@ pub struct Anchored {
 /// **The one placer of a panel beside the control that opened it.** `size` is the panel's own
 /// `(w, h)`; `need_h` is the height it must be able to show, which alone decides the SIDE (a menu
 /// whose pages differ in height passes the tallest, so the side does not change between pages); the
-/// height drawn is `size.1` cut to the chosen side's room only where `how.overflow` says so. `gap`
+/// height drawn is `size.1` cut to the chosen side's room only where `how.overflow` says so. `how.gap`
 /// is the air between anchor and panel.
 ///
 /// A side HOLDS the panel when, for `Above`/`Below`, the height between the anchor's edge plus
@@ -295,8 +292,9 @@ pub struct Anchored {
 ///
 /// Pure: the same anchor and size always give the same rect, so a caller that keeps the anchor it
 /// was opened with keeps its panel still.
-pub fn anchor_panel(anchor: Rect, size: (f32, f32), need_h: f32, gap: f32, how: Placement) -> Anchored {
+pub fn anchor_panel(anchor: Rect, size: (f32, f32), need_h: f32, how: Placement) -> Anchored {
     let (w, h) = size;
+    let gap = how.gap;
     let keep = how.keep;
     let (keep_r, keep_b) = (keep.x + keep.w, keep.y + keep.h);
     let (anchor_r, anchor_b) = (anchor.x + anchor.w, anchor.y + anchor.h);
@@ -374,7 +372,7 @@ pub fn under_or_above(a: Rect, content_w: f32, content_h: f32) -> Rect {
     use crate::consts::SCR_H;
     let width = content_w.clamp(crate::table::MENU_MIN_W, crate::table::MENU_MAX_W);
     let h = content_h.clamp(120.0, SCR_H - 2.0 * PANEL_EDGE);
-    anchor_panel(a, (width, h), h, PANEL_GAP, Placement::UNDER_OR_ABOVE).rect
+    anchor_panel(a, (width, h), h, Placement::UNDER_OR_ABOVE).rect
 }
 
 /// [`under_or_above`] for a panel that may be taller than the room either side of its opener (a pushed page
@@ -385,7 +383,7 @@ pub fn under_or_above_fit(a: Rect, content_w: f32, content_h: f32) -> Rect {
     use crate::consts::SCR_H;
     let width = content_w.clamp(crate::table::MENU_MIN_W, crate::table::MENU_MAX_W);
     let h = content_h.clamp(120.0, SCR_H - 2.0 * PANEL_EDGE);
-    anchor_panel(a, (width, h), h, PANEL_GAP, Placement::UNDER_OR_ABOVE_FIT).rect
+    anchor_panel(a, (width, h), h, Placement::UNDER_OR_ABOVE_FIT).rect
 }
 
 /// **Where a header menu's panel of width `w` starts across, hung from its opener `pill`** (the
@@ -436,24 +434,10 @@ pub fn cover_opener_clear(pill: Rect, size: (f32, f32), keep: Rect, clear_y: f32
     }
 }
 
-/// The [`Opener::redraw`] of a popover with nothing to lift — a named fn rather than a closure, so
-/// [`Opener::NONE`] can be a `const`.
-fn draw_nothing() {}
-
 impl Opener {
     /// No element at all: the panel falls back to its own placement and the scrim covers everything,
     /// which is exactly what every popover did before this existed.
-    pub const NONE: Opener = Opener {
-        rect: None,
-        redraw: draw_nothing,
-    };
-
-    /// An opener that is only a DRAW — for a panel whose placement is its own. The Library's chip
-    /// menus are anchored on the toolbar rather than on the chip's measured rect, so they have a
-    /// thing to lift and no rect to hand over.
-    pub const fn drawn(redraw: fn()) -> Opener {
-        Opener { rect: None, redraw }
-    }
+    pub const NONE: Opener = Opener { rect: None };
 }
 
 /// Does this popover freeze the page it stands on into the shared [`host`] snapshot?
@@ -832,33 +816,6 @@ impl Popover {
         if scrim_a > 0.0 {
             let dim = theme::scrim_black(scrim_a * self.appear() * nav.page_alpha);
             Painter::root().rect(Rect::FULL, 0.0, dim, dim, 0.0);
-        }
-    }
-
-    /// Draw the modal scrim, then LIFT `opener` back out of it: the element the popover was opened
-    /// FROM, re-drawn on top of the dim, so the one thing the panel is about stays at full strength
-    /// while the page around it recedes.
-    ///
-    /// **Both calls belong to the HOST PAGE**, for the reason [`scrim`](Self::scrim) already gives
-    /// and one more. The direct blur source path re-renders the page closure into a small target
-    /// before any popover draws, so a lift drawn WITH the panel would reach the visible frame and
-    /// never the snapshot — and a glass panel frosting a *dimmed* copy of the very card it is about
-    /// is exactly the class of artefact the scrim's own placement rule exists to prevent.
-    ///
-    /// **The lift is a SECOND DRAW, not a cut-out, and that is a visual decision rather than an
-    /// implementation detail.** Everything the element paints OPAQUELY comes out at exactly its own
-    /// colour, which is the point. Everything it paints with ALPHA — its soft shadow, its focus
-    /// glow, the anti-aliased edges of its label — composites twice, once dimmed under the scrim
-    /// and once over it, so those read heavier than the same element does anywhere else on the
-    /// screen. The shadow reading twice is what a raised object would really cast; the label's AA
-    /// edges thickening is the price, and it is paid from the first frame the panel is up, not
-    /// only once the scrim has ramped in. The alternative — scrim as four quads around the rect —
-    /// has neither cost and cannot follow an element whose glow and caption run outside its own
-    /// frame, which every card surface here has.
-    pub fn scrim_lifting(&self, scrim_a: f32, opener: &Opener, nav: crate::screen::NavPresentation) {
-        self.scrim(scrim_a, nav);
-        if scrim_a > 0.0 {
-            (opener.redraw)();
         }
     }
 

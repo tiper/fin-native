@@ -86,6 +86,14 @@ pub enum Activation<A, Dest> {
     Action(A),
 }
 
+/// What a re-typed row keeps of its binding ([`Form::map`]): the focus key and the kind and action in the new
+/// alphabet. Its identity is the one `map`'s `id` answered, and `disabled` carries over.
+pub struct Rebind<A, Dest> {
+    pub key: RowKey,
+    pub kind: RowKind<Dest>,
+    pub action: A,
+}
+
 /// A focusable row's non-visual half, kept parallel to the table by [`FormTable`] alone.
 #[derive(Clone, Debug)]
 pub struct Binding<Id, A, Dest> {
@@ -258,6 +266,9 @@ impl<Id: FormId, A, Dest> FormSection<Id, A, Dest> {
 /// An ordered list of sections, built by a PURE function of plain inputs.
 pub struct Form<Id, A, Dest> {
     sections: Vec<FormSection<Id, A, Dest>>,
+    /// Rows that have changed shape since a page above this one was opened from them: `(was, is)`
+    /// ([`Self::alias`]).
+    aliases: Vec<(Id, Id)>,
 }
 impl<Id, A, Dest> Default for Form<Id, A, Dest> {
     fn default() -> Self {
@@ -268,16 +279,33 @@ impl<Id, A, Dest> Form<Id, A, Dest> {
     pub fn new() -> Self {
         Self {
             sections: Vec::new(),
+            aliases: Vec::new(),
         }
     }
     pub fn section(mut self, s: FormSection<Id, A, Dest>) -> Self {
         self.sections.push(s);
         self
     }
+    /// **Say that the row `is` now stands for the row `was`**: a row can change shape under a viewer while a page
+    /// above it is open (a language that dropped to one track is a direct row now, and the reverse), and the page
+    /// above remembers the row it was opened from by its identity. A pop that lands on this form seats the cursor on
+    /// `is` where it would have sought `was` ([`Self::stands_for`]).
+    pub fn alias(mut self, was: Id, is: Id) -> Self {
+        self.aliases.push((was, is));
+        self
+    }
+    /// The row of this form that stands for the row `id` NOW: what [`Self::alias`] said, else `id` itself.
+    pub fn stands_for(&self, id: &Id) -> Id
+    where
+        Id: PartialEq + Clone,
+    {
+        self.aliases.iter().find(|(was, _)| was == id).map_or_else(|| id.clone(), |(_, is)| is.clone())
+    }
     /// `other`'s sections after this form's own: a page that embeds a list built elsewhere (the
     /// Library's Sort & Filter menu holds the Sources list) keeps that list's sections whole.
     pub fn then(mut self, other: Self) -> Self {
         self.sections.extend(other.sections);
+        self.aliases.extend(other.aliases);
         self
     }
     /// Does the built form hold a focusable row `id` (in a visible section)? What a rebuild asks
@@ -306,12 +334,22 @@ impl<Id, A, Dest> Form<Id, A, Dest> {
             })
             .collect()
     }
-    /// Re-type every focusable row (identity, action and the drill-in destination's type): `f` gets each binding and answers its replacement, or `None` to
-    /// demote the row to an inert slot — still DRAWN exactly as declared, but never focusable.
-    /// Sections, headers, accessories and every row's presentation pass through untouched, so a
-    /// shared builder (`appkit::source_list::form`) serves a surface that has its own row identities.
-    pub fn map<Id2, A2, Dest2>(self, mut f: impl FnMut(Binding<Id, A, Dest>) -> Option<Binding<Id2, A2, Dest2>>) -> Form<Id2, A2, Dest2> {
+    /// **Re-type the form**: the ONE way a form moves to another row alphabet. `id` names each row's identity in
+    /// the new alphabet, once (`None` demotes the row to an inert slot: still DRAWN exactly as declared, never
+    /// focusable); `row` then gets the old identity, the new one, and the row's kind and action, and answers the new
+    /// [`Rebind`] (key, kind, action). The form's aliases ([`Self::alias`]) go through the same `id`, so what a
+    /// page declares about a pop survives the re-typing, and an alias naming a row `id` refuses is dropped. A
+    /// `disabled` row stays disabled. Sections, headers, accessories and every row's presentation pass through
+    /// untouched, so a shared builder (`appkit::source_list::form`, `appkit::track_rows`) serves a surface that has
+    /// its own row identities.
+    pub fn map<Id2, A2, Dest2>(
+        self,
+        mut id: impl FnMut(&Id) -> Option<Id2>,
+        mut row: impl FnMut(&Id, &Id2, RowKind<Dest>, A) -> Rebind<A2, Dest2>,
+    ) -> Form<Id2, A2, Dest2> {
+        let aliases = self.aliases.into_iter().filter_map(|(was, is)| Some((id(&was)?, id(&is)?))).collect();
         Form {
+            aliases,
             sections: self
                 .sections
                 .into_iter()
@@ -323,11 +361,14 @@ impl<Id, A, Dest> Form<Id, A, Dest> {
                         .slots
                         .into_iter()
                         .map(|slot| match slot {
-                            Slot::Item(b, row, name) => match f(b) {
-                                Some(b2) => Slot::Item(b2, row, name),
-                                None => Slot::Inert(row),
+                            Slot::Item(b, row_, name) => match id(&b.id) {
+                                Some(id2) => {
+                                    let Rebind { key, kind, action } = row(&b.id, &id2, b.kind, b.action);
+                                    Slot::Item(Binding { id: id2, key, kind, action, disabled: b.disabled }, row_, name)
+                                }
+                                None => Slot::Inert(row_),
                             },
-                            Slot::Inert(row) => Slot::Inert(row),
+                            Slot::Inert(row_) => Slot::Inert(row_),
                         })
                         .collect(),
                 })
@@ -385,11 +426,29 @@ pub struct FormTable<Id, A, Dest> {
 impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
     /// `key_ceiling`: every [`RowKey`] must be below it (the page's key band; debug-asserted).
     pub const fn new(key_ceiling: u32) -> Self {
+        Self::with_class(key_ceiling, crate::menu::Class::Picker)
+    }
+
+    /// [`Self::new`] whose table is of the size class `class` says ([`TableView::with_class`]), fixed here.
+    pub const fn with_class(key_ceiling: u32, class: crate::menu::Class) -> Self {
         Self {
-            table: TableView::new(),
+            table: TableView::with_class(class),
             bindings: Vec::new(),
             names: Vec::new(),
             key_ceiling,
+            engine_key: None,
+            reseat: None,
+        }
+    }
+
+    /// **An empty form dressed like this one** ([`TableView::blank_like`]): the same key band and table class, no rows.
+    /// A page that is built to be measured or warmed without being shown ([`crate::menu::Menu::prewarm_aside`]) lives in it.
+    pub fn blank_like(&self) -> Self {
+        Self {
+            table: self.table.blank_like(),
+            bindings: Vec::new(),
+            names: Vec::new(),
+            key_ceiling: self.key_ceiling,
             engine_key: None,
             reseat: None,
         }
@@ -424,6 +483,17 @@ impl<Id: PartialEq + Clone, A: Clone, Dest: Clone> FormTable<Id, A, Dest> {
     /// profile* is hidden) but opens afresh on [`TableView::opening_row`], exactly as the first build does.
     pub fn set_or_open(&mut self, form: Form<Id, A, Dest>, keep: Option<&Id>) {
         self.install_keeping(form, keep, false, false);
+    }
+
+    /// [`Self::set_sliding`] for an ACTION MENU rebuilt under the cursor: a `keep` that survives glides (the
+    /// pill and the scroll stay where they are); one that vanished does NOT slide onto its neighbour but opens
+    /// afresh on `initial` (else [`TableView::opening_row`]), as [`Self::open`] does.
+    pub fn set_sliding_or_open(&mut self, form: Form<Id, A, Dest>, keep: Option<&Id>, initial: Option<&Id>) {
+        if keep.is_some_and(|k| form.contains(k)) {
+            self.install_keeping(form, keep, true, false);
+        } else {
+            self.open(form, initial);
+        }
     }
 
     /// [`Self::set`] for a rebuild that happens UNDER the cursor and must not move the scroll or

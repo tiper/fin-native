@@ -2899,7 +2899,11 @@ mod tests {
         // `Action::Pick`, its page depth): previously 0x705f_6115_6a7b_0b8c.
         // The Live TV Guide's window start becomes the reader's own (`guide:Option<(page,window,ahead)>`) and joins the Live TV
         // screen's canon (only the screen half moves): previously 0x206d_ac83_c50c_4704.
-        assert_eq!(state_fp(), 0xfe55_9a06_f7a0_5802, "current V13 producer census");
+        // Live TV Browse (the scope's filter, the empty-filter mode, the filter menu surface and its shape; the menu's checked filter
+        // joins its shape: the menu stays up with the check moved): previously
+        // 0xfe55_9a06_f7a0_5802.
+        assert_eq!(state_fp(), 0x8203_7c2e_b468_11a1, "current V13 producer census");
+        assert_ne!(state_fp(), 0xfe55_9a06_f7a0_5802, "the census before Live TV Browse and its filter menu");
         assert_ne!(state_fp(), 0x206d_ac83_c50c_4704, "the census before the Live TV Guide's scope, page and window");
         assert_ne!(state_fp(), 0x705f_6115_6a7b_0b8c, "the census before the hero menu's pages");
         assert_ne!(state_fp(), 0xcb36_5b40_2b40_643f, "the census before the live player's zap, art and banner phases");

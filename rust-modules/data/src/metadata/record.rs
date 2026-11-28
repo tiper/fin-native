@@ -419,7 +419,7 @@ mod tests {
         use crate::stores::tape;
         controlled(false);
         request("refused", false, false);
-        assert!(!pump_detail(test_state(), test_adapter(), &plx_plex::plex::ClientKeys::default(), true));
+        assert!(pump_detail(test_state(), test_adapter(), &plx_plex::plex::ClientKeys::default(), true), "a refusal leaves the page Failed, which is news");
         assert!(!detail_loading(test_adapter()));
         let results = tape::take_results();
         let (admissions, failure) = tape::finish();
@@ -439,7 +439,7 @@ mod tests {
         super::super::clear(test_state(), test_adapter());
         tape::reset_for_test();
         assert_eq!(outcome, (admissions, None));
-        assert!(!changed);
+        assert!(changed, "the replayed refusal settles the page as Failed, as the recording did");
         assert!(!loading);
         assert_eq!(observed, results);
         assert_eq!((pending, seq), (0, 1));

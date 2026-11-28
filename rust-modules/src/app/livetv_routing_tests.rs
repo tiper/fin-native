@@ -11,8 +11,8 @@ use plx_ui::dispatch::Tap;
 fn channel(vcn: &str, name: &str) -> Channel {
     Channel { sid: plx_plex::plex::ServerId::from_raw(0), dvr: "7".into(),
         channel: format!("C{vcn}.242.ersatztv.org"), vcn: vcn.into(), name: name.into(),
-        thumb: String::new(), now: "Family Show".into(), now_thumb: String::new(),
-        now_summary: String::new(), begins_at: 0, ends_at: 0, later: Vec::new() }
+        thumb: String::new(),
+        airings: plx_data::livetv::Airings::on_then(plx_data::livetv::LiveAiring::new("Family Show", 0, 0), Vec::new()) }
 }
 
 #[derive(Default)]
@@ -448,14 +448,13 @@ fn live_banner_uses_the_existing_caption_and_tracks_the_airing() {
         ("101", "Next Show", "101 · Next Show"), ("", "Next Show", "Next Show"), ("101", "", "101"), ("", "", "")] {
         let mut ch = channel(number, "Family Channel");
         ch.channel = "C101.242.ersatztv.org".into();
-        ch.now = programme.into();
-        ch.now_summary = format!("About {programme}");
-        ch.begins_at = 1_792_523_168;
-        ch.ends_at = 1_792_524_417;
+        ch.airings = plx_data::livetv::Airings::on_then(plx_data::livetv::LiveAiring {
+            summary: format!("About {programme}"), ..plx_data::livetv::LiveAiring::new(programme, 1_792_523_168, 1_792_524_417)
+        }, Vec::new());
         crate::app::playback::publish_live_banner(&mut app.player.session, &[ch]);
         let info = plx_media::route::live_info(&app.player.session).expect("the tuned channel's facts");
-        assert_eq!(info.channel.now_summary, format!("About {programme}"));
-        assert_eq!((info.channel.begins_at, info.channel.ends_at), (1_792_523_168, 1_792_524_417), "the raw airing, worded at draw");
+        assert_eq!(info.channel.airings.on_air().map(|a| a.summary.clone()), Some(format!("About {programme}")));
+        assert_eq!((info.channel.airings.begins_at(), info.channel.airings.ends_at()), (1_792_523_168, 1_792_524_417), "the raw airing, worded at draw");
         // SAFETY: the session owns the NUL-terminated banner for this assertion.
         assert_eq!(unsafe { std::ffi::CStr::from_ptr(plx_media::route::ctxline_cptr(&app.player.session)) }.to_str().unwrap(), expected);
     }
@@ -473,9 +472,7 @@ fn an_unchanged_channel_is_not_republished_and_a_rollover_is() {
     start_channel(&mut app, &mut now);
     let mut ch = channel("101", "Family Channel");
     ch.channel = "C101.242.ersatztv.org".into();
-    ch.now = "Family Show".into();
-    ch.begins_at = 1_792_523_168;
-    ch.ends_at = 1_792_526_768;
+    ch.airings = plx_data::livetv::Airings::on_then(plx_data::livetv::LiveAiring::new("Family Show", 1_792_523_168, 1_792_526_768), Vec::new());
     let info_at = |app: &App| plx_media::route::live_info(&app.player.session).expect("the tuned channel's facts") as *const plx_media::route::LiveInfo;
     crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch));
     let first = info_at(&app);
@@ -486,12 +483,10 @@ fn an_unchanged_channel_is_not_republished_and_a_rollover_is() {
     }
     assert_eq!(info_at(&app), first, "an unchanged channel keeps its info");
     // A programme rollover is a different row and is published.
-    ch.now = "Next Show".into();
-    ch.begins_at = ch.ends_at;
-    ch.ends_at += 3_600;
+    ch.airings = plx_data::livetv::Airings::on_then(plx_data::livetv::LiveAiring::new("Next Show", 1_792_526_768, 1_792_530_368), Vec::new());
     crate::app::playback::publish_live_banner(&mut app.player.session, std::slice::from_ref(&ch));
     let info = plx_media::route::live_info(&app.player.session).unwrap();
-    assert_eq!((info.channel.now.as_str(), info.channel.begins_at), ("Next Show", 1_792_526_768));
+    assert_eq!((info.channel.airings.now_title(), info.channel.airings.begins_at()), ("Next Show", 1_792_526_768));
     player_request(&mut app, now, plx_screens::registry::PlayerReq::Exit);
 }
 

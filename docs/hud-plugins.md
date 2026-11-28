@@ -132,11 +132,11 @@ Menus and popovers
   tall panel over its opener; x from the control's left edge clamped to `PANEL_EDGE_X`) and `hang_x(pill,
   w, keep)` (`:303-312`: the near edge is the opener's outer edge by screen half, clamped into `keep`).
   `under_or_above` has no production caller now. Callers of `under_or_above_fit` (the same placement with `ClampToRoom`: a tall list is cut to the roomier side and never covers its opener): `ui/src/menu.rs` (`Mount::Sheet`, which Also available and Select Version without an opener share; `Mount::Video` places the failure screen's picker by the same rule, `Placement::UNDER_OR_ABOVE_FIT`, flat over the player). Callers of `hang_x`:
-  `screens/src/watchlist/options.rs:317`, `screens/src/library/menu.rs:470` (`hang_x`); pinned by
+  `popover::cover_opener` (the placement of every growing menu, `Host::Grows` of `ui/src/menu.rs`: the Library's, the Watchlist's and the profile menu) and `anchor_panel`'s `Cross::Hang`; pinned by
   `screens/src/alt_sources_tests.rs:674-736` and `ui/src/popover_host_tests.rs:254-258`. `PANEL_GAP =
   space::MD` (`:276`), `PANEL_EDGE = space::XL`, `PANEL_EDGE_X = MARGIN_X` (`:280-281`). Open styles
-  `Appear` and `Morph` (`:266-273`), `open_from`/`track_opener` (`:448-458`), `Opener { rect, redraw }`
-  (`:254-263`). The spacing ladder is XS 8, SM 16, MD 24, LG 40, XL 64 (`ui/src/theme.rs:178-186`).
+  `Appear` and `Morph` (`:266-273`), `open_from`/`track_opener` (`:448-458`), `Opener { rect }`
+  (`popover.rs`; rect only, the element's lift is the dispatcher's `lifted_opener` pass, not a fn the popover carries). The spacing ladder is XS 8, SM 16, MD 24, LG 40, XL 64 (`ui/src/theme.rs:178-186`).
 - F22. Other HUD surfaces: the Timing capsule hides the HUD and sits at `CAPSULE_BOTTOM_Y` 836
   (`media/src/player/text_style.rs:70-72`, test `:295`); the scrub-preview card is centred over the knob,
   clamped to the bar and drawn above it, from arguments (`appkit/src/scrub_preview.rs:175-180`); the
@@ -995,7 +995,7 @@ opener, through ONE shared placer.
   (`popover.rs:283-301`), so every caller of `under_or_above` gets the SAME
   rects (Also available and Select Version without an opener have since moved to `under_or_above_fit`, `ClampToRoom`, on
   `ui/src/menu.rs`'s `Mount::Sheet`; `under_or_above` itself is now pinned by the tests rather than called), pinned by `alt_sources_tests.rs:674-736` (`r.x == btn.x` at `:681`, the tall case at `:700-701`); `hang_x` stays
-  the function its two callers (`watchlist/options.rs:317`, `library/menu.rs:470`) call, untouched. No existing caller's
+  the function `cover_opener` calls, untouched. No existing caller's
   result changes and none of the four files is edited. The player's menus pass `Facing`, `Hang`, `ClampToRoom` and
   `keep = SAFE`. `Facing`: the vertical side facing `keep`'s centre (Above for an opener in the lower half), the other
   vertical side, the horizontal side facing the centre (Start for an opener in the right half), the other. Room: for
@@ -1012,7 +1012,7 @@ opener, through ONE shared placer.
   language change, does not move an open panel. A menu opened by something that is not a HUD control has
   no HUD anchor, and takes the root state's `open_more` rest rect as its anchor: the failure read-out's
   `More { page: Some(Quality) }` (F18, formerly `More { quality: true }`) therefore opens where classic opens it today, `CTRL_RIGHT - pw`, bottom 764, and a
-  headless trigger is the same `Opener::NONE` case (`popover.rs:321`).
+  headless trigger is the same `Opener::NONE` case (`popover.rs`).
 - The gap. `theme::layout::PLAYER_MENU_GAP = 28.0`, named (it is 792 - 764 today, F20, and `PANEL_GAP` is
   24), replaces `PLAYER_MENU_BOTTOM`; classic's bottom edge stays 764.
 - The need. `need_h` is the tallest page the menu can show with app-owned rows (More: the Quality page with

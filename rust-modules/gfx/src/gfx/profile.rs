@@ -138,10 +138,12 @@ mod imp {
         "lb.document",
         "lb.rail",
         "lb.menu",
+        "ltv.filter",
         "rc.clear",
         "rc.ground",
         "rc.rows",
         "st.ground",
+        "wl.menu",
     ];
 
     /// Resolve a trigger's contents to a phase name, or explain why it is not one.

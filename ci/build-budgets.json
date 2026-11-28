@@ -6,10 +6,10 @@
       "what": "Size in bytes of the STRIPPED ARM plxnative binary that `make ipk FLAVOR=debug` stages into the package (ipkroot/data/usr/palm/applications/<appid>/plxnative), as the CI cross-build job builds it: `make ipk FLAVOR=debug` with RELEASE unset, so the Makefile's dev feature set (both playback backends plus devtools, devtriggers and threadcheck), the fat-LTO `release` cargo profile (CI selects it by itself) and a stripped binary. The shipped RELEASE=1 binary is built with the shipping feature set (no devtools, devtriggers or threadcheck) and is smaller; this is the number CI can measure on every PR.",
       "unit": "bytes",
       "mode": "fail",
-      "limit": 21000000,
-      "measured": 20350168,
-      "measured_on": "2026-11-26",
-      "headroom": "3% (limit raised from 20,000,000 to 21,000,000 by the owner at the 2026-11-26 upstream merge: upstream Live TV, the debug playback control socket and FFmpeg 9.1, on top of the Jellyfin backend crate)"
+      "limit": 21500000,
+      "measured": 21080896,
+      "measured_on": "2026-11-28",
+      "headroom": "2% (limit raised from 21,000,000 to 21,500,000 by the owner at the 2026-11-28 upstream merge: upstream Live TV Browse, the playback failure read-out and the menus on plx_ui::menu, on top of the Jellyfin backend crate; earlier raised from 20,000,000 to 21,000,000 at the 2026-11-26 merge)"
     },
     "packages_default": {
       "what": "Third-party (registry/git) packages the app crate compiles for armv7-unknown-linux-gnueabi with its DEFAULT features: normal + build dependencies, dev-dependencies excluded, workspace members excluded.",

@@ -691,7 +691,7 @@ fn the_players_quality_pick_skips_only_a_stored_equal_rung() {
 /// `How::Confirm` door). A Durable write publishes unconditionally, so a newer cell value written
 /// between a restore and the write is overwritten with the written value.
 ///
-/// This row used to be plan delta 3's "before": `app::playback::play_automatically` was exactly
+/// This row used to be plan delta 3's "before": `app::playback::perform_recovery(Recovery::PlayAutomatically)` was exactly
 /// this pair, a `restore_direct_play_mode(Auto)` on the caller's thread and then a queued
 /// `set_direct_play_mode(Auto)` that republished from the storage worker. It has not used the pair
 /// since delta 3, which publishes Auto once through `choose` (`How::Optimistic`); the hostsim test

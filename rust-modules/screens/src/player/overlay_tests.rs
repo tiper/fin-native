@@ -133,10 +133,10 @@ pub(super) fn derive_state(ps: &mut plx_media::route::PlaybackSession, state: pl
 /// Test-host IO port, called before entering a machine window, never from a host getter.
 pub(super) fn failure_fixture(ps: &plx_media::route::PlaybackSession) -> plx_appkit::player_hud::FailureReadout {
     use plx_media::player;
-    let error = player::error_now(ps);
-    let actions = player::failure_actions(error.kind, player::failure_context(ps, false));
-    let support = player::support_line(error.kind);
-    plx_appkit::player_hud::FailureReadout::captured(error, actions, support, ps.repair_status)
+    let failure = player::failure_for_test(ps);
+    let actions = player::failure_actions(&failure, player::LiveOffers { repair_idle: ps.repair_status == plx_os::tv::native_video::State::Idle, tracks_available: false, versions_available: false });
+    let support = player::support_line(failure.kind());
+    plx_appkit::player_hud::FailureReadout::captured(failure.attempt(), failure.shape().clone(), actions, support, ps.repair_status)
 }
 
 /// A session playing the middle episode `11` of a three-episode queue, `12` up next: the neighbours the accessibility
@@ -155,7 +155,7 @@ pub(super) fn presentation_fixture(ps: &plx_media::route::PlaybackSession) -> pl
     use plx_appkit::player_hud::{Busy, Presentation};
     let state = player::state(ps);
     if state == player::PlaybackState::Error || plx_base::devtrig::flag("failtest") {
-        Presentation { busy: Busy::Readout(plx_ui::widgets::StatusKind::Failed, player::error_caption(ps)),
+        Presentation { busy: Busy::Readout(plx_ui::widgets::StatusKind::Failed, player::error_for_test(ps).caption),
             failure: Some(std::sync::Arc::new(failure_fixture(ps))) }
     } else {
         Presentation { busy: plx_appkit::player_hud::busy_surface_with(c"", state,
@@ -272,12 +272,18 @@ impl crate::registry::MetadataLike for TestHost {
 const ENTRY: EntryId = EntryId(44);
 const INST: InstanceId = InstanceId(7);
 
+thread_local! {
+    /// The engine's focus, as far as these tests tell it ([`deliver`] records every `FocusMoved` it passes on): what a
+    /// real dispatcher hands the screen in `cx.focus.current`.
+    static ENGINE_FOCUS: std::cell::Cell<Option<FocusKey<u32>>> = const { std::cell::Cell::new(None) };
+}
+
 fn cx() -> Cx<'static, TestHost> {
     Cx {
         views: plx_media::route::idle_session_for_test(),
         tick: Tick::default(),
         measure: &FixtureMeasure,
-        focus: Default::default(),
+        focus: plx_machine::machine::FocusRead { current: ENGINE_FOCUS.with(|f| f.get()), ..Default::default() },
         press: Default::default(),
         modal: Default::default(), page_image: Default::default(), hold_hint: Default::default(),
         owner: InputOwner::Entry(ENTRY),
@@ -287,6 +293,9 @@ fn cx() -> Cx<'static, TestHost> {
 /// Deliver one event through the surface. Returns `(handled, the app requests it raised, whether
 /// it asked the container to dismiss it)` — the three things every test below reads back.
 fn deliver(page: &mut PlayerOverlayScreen, ev: ScreenEvent<TestHost>) -> (Handled, Vec<PlayerReq>, bool) {
+    if let ScreenEvent::FocusMoved { to, .. } = &ev {
+        ENGINE_FOCUS.with(|f| f.set(Some(*to)));
+    }
     let mut out = Vec::new();
     let mut present = plx_machine::present::Present::new();
     let handled = page.step(
@@ -326,14 +335,14 @@ fn press(page: &mut PlayerOverlayScreen, sym: u32, wcode: u32, edge: Edge) -> (H
 
 /// A direction re-delivered at this panel's group EDGE (`EdgeRule::Screen`, §7.3 step 3) — what
 /// the engine does after its own `neighbour` answers `Step::Edge` and the group declares `Screen`
-/// on that side; `edge_key` is the only place left that a panel decides something outside its own
-/// scope, so this is the one path a unit test has to synthesize rather than observe end to end.
+/// on that side; `menu_key` is the one place the screen feeds the menu a key, so this is the one path a unit test has to synthesize rather than observe end to end.
 fn press_at_edge(page: &mut PlayerOverlayScreen, sym: u32) -> (Handled, Vec<PlayerReq>, bool) {
     deliver(
         page,
         ScreenEvent::Input(InputEvent {
             kind: InputKind::Key {
-                key: plx_machine::machine::Key::Other,
+                // the engine re-delivers the direction it understood
+                key: if sym == plx_ui::consts::SDLK_LEFT { plx_machine::machine::Key::Left } else { plx_machine::machine::Key::Right },
                 sym,
                 wcode: 0,
                 edge: Edge::Down,
@@ -1323,7 +1332,7 @@ fn the_player_panels_dim_through_the_container_in_the_neutral_dim_whatever_the_i
     assert!(store.run(plx_data::stores::metadata::MetadataCmd::InstallPlaying(Some(plx_data::metadata::PlayingItem {
         sid: plx_plex::plex::ServerId::from_raw(0), rk: "rk".into(), show_rk: String::new(), kind: String::new(), duration_ms: None, audio: Vec::new(), subs: Vec::new(),
         video_fps: 0.0, width: 0, height: 0, bitrate: 0, video_kbps: 0, dovi: Default::default(),
-        markers: Vec::new(), chapters: Vec::new(), hdr: false, sub_choice: Default::default(),
+        markers: Vec::new(), chapters: Vec::new(), hdr: false, sub_choice: Default::default(), versions: Vec::new(),
     }))));
     for (kind, alpha) in [
         (OverlayKind::Tracks { tab: 0 }, DIM_PLAYER),
@@ -1540,8 +1549,8 @@ const MENUS: [(OverlayKind, &str); 4] = [
 
 fn menu_anchor_of(page: &PlayerOverlayScreen, name: &str) -> plx_ui::Rect {
     match page.panel() {
-        Panel::Tracks(p) => p.anchor(),
-        Panel::More(p) => p.anchor(),
+        Panel::Tracks(p) => p.menu().anchor().expect("a video card hangs from an anchor"),
+        Panel::More(p) => p.menu().anchor().expect("a video card hangs from an anchor"),
         _ => panic!("{name}: a menu"),
     }
 }
